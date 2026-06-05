@@ -1,3 +1,28 @@
+# custom
+*sublime*
+CLAUDE.md
+
+# --- Working / reference-only material (kept LOCAL, never committed) ---
+# tmp/ holds scratch work (tmp/scratch/) and the MATLAB-era reference inputs we
+# convert FROM (tmp/sacsma_module, tmp/hru_meteo_15CDEC_new, tmp/GIS_calsim3,
+# tmp/src_dpl, tmp/HRUinfo_ALL.txt). Run `python -m sacsma.dataprep all` to
+# regenerate the tracked data/ artifacts from them.
+tmp/
+
+# --- Derived data ---
+# The domain forcing store is tracked via git-LFS (see .gitattributes); any OTHER
+# forcing/* file (e.g. a different domain) stays out of git. Small organized
+# tables and the GeoPackage under data/ ARE tracked (see data/README.md).
+data/forcing/*
+!data/forcing/historical_15cdec.nc
+outputs/
+
+# Simulated outputs and diagnostic figures (derived); keep the folder + README.
+artifacts/*
+!artifacts/README.md
+!artifacts/15cdec
+
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

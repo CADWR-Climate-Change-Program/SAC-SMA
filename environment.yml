@@ -1,0 +1,36 @@
+# Conda environment for the sacsma package.
+#   conda env create -f environment.yml
+#   conda activate sacsma
+#   pip install -e .            # install the package in editable mode
+#
+# Python is pinned to 3.11 because Numba lags the newest CPython releases.
+name: sacsma
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  # Pin the BLAS implementation to OpenBLAS. The conda-forge MKL builds have
+  # shipped preview releases (e.g. mkl 2026.x) whose ABI mismatches numpy's,
+  # which makes 2-D matmul / np.linalg / np.corrcoef crash on Windows with a
+  # delay-load error (0xC06D007F). OpenBLAS avoids that. (Our model uses no
+  # BLAS; this only matters for metrics + matplotlib.)
+  - libblas=*=*openblas
+  - numpy>=1.24
+  - numba>=0.59
+  - pandas>=2.0
+  - matplotlib>=3.7   # sacsma.plots diagnostics
+  # I/O / data-prep artifacts
+  - pyarrow>=14
+  - xarray>=2024.1
+  - netcdf4
+  # GIS (build CalSim HRU info from GIS/ shapefiles)
+  - geopandas>=0.14
+  - shapely>=2.0
+  - pyproj>=3.6
+  # dev / testing
+  - pytest>=8.0
+  - pytest-cov>=4.1
+  - ruff>=0.4
+  - pip
+  - pip:
+      - -e .

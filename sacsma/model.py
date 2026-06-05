@@ -1,0 +1,246 @@
+"""Coupled per-HRU pipeline and basin aggregation driver.
+
+Per HRU: Hamon PET -> SNOW-17 -> SAC-SMA -> Lohmann routing.  Basin flow is
+the area-weighted sum of routed HRU flow (mm/day) at the gauge.
+
+This reproduces the distributed SAC-SMA forward run from the archived GA
+optimum (the run-from-pre-done-calibration path).
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
+from . import parameters as P
+from .io import (
+    FORCING_NAME,
+    doy_and_leap,
+    load_forcing,
+    load_params,
+    meteo_filename,
+    read_hruinfo,
+    read_meteo,
+)
+from .pet import hamon_pet
+from .routing import lohmann
+from .sma import sac_sma
+from .snow17 import snow17
+
+
+def default_is_outlet(flowlen: float) -> int:
+    """Default outlet rule: the HRU at the watershed outlet has flowlen 0.
+
+    NOTE: confirm this against the MATLAB driver's outlet/flowlen convention.
+    """
+    return 1 if flowlen == 0.0 else 0
+
+
+def run_hru(
+    prcp: np.ndarray,
+    tavg: np.ndarray,
+    doy: np.ndarray,
+    is_leap: np.ndarray,
+    *,
+    lat: float,
+    elev: float,
+    flowlen: float,
+    ga_row,
+    is_outlet: int | None = None,
+) -> np.ndarray:
+    """Run the full coupled pipeline for one HRU; return routed flow (mm/day)."""
+    pet = hamon_pet(tavg, doy, lat, P.kpet(ga_row))
+    eff_p = snow17(prcp, tavg, doy, is_leap, elev, P.snow_par(ga_row))[0]
+    surf, base, _tet, _state = sac_sma(pet, eff_p, P.sma_par(ga_row))
+    if is_outlet is None:
+        is_outlet = default_is_outlet(flowlen)
+    runoff, _baseflow = lohmann(surf, base, flowlen, P.routing_par(ga_row), is_outlet)
+    return runoff
+
+
+def run_basin(
+    basin: str,
+    *,
+    data_dir: str | Path | None = "data",
+    start: str | None = None,
+    end: str | None = None,
+    ga_df: pd.DataFrame | None = None,
+    hruinfo_path: str | Path | None = None,
+    meteo_dir: str | Path | None = None,
+    progress: bool = False,
+    forcing: DomainForcing | None = None,
+) -> pd.DataFrame:
+    """Forward-simulate one CDEC basin from the GA optimum.
+
+    Native path (default): ``data_dir`` points at the organized ``data/`` store
+    and its domain forcing (``data/forcing/historical_15cdec.nc``) is used.
+
+    For multi-basin runs, build the domain forcing once with
+    :func:`load_domain_forcing` and pass it as ``forcing`` so the ~900 MB/var
+    read happens a single time across all basins.
+
+    Legacy auditable ``.txt`` path: pass explicit ``hruinfo_path``, ``meteo_dir``,
+    and ``ga_df`` (e.g. the raw MATLAB-era reference files) — used only when the
+    native store is absent.
+
+    Returns DataFrame[date, flow] of area-weighted gauge flow (mm/day).
+    """
+    if forcing is not None or (
+        data_dir is not None and (Path(data_dir) / "forcing" / FORCING_NAME).exists()
+    ):
+        return _run_basin_native(
+            basin, data_dir=data_dir, start=start, end=end,
+            progress=progress, forcing=forcing,
+        )
+    if hruinfo_path is None or meteo_dir is None or ga_df is None:
+        raise ValueError(
+            "run_basin needs either the native data store "
+            f"(data_dir with {Path('forcing') / FORCING_NAME}) or, for the legacy "
+            ".txt path, explicit hruinfo_path, meteo_dir, and ga_df."
+        )
+    meteo_dir = Path(meteo_dir)
+
+    hrus = read_hruinfo(hruinfo_path)
+    # Source HRU weights are PER-BASIN PERCENTAGES (sum to 100); normalize to
+    # area fractions (sum to 1) before area-weighting the routed flow.
+    wnorm = hrus["area_weight"].to_numpy(dtype=float)
+    wnorm = wnorm / wnorm.sum()
+
+    dates: pd.DatetimeIndex | None = None
+    total: np.ndarray | None = None
+    doy = is_leap = None
+
+    n = len(hrus)
+    for i, hru in enumerate(hrus.itertuples(index=False)):
+        if progress and (i % 200 == 0):
+            print(f"  {basin}: HRU {i + 1}/{n}", flush=True)
+        meteo = read_meteo(meteo_dir / meteo_filename(hru.lat, hru.lon))
+        if start is not None or end is not None:
+            mask = pd.Series(True, index=meteo.index)
+            if start is not None:
+                mask &= meteo["date"] >= pd.Timestamp(start)
+            if end is not None:
+                mask &= meteo["date"] <= pd.Timestamp(end)
+            meteo = meteo.loc[mask].reset_index(drop=True)
+
+        if dates is None:
+            dates = pd.DatetimeIndex(meteo["date"])
+            doy, is_leap = doy_and_leap(dates)
+            total = np.zeros(len(dates))
+        elif len(meteo) != len(dates):
+            raise ValueError(
+                f"HRU {hru.key} has {len(meteo)} days, expected {len(dates)}"
+            )
+
+        ga_row = ga_df.loc[hru.key]
+        runoff = run_hru(
+            meteo["prcp"].to_numpy(),
+            meteo["tavg"].to_numpy(),
+            doy,
+            is_leap,
+            lat=hru.lat,
+            elev=hru.elev,
+            flowlen=hru.flowlen,
+            ga_row=ga_row,
+        )
+        total += wnorm[i] * runoff
+
+    if dates is None:
+        raise ValueError(f"No HRUs found for basin {basin}")
+    return pd.DataFrame({"date": dates, "flow": total})
+
+
+@dataclass
+class DomainForcing:
+    """Domain-wide forcing read into memory once, reusable across basins.
+
+    ``prcp``/``tavg`` are the full ``(n_cells, n_time)`` arrays; ``pos`` maps a
+    grid-cell ``key`` to its row.  ``doy``/``is_leap`` are precomputed for the
+    (possibly time-sliced) ``dates``.
+    """
+
+    pos: dict[str, int]
+    prcp: np.ndarray
+    tavg: np.ndarray
+    dates: pd.DatetimeIndex
+    doy: np.ndarray
+    is_leap: np.ndarray
+
+
+def load_domain_forcing(
+    data_dir: str | Path,
+    *,
+    start: str | None = None,
+    end: str | None = None,
+) -> DomainForcing:
+    """Read the whole forcing store into memory ONCE (reuse across basins).
+
+    The store is zlib-compressed; xarray/HDF5 fancy-indexing ~2000 non-contiguous
+    keys re-decompresses overlapping chunks per key and takes minutes, whereas a
+    single contiguous read of each variable is ~4s and NumPy row-indexing is
+    instant.  For multi-basin runs, build this once and pass it to every
+    :func:`run_basin` call so the ~900 MB/var read happens a single time.
+    """
+    ds = load_forcing(data_dir)
+    try:
+        if start is not None or end is not None:
+            ds = ds.sel(time=slice(start, end))
+        dates = pd.DatetimeIndex(ds["time"].values)
+        doy, is_leap = doy_and_leap(dates)
+        prcp = ds["prcp"].values
+        tavg = ds["tavg"].values
+        pos = {str(k): i for i, k in enumerate(ds["key"].values)}
+    finally:
+        ds.close()
+    return DomainForcing(pos=pos, prcp=prcp, tavg=tavg, dates=dates, doy=doy, is_leap=is_leap)
+
+
+def _run_basin_native(
+    basin: str,
+    *,
+    data_dir: str | Path | None = None,
+    start: str | None = None,
+    end: str | None = None,
+    progress: bool = False,
+    forcing: DomainForcing | None = None,
+) -> pd.DataFrame:
+    """Native-path basin run from the organized ``data/`` artifacts.
+
+    Forcing is the domain-wide grid-cell store; HRU attributes (elev, flowlen,
+    area_weight, lat) come from the HRU table.  Each HRU pulls its grid cell's
+    forcing by ``key``.  Pass a preloaded ``forcing`` (from
+    :func:`load_domain_forcing`) to avoid re-reading the store per basin.
+    """
+    from .io import load_hru_table
+
+    dd: str | Path = data_dir if data_dir is not None else "data"
+    if forcing is None:
+        forcing = load_domain_forcing(dd, start=start, end=end)
+    params_df = load_params(dd)
+    hrus = load_hru_table(dd)
+    sub = hrus[hrus["basin"] == basin].reset_index(drop=True)
+    if sub.empty:
+        raise ValueError(f"No HRUs for basin {basin} in {data_dir}")
+    # Source HRU weights are PER-BASIN PERCENTAGES (sum to 100); normalize to
+    # area fractions (sum to 1) before area-weighting the routed flow.
+    wnorm = sub["area_weight"].to_numpy(dtype=float)
+    wnorm = wnorm / wnorm.sum()
+
+    dates, doy, is_leap = forcing.dates, forcing.doy, forcing.is_leap
+    total = np.zeros(len(dates))
+    n = len(sub)
+    for i, hru in enumerate(sub.itertuples(index=False)):
+        if progress and (i % 200 == 0):
+            print(f"  {basin}: HRU {i + 1}/{n}", flush=True)
+        c = forcing.pos[hru.key]
+        ga_row = params_df.loc[hru.key]
+        runoff = run_hru(
+            forcing.prcp[c], forcing.tavg[c], doy, is_leap,
+            lat=float(hru.lat), elev=float(hru.elev), flowlen=float(hru.flowlen),
+            ga_row=ga_row,
+        )
+        total += wnorm[i] * runoff
+    return pd.DataFrame({"date": dates, "flow": total})

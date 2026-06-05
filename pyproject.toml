@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sacsma"
+version = "0.1.0"
+description = "Faithful NumPy/Numba port of the Sacramento Soil Moisture Accounting (SAC-SMA) model (Wi & Steinschneider, CA DWR San Joaquin Watershed Studies)"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+authors = [{ name = "DWR / Steinschneider Lab port" }]
+keywords = ["hydrology", "sac-sma", "snow17", "lohmann-routing", "streamflow"]
+
+dependencies = [
+    "numpy>=1.24",
+    "numba>=0.59",
+    "pandas>=2.0",
+    "matplotlib>=3.7",   # sacsma.plots calibration/validation diagnostics
+]
+
+[project.optional-dependencies]
+gis = [
+    "geopandas>=0.14",   # build CalSim HRU info tables from GIS/ shapefiles
+    "shapely>=2.0",
+    "pyproj>=3.6",
+]
+io = [
+    "pyarrow>=14",       # parquet data-prep artifacts
+    "xarray>=2024.1",    # optional NetCDF/zarr forcing cubes
+]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=4.1",
+    "ruff>=0.4",
+]
+
+[project.scripts]
+sacsma = "sacsma.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["sacsma*"]
+exclude = ["sacsma_module*", "src_dpl*", "GIS*", "tests*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+markers = [
+    "slow: end-to-end runs over the full domain (deselect with '-m \"not slow\"')",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
