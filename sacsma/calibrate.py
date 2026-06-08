@@ -1,6 +1,10 @@
 """GA calibration scaffold (Wang 1991 real-coded genetic algorithm).
 
-This provides a reusable bounded real-coded GA engine and a KGE objective
+**Not part of the forward-run deliverable** — this is the scaffold for roadmap
+item 3 (re-calibration / calibrating new domains).  Nothing in the public API
+(:mod:`sacsma.__init__`) depends on it; it is intentionally kept un-wired.
+
+It provides a reusable bounded real-coded GA engine and a KGE objective
 helper.  What is intentionally left as TODO for a later milestone:
 
   * the cluster -> HRU parameter expansion (PET-by-veg, SMA-by-soil,

@@ -11,7 +11,7 @@ Public API:
 
 from __future__ import annotations
 
-from .metrics import kge, nse, pbias
+from .metrics import kge, nse, pbias, pearson
 from .model import run_basin, run_hru
 from .parameters import load_ga_optimum
 from .pet import hamon_pet
@@ -32,5 +32,6 @@ __all__ = [
     "kge",
     "nse",
     "pbias",
+    "pearson",
     "__version__",
 ]

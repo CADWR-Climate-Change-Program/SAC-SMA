@@ -22,12 +22,15 @@ dependencies = [
 [project.optional-dependencies]
 gis = [
     "geopandas>=0.14",   # build CalSim HRU info tables from GIS/ shapefiles
-    "shapely>=2.0",
+    "shapely>=2.0",      # Voronoi tessellation for HRU->catchment area overlap
     "pyproj>=3.6",
+    "scipy>=1.10",       # nearest-neighbour spacing for the Voronoi buffer clip
 ]
 io = [
-    "pyarrow>=14",       # parquet data-prep artifacts
-    "xarray>=2024.1",    # optional NetCDF/zarr forcing cubes
+    # the data/ tables are plain CSV (pandas built-in); only the gridded forcing needs these:
+    "xarray>=2024.1",    # NetCDF forcing cubes (data/forcing/historical_*.nc)
+    "netcdf4>=1.6",      # NetCDF engine xarray reads/writes the forcing store with
+    "openpyxl>=3.1",     # dataprep .xlsx ingest (DSS spreadsheet FNF, area/rim-anchor tables)
 ]
 dev = [
     "pytest>=8.0",

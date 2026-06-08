@@ -43,6 +43,21 @@ def kge(sim: np.ndarray, obs: np.ndarray) -> float:
     return 1.0 - np.sqrt((r - 1.0) ** 2 + (alpha - 1.0) ** 2 + (beta - 1.0) ** 2)
 
 
+def pearson(sim: np.ndarray, obs: np.ndarray) -> float:
+    """Pearson correlation coefficient (BLAS-free; NaN pairs dropped).
+
+    Computed via reductions (no ``np.corrcoef``/``np.cov`` gemm).  Returns NaN
+    for fewer than 3 finite pairs or a zero-variance series.
+    """
+    sim, obs = _align(sim, obs)
+    if sim.size < 3:
+        return np.nan
+    sd_s, sd_o = sim.std(), obs.std()
+    if sd_s == 0 or sd_o == 0:
+        return np.nan
+    return float(np.mean((sim - sim.mean()) * (obs - obs.mean())) / (sd_s * sd_o))
+
+
 def pbias(sim: np.ndarray, obs: np.ndarray) -> float:
     """Percent bias (%)."""
     sim, obs = _align(sim, obs)

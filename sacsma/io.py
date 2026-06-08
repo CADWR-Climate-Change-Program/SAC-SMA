@@ -19,8 +19,17 @@ HRUINFO_COLUMNS = [
     "soil_class", "veg_class", "basin_id", "basin_id2",
 ]
 
-#: Default domain-wide forcing store filename under ``data/forcing/``.
-FORCING_NAME = "historical_15cdec.nc"
+#: Default modeling domain (the 15 CDEC reservoir watersheds).
+DEFAULT_DOMAIN = "15cdec"
+
+
+def forcing_name(domain: str = DEFAULT_DOMAIN) -> str:
+    """Domain-wide forcing store filename under ``data/forcing/``."""
+    return f"historical_{domain}.nc"
+
+
+#: Default domain-wide forcing store filename (back-compat constant).
+FORCING_NAME = forcing_name(DEFAULT_DOMAIN)
 
 #: 1 cfs sustained for a day, spread over 1 mi^2, equals this many mm.
 #: (1 cfs = 0.0283168 m^3/s; x86400 s; / (mi^2 = 2.589988e6 m^2); x1000 mm/m)
@@ -101,20 +110,51 @@ def read_simflow(path: str | Path) -> pd.DataFrame:
 # --------------------------------------------------------------------------
 # Native (data/) loaders — produced by sacsma.dataprep
 # --------------------------------------------------------------------------
-def load_hru_table(data_dir: str | Path = "data") -> pd.DataFrame:
-    """Per-HRU attribute table (with basin code)."""
-    return pd.read_parquet(Path(data_dir) / "hru" / "hruinfo_15cdec.parquet")
+#: Columns parsed back to datetime64 when reading a native CSV table.
+_DATE_COLS = ("date", "cal_start", "cal_end")
 
 
-def load_params(data_dir: str | Path = "data") -> pd.DataFrame:
-    """Per-HRU GA-optimum parameters, indexed by ``key`` (lat_lon)."""
-    df = pd.read_parquet(Path(data_dir) / "params" / "ga_optimum_15cdec.parquet")
-    return df.set_index("key")
+def read_table(path: str | Path) -> pd.DataFrame:
+    """Read a native ``data/`` table (CSV), parsing date columns to datetime64.
+
+    The native store is plain CSV so every table opens in Excel / a text editor
+    without any script; date columns (:data:`_DATE_COLS`) round-trip to datetime.
+    """
+    path = Path(path)
+    cols = pd.read_csv(path, nrows=0).columns
+    parse = [c for c in _DATE_COLS if c in cols]
+    return pd.read_csv(path, parse_dates=parse or None)
 
 
-def load_reference(data_dir: str | Path = "data", basin: str | None = None) -> pd.DataFrame:
-    """Reference MATLAB simulated flow (optionally filtered to one basin)."""
-    df = pd.read_parquet(Path(data_dir) / "reference" / "simflow_15cdec.parquet")
+def write_table(df: pd.DataFrame, path: str | Path) -> Path:
+    """Write a native ``data/`` table as index-less CSV (the openable storage format)."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(path, index=False)
+    return path
+
+
+def load_hru_table(data_dir: str | Path = "data", domain: str = DEFAULT_DOMAIN) -> pd.DataFrame:
+    """Per-HRU attribute table (with basin code) for a modeling ``domain``."""
+    return read_table(Path(data_dir) / "hru" / f"hruinfo_{domain}.csv")
+
+
+def load_params(data_dir: str | Path = "data", domain: str = DEFAULT_DOMAIN) -> pd.DataFrame:
+    """Per-HRU GA-optimum parameters for a ``domain`` (columns include ``key``).
+
+    Not indexed: the pooled ``15cdec`` set has one param row per grid cell, but the
+    per-watershed ``9unimp`` calibration repeats some shared cells with different
+    params per ``basin``, so callers index by ``key`` (after filtering to a basin
+    where a ``basin`` column is present).
+    """
+    return read_table(Path(data_dir) / "params" / f"ga_optimum_{domain}.csv")
+
+
+def load_reference(
+    data_dir: str | Path = "data", basin: str | None = None, domain: str = DEFAULT_DOMAIN
+) -> pd.DataFrame:
+    """Reference MATLAB simulated flow for a ``domain`` (optionally one basin)."""
+    df = read_table(Path(data_dir) / "reference" / f"simflow_{domain}.csv")
     if basin is not None:
         df = df[df["basin"] == basin].reset_index(drop=True)
     return df
@@ -122,27 +162,60 @@ def load_reference(data_dir: str | Path = "data", basin: str | None = None) -> p
 
 def load_gage(data_dir: str | Path = "data", basin: str | None = None) -> pd.DataFrame:
     """Observed gage FNF flow (calibration target, mm/day); optionally one basin."""
-    df = pd.read_parquet(Path(data_dir) / "reference" / "gage_15cdec.parquet")
+    df = read_table(Path(data_dir) / "reference" / "gage_15cdec.csv")
     if basin is not None:
         df = df[df["basin"] == basin].reset_index(drop=True)
     return df
 
 
-def load_basin_area(data_dir: str | Path = "data") -> pd.DataFrame:
-    """Per-basin drainage area table [basin, area_mi2]."""
-    return pd.read_parquet(Path(data_dir) / "reference" / "basin_area_15cdec.parquet")
+def load_basin_area(data_dir: str | Path = "data", domain: str = DEFAULT_DOMAIN) -> pd.DataFrame:
+    """Per-basin drainage area table [basin, area_mi2] for a ``domain``."""
+    return read_table(Path(data_dir) / "reference" / f"basin_area_{domain}.csv")
 
 
-def load_forcing(data_dir: str | Path, name: str = FORCING_NAME):
+def load_calib_monthly(data_dir: str | Path = "data", domain: str = DEFAULT_DOMAIN,
+                       basin: str | None = None) -> pd.DataFrame:
+    """Monthly calibration record [date, basin, sim_mm, obs_mm, cal_start, cal_end].
+
+    The observed monthly full-natural-flow target (``obs_mm``) and the MATLAB
+    monthly simulation (``sim_mm``) extracted from each CalLite watershed's
+    calibration log; ``cal_start``/``cal_end`` bound the calibration period.
+    """
+    df = read_table(Path(data_dir) / "reference" / f"calib_{domain}_monthly.csv")
+    if basin is not None:
+        df = df[df["basin"] == basin].reset_index(drop=True)
+    return df
+
+
+def load_fnf_monthly(data_dir: str | Path = "data", domain: str = DEFAULT_DOMAIN,
+                     basin: str | None = None) -> pd.DataFrame:
+    """Full-period monthly observed FNF [date, basin, obs_mm, cal_start, cal_end] (mm/month)."""
+    df = read_table(Path(data_dir) / "reference" / f"fnf_{domain}_monthly.csv")
+    if basin is not None:
+        df = df[df["basin"] == basin].reset_index(drop=True)
+    return df
+
+
+def load_vic_monthly(data_dir: str | Path = "data") -> pd.DataFrame:
+    """VIC routed historical monthly flow [date, vic_name, flow_taf] (TAF/month)."""
+    return read_table(Path(data_dir) / "reference" / "vic_routed_monthly.csv")
+
+
+def load_calsim3_monthly(data_dir: str | Path = "data") -> pd.DataFrame:
+    """CalSim3 historical monthly inflow [date, arc, flow_taf] (TAF/month)."""
+    return read_table(Path(data_dir) / "reference" / "calsim3_inflow_monthly.csv")
+
+
+def load_forcing(data_dir: str | Path, name: str | None = None, domain: str = DEFAULT_DOMAIN):
     """Open the domain-wide forcing store (xarray Dataset, dims (key, time)).
 
-    One store for the whole ingested meteo domain — grid cells indexed by
-    ``key`` (``lat_lon``), shared across HRUs/basins.  HRU-level attributes
-    (elev, flowlen, area_weight, …) live in the HRU table, not here.
+    One store per modeling ``domain`` (``historical_<domain>.nc``) — grid cells
+    indexed by ``key`` (``lat_lon``), shared across HRUs/basins.  HRU-level
+    attributes (elev, flowlen, area_weight, …) live in the HRU table, not here.
     """
     import xarray as xr
 
-    return xr.open_dataset(Path(data_dir) / "forcing" / name)
+    return xr.open_dataset(Path(data_dir) / "forcing" / (name or forcing_name(domain)))
 
 
 def doy_and_leap(dates: pd.Series | pd.DatetimeIndex) -> tuple[np.ndarray, np.ndarray]:

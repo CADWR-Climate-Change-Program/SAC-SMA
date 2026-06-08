@@ -15,12 +15,20 @@ tmp/
 # tables and the GeoPackage under data/ ARE tracked (see data/README.md).
 data/forcing/*
 !data/forcing/historical_15cdec.nc
+!data/forcing/historical_9unimp.nc
+!data/forcing/historical_11obs.nc
+!data/forcing/historical_12rim.nc
 outputs/
 
 # Simulated outputs and diagnostic figures (derived); keep the folder + README.
 artifacts/*
 !artifacts/README.md
 !artifacts/15cdec
+!artifacts/9unimp
+!artifacts/11obs
+!artifacts/12rim
+!artifacts/calsim
+
 
 
 # Byte-compiled / optimized / DLL files

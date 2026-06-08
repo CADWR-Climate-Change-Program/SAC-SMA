@@ -23,10 +23,12 @@ dependencies:
   - pyarrow>=14
   - xarray>=2024.1
   - netcdf4
-  # GIS (build CalSim HRU info from GIS/ shapefiles)
+  - openpyxl>=3.1   # dataprep .xlsx ingest (DSS spreadsheet FNF, area / rim-anchor tables)
+  # GIS (build CalSim HRU info from GIS/ shapefiles; Voronoi catchment overlap)
   - geopandas>=0.14
   - shapely>=2.0
   - pyproj>=3.6
+  - scipy>=1.10
   # dev / testing
   - pytest>=8.0
   - pytest-cov>=4.1
