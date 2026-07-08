@@ -1,35 +1,66 @@
-"""Readers for the MATLAB-era reference data and date helpers.
+"""Data-store loaders, date helpers, and unit conversions.
 
-File formats (all whitespace-delimited, no header):
-  * meteo:    ``meteo_<lat>_<lon>`` -> year month day prcp tavg
-  * HRUinfo:  ``HRUinfo_<CDEC>.txt`` -> lat lon area_weight elev flowlen soil veg b1 b2
-  * simflow:  ``climate_historical/simflow_sacsma_<CDEC>_short.txt`` -> year month day value
+The ``data/`` store is split by application — ``data/cdec15/`` (the 15-CDEC
+domain) and ``data/calsim/`` (the CalSim/CalLite domains ``9unimp``/``11obs``/
+``12rim`` plus the CalSim3/VIC references).  Everything is plain CSV (openable
+in Excel / a text editor) except the gridded forcing stores (NetCDF, git-LFS).
+The per-domain loaders (:func:`load_hru_table`, :func:`load_params`,
+:func:`load_reference`, ...) resolve a modeling ``domain`` string to its file;
+see ``data/INVENTORY.md`` for the full manifest and provenance.
 """
 
 from __future__ import annotations
 
-import warnings
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
-HRUINFO_COLUMNS = [
-    "lat", "lon", "area_weight", "elev", "flowlen",
-    "soil_class", "veg_class", "basin_id", "basin_id2",
-]
-
 #: Default modeling domain (the 15 CDEC reservoir watersheds).
 DEFAULT_DOMAIN = "15cdec"
+#: the 15-CDEC application's domain.
+CDEC15_DOMAIN = "15cdec"
+#: the CalSim/CalLite application's domains.
+CALSIM_DOMAINS = ("9unimp", "11obs", "12rim")
 
 
-def forcing_name(domain: str = DEFAULT_DOMAIN) -> str:
-    """Domain-wide forcing store filename under ``data/forcing/``."""
-    return f"historical_{domain}.nc"
+def domain_dir(data_dir: str | Path = "data", domain: str = DEFAULT_DOMAIN) -> Path:
+    """Application data directory: ``data/cdec15`` for 15cdec, ``data/calsim`` else."""
+    if domain == CDEC15_DOMAIN:
+        return Path(data_dir) / "cdec15"
+    if domain in CALSIM_DOMAINS:
+        return Path(data_dir) / "calsim"
+    raise ValueError(f"unknown domain {domain!r} (expected {CDEC15_DOMAIN} or one of {CALSIM_DOMAINS})")
 
 
-#: Default domain-wide forcing store filename (back-compat constant).
-FORCING_NAME = forcing_name(DEFAULT_DOMAIN)
+def _sfx(domain: str) -> str:
+    """Filename suffix: 15cdec files are unsuffixed (one domain per app dir);
+    the calsim files carry ``_<domain>`` (three domains share the dir)."""
+    return "" if domain == CDEC15_DOMAIN else f"_{domain}"
+
+
+#: Default forcing product (filename stem): the historical **Livneh-unsplit**
+#: grid (Pierce-2021 unsplit precipitation basis; Livneh+PRISM temperature).
+DEFAULT_FORCING = "historical_livneh_unsplit"
+
+
+def forcing_name(domain: str = DEFAULT_DOMAIN, product: str = DEFAULT_FORCING) -> str:
+    """Forcing store filename for a ``product`` (the filename stem).
+
+    Products: :data:`DEFAULT_FORCING` (the historical Livneh-unsplit grid) and
+    ``wgen_product_a`` (WGEN Product A scenario 1 — the same unsplit
+    precipitation, temperature detrended to the 1991-2020 baseline; CalSim
+    domains only).  See ``data/INVENTORY.md``.
+    """
+    return f"{product}{_sfx(domain)}.nc"
+
+
+def forcing_path(
+    data_dir: str | Path = "data", domain: str = DEFAULT_DOMAIN, product: str = DEFAULT_FORCING
+) -> Path:
+    """Full path of a domain's forcing store (``<app dir>/forcing/<name>.nc``)."""
+    return domain_dir(data_dir, domain) / "forcing" / forcing_name(domain, product)
+
 
 #: 1 cfs sustained for a day, spread over 1 mi^2, equals this many mm.
 #: (1 cfs = 0.0283168 m^3/s; x86400 s; / (mi^2 = 2.589988e6 m^2); x1000 mm/m)
@@ -46,69 +77,8 @@ def mmday_to_cfs(mmday, area_mi2):
     return mmday * area_mi2 / _CFS_DAY_PER_MI2_MM
 
 
-def _read_ws(path, names, dtype=None) -> pd.DataFrame:
-    """Fast whitespace-delimited read (C engine), version-robust.
-
-    Uses ``delim_whitespace`` (C parser) — far faster than the regex
-    ``sep=r"\\s+"`` Python engine on the large per-HRU meteo files.
-    """
-    kw = dict(header=None, names=names, dtype=dtype)
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", FutureWarning)
-        try:
-            return pd.read_csv(path, delim_whitespace=True, **kw)
-        except (TypeError, ValueError):
-            return pd.read_csv(path, sep=r"\s+", engine="python", **kw)
-
-
-def meteo_filename(lat: float, lon: float) -> str:
-    """Filename of the meteo grid cell for a given lat/lon (6 decimals)."""
-    return f"meteo_{lat:.6f}_{lon:.6f}"
-
-
-def parse_meteo_filename(name: str) -> tuple[str, float, float]:
-    """Inverse of :func:`meteo_filename`: ``meteo_<lat>_<lon>`` -> (key, lat, lon).
-
-    The grid-cell ``key`` (``lat_lon``) is the join key shared by the HRU
-    table, the GA-parameter table, and the forcing store.
-    """
-    stem = Path(name).name
-    if stem.startswith("meteo_"):
-        stem = stem[len("meteo_"):]
-    lat_s, lon_s = stem.split("_")
-    return f"{lat_s}_{lon_s}", float(lat_s), float(lon_s)
-
-
-def read_meteo(path: str | Path) -> pd.DataFrame:
-    """Read a per-HRU meteo file -> DataFrame[date, prcp, tavg]."""
-    df = _read_ws(
-        path,
-        ["year", "month", "day", "prcp", "tavg"],
-        dtype={"year": "int16", "month": "int8", "day": "int8",
-               "prcp": "float32", "tavg": "float32"},
-    )
-    df["date"] = pd.to_datetime(dict(year=df["year"], month=df["month"], day=df["day"]))
-    return df[["date", "prcp", "tavg"]]
-
-
-def read_hruinfo(path: str | Path) -> pd.DataFrame:
-    """Read an HRUinfo table -> DataFrame with :data:`HRUINFO_COLUMNS`."""
-    df = _read_ws(path, HRUINFO_COLUMNS)
-    from .parameters import latlon_key
-
-    df["key"] = [latlon_key(la, lo) for la, lo in zip(df["lat"], df["lon"])]
-    return df
-
-
-def read_simflow(path: str | Path) -> pd.DataFrame:
-    """Read a reference simulated-flow file -> DataFrame[date, flow]."""
-    df = _read_ws(path, ["year", "month", "day", "flow"])
-    df["date"] = pd.to_datetime(df[["year", "month", "day"]])
-    return df[["date", "flow"]]
-
-
 # --------------------------------------------------------------------------
-# Native (data/) loaders — produced by sacsma.dataprep
+# Native (data/) loaders
 # --------------------------------------------------------------------------
 #: Columns parsed back to datetime64 when reading a native CSV table.
 _DATE_COLS = ("date", "cal_start", "cal_end")
@@ -136,7 +106,7 @@ def write_table(df: pd.DataFrame, path: str | Path) -> Path:
 
 def load_hru_table(data_dir: str | Path = "data", domain: str = DEFAULT_DOMAIN) -> pd.DataFrame:
     """Per-HRU attribute table (with basin code) for a modeling ``domain``."""
-    return read_table(Path(data_dir) / "hru" / f"hruinfo_{domain}.csv")
+    return read_table(domain_dir(data_dir, domain) / f"hruinfo{_sfx(domain)}.csv")
 
 
 def load_params(data_dir: str | Path = "data", domain: str = DEFAULT_DOMAIN) -> pd.DataFrame:
@@ -147,22 +117,14 @@ def load_params(data_dir: str | Path = "data", domain: str = DEFAULT_DOMAIN) -> 
     params per ``basin``, so callers index by ``key`` (after filtering to a basin
     where a ``basin`` column is present).
     """
-    return read_table(Path(data_dir) / "params" / f"ga_optimum_{domain}.csv")
+    return read_table(domain_dir(data_dir, domain) / f"ga_optimum{_sfx(domain)}.csv")
 
 
 def load_reference(
     data_dir: str | Path = "data", basin: str | None = None, domain: str = DEFAULT_DOMAIN
 ) -> pd.DataFrame:
     """Reference MATLAB simulated flow for a ``domain`` (optionally one basin)."""
-    df = read_table(Path(data_dir) / "reference" / f"simflow_{domain}.csv")
-    if basin is not None:
-        df = df[df["basin"] == basin].reset_index(drop=True)
-    return df
-
-
-def load_gage(data_dir: str | Path = "data", basin: str | None = None) -> pd.DataFrame:
-    """Observed gage FNF flow (calibration target, mm/day); optionally one basin."""
-    df = read_table(Path(data_dir) / "reference" / "gage_15cdec.csv")
+    df = read_table(domain_dir(data_dir, domain) / f"simflow{_sfx(domain)}.csv")
     if basin is not None:
         df = df[df["basin"] == basin].reset_index(drop=True)
     return df
@@ -170,52 +132,27 @@ def load_gage(data_dir: str | Path = "data", basin: str | None = None) -> pd.Dat
 
 def load_basin_area(data_dir: str | Path = "data", domain: str = DEFAULT_DOMAIN) -> pd.DataFrame:
     """Per-basin drainage area table [basin, area_mi2] for a ``domain``."""
-    return read_table(Path(data_dir) / "reference" / f"basin_area_{domain}.csv")
+    return read_table(domain_dir(data_dir, domain) / f"basin_area{_sfx(domain)}.csv")
 
 
-def load_calib_monthly(data_dir: str | Path = "data", domain: str = DEFAULT_DOMAIN,
-                       basin: str | None = None) -> pd.DataFrame:
-    """Monthly calibration record [date, basin, sim_mm, obs_mm, cal_start, cal_end].
-
-    The observed monthly full-natural-flow target (``obs_mm``) and the MATLAB
-    monthly simulation (``sim_mm``) extracted from each CalLite watershed's
-    calibration log; ``cal_start``/``cal_end`` bound the calibration period.
-    """
-    df = read_table(Path(data_dir) / "reference" / f"calib_{domain}_monthly.csv")
-    if basin is not None:
-        df = df[df["basin"] == basin].reset_index(drop=True)
-    return df
-
-
-def load_fnf_monthly(data_dir: str | Path = "data", domain: str = DEFAULT_DOMAIN,
-                     basin: str | None = None) -> pd.DataFrame:
-    """Full-period monthly observed FNF [date, basin, obs_mm, cal_start, cal_end] (mm/month)."""
-    df = read_table(Path(data_dir) / "reference" / f"fnf_{domain}_monthly.csv")
-    if basin is not None:
-        df = df[df["basin"] == basin].reset_index(drop=True)
-    return df
-
-
-def load_vic_monthly(data_dir: str | Path = "data") -> pd.DataFrame:
-    """VIC routed historical monthly flow [date, vic_name, flow_taf] (TAF/month)."""
-    return read_table(Path(data_dir) / "reference" / "vic_routed_monthly.csv")
-
-
-def load_calsim3_monthly(data_dir: str | Path = "data") -> pd.DataFrame:
-    """CalSim3 historical monthly inflow [date, arc, flow_taf] (TAF/month)."""
-    return read_table(Path(data_dir) / "reference" / "calsim3_inflow_monthly.csv")
-
-
-def load_forcing(data_dir: str | Path, name: str | None = None, domain: str = DEFAULT_DOMAIN):
+def load_forcing(
+    data_dir: str | Path,
+    name: str | None = None,
+    domain: str = DEFAULT_DOMAIN,
+    product: str = DEFAULT_FORCING,
+):
     """Open the domain-wide forcing store (xarray Dataset, dims (key, time)).
 
-    One store per modeling ``domain`` (``historical_<domain>.nc``) — grid cells
-    indexed by ``key`` (``lat_lon``), shared across HRUs/basins.  HRU-level
-    attributes (elev, flowlen, area_weight, …) live in the HRU table, not here.
+    One store per modeling ``domain`` and forcing ``product`` (default: the
+    Livneh-unsplit historical grid) — grid cells indexed by ``key``
+    (``lat_lon``), shared across HRUs/basins.  HRU-level attributes (elev,
+    flowlen, area_weight, …) live in the HRU table, not here.  ``name``
+    overrides the resolved filename entirely.
     """
     import xarray as xr
 
-    return xr.open_dataset(Path(data_dir) / "forcing" / (name or forcing_name(domain)))
+    d = domain_dir(data_dir, domain) / "forcing"
+    return xr.open_dataset(d / name if name else forcing_path(data_dir, domain, product))
 
 
 def doy_and_leap(dates: pd.Series | pd.DatetimeIndex) -> tuple[np.ndarray, np.ndarray]:

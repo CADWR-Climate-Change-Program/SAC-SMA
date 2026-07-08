@@ -3,30 +3,32 @@
 CLAUDE.md
 
 # --- Working / reference-only material (kept LOCAL, never committed) ---
-# tmp/ holds scratch work (tmp/scratch/) and the MATLAB-era reference inputs we
-# convert FROM (tmp/sacsma_module, tmp/hru_meteo_15CDEC_new, tmp/GIS_calsim3,
-# tmp/src_dpl, tmp/HRUinfo_ALL.txt). Run `python -m sacsma.dataprep all` to
-# regenerate the tracked data/ artifacts from them.
+# tmp/ holds local scratch work and the original reference material the tracked
+# data/ store was derived from (see data/INVENTORY.md for provenance).
 tmp/
 
 # --- Derived data ---
-# The domain forcing store is tracked via git-LFS (see .gitattributes); any OTHER
-# forcing/* file (e.g. a different domain) stays out of git. Small organized
-# tables and the GeoPackage under data/ ARE tracked (see data/README.md).
-data/forcing/*
-!data/forcing/historical_15cdec.nc
-!data/forcing/historical_9unimp.nc
-!data/forcing/historical_11obs.nc
-!data/forcing/historical_12rim.nc
+# The forcing stores are tracked via git-LFS (see .gitattributes); any OTHER
+# forcing/* file stays out of git. Small organized tables and the GeoPackage
+# under data/ ARE tracked (see data/INVENTORY.md).
+data/cdec15/forcing/*
+!data/cdec15/forcing/historical_livneh_unsplit.nc
+data/calsim/forcing/*
+!data/calsim/forcing/historical_livneh_unsplit_9unimp.nc
+!data/calsim/forcing/historical_livneh_unsplit_11obs.nc
+!data/calsim/forcing/historical_livneh_unsplit_12rim.nc
+!data/calsim/forcing/wgen_product_a_9unimp.nc
+!data/calsim/forcing/wgen_product_a_11obs.nc
+!data/calsim/forcing/wgen_product_a_12rim.nc
+!data/calsim/forcing/historical_lto_9unimp.nc
+!data/calsim/forcing/historical_lto_11obs.nc
+!data/calsim/forcing/historical_lto_12rim.nc
 outputs/
 
 # Simulated outputs and diagnostic figures (derived); keep the folder + README.
 artifacts/*
 !artifacts/README.md
-!artifacts/15cdec
-!artifacts/9unimp
-!artifacts/11obs
-!artifacts/12rim
+!artifacts/cdec15
 !artifacts/calsim
 
 

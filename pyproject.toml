@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "sacsma"
 version = "0.1.0"
-description = "Faithful NumPy/Numba port of the Sacramento Soil Moisture Accounting (SAC-SMA) model (Wi & Steinschneider, CA DWR San Joaquin Watershed Studies)"
+description = "Distributed SAC-SMA (Hamon PET / Snow-17 / SAC-SMA / Lohmann routing) applications for California watersheds: the 15-CDEC daily calibration and the CalSim/CalLite monthly domains with CalSim3 cross-comparison"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
@@ -21,20 +21,17 @@ dependencies = [
 
 [project.optional-dependencies]
 gis = [
-    "geopandas>=0.14",   # build CalSim HRU info tables from GIS/ shapefiles
+    "geopandas>=0.14",   # CalSim catchment layers (HRU->catchment mapping, coverage maps)
     "shapely>=2.0",      # Voronoi tessellation for HRU->catchment area overlap
     "pyproj>=3.6",
-    "scipy>=1.10",       # nearest-neighbour spacing for the Voronoi buffer clip
+    "scipy>=1.10",       # Voronoi buffer spacing + per-month gamma-tail QMAP
 ]
 io = [
     # the data/ tables are plain CSV (pandas built-in); only the gridded forcing needs these:
-    "xarray>=2024.1",    # NetCDF forcing cubes (data/forcing/historical_*.nc)
-    "netcdf4>=1.6",      # NetCDF engine xarray reads/writes the forcing store with
-    "openpyxl>=3.1",     # dataprep .xlsx ingest (DSS spreadsheet FNF, area/rim-anchor tables)
+    "xarray>=2024.1",    # NetCDF forcing stores (the Livneh-unsplit historical grids)
+    "netcdf4>=1.6",      # NetCDF engine xarray reads the forcing store with
 ]
 dev = [
-    "pytest>=8.0",
-    "pytest-cov>=4.1",
     "ruff>=0.4",
 ]
 
@@ -43,14 +40,6 @@ sacsma = "sacsma.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["sacsma*"]
-exclude = ["sacsma_module*", "src_dpl*", "GIS*", "tests*"]
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-addopts = "-q"
-markers = [
-    "slow: end-to-end runs over the full domain (deselect with '-m \"not slow\"')",
-]
 
 [tool.ruff]
 line-length = 100
