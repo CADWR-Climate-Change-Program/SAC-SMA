@@ -91,13 +91,9 @@ The Python model reproduces the original MATLAB simulated flow **exactly**
 across all 15 basins over 1915–2018 (pooled KGE ≈ 1.0, max daily difference
 < 0.02 mm/day) — and likewise for all three CalLite domains (KGE = 1.0):
 
-![Python vs MATLAB parity](artifacts/cdec15/figures/parity_vs_matlab.png)
-
 Against the **observed** gage full-natural-flow, calibration skill matches the
 published study (mean KGE ≈ 0.83), with separate calibration/validation
 statistics per basin:
-
-![Skill summary](artifacts/cdec15/figures/skill_summary.png)
 
 Per-basin diagnostics, the skill summary, the parity figure, and
 `metrics_15cdec.csv` live in [`artifacts/cdec15/`](artifacts/cdec15/).
@@ -155,22 +151,6 @@ SAC-SMA basin maps).
 > identically-zero series because CalSim folds their flow into a parent node. These
 > areas still appear inside the basin **footprint outline** but don't contribute to
 > a scored sum.
-
-![15cdec coverage](artifacts/calsim/compare/figures/15cdec_coverage_map.png)
-![SAC-SMA − VIC basin KGE](artifacts/calsim/compare/figures/calsim_sacsma_minus_vic_kge.png)
-![Basin-level KGE](artifacts/calsim/compare/figures/anchor_skill_kge.png)
-
-### The 8 main river indices (anchor hydrographs)
-
-For the rim basins the anchor's reference is the CalSim **`FLOW-UNIMPAIRED`**
-series, and `anchor_hydrographs.png` plots the monthly hydrographs of the
-**8 main river indices** — the California 8-River Index: Sacramento @ Bend
-Bridge, Feather (Oroville), Yuba, American (Folsom), Stanislaus, Tuolumne,
-Merced, and San Joaquin (Millerton) — with each SAC-SMA set and VIC against the
-unimpaired reference (bold). SAC-SMA **11obs** (calibrated to these rim gauges)
-reproduces the unimpaired hydrology at median monthly **KGE 0.94**.
-
-![8 main river hydrographs](artifacts/calsim/compare/figures/anchor_hydrographs.png)
 
 ## License
 
