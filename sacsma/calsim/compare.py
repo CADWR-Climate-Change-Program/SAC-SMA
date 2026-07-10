@@ -1083,7 +1083,7 @@ def make_all(
     make_anchor(data_dir, artifacts_dir, run, sets, anchor_long=anchor_long)
     # parallel full-footprint view + the screened-vs-full delta (with the VIC benchmark), plus
     # the calibration-target-vs-CalSim3 table; the fnf_* calibration basis is untouched
-    # (see data/CALSIM3_FNF_FOOTPRINT.md).
+    # (see tmp/CALSIM3_FNF_FOOTPRINT.md).
     make_anchor_full(data_dir, artifacts_dir, run, sets, anchor_long=anchor_long,
                      period=(start, end), comp_cache=comp_cache, parallel=parallel)
     target_vs_calsim3(data_dir, sets=tuple(s for s in sets if s in ANCHOR_SETS)).to_csv(
@@ -1101,6 +1101,19 @@ def make_all(
     # CalSim<->SAC-SMA basin maps (9unimp + 11obs partition): basin-level NSE/KGE/pbias for
     # the SAC composite and VIC, plus SAC−VIC difference maps — all coloured per main basin.
     make_basin_maps(data_dir, out, anchor_met, sets=adj_sets)
+    # footprint-screening methods maps (single-basin illustrations of
+    # tmp/CALSIM3_FNF_FOOTPRINT.md: the VIC grid + the SAC HRU sets on the catchment)
+    make_shasta_footprint_maps(data_dir, out)
+    for title, set_name, basin, vic_node, cdec_basin, stem in FOOTPRINT_MAP_BASINS:
+        make_basin_footprint_maps(data_dir, out, title=title, set_name=set_name,
+                                  basin=basin, vic_node=vic_node,
+                                  cdec_basin=cdec_basin, stem=stem)
+    # whole-domain HRU attribute / calibrated-parameter maps (15cdec veg_class + Kpet;
+    # 11obs/9unimp per-basin Kpet) + the per-veg-class Kpet summary and the exact
+    # soil_class→Kpet lookup (the real 15cdec Kpet regionalization is soil-based)
+    make_hru_attribute_maps(data_dir, out)
+    hru_param_table(data_dir).to_csv(out / "hru_veg_kpet_15cdec.csv", index=False)
+    kpet_soil_table(data_dir).to_csv(out / "hru_kpet_by_soil_15cdec.csv", index=False)
     # rolling 30-yr KGE/NSE/pbias vs CalSim3 at the basin-level FLOW-UNIMPAIRED anchors
     # (median across each anchor set's basins; VIC split onto the 11obs & 9unimp basins)
     make_rolling_skill(data_dir, artifacts_dir, run, anchor_long=anchor_long, sets=sets)
@@ -1232,6 +1245,680 @@ def _calset_coverage_map(data_dir, set_name, anchor_met, path):
                     "basin monthly NSE vs CalSim3 anchor", path,
                     cells=cells, cells_label=f"{set_name} HRU cells ({len(cells)})",
                     subsystems=footprints, extent=_map_extent(data_dir), annot=annot)
+
+
+# ---------------------------------------------------------------------------
+# single-basin footprint-screening maps (methods figures)
+# ---------------------------------------------------------------------------
+
+#: red for terrain outside the CalSim3 catchment / dropped by the screening
+_FP_RED = "#c02f1d"
+
+
+def _cell_boxes(lat, lon):
+    """1/16-degree grid-cell polygons around cell-center points (EPSG:4326)."""
+    import geopandas as gpd
+    from shapely import box
+
+    h = 0.0625 / 2.0
+    return gpd.GeoSeries([box(x - h, y - h, x + h, y + h)
+                          for y, x in zip(lat, lon, strict=True)], crs="EPSG:4326")
+
+
+def _vic_cells(data_dir, node, *, no_gooselake=False):
+    """VIC GridInfo cells for ``node`` as boxes with the in-basin ``frac`` weight.
+
+    A couple of boundary cells arrive as two fragments (sliver + main part) ->
+    aggregate per (lat, lon) cell first.
+    """
+    import geopandas as gpd
+
+    from . import load_vic_gridinfo
+
+    g = (load_vic_gridinfo(data_dir, node=node, no_gooselake=no_gooselake)
+         .groupby(["lat", "lon"], as_index=False)
+         .agg(cell_km2=("cell_km2", "first"), basin_km2=("basin_km2", "sum")))
+    g["frac"] = (g["basin_km2"] / g["cell_km2"]).clip(upper=1.0)
+    return gpd.GeoDataFrame(g, geometry=_cell_boxes(g["lat"], g["lon"]), crs="EPSG:4326")
+
+
+def _fill_cells(ax, geoms, color, frac=None, alpha=0.85, hatch=None, zorder=3):
+    """Draw grid-cell polygons; ``frac`` scales each cell's fill alpha so partial
+    (edge) cells read lighter."""
+    import geopandas as gpd
+    from matplotlib.colors import to_rgba
+
+    if len(geoms) == 0:                     # e.g. a basin whose screening drops nothing
+        return
+    if frac is None:
+        colors = to_rgba(color, alpha)
+    else:
+        colors = [to_rgba(color, 0.30 + 0.60 * float(f)) for f in frac]
+    gpd.GeoDataFrame(geometry=gpd.GeoSeries(geoms, crs="EPSG:4326")).plot(
+        ax=ax, color=colors, edgecolor=(color if hatch else "white"),
+        linewidth=0.15, hatch=hatch, zorder=zorder)
+
+
+def _fp_panel(ax, title, note, *, context, outline, extent, aspect):
+    """One footprint-map panel: grey context catchments, the basin outline as the
+    common reference, the stats note box, and the shared extent."""
+    import geopandas as gpd
+
+    context.plot(ax=ax, facecolor="#f3f3f3", edgecolor="0.85", linewidth=0.2, zorder=1)
+    gpd.GeoSeries([outline], crs=context.crs).boundary.plot(
+        ax=ax, color=_COLORS["calsim3"], linewidth=0.9, zorder=5)
+    ax.set_title(title, fontsize=8)
+    ax.text(0.03, 0.03, note, transform=ax.transAxes, fontsize=6, va="bottom",
+            ha="left", linespacing=1.3, zorder=6,
+            bbox=dict(facecolor="white", edgecolor="0.7", lw=0.4, alpha=0.85,
+                      boxstyle="round,pad=0.25"))
+    xmin, ymin, xmax, ymax = extent
+    ax.set_xlim(xmin, xmax)
+    ax.set_ylim(ymin, ymax)
+    ax.set_aspect(aspect)
+    ax.tick_params(labelsize=6)
+
+
+def make_shasta_footprint_maps(data_dir: str | Path = "data",
+                               out: str | Path = "artifacts/calsim/compare"):
+    """The Shasta footprint-screening story as maps (single-basin methods figure).
+
+    ``shasta_footprint_panels.png`` — 2x3 solo panels (same layout as
+    :func:`make_basin_footprint_maps`): the VIC routing grid (original, with its
+    endorheic Goose Lake over-reach red — the one place VIC's grid is ever
+    corrected), the SAC-SMA 11obs HRUs (full, screened-out cells red), the 15cdec
+    HRUs, the authoritative CalSim3 SHSTA delineation (Goose Lake dash-outlined),
+    and the screened result the anchor scores: the GIS-screened 11obs HRUs drawn
+    OVER the full VIC ``no_gooselake`` grid — VIC still simulates every one of those
+    cells, so terrain only VIC covers stays visibly purple.  The sixth slot carries
+    the legend.
+
+    Every panel shares one extent and carries the black SHSTA outline as the common
+    reference; red marks the Goose Lake over-reach (terrain outside the catchment /
+    dropped by screening).  Unlike every other compare map this one is
+    **single-basin** (SHA/SHSTA) — a methods illustration of
+    ``tmp/CALSIM3_FNF_FOOTPRINT.md``, not a basin-level skill map.  The other
+    single-basin counterparts render via :func:`make_basin_footprint_maps`
+    (:data:`FOOTPRINT_MAP_BASINS`).
+    """
+    import geopandas as gpd
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.patheffects as pe
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import to_rgba
+    from matplotlib.lines import Line2D
+    from matplotlib.patches import Patch
+    from shapely.ops import unary_union
+
+    from ..io import load_basin_area, load_hru_table
+    from . import load_vic_gridinfo
+    from .catchments import (
+        _EQ_CRS,
+        _M2_PER_MI2,
+        MERGED_LAYER,
+        _hru_abs_area,
+        load_catchments,
+        screened_footprint,
+    )
+
+    figs = Path(out) / "figures"
+    figs.mkdir(parents=True, exist_ok=True)
+    km2_per_mi2 = _M2_PER_MI2 / 1e6
+
+    # --- CalSim3 delineation: the SHSTA rim polygon (+ every other rim as faint context)
+    catch = load_catchments(data_dir, layer=MERGED_LAYER, rim_only=True)
+    shsta = catch[catch["node"] == "SHSTA"]
+    shsta_geom = unary_union(list(shsta.geometry))
+    calsim_mi2 = float(shsta["sq_mi"].sum())
+
+    # --- VIC routing grid (GridInfo): per-cell in-basin fraction
+    vic_all = _vic_cells(data_dir, "I_SHSTA")
+    vic_kept = _vic_cells(data_dir, "I_SHSTA", no_gooselake=True)
+    n_vic_all = len(load_vic_gridinfo(data_dir))            # row counts, incl. fragments
+    n_vic_kept = len(load_vic_gridinfo(data_dir, no_gooselake=True))
+    kept_keys = set(zip(vic_kept["lat"], vic_kept["lon"], strict=True))
+    in_kept = [k in kept_keys for k in zip(vic_all["lat"], vic_all["lon"], strict=True)]
+    vic_drop = vic_all[[not k for k in in_kept]]
+    vic_orig_kept = vic_all[in_kept]
+    vic_all_mi2 = float(vic_all["basin_km2"].sum() / km2_per_mi2)
+    goose_geom = unary_union(list(vic_drop.geometry))       # the Goose Lake block
+
+    # --- SAC-SMA 11obs SHA HRUs (1/16-deg cells) + the GIS screening that fixes them
+    sha = (load_hru_table(data_dir, domain="11obs")
+           .query("basin == 'SHA'").drop_duplicates("key").reset_index(drop=True))
+    sha_boxes = _cell_boxes(sha["lat"], sha["lon"])
+    scr = screened_footprint(data_dir, domain="11obs")
+    scr = scr[scr["basin"] == "SHA"].set_index("key")["overlap_area_mi2"]
+    kept11 = sha["key"].isin(scr.index).to_numpy()
+    box_mi2 = sha_boxes.to_crs(_EQ_CRS).area.to_numpy() / _M2_PER_MI2
+    ov_frac = np.clip(sha["key"].map(scr).to_numpy() / box_mi2, 0.0, 1.0)
+    # 11obs quoted on its EFFECTIVE area basis — the reconstructed per-HRU drainage
+    # areas its ``area_weight`` claims (same ``abs_area`` as :func:`load_hru_cells`),
+    # the parallel of VIC's in-basin ``basin_km2`` — not the gross span of the drawn
+    # boxes (edge HRUs are partial cells, so the box union would over-state it).
+    abs_area = (_hru_abs_area(data_dir, "11obs").query("basin == 'SHA'")
+                .drop_duplicates("key").set_index("key")["abs_area"])
+    full11_mi2 = float(abs_area.sum())
+
+    # --- SAC-SMA 15cdec SHA HRUs (irregular sub-grid points, off the 1/16-deg grid)
+    cdec = (load_hru_table(data_dir, domain="15cdec")
+            .query("basin == 'SHA'").drop_duplicates("key"))
+    cdec_mi2 = float(load_basin_area(data_dir, domain="15cdec")
+                     .set_index("basin").loc["SHA", "area_mi2"])
+
+    # one shared extent: everything any panel draws, plus a small pad
+    bounds = np.vstack([vic_all.total_bounds, np.asarray(shsta.total_bounds),
+                        np.asarray(sha_boxes.total_bounds)])
+    xmin, ymin = bounds[:, :2].min(axis=0) - 0.10
+    xmax, ymax = bounds[:, 2:].max(axis=0) + 0.10
+
+    def pct(a):
+        return f"{100.0 * (a / calsim_mi2 - 1.0):+.1f}%"
+
+    def panel(ax, title, note):
+        _fp_panel(ax, title, note, context=catch, outline=shsta_geom,
+                  extent=(xmin, ymin, xmax, ymax), aspect=1.30)
+
+    fig, axes = plt.subplots(2, 3, figsize=(_MAP_W, 5.2), sharex=True, sharey=True)
+    ax = axes.ravel()
+    panel(ax[0], "(a) VIC routing grid — original",
+          f"{n_vic_all} cells\n{vic_all_mi2:,.0f} mi$^2$ ({pct(vic_all_mi2)})")
+    _fill_cells(ax[0], vic_orig_kept.geometry, _COLORS["vic"], frac=vic_orig_kept["frac"])
+    _fill_cells(ax[0], vic_drop.geometry, _FP_RED, frac=vic_drop["frac"])
+    panel(ax[1], "(b) SAC-SMA 11obs HRUs (full)",
+          f"{len(sha)} HRUs\neffective {full11_mi2:,.0f} mi$^2$ ({pct(full11_mi2)})")
+    _fill_cells(ax[1], sha_boxes[kept11], _COLORS["11obs"])
+    _fill_cells(ax[1], sha_boxes[~kept11], _FP_RED)
+    panel(ax[2], "(c) SAC-SMA 15cdec HRUs (SHA)",
+          f"{len(cdec)} HRUs (sub-grid points)\n{cdec_mi2:,.0f} mi$^2$ ({pct(cdec_mi2)})")
+    ax[2].scatter(cdec["lon"], cdec["lat"], s=0.8, c=_COLORS["15cdec"], alpha=0.7,
+                  linewidths=0, zorder=3)
+    panel(ax[3], "(d) CalSim3 delineation (SHSTA)",
+          f"{calsim_mi2:,.0f} mi$^2$\nthe anchor basis")
+    gpd.GeoSeries([shsta_geom], crs=catch.crs).plot(ax=ax[3], facecolor="#e0dcd3",
+                                                    edgecolor="none", zorder=2)
+    gpd.GeoSeries([goose_geom], crs=catch.crs).boundary.plot(
+        ax=ax[3], color=_FP_RED, linewidth=0.8, linestyle=(0, (3, 2)), zorder=4)
+    gx, gy = goose_geom.centroid.x, goose_geom.centroid.y
+    ax[3].annotate("Goose Lake\n(endorheic)", (gx, gy), ha="center", va="center",
+                   fontsize=5.5, color=_FP_RED, zorder=6, linespacing=1.2,
+                   path_effects=[pe.withStroke(linewidth=1.4, foreground="white")])
+    panel(ax[4], "(e) screened — both models",
+          f"SAC-SMA: {int(kept11.sum())}/{len(sha)} HRUs kept\n"
+          f"VIC: {n_vic_kept}/{n_vic_all} cells kept")
+    # VIC still SIMULATES its whole no-Goose-Lake grid (the screening cut only the
+    # SAC-SMA HRU set) — draw the VIC cells underneath the screened HRUs so terrain
+    # only VIC covers stays visibly purple.
+    _fill_cells(ax[4], vic_kept.geometry, _COLORS["vic"], frac=vic_kept["frac"], zorder=2)
+    _fill_cells(ax[4], sha_boxes[kept11], _COLORS["11obs"], frac=ov_frac[kept11])
+    handles = [
+        Line2D([], [], color=_COLORS["calsim3"], lw=0.9,
+               label=f"CalSim3 SHSTA catchment ({calsim_mi2:,.0f} mi$^2$)"),
+        Patch(facecolor=to_rgba(_COLORS["vic"], 0.7), label="VIC grid cell"),
+        Patch(facecolor=to_rgba(_COLORS["11obs"], 0.85), label="11obs HRU cell"),
+        Line2D([], [], marker="o", ls="", color=_COLORS["15cdec"], markersize=3,
+               label="15cdec (SHA) HRU"),
+        Patch(facecolor=to_rgba(_FP_RED, 0.8), label="Goose Lake over-reach (dropped)"),
+    ]
+    ax[5].axis("off")
+    ax[5].legend(handles=handles, loc="center", fontsize=6, framealpha=0.9)
+    ax[2].tick_params(labelbottom=True)     # sharex hides labels above the legend slot
+    fig.suptitle("Shasta: screening the VIC grid and SAC-SMA HRU footprints to the "
+                 "CalSim3 SHSTA catchment", fontsize=8.5)
+    fig.supxlabel("lon", fontsize=7)
+    fig.supylabel("lat", fontsize=7)
+    fig.tight_layout(rect=(0.01, 0.0, 1, 1))
+    fig.savefig(figs / "shasta_footprint_panels.png", dpi=_MAP_DPI)
+    plt.close(fig)
+    print(f"compare: wrote shasta_footprint_panels.png -> {figs}")
+
+
+#: single-basin footprint-map configs for :func:`make_basin_footprint_maps` —
+#: ``(display title, calibration set, basin, VIC GridInfo node, 15cdec basin or None,
+#: output stem)``.  Each figure renders the screened or the not-screened story by the
+#: basin's :data:`~.catchments.SCREENED_BASINS` membership (SNS and Chowchilla are
+#: screened; Trinity and the Fresno River are not).  Trinity and the Fresno/Chowchilla
+#: rivers have no 15cdec representation.
+FOOTPRINT_MAP_BASINS = (
+    ("Stanislaus", "11obs", "SNS", "8RI_N_MEL", "NML", "sns"),
+    ("Chowchilla River", "9unimp", "ChowchillaRiver", "I_ESTMN", None, "chowchilla"),
+    ("Trinity", "11obs", "TNL", "I_TRNTY", None, "tnl"),
+    ("Fresno River", "9unimp", "FresnoRiver", "I_HNSLY", None, "fresno"),
+)
+
+
+def make_basin_footprint_maps(data_dir: str | Path = "data",
+                              out: str | Path = "artifacts/calsim/compare", *,
+                              title: str = "Stanislaus", set_name: str = "11obs",
+                              basin: str = "SNS", vic_node: str = "8RI_N_MEL",
+                              cdec_basin: str | None = "NML", stem: str = "sns"):
+    """One anchor basin's footprint story as maps (single-basin methods figure).
+
+    ``<stem>_footprint_panels.png`` — 2x3 solo panels: the VIC routing grid
+    (``vic_node``, always used **as-is**), the SAC-SMA ``set_name`` HRUs, the 15cdec
+    HRUs where the basin has them (``cdec_basin``), the CalSim3 delineation the basin
+    owns, and the two model footprints the anchor actually scores, drawn together.
+    The story branches on the basin's :data:`~.catchments.SCREENED_BASINS` membership:
+
+    * **screened** (SNS, Chowchilla; Shasta has its own richer function) — the
+      out-of-catchment HRU cells are solid red (dropped) and the final panel draws
+      the GIS-screened cells (overlap-weighted alpha) over the full VIC grid;
+    * **not screened** (Trinity, Fresno R.) — the anchor volume is simply the
+      full-footprint area-weighted depth times the CalSim3 catchment area, so cells
+      extending outside the catchment are red-hatched but **kept**, and the final
+      panel draws ALL the set's HRU cells over the full VIC grid.
+
+    The slot after the panels carries the legend.  Shared extent, black catchment
+    outline; single-basin methods figures — the basin-level colouring rule does not
+    apply.  ``make_all`` renders :data:`FOOTPRINT_MAP_BASINS`.
+    """
+    import geopandas as gpd
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import to_rgba
+    from matplotlib.lines import Line2D
+    from matplotlib.patches import Patch
+    from matplotlib.ticker import MaxNLocator
+    from shapely.geometry import MultiPolygon, Polygon
+    from shapely.ops import unary_union
+
+    from ..io import load_basin_area, load_hru_table
+    from . import load_vic_gridinfo
+    from .catchments import (
+        _EQ_CRS,
+        _M2_PER_MI2,
+        BASIN_RIM_SYSTEM,
+        MERGED_LAYER,
+        SCREENED_BASINS,
+        VALLEY_SYSTEMS,
+        _hru_abs_area,
+        derive_basin_nodes,
+        load_catchments,
+        screened_footprint,
+        valley_arc_for_system,
+    )
+
+    screened = basin in SCREENED_BASINS
+
+    figs = Path(out) / "figures"
+    figs.mkdir(parents=True, exist_ok=True)
+    km2_per_mi2 = _M2_PER_MI2 / 1e6
+
+    # --- CalSim3 delineation: the catchments the basin owns (screened_footprint's
+    # own recipe: crosswalk nodes + the valley-accretion node where the system has one)
+    catch = load_catchments(data_dir, layer=MERGED_LAYER, rim_only=True)
+    nodes = derive_basin_nodes(data_dir, set_name)
+    own = set(nodes.loc[nodes["basin"] == basin, "node"].astype(str))
+    sysn = BASIN_RIM_SYSTEM.get(set_name, {}).get(basin)
+    if sysn in VALLEY_SYSTEMS:
+        own.add(valley_arc_for_system(sysn)[2:])
+    bcatch = catch[catch["node"].astype(str).isin(own)]
+    u = unary_union(list(bcatch.geometry))
+    # adjacent catchments union with hairline sliver gaps -> drop the interior rings
+    # (and any sliver fragments) so only the true outer boundary draws
+    parts = list(u.geoms) if u.geom_type == "MultiPolygon" else [u]
+    bgeom = MultiPolygon([Polygon(p.exterior) for p in parts if p.area > 1e-6])
+    calsim_mi2 = float(bcatch["sq_mi"].sum())
+
+    # --- VIC routing grid (GridInfo): per-cell in-basin fraction, used as-is
+    vic = _vic_cells(data_dir, vic_node)
+    n_vic = len(load_vic_gridinfo(data_dir, node=vic_node))
+    vic_mi2 = float(vic["basin_km2"].sum() / km2_per_mi2)
+
+    # --- the set's HRUs (1/16-deg cells) + the catchment overlap.  For a screened
+    # basin this IS the anchor's screening; for the others it is geometry only
+    # (basins=(basin,) forces the per-basin diagnostic — every HRU stays kept).
+    hru = load_hru_table(data_dir, domain=set_name)
+    hru = hru[hru["basin"] == basin].drop_duplicates("key").reset_index(drop=True)
+    hru_boxes = _cell_boxes(hru["lat"], hru["lon"])
+    scr = screened_footprint(data_dir, domain=set_name, basins=(basin,))
+    scr = scr[scr["basin"] == basin].set_index("key")["overlap_area_mi2"]
+    inside = hru["key"].isin(scr.index).to_numpy()
+    box_mi2 = hru_boxes.to_crs(_EQ_CRS).area.to_numpy() / _M2_PER_MI2
+    ov_frac = np.clip(hru["key"].map(scr).to_numpy() / box_mi2, 0.0, 1.0)
+    # effective area basis, as in the Shasta figure (see there)
+    abs_area = _hru_abs_area(data_dir, set_name)
+    abs_area = (abs_area[abs_area["basin"] == basin]
+                .drop_duplicates("key").set_index("key")["abs_area"])
+    full_mi2 = float(abs_area.sum())
+
+    # --- 15cdec HRUs (irregular sub-grid points), only where the basin has them
+    cdec = None
+    if cdec_basin is not None:
+        cdec = load_hru_table(data_dir, domain="15cdec")
+        cdec = cdec[cdec["basin"] == cdec_basin].drop_duplicates("key")
+        cdec_mi2 = float(load_basin_area(data_dir, domain="15cdec")
+                         .set_index("basin").loc[cdec_basin, "area_mi2"])
+
+    bounds = np.vstack([vic.total_bounds, np.asarray(bcatch.total_bounds),
+                        np.asarray(hru_boxes.total_bounds)])
+    xmin, ymin = bounds[:, :2].min(axis=0) - 0.10
+    xmax, ymax = bounds[:, 2:].max(axis=0) + 0.10
+    aspect = 1.0 / np.cos(np.radians((ymin + ymax) / 2.0))
+
+    def pct(a):
+        return f"{100.0 * (a / calsim_mi2 - 1.0):+.1f}%"
+
+    def panel(ax, ttl, note):
+        _fp_panel(ax, ttl, note, context=catch, outline=bgeom,
+                  extent=(xmin, ymin, xmax, ymax), aspect=aspect)
+
+    def draw_vic(a):
+        _fill_cells(a, vic.geometry, _COLORS["vic"], frac=vic["frac"])
+
+    def draw_full(a):
+        if screened:
+            _fill_cells(a, hru_boxes[inside], _COLORS[set_name])
+            _fill_cells(a, hru_boxes[~inside], _FP_RED)      # dropped by the screening
+        else:
+            _fill_cells(a, hru_boxes, _COLORS[set_name])
+            # cells extending outside the catchment are KEPT (not screened) — hatch only
+            _fill_cells(a, hru_boxes[~inside], _FP_RED, alpha=0.0, hatch="////", zorder=4)
+
+    def draw_cdec(a):
+        a.scatter(cdec["lon"], cdec["lat"], s=0.8, c=_COLORS["15cdec"], alpha=0.7,
+                  linewidths=0, zorder=3)
+
+    def draw_delin(a):
+        gpd.GeoSeries([bgeom], crs=catch.crs).plot(ax=a, facecolor="#e0dcd3",
+                                                   edgecolor="none", zorder=2)
+
+    def draw_scored(a):
+        # the footprints the anchor actually scores: the full VIC grid (never screened
+        # here) under the SAC-SMA cells — screened subset or the full set
+        _fill_cells(a, vic.geometry, _COLORS["vic"], frac=vic["frac"], zorder=2)
+        if screened:
+            _fill_cells(a, hru_boxes[inside], _COLORS[set_name], frac=ov_frac[inside])
+        else:
+            _fill_cells(a, hru_boxes, _COLORS[set_name], alpha=0.62)
+
+    panels = [
+        (f"VIC routing grid ({vic_node})",
+         f"{n_vic} cells — used as-is\n{vic_mi2:,.0f} mi$^2$ ({pct(vic_mi2)})",
+         draw_vic),
+        (f"SAC-SMA {set_name} HRUs" + (" (full)" if screened else ""),
+         f"{len(hru)} HRUs — {f'{int(inside.sum())} kept' if screened else 'all kept'}\n"
+         f"effective {full_mi2:,.0f} mi$^2$ ({pct(full_mi2)})",
+         draw_full),
+    ]
+    if cdec is not None:
+        panels.append((f"SAC-SMA 15cdec HRUs ({cdec_basin})",
+                       f"{len(cdec)} HRUs (sub-grid points)\n"
+                       f"{cdec_mi2:,.0f} mi$^2$ ({pct(cdec_mi2)})", draw_cdec))
+    ncatch = len(bcatch)
+    blab = _BASIN_ABBREV.get(basin, basin)
+    panels += [
+        (f"CalSim3 delineation ({blab})",
+         f"{calsim_mi2:,.0f} mi$^2$ in {ncatch} catchment{'s' if ncatch > 1 else ''}\n"
+         "the anchor basis", draw_delin),
+        ("screened — both models" if screened else "scored footprints — both models",
+         (f"SAC-SMA: {int(inside.sum())}/{len(hru)} HRUs kept" if screened
+          else f"SAC-SMA: all {len(hru)} HRUs (not screened)")
+         + f"\nVIC: all {n_vic} cells",
+         draw_scored),
+    ]
+
+    fig, axes = plt.subplots(2, 3, figsize=(_MAP_W, 5.2), sharex=True, sharey=True)
+    ax = axes.ravel()
+    for k, (ttl, note, draw) in enumerate(panels):
+        panel(ax[k], f"({'abcde'[k]}) {ttl}", note)
+        draw(ax[k])
+    handles = [
+        Line2D([], [], color=_COLORS["calsim3"], lw=0.9,
+               label=f"CalSim3 {blab} catchment ({calsim_mi2:,.0f} mi$^2$)"),
+        Patch(facecolor=to_rgba(_COLORS["vic"], 0.7), label="VIC grid cell"),
+        Patch(facecolor=to_rgba(_COLORS[set_name], 0.85), label=f"{set_name} HRU cell"),
+    ]
+    if cdec is not None:
+        handles.append(Line2D([], [], marker="o", ls="", color=_COLORS["15cdec"],
+                              markersize=3, label=f"15cdec ({cdec_basin}) HRU"))
+    if (~inside).any():                     # e.g. Trinity has no out-of-catchment cells
+        handles.append(
+            Patch(facecolor=to_rgba(_FP_RED, 0.8), label="outside catchment (screened out)")
+            if screened else
+            Patch(facecolor="none", edgecolor=_FP_RED, hatch="////", lw=0.6,
+                  label="extends outside catchment (kept)"))
+    ax[len(panels)].axis("off")
+    ax[len(panels)].legend(handles=handles, loc="center", fontsize=6, framealpha=0.9)
+    for k in range(len(panels) + 1, 6):
+        ax[k].axis("off")
+    for col in range(3):                          # sharex hides labels above off axes
+        vis = [k for k in (col, col + 3) if k < len(panels)]
+        if vis and vis[-1] != col + 3:
+            ax[vis[-1]].tick_params(labelbottom=True)
+    ax[0].xaxis.set_major_locator(MaxNLocator(4))  # small extents: default ticks collide
+    fig.suptitle(f"{title}: screening the SAC-SMA footprint to the CalSim3 "
+                 "catchment (VIC grid as-is)" if screened else
+                 f"{title}: the model footprints vs the CalSim3 catchment — "
+                 "not screened; both grids scored as-is", fontsize=8.5)
+    fig.supxlabel("lon", fontsize=7)
+    fig.supylabel("lat", fontsize=7)
+    fig.tight_layout(rect=(0.01, 0.0, 1, 1))
+    fig.savefig(figs / f"{stem}_footprint_panels.png", dpi=_MAP_DPI)
+    plt.close(fig)
+    print(f"compare: wrote {stem}_footprint_panels.png -> {figs}")
+
+
+# ---------------------------------------------------------------------------
+# HRU attribute / calibrated-parameter maps (whole-domain input figures)
+# ---------------------------------------------------------------------------
+
+def _hru_extent(lat, lon, pad=0.15):
+    """(xmin, xmax, ymin, ymax) around HRU points with a small pad — these domains
+    (esp. 15cdec, which reaches the southern Sierra) exceed the Rim :func:`_map_extent`."""
+    return (lon.min() - pad, lon.max() + pad, lat.min() - pad, lat.max() + pad)
+
+
+def _hru_map_context(ax, data_dir, extent):
+    """Faint grey CalSim3 Rim catchments as a geographic backdrop + shared limits and
+    cos(lat) aspect — the common base for every HRU attribute map."""
+    from .catchments import load_catchments
+
+    load_catchments(data_dir, rim_only=True).plot(
+        ax=ax, facecolor="#f4f4f4", edgecolor="0.82", linewidth=0.2, zorder=1)
+    ax.set_xlim(extent[0], extent[1])
+    ax.set_ylim(extent[2], extent[3])
+    ax.set_aspect(1.0 / np.cos(np.deg2rad((extent[2] + extent[3]) / 2.0)))
+    ax.tick_params(labelsize=6)
+    for s in ax.spines.values():
+        s.set_linewidth(0.5)
+
+
+def make_hru_attribute_maps(data_dir: str | Path = "data",
+                            out: str | Path = "artifacts/calsim/compare"):
+    """Whole-domain HRU attribute / calibrated-parameter maps (input figures).
+
+    Four PNGs into ``<out>/figures/``:
+
+    * ``hru_veg_15cdec.png`` — the 15cdec HRUs coloured categorically by ``veg_class``
+      (a per-cell land-cover code; verified consistent across the pooled table's repeated
+      keys).  Codes are shown as-is: they follow the study's MODIS/IGBP-lineage land-cover
+      scheme (Hansen et al. 2010) but the repo carries no authoritative code→name legend,
+      so the legend stays numeric to avoid mislabelling.
+    * ``hru_soil_15cdec.png`` — the same HRUs coloured categorically by ``soil_class``
+      (also a numeric code, no legend in the repo).  This is the map the calibrated ``Kpet``
+      actually tracks (see below).
+    * ``hru_kpet_15cdec.png`` — the same HRUs coloured by the **calibrated** Hamon PET
+      coefficient ``Kpet``.  In the 15cdec pooled optimum ``Kpet`` is regionalized on
+      **soil zone alone** (9 distinct values, 0.4–2.5, single-valued per ``soil_class``;
+      ``veg_class`` adds nothing — verified), so this mirrors ``hru_soil_15cdec.png``, not the
+      vegetation map.  The exact lookup is :func:`kpet_soil_table`.
+    * ``hru_kpet_calsim.png`` — the 11obs + 9unimp HRUs coloured by ``Kpet`` on a shared
+      colourbar.  ``Kpet`` is **per-basin uniform** in these per-watershed calibrations, so
+      the map reads as a per-basin choropleth at HRU-cell resolution.  Basins share boundary
+      cells with *different* ``Kpet`` (662 such cells in 11obs), so every basin's full cell
+      set is drawn — higher-``Kpet`` basins last, so a contested cell resolves deterministically.
+
+    Whole-domain input maps, not the basin-level cross-compare — the basin-colouring rule
+    does not apply.  Repo map style (≤6.5in, 300 dpi).  Rendered by ``make_all``.
+    """
+    import geopandas as gpd
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.cm import ScalarMappable
+    from matplotlib.colors import Normalize, to_rgba
+    from matplotlib.lines import Line2D
+    from matplotlib.patheffects import withStroke
+
+    from ..io import load_hru_table, load_params
+    from .catchments import basin_footprints
+
+    figs = Path(out) / "figures"
+    figs.mkdir(parents=True, exist_ok=True)
+    halo = [withStroke(linewidth=1.6, foreground="white")]
+
+    # --- Figures 1-2: 15cdec categorical attribute maps (veg_class, soil_class) ---
+    h = load_hru_table(data_dir, domain="15cdec")
+    ext = _hru_extent(h["lat"].to_numpy(), h["lon"].to_numpy())
+    foots15 = basin_footprints(data_dir, domain="15cdec")
+
+    def _cat_map(field, title, fname):
+        classes = sorted(h[field].unique())
+        counts = h[field].value_counts()
+        cm = plt.get_cmap("tab20")
+        col = {c: cm(i % 20) for i, c in enumerate(classes)}
+        fig, ax = plt.subplots(figsize=(5.0, 6.6))
+        _hru_map_context(ax, data_dir, ext)
+        gpd.GeoSeries(list(foots15.values()), crs="EPSG:4326").boundary.plot(
+            ax=ax, color="0.35", linewidth=0.5, zorder=3)
+        for c in classes:
+            hc = h[h[field] == c]
+            ax.scatter(hc["lon"], hc["lat"], s=3.0, c=[col[c]], marker="s",
+                       linewidths=0, zorder=4)
+        handles = [Line2D([0], [0], marker="s", linestyle="", markersize=6,
+                          markerfacecolor=col[c], markeredgewidth=0,
+                          label=f"class {c}  (n={counts[c]})") for c in classes]
+        ax.legend(handles=handles, title=field, fontsize=6, title_fontsize=7,
+                  loc="upper right", framealpha=0.9, borderpad=0.5, handletextpad=0.4,
+                  labelspacing=0.3)
+        ax.set_title(f"{title}  ({len(h)} HRUs, {h['basin'].nunique()} watersheds)",
+                     fontsize=9)
+        ax.set_xlabel("lon", fontsize=7)
+        ax.set_ylabel("lat", fontsize=7)
+        fig.tight_layout()
+        fig.savefig(figs / fname, dpi=_MAP_DPI, bbox_inches="tight")
+        plt.close(fig)
+
+    _cat_map("veg_class", "15cdec HRUs by vegetation class", "hru_veg_15cdec.png")
+    _cat_map("soil_class", "15cdec HRUs by soil class", "hru_soil_15cdec.png")
+
+    # --- Figure 3: 15cdec calibrated Kpet (tracks soil_class) ---
+    kp15 = load_params(data_dir, domain="15cdec").set_index("key")["Kpet"]
+    h = h.assign(Kpet=h["key"].map(kp15))
+    norm = Normalize(vmin=np.floor(h["Kpet"].min() * 10) / 10,
+                     vmax=np.ceil(h["Kpet"].max() * 10) / 10)
+    cmap = plt.get_cmap("viridis")
+    fig, ax = plt.subplots(figsize=(5.0, 6.6))
+    _hru_map_context(ax, data_dir, ext)
+    gpd.GeoSeries(list(foots15.values()), crs="EPSG:4326").boundary.plot(
+        ax=ax, color="0.35", linewidth=0.5, zorder=3)
+    ax.scatter(h["lon"], h["lat"], s=3.0, c=h["Kpet"], cmap=cmap, norm=norm,
+               marker="s", linewidths=0, zorder=4)
+    cb = fig.colorbar(ScalarMappable(norm=norm, cmap=cmap), ax=ax, fraction=0.045, pad=0.02)
+    cb.set_label("calibrated Hamon PET coefficient  Kpet", fontsize=8)
+    cb.ax.tick_params(labelsize=6)
+    ax.set_title(f"15cdec HRUs by calibrated Kpet  ({len(h)} HRUs, "
+                 f"{h['basin'].nunique()} watersheds)", fontsize=9)
+    ax.set_xlabel("lon", fontsize=7)
+    ax.set_ylabel("lat", fontsize=7)
+    fig.tight_layout()
+    fig.savefig(figs / "hru_kpet_15cdec.png", dpi=_MAP_DPI, bbox_inches="tight")
+    plt.close(fig)
+
+    # --- Figure 3: 11obs + 9unimp per-basin Kpet ---
+    doms = ["11obs", "9unimp"]
+    hru = {d: load_hru_table(data_dir, domain=d) for d in doms}
+    par = {d: load_params(data_dir, domain=d).groupby("basin")["Kpet"].first() for d in doms}
+    allh = np.concatenate([hru[d][["lat", "lon"]].to_numpy() for d in doms])
+    cext = _hru_extent(allh[:, 0], allh[:, 1])
+    kall = np.concatenate([par[d].to_numpy() for d in doms])
+    norm = Normalize(vmin=np.floor(kall.min() * 10) / 10, vmax=np.ceil(kall.max() * 10) / 10)
+
+    fig, axes = plt.subplots(1, 2, figsize=(_MAP_W, 4.6))
+    for ax, d in zip(axes, doms, strict=True):
+        _hru_map_context(ax, data_dir, cext)
+        hb = hru[d].copy()
+        hb["Kpet"] = hb["basin"].map(par[d])
+        hb = hb.sort_values("Kpet")           # high Kpet last -> deterministic shared-cell colour
+        gpd.GeoDataFrame(geometry=_cell_boxes(hb["lat"], hb["lon"])).plot(
+            ax=ax, color=[to_rgba(cmap(norm(v))) for v in hb["Kpet"]],
+            edgecolor="white", linewidth=0.05, zorder=3)
+        for b, geom in basin_footprints(data_dir, domain=d).items():
+            gpd.GeoSeries([geom], crs="EPSG:4326").boundary.plot(
+                ax=ax, color="0.15", linewidth=0.4, zorder=4)
+            pt = geom.representative_point()
+            ax.text(pt.x, pt.y, f"{_BASIN_ABBREV.get(b, b)}\n{par[d][b]:.2f}", fontsize=5.0,
+                    ha="center", va="center", zorder=6, path_effects=halo)
+        ax.set_title(f"{d}  ({len(hb)} HRUs, {hb['basin'].nunique()} basins)", fontsize=8)
+        ax.set_xlabel("lon", fontsize=7)
+    axes[0].set_ylabel("lat", fontsize=7)
+    cb = fig.colorbar(ScalarMappable(norm=norm, cmap=cmap), ax=axes, fraction=0.045, pad=0.02)
+    cb.set_label("Hamon PET coefficient  Kpet", fontsize=8)
+    cb.ax.tick_params(labelsize=6)
+    fig.suptitle("SAC-SMA CalSim domains — Hamon PET coefficient (per-basin uniform)", fontsize=9)
+    fig.savefig(figs / "hru_kpet_calsim.png", dpi=_MAP_DPI, bbox_inches="tight")
+    plt.close(fig)
+    print("compare: wrote hru_veg_15cdec.png, hru_soil_15cdec.png, hru_kpet_15cdec.png, "
+          f"hru_kpet_calsim.png -> {figs}")
+
+
+def hru_param_table(data_dir: str | Path = "data", domain: str = "15cdec") -> pd.DataFrame:
+    """Per ``veg_class`` summary of the calibrated Hamon PET coefficient ``Kpet`` (the
+    tabular companion to :func:`make_hru_attribute_maps`).
+
+    In the 15cdec pooled optimum ``Kpet`` is regionalized by land-cover **and** soil zone —
+    it is single-valued for each ``(veg_class, soil_class)`` pair but varies with soil within
+    a ``veg_class`` — so this table reports the ``Kpet`` spread per class (median + range +
+    number of distinct values) alongside the HRU count.  ``veg_class`` codes follow the
+    study's MODIS/IGBP-lineage land-cover scheme (Hansen et al. 2010); the repo carries no
+    authoritative code→name legend, so no name column is emitted.
+    """
+    from ..io import load_hru_table, load_params
+
+    h = load_hru_table(data_dir, domain=domain)
+    kp = load_params(data_dir, domain=domain)
+    kp = (kp.drop_duplicates("basin") if "basin" in kp.columns and domain != "15cdec"
+          else kp.drop_duplicates("key"))
+    h = h.merge(kp[["key", "Kpet"]], on="key", how="left")
+    g = h.groupby("veg_class")["Kpet"]
+    tbl = pd.DataFrame({
+        "veg_class": [int(c) for c in g.size().index],
+        "n_hru": g.size().to_numpy(),
+        "pct_domain": (100 * g.size() / len(h)).round(1).to_numpy(),
+        "kpet_min": g.min().round(4).to_numpy(),
+        "kpet_median": g.median().round(4).to_numpy(),
+        "kpet_max": g.max().round(4).to_numpy(),
+        "n_distinct_kpet": g.nunique().to_numpy(),
+    }).sort_values("n_hru", ascending=False).reset_index(drop=True)
+    return tbl
+
+
+def kpet_soil_table(data_dir: str | Path = "data", domain: str = "15cdec") -> pd.DataFrame:
+    """Exact ``soil_class → Kpet`` lookup for the 15cdec pooled optimum.
+
+    The calibrated Hamon PET coefficient is regionalized on **soil zone alone**: within this
+    domain ``Kpet`` is single-valued per ``soil_class`` and ``veg_class`` adds nothing (verified).
+    So this 1:1 lookup — not the per-``veg_class`` spread in :func:`hru_param_table` — is the
+    real parameterization; the ``veg_class`` map and the ``Kpet`` map look alike only because
+    soil and land cover co-vary spatially.
+    """
+    from ..io import load_hru_table, load_params
+
+    h = load_hru_table(data_dir, domain=domain)
+    kp = load_params(data_dir, domain=domain).drop_duplicates("key")
+    m = h.merge(kp[["key", "Kpet"]], on="key", how="left")
+    g = m.groupby("soil_class")["Kpet"]
+    tbl = pd.DataFrame({
+        "soil_class": [int(c) for c in g.size().index],
+        "kpet": g.first().round(6).to_numpy(),
+        "n_hru": g.size().to_numpy(),
+        "pct_domain": (100 * g.size() / len(m)).round(1).to_numpy(),
+        "n_distinct_kpet": g.nunique().to_numpy(),   # 1 for every row (soil fixes Kpet)
+    }).sort_values("n_hru", ascending=False).reset_index(drop=True)
+    return tbl
 
 
 def _calset_skill_fig(anchor_met, set_name, path):
@@ -1406,21 +2093,30 @@ def _anchor_set_taf(domain, data_dir, nodes, forcing=None, *, comp_cache=None,
 
 
 def build_anchor_long(data_dir: str | Path = "data", sets=DEFAULT_CALSETS,
-                      *, comp_cache=None, parallel=False, footprint=None) -> pd.DataFrame:
+                      *, comp_cache=None, parallel=False, footprint=None,
+                      product: str | None = None) -> pd.DataFrame:
     """Long [date, set, basin, source, flow_taf, ref_kind] for the basin-level anchor.
 
     The SAC volume is on the canonical CalSim catchment area.  Pass a shared
     ``comp_cache`` dict to reuse per-cell SMA components across the anchor and
-    per-catchment builds.  ``footprint`` (a ``{domain: screened_footprint_df}`` dict) switches
-    the flagged basins onto the GIS-screened corrected footprint (see :func:`_anchor_set_taf`)
-    — the **official** anchor basis in :func:`make_all`; omit it for the full-HRU-footprint
-    view (the parallel artifact, :func:`make_anchor_full`)."""
+    per-catchment builds — never share one across ``product``s (it is keyed per cell).
+    ``footprint`` (a ``{domain: screened_footprint_df}`` dict) switches
+    the basins it names onto the GIS-screened footprint (see :func:`_anchor_set_taf`) —
+    in the **official** :func:`make_all` anchor that is
+    :data:`~.catchments.SCREENED_BASINS` (SHA/BND Goose Lake + SNS/Chowchilla
+    over-reach; every other basin runs its full calibrated footprint); omit it for the
+    everything-unscreened view (the parallel artifact, :func:`make_anchor_full`).
+    ``product`` selects an
+    alternate forcing (e.g. ``historical_lto``; default = the Livneh-unsplit baseline)
+    — the CalSim3/VIC reference columns are unaffected
+    (:mod:`~sacsma.calsim.forcing_compare` uses this for the forcing-effect skill)."""
     from ..model import load_domain_forcing
 
     parts = []
     for dom in sets:
         nodes = load_basin_nodes(data_dir, dom)
-        forcing = load_domain_forcing(data_dir, domain=dom)
+        kw = {} if product is None else {"product": product}
+        forcing = load_domain_forcing(data_dir, domain=dom, **kw)
         fp = footprint.get(dom) if footprint else None
         parts.append(_anchor_set_taf(dom, data_dir, nodes, forcing,
                                      comp_cache=comp_cache, parallel=parallel, footprint=fp))
@@ -1430,9 +2126,14 @@ def build_anchor_long(data_dir: str | Path = "data", sets=DEFAULT_CALSETS,
 def _screened_fp(data_dir, sets) -> dict:
     """``{domain: screened_footprint}`` for the anchor sets — the OFFICIAL anchor basis.
 
-    Every standalone entry point that (re)builds the anchor must pass this to
-    :func:`build_anchor_long` so it matches the :func:`make_all` anchor; only
-    :func:`make_anchor_full` builds without it (the parallel full-footprint view)."""
+    Since 2026-07-08 the screening covers ONLY :data:`~.catchments.SCREENED_BASINS`
+    (SHA/BND — the endorheic Goose Lake block — plus SNS/ChowchillaRiver — delineation
+    over-reach); every other basin runs on its full calibrated footprint, so its anchor
+    volume is the full-footprint area-weighted depth times the canonical CalSim3
+    catchment area.  Every standalone entry point
+    that (re)builds the anchor must pass this to :func:`build_anchor_long` so it
+    matches the :func:`make_all` anchor; only :func:`make_anchor_full` builds without
+    it (the parallel everything-unscreened view)."""
     from .catchments import screened_footprint
     return {s: screened_footprint(data_dir, domain=s) for s in sets if s in ANCHOR_SETS}
 
@@ -1642,7 +2343,7 @@ def make_anchor_full(data_dir: str | Path = "data", artifacts_dir: str | Path = 
     months and reference.  Screening removes out-of-catchment dilution (SHA -8.9 -> +0.1,
     SNS -7.8 -> -0.8, Chowchilla -14.3 -> -4.3); for BND and Fresno R it removes a
     *compensating* dilution to expose an honest over-prediction (see
-    ``data/CALSIM3_FNF_FOOTPRINT.md``).  ``anchor_long`` is the OFFICIAL (screened) long from
+    ``tmp/CALSIM3_FNF_FOOTPRINT.md``).  ``anchor_long`` is the OFFICIAL (screened) long from
     :func:`make_all` (rebuilt here if omitted); ``period`` (a ``(start, end)`` pair) clips both
     views to identical months for a fair delta.  The ``fnf_<domain>_monthly.csv`` calibration
     basis and the fnf-target diagnostics are unaffected by the anchor basis."""

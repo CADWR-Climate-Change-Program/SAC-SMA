@@ -54,9 +54,32 @@ def load_fnf_monthly(data_dir: str | Path = "data", domain: str = DEFAULT_DOMAIN
     return df
 
 
-def load_vic_monthly(data_dir: str | Path = "data") -> pd.DataFrame:
-    """VIC routed historical monthly flow [date, vic_name, flow_taf] (TAF/month)."""
-    return read_table(calsim_dir(data_dir) / "vic_routed_monthly.csv")
+def load_vic_monthly(data_dir: str | Path = "data",
+                     product: str | None = None) -> pd.DataFrame:
+    """VIC routed monthly flow [date, vic_name, flow_taf] (TAF/month).
+
+    ``product=None`` is the historical baseline (the ``Historical_Unsplit`` VIC
+    run — same unsplit precipitation basis as the SAC-SMA forcing).  The
+    alternate-climate runs mirror the forcing products: ``historical_lto`` (the
+    split-precipitation ``Historical`` run, 1915–2021) and ``wgen_product_a``
+    (the detrended-temperature ``Product_A`` validation run).
+    """
+    sfx = f"_{product}" if product else ""
+    return read_table(calsim_dir(data_dir) / f"vic_routed_monthly{sfx}.csv")
+
+
+def load_vic_gridinfo(data_dir: str | Path = "data", node: str = "I_SHSTA", *,
+                      no_gooselake: bool = False) -> pd.DataFrame:
+    """VIC routing GridInfo [id, lat, lon, cell_km2, basin_km2] for one CalSim node.
+
+    The station->grid-cell weight table of the CalSim3 VIC routing: one row per
+    1/16-degree VIC cell fragment (``basin_km2`` is the cell area inside the
+    node's basin; a couple of boundary cells appear as two fragments).  The
+    ``no_gooselake`` variant drops the 94 cells of the endorheic Goose Lake
+    over-reach (the basis of the ``_no_gooselake`` routed series).
+    """
+    sfx = "_no_gooselake" if no_gooselake else ""
+    return read_table(calsim_dir(data_dir) / f"vic_gridinfo_{node}{sfx}.csv")
 
 
 def load_calsim3_monthly(data_dir: str | Path = "data") -> pd.DataFrame:

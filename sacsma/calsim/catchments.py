@@ -213,27 +213,42 @@ def calsim_basin_areas(data_dir: str | Path = "data", domain: str = DEFAULT_DOMA
     return out
 
 
+#: the ONLY basins whose HRU footprint is GIS-screened for the anchor (revised 2026-07-08):
+#: basins whose footprint **materially over-reaches** its CalSim3 catchment — SHA and BND
+#: (the ~1000 mi^2 **endorheic Goose Lake / Modoc block**, terrain whose runoff never
+#: reaches the gauge; the exact parallel of VIC's ``no_gooselake`` fix for
+#: I_SHSTA / 8RI_SRBB) plus SNS and ChowchillaRiver (delineation over-reach well beyond
+#: the catchment, the same ``area_artifact`` family as their targets).  Every other basin
+#: keeps its **full calibrated footprint**: the anchor volume is the full-footprint
+#: area-weighted depth x the canonical CalSim3 catchment area, and trimming ordinary
+#: boundary rasterization would distort the calibrated depth rather than fix anything.
+SCREENED_BASINS = ("SHA", "BND", "SNS", "ChowchillaRiver")
+
+
 def screened_footprint(data_dir: str | Path = "data", domain: str = DEFAULT_DOMAIN,
-                       *, write: bool = False) -> pd.DataFrame:
+                       *, basins: tuple[str, ...] | None = SCREENED_BASINS,
+                       write: bool = False) -> pd.DataFrame:
     """Per-basin HRU set **screened to its true CalSim catchment**, with overlap-area weights.
 
-    For each basin, keep only the HRUs whose grid-cell footprint overlaps the basin's CalSim
-    GIS catchment (:func:`derive_basin_nodes` arcs + the ``<SYS>_VAL`` valley-accretion node,
-    on the :data:`MERGED_LAYER`), and weight each retained HRU by that **overlap area** (mi^2)
-    — the honest sub-area it contributes to the catchment — instead of the domain's own
-    ``area_weight`` (which spans the basin's full, often over-reaching, HRU footprint).
+    For each screened basin, keep only the HRUs whose grid-cell footprint overlaps the basin's
+    CalSim GIS catchment (:func:`derive_basin_nodes` arcs + the ``<SYS>_VAL`` valley-accretion
+    node, on the :data:`MERGED_LAYER`), and weight each retained HRU by that **overlap area**
+    (mi^2) — the honest sub-area it contributes to the catchment — instead of the domain's own
+    ``area_weight`` (which spans the basin's full HRU footprint).
 
-    This is the canonical **corrected footprint**: simulating a basin on it (area-weighted by
-    ``overlap_area_mi2``, then rescaled to the canonical CalSim area) and scoring against the
-    CalSim3 unimpaired FNF removes the out-of-catchment dilution that makes e.g. Shasta read
-    ~9% low on the full footprint.  The screening is **deterministic** from tracked data
-    (``calsim3.gpkg`` merged layer + ``calsim_crosswalk.csv``) — nothing here is hand-tuned; it
-    reuses exactly the :func:`map_hrus_to_catchments` overlap the per-sub-arc cross-compare uses.
+    ``basins`` limits which basins are screened at all — default :data:`SCREENED_BASINS`
+    (SHA/BND, the Goose Lake fix, + SNS/ChowchillaRiver, delineation over-reach; revised
+    2026-07-08 from the earlier uniform rule): every other basin's anchor uses the full
+    calibrated footprint — its full-footprint area-weighted depth times the canonical
+    CalSim3 catchment area — so this returns no rows for it.  Pass ``basins=None`` (all) or
+    an explicit tuple for per-basin geometry diagnostics (e.g. the footprint maps).  The
+    screening is **deterministic** from tracked data (``calsim3.gpkg`` merged layer +
+    ``calsim_crosswalk.csv``) — nothing here is hand-tuned; it reuses exactly the
+    :func:`map_hrus_to_catchments` overlap the per-sub-arc cross-compare uses.
 
-    Returns ``[basin, key, overlap_area_mi2]`` (one row per retained HRU per basin).  It does
-    **not** replace the full-footprint :func:`sacsma.model.run_basin` (the calibration basis) —
-    it is the parallel, corrected view.  ``write=True`` saves
-    ``data/calsim/screened_footprint_<domain>.csv``.
+    Returns ``[basin, key, overlap_area_mi2]`` (one row per retained HRU per screened basin).
+    It does **not** replace the full-footprint :func:`sacsma.model.run_basin` (the calibration
+    basis).  ``write=True`` saves ``data/calsim/screened_footprint_<domain>.csv``.
     """
     catch = load_catchments(data_dir, layer=MERGED_LAYER, rim_only=True)
     nodes = derive_basin_nodes(data_dir, domain)
@@ -241,7 +256,10 @@ def screened_footprint(data_dir: str | Path = "data", domain: str = DEFAULT_DOMA
     hru = load_hru_table(data_dir, domain=domain)
     sysmap = BASIN_RIM_SYSTEM.get(domain, {})
     parts = []
-    for basin in sorted(hru["basin"].unique()):
+    basin_list = sorted(hru["basin"].unique())
+    if basins is not None:
+        basin_list = [b for b in basin_list if b in basins]
+    for basin in basin_list:
         own = set(nodes.loc[nodes["basin"] == basin, "node"].astype(str))
         if not own:
             continue                                    # no CalSim catchment (e.g. Tulare/Kern)
@@ -629,6 +647,79 @@ def basin_footprints(data_dir: str | Path = "data", domain: str = DEFAULT_DOMAIN
         geom = geom.buffer(0.01).buffer(-0.01).simplify(simplify_deg)  # close gaps -> outer edge
         polys = geom.geoms if isinstance(geom, MultiPolygon) else [geom]
         out[b] = MultiPolygon([Polygon(p.exterior) for p in polys if p.area > 0])  # drop holes
+    return out
+
+
+def calsim_basin_polygons(data_dir: str | Path = "data", domain: str = DEFAULT_DOMAIN):
+    """Per-basin **CalSim3 catchment delineation** (lon/lat): the union of the merged-layer
+    polygons the basin owns (crosswalk nodes + the valley-accretion node where the system
+    has one) — the catchment geometry itself, NOT an HRU footprint.
+
+    For building external eval sets directly on the CalSim3 delineations — the
+    neuralhyd-ca LSTM comparison basis (2026-07-08): the LSTM has no HRU legacy, so it
+    runs on the true catchment and its volume is depth x the canonical CalSim area
+    (``basin_area_<domain>_calsim.csv``), matching the anchor convention exactly.  Node
+    selection mirrors :func:`screened_footprint`; basins with no usable catchment (e.g.
+    Tulare/Kern) fall back to their full HRU footprint (:func:`basin_footprints`).
+    Hairline sliver rings between adjacent catchments are filled so each basin is a
+    clean outer boundary.
+    """
+    from shapely.geometry import MultiPolygon, Polygon
+    from shapely.ops import unary_union
+
+    full = basin_footprints(data_dir, domain)                # fallback only
+    catch = load_catchments(data_dir, layer=MERGED_LAYER, rim_only=True)
+    nodes = derive_basin_nodes(data_dir, domain)
+    sysmap = BASIN_RIM_SYSTEM.get(domain, {})
+    out = {}
+    for basin, geom in full.items():
+        own = set(nodes.loc[nodes["basin"] == basin, "node"].astype(str))
+        sysn = sysmap.get(basin)
+        if sysn in VALLEY_SYSTEMS:
+            own.add(valley_arc_for_system(sysn)[2:])
+        catch_b = catch[catch["node"].astype(str).isin(own)]
+        if not own or catch_b.empty:
+            out[basin] = geom                                # no catchment -> HRU footprint
+            continue
+        u = unary_union(list(catch_b.geometry.values))
+        polys = list(u.geoms) if isinstance(u, MultiPolygon) else [u]
+        out[basin] = MultiPolygon([Polygon(p.exterior) for p in polys if p.area > 1e-6])
+    return out
+
+
+def screened_basin_footprints(data_dir: str | Path = "data", domain: str = DEFAULT_DOMAIN,
+                              *, simplify_deg: float = 0.01):
+    """Per-basin **GIS-screened** footprint (lon/lat): :func:`basin_footprints` clipped to
+    the basin's own CalSim catchment polygons — the geometry counterpart of
+    :func:`screened_footprint`, for building external eval sets on the clipped-HRU
+    footprint.  Superseded for the LSTM comparison by :func:`calsim_basin_polygons`
+    (the catchment delineation itself, 2026-07-08).  Node selection mirrors
+    :func:`screened_footprint` exactly (crosswalk arcs + the valley-accretion node);
+    basins with no usable catchment (e.g. Tulare/Kern) keep their full footprint.
+    NOTE: clips EVERY basin — unlike the anchor, which screens only
+    :data:`SCREENED_BASINS`.
+    """
+    from shapely.geometry import MultiPolygon, Polygon
+    from shapely.ops import unary_union
+
+    full = basin_footprints(data_dir, domain, simplify_deg=simplify_deg)
+    catch = load_catchments(data_dir, layer=MERGED_LAYER, rim_only=True)
+    nodes = derive_basin_nodes(data_dir, domain)
+    sysmap = BASIN_RIM_SYSTEM.get(domain, {})
+    out = {}
+    for basin, geom in full.items():
+        own = set(nodes.loc[nodes["basin"] == basin, "node"].astype(str))
+        sysn = sysmap.get(basin)
+        if sysn in VALLEY_SYSTEMS:
+            own.add(valley_arc_for_system(sysn)[2:])
+        catch_b = catch[catch["node"].astype(str).isin(own)]
+        if not own or catch_b.empty:
+            out[basin] = geom                            # same fallback as screened_footprint
+            continue
+        clipped = geom.intersection(unary_union(list(catch_b.geometry.values)))
+        polys = ([clipped] if isinstance(clipped, Polygon)
+                 else [p for p in getattr(clipped, "geoms", []) if isinstance(p, Polygon)])
+        out[basin] = MultiPolygon([p for p in polys if p.area > 0]) if polys else geom
     return out
 
 

@@ -19,7 +19,7 @@ Each of these also emits a **CalSim3-basis** variant (``*_calsim3`` figures +
 GIS-**corrected footprint** for the
 CalLite domains — scored against **CalSim3's own unimpaired FNF** (TAF/month) instead of the
 observed-FNF calibration target, split on the same calibration windows.  Non-destructive: the
-fnf-target diagnostics are untouched.  See ``data/CALSIM3_FNF_FOOTPRINT.md``.
+fnf-target diagnostics are untouched.  See ``tmp/CALSIM3_FNF_FOOTPRINT.md``.
 
 Usage::
 
@@ -118,8 +118,10 @@ def _make_calsim3_diagnostics(basins, data_dir, domain, figdir, *, screened, cal
     own unimpaired FNF** (TAF/month), split by each basin's calibration window.
 
     Built from :func:`sacsma.calsim.compare.build_anchor_long` — the same ``sac`` + ``calsim3``
-    monthly series the cross-compare anchor uses (``screened=True`` puts the CalLite domains on the
-    GIS-**corrected footprint**, :func:`~sacsma.calsim.catchments.screened_footprint`).  This is a
+    monthly series the cross-compare anchor uses (``screened=True`` applies the anchor's
+    over-reach screening — :data:`~sacsma.calsim.catchments.SCREENED_BASINS`, SHA/BND/SNS/
+    Chowchilla since 2026-07-08 — via :func:`~sacsma.calsim.catchments.screened_footprint`).
+    This is a
     **parallel** view alongside the observed-FNF-target diagnostics: files carry ``suffix`` and the
     fnf-target outputs are untouched.  ``cal_windows`` is ``{basin: (cal_start_ts, cal_end_ts)}``.
     ``label_map`` overrides the skill-summary x labels (default: :data:`_BASIN_ABBREV`) — the

@@ -17,7 +17,7 @@ applications:
 | | `sacsma.cdec15` | `sacsma.calsim` |
 |---|---|---|
 | Watersheds | 15 CDEC reservoir watersheds (SHA, BND, ORO, …) | The CalSim/CalLite domains: **`9unimp`** (9 CalLite "Unimpaired" creeks), **`11obs`** (11 observed gauges), **`12rim`** (12 Rim reservoir inflows) |
-| Calibration | One **pooled** GA optimum, **daily** observed CDEC gage FNF target (WY1989–2003) | **Per-watershed** GA optima, **monthly** observed FNF targets |
+| Calibration | One **pooled** GA optimum, **daily** observed CDEC gage FNF target | **Per-watershed** GA optima, **monthly** observed FNF targets |
 | Diagnostics | Daily cal/val skill (`sacsma plots --domain 15cdec`) | Monthly cal/val skill (`sacsma plots --domain 11obs` …) |
 | Extras | GA calibration scaffold (`cdec15.calibrate`) | HRU→CalSim-catchment aggregation (`calsim.catchments`) and the CalSim3-vs-VIC cross-compare (`calsim.compare`) |
 
