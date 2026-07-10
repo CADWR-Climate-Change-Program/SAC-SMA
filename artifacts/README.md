@@ -44,11 +44,11 @@ the per-watershed runs).
 | Path | What |
 |------|------|
 | `flow_daily_<domain>.csv` | Long `[date, basin, flow]` daily simulated flow (mm/day, 1915–2018) for every watershed of `9unimp`/`11obs`/`12rim` — same format as the `simflow` reference tables. |
-| `wgen_a_vs_livneh_summary.csv` | Per-watershed comparison vs the Livneh-unsplit run (= the parity-exact `simflow` reference): mean flow both ways, volume % change, daily correlation, monthly KGE. |
 
 The detrended (warmer early-record) temperatures cost a consistent ~2–4% of
 long-term runoff volume (median −3% per domain; daily correlation ≥ 0.999
-everywhere — precipitation is unchanged).
+everywhere — precipitation is unchanged). The per-watershed comparison vs the
+Livneh-unsplit run lives in `calsim/forcing_compare/` (below).
 
 ## Historical LTO runs (`calsim/historical_lto/`)
 
@@ -62,11 +62,12 @@ historical_lto` / `run_basin(..., product="historical_lto")`.
 | Path | What |
 |------|------|
 | `flow_daily_<domain>.csv` | Long `[date, basin, flow]` daily simulated flow (mm/day, **1915–2021**) for every watershed of `9unimp`/`11obs`/`12rim`. |
-| `lto_vs_livneh_summary.csv` | Per-watershed comparison vs the Livneh-unsplit run over the 1915–2018 overlap: mean flow both ways, volume % change, daily correlation, monthly KGE. |
 
 Unlike the WGEN Product A run (temperature-only difference), this is a
 **different precipitation realization** — per-watershed differences reflect
-the split-vs-unsplit precipitation basis end-to-end.
+the split-vs-unsplit precipitation basis end-to-end. The per-watershed
+comparison vs the Livneh-unsplit run (1915–2018 overlap) lives in
+`calsim/forcing_compare/` (below).
 
 ## Forcing comparison (`calsim/forcing_compare/`)
 
