@@ -119,13 +119,14 @@ def load_cal_obs(
 def load_domain_tensors(
     data_dir: str = "data",
     *,
+    domain: str = "15cdec",
     device: torch.device | str = "cuda",
     dtype: torch.dtype = torch.float32,
     basins: tuple[str, ...] | None = None,
 ) -> DomainTensors:
     device = torch.device(device)
-    forcing = load_domain_forcing(data_dir, domain="15cdec")
-    hrus = load_hru_table(data_dir, domain="15cdec")
+    forcing = load_domain_forcing(data_dir, domain=domain)
+    hrus = load_hru_table(data_dir, domain=domain)
     basins = tuple(basins if basins is not None else BASINS)
     hrus = hrus[hrus["basin"].isin(basins)].reset_index(drop=True)
 

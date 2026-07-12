@@ -125,7 +125,7 @@ def _dpl_train(args: argparse.Namespace) -> int:
         seed=args.seed, use_cuda_graphs=not args.no_graphs,
     )
     train(args.variant, data_dir=args.data_dir, out_dir=args.out, cfg=cfg,
-          resume=args.resume)
+          resume=args.resume, domain=args.domain)
     return 0
 
 
@@ -250,6 +250,11 @@ def main(argv: list[str] | None = None) -> int:
                     help="feature ablation arm (physical = continuous "
                          "soil/veg/terrain/LAI in place of one-hot soil/veg)")
     tr.add_argument("--data-dir", default="data", help="organized data/ store")
+    tr.add_argument("--domain", default="15cdec",
+                    choices=["15cdec", "15cdec_grid"],
+                    help="training domain: 15cdec HRU cloud (7891) or the native "
+                         "1/16-deg Livneh grid (2074 cells); baked into the "
+                         "checkpoint so evaluate scores the same domain")
     tr.add_argument("--out", default=None,
                     help="output dir (default: artifacts/dpl/<variant>)")
     tr.add_argument("--device", default="cuda", choices=["cuda", "cpu"],

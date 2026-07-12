@@ -138,6 +138,7 @@ def score_frozen(
     *,
     label: str = "dpl_static",
     cal_end: str = CAL_END,
+    domain: str = "15cdec",
     parallel: bool = True,
 ) -> pd.DataFrame:
     """Score a parameter table through the FROZEN model vs the observed gage.
@@ -163,20 +164,21 @@ def score_frozen(
     figdir.mkdir(parents=True, exist_ok=True)
     cal_end_ts = pd.Timestamp(cal_end)
 
-    hru = load_hru_table(data_dir, domain="15cdec")
+    ref = "15cdec" if domain.endswith("_grid") else domain  # basins shared w/ 15cdec
+    hru = load_hru_table(data_dir, domain=domain)
     basins = folsom_before_yuba(
-        "15cdec",
+        ref,
         hru.groupby("basin")["lat"].mean().sort_values(ascending=False).index.tolist())
-    forcing = load_domain_forcing(data_dir, domain="15cdec")
+    forcing = load_domain_forcing(data_dir, domain=domain)
     try:
-        areas = load_basin_area(data_dir, domain="15cdec").set_index(
+        areas = load_basin_area(data_dir, domain=ref).set_index(
             "basin")["area_mi2"].to_dict()
     except FileNotFoundError:
         areas = {}
 
     records = []
     for b in basins:
-        sim = run_basin(b, data_dir=data_dir, domain="15cdec", forcing=forcing,
+        sim = run_basin(b, data_dir=data_dir, domain=domain, forcing=forcing,
                         params=params, parallel=parallel).rename(
                             columns={"flow": "flow_sim"})
         obs = load_gage(data_dir, basin=b)[["date", "flow"]].rename(
@@ -233,16 +235,18 @@ def evaluate_checkpoint(
 
     ck = torch.load(ckpt_path, map_location="cpu", weights_only=False)
     variant = ck["variant"]
+    domain = ck.get("domain", "15cdec")
     out = Path(out_dir if out_dir is not None else f"artifacts/dpl/{variant}")
     out.mkdir(parents=True, exist_ok=True)
 
-    dom = load_domain_tensors(data_dir, device="cpu", dtype=torch.float64)
+    dom = load_domain_tensors(data_dir, domain=domain, device="cpu",
+                              dtype=torch.float64)
     stats = FeatureSet(x=_np.empty((0, 0), dtype=_np.float32), **ck["features"])
     fs = build_features(dom.hrus, variant=variant,
                         forcing=dom.forcing if variant == "climate" else None,
                         climate_window=stats.climate_window,
                         climate_product=stats.climate_product,
-                        physical_path=(soilveg_path(data_dir, "15cdec")
+                        physical_path=(soilveg_path(data_dir, domain)
                                        if variant == "physical" else None),
                         stats=stats)
     x = torch.as_tensor(fs.x).to("cpu", torch.float64)
@@ -265,7 +269,7 @@ def evaluate_checkpoint(
           f"{ck.get('cal_kge', float('nan')):.4f})", flush=True)
     return score_frozen(dpl_df, data_dir, out,
                         label=label if label is not None else f"dpl_{variant}",
-                        parallel=parallel)
+                        domain=domain, parallel=parallel)
 
 
 def fidelity_benchmark(

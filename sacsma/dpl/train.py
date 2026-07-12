@@ -114,6 +114,7 @@ def train(
     *,
     resume: bool = False,
     basins: tuple[str, ...] | None = None,   # debug subset (default: all 15)
+    domain: str = "15cdec",                  # 15cdec HRU cloud | 15cdec_grid native grid
 ) -> Path:
     """Train one feature variant; returns the output directory."""
     cfg = cfg or DplConfig()
@@ -128,14 +129,15 @@ def train(
     ckdir.mkdir(parents=True, exist_ok=True)
     log_path = out / "train_log.csv"
 
-    dom = load_domain_tensors(data_dir, device=dev, dtype=dtype, basins=basins)
+    dom = load_domain_tensors(data_dir, domain=domain, device=dev, dtype=dtype,
+                              basins=basins)
     calobs = load_cal_obs(dom, data_dir, cal_start=cfg.cal_start)
     fs = build_features(
         dom.hrus, variant=variant,
         forcing=dom.forcing if variant == "climate" else None,
         climate_product="historical_livneh_unsplit" if variant == "climate" else None,
         fourier_k=cfg.fourier_k,
-        physical_path=(soilveg_path(data_dir, "15cdec")
+        physical_path=(soilveg_path(data_dir, domain)
                        if variant == "physical" else None),
     )
     x = torch.as_tensor(fs.x).to(dev, dtype)
@@ -183,7 +185,7 @@ def train(
         print(f"train: learned spatial smoother on (gnn_k={cfg.gnn_k}, "
               f"attr_scale={cfg.gnn_attr_scale}; zero-init mixing = exact v1 "
               f"at init)", flush=True)
-    priors = ga_priors(load_params(data_dir, domain="15cdec"), dom.hrus)
+    priors = ga_priors(load_params(data_dir, domain=domain), dom.hrus)
     net.init_from_priors(priors)
     opt = torch.optim.AdamW(net.parameters(), lr=cfg.lr,
                             weight_decay=cfg.weight_decay)
@@ -273,7 +275,7 @@ def train(
         torch.save({"net": net.state_dict(), "opt": opt.state_dict(),
                     "sched": sched.state_dict(), "epoch": epoch,
                     "best_kge": best_kge, "stale": stale, "cal_kge": kge,
-                    "cfg": asdict(cfg), "variant": variant,
+                    "cfg": asdict(cfg), "variant": variant, "domain": domain,
                     "net_config": {"hidden": cfg.hidden, "embed": cfg.embed,
                                    "dropout": cfg.dropout,
                                    "grouped_heads": cfg.grouped_heads,
