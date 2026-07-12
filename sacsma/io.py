@@ -20,23 +20,33 @@ import pandas as pd
 DEFAULT_DOMAIN = "15cdec"
 #: the 15-CDEC application's domain.
 CDEC15_DOMAIN = "15cdec"
+#: the coarse 1/16-deg grid-aligned parallel of 15cdec — one unit per native
+#: Livneh cell (vs the ~3.8x-denser off-grid HRU cloud); see data/cdec15_grid
+#: and data/INVENTORY.md.
+CDEC15_GRID_DOMAIN = "15cdec_grid"
 #: the CalSim/CalLite application's domains.
 CALSIM_DOMAINS = ("9unimp", "11obs", "12rim")
 
 
 def domain_dir(data_dir: str | Path = "data", domain: str = DEFAULT_DOMAIN) -> Path:
-    """Application data directory: ``data/cdec15`` for 15cdec, ``data/calsim`` else."""
+    """Application data directory: ``data/cdec15`` for 15cdec, ``data/cdec15_grid``
+    for its grid parallel, ``data/calsim`` for the CalSim domains."""
     if domain == CDEC15_DOMAIN:
         return Path(data_dir) / "cdec15"
+    if domain == CDEC15_GRID_DOMAIN:
+        return Path(data_dir) / "cdec15_grid"
     if domain in CALSIM_DOMAINS:
         return Path(data_dir) / "calsim"
-    raise ValueError(f"unknown domain {domain!r} (expected {CDEC15_DOMAIN} or one of {CALSIM_DOMAINS})")
+    raise ValueError(
+        f"unknown domain {domain!r} (expected {CDEC15_DOMAIN}, {CDEC15_GRID_DOMAIN}, "
+        f"or one of {CALSIM_DOMAINS})"
+    )
 
 
 def _sfx(domain: str) -> str:
-    """Filename suffix: 15cdec files are unsuffixed (one domain per app dir);
+    """Filename suffix: the 15cdec domains are unsuffixed (one domain per app dir);
     the calsim files carry ``_<domain>`` (three domains share the dir)."""
-    return "" if domain == CDEC15_DOMAIN else f"_{domain}"
+    return "" if domain in (CDEC15_DOMAIN, CDEC15_GRID_DOMAIN) else f"_{domain}"
 
 
 #: Default forcing product (filename stem): the historical **Livneh-unsplit**
@@ -60,6 +70,19 @@ def forcing_path(
 ) -> Path:
     """Full path of a domain's forcing store (``<app dir>/forcing/<name>.nc``)."""
     return domain_dir(data_dir, domain) / "forcing" / forcing_name(domain, product)
+
+
+def soilveg_path(data_dir: str | Path = "data", domain: str = DEFAULT_DOMAIN) -> Path:
+    """Per-HRU continuous soil/veg/terrain feature table (POLARIS + LANDFIRE +
+    3DEP + MODIS-LAI sampled at each HRU point; see ``data/raw_gis/SOURCES.md``).
+    One row per HRU in ``hruinfo`` order, keyed (non-uniquely) by ``key``."""
+    return domain_dir(data_dir, domain) / f"soilveg_continuous{_sfx(domain)}.csv"
+
+
+def lai_climatology_path(data_dir: str | Path = "data", domain: str = DEFAULT_DOMAIN) -> Path:
+    """Per-HRU 46-value 8-day MODIS-LAI day-of-year climatology (companion to
+    :func:`soilveg_path`; the Noah-ET canopy driver)."""
+    return domain_dir(data_dir, domain) / f"lai_climatology{_sfx(domain)}.csv"
 
 
 #: 1 cfs sustained for a day, spread over 1 mi^2, equals this many mm.

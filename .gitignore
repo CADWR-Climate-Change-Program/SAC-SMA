@@ -7,6 +7,14 @@ CLAUDE.md
 # data/ store was derived from (see data/INVENTORY.md for provenance).
 tmp/
 
+# Raw California/CONUS GIS rasters parked for continuous soil/veg features and
+# future domain extension (POLARIS/gNATSGO/LANDFIRE/LAI/3DEP/NLCD) — large,
+# staged locally; only the small per-HRU derived CSVs are tracked. Provenance:
+# data/raw_gis/SOURCES.md. The provenance doc + reusable HRU sampler are tracked.
+data/raw_gis/*
+!data/raw_gis/SOURCES.md
+!data/raw_gis/sample_gis.py
+
 # --- Derived data ---
 # The forcing stores are tracked via git-LFS (see .gitattributes); any OTHER
 # forcing/* file stays out of git. Small organized tables and the GeoPackage

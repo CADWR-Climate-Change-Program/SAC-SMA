@@ -1,22 +1,23 @@
-# Conda environment for the sacsma package.
+# Conda environment for the sacsma package (incl. the torch-based sacsma.dpl subpackage).
 #   conda env create -f environment.yml
 #   conda activate sacsma
-#   pip install -e .            # install the package in editable mode
 #
-# Python is pinned to 3.11 because Numba lags the newest CPython releases.
+# Python 3.14 + numba 0.65 + conda-forge pytorch 2.10/cuda130 is the combo verified
+# working on this machine (RTX PRO 1000, driver CUDA 13.1).
 name: sacsma
 channels:
   - conda-forge
 dependencies:
-  - python=3.11
-  # Pin the BLAS implementation to OpenBLAS. The conda-forge MKL builds have
-  # shipped preview releases (e.g. mkl 2026.x) whose ABI mismatches numpy's,
-  # which makes 2-D matmul / np.linalg / np.corrcoef crash on Windows with a
-  # delay-load error (0xC06D007F). OpenBLAS avoids that. (Our model uses no
-  # BLAS; this only matters for metrics + matplotlib.)
-  - libblas=*=*openblas
+  - python=3.14
+  # The conda-forge CUDA pytorch builds are MKL-linked (cuda130_mkl), so the old
+  # libblas=*=*openblas pin can't hold. The crash it guarded against was the mkl 2026.x
+  # PREVIEW ABI mismatch with numpy (2-D matmul / np.linalg delay-load error 0xC06D007F
+  # on Windows) - pin mkl below 2026 instead. (The model itself uses no BLAS; this
+  # matters only for metrics + matplotlib.)
+  - mkl<2026
+  - pytorch=2.10.*=cuda130*   # sacsma.dpl differentiable model (GPU training)
   - numpy>=1.24
-  - numba>=0.59
+  - numba>=0.65
   - pandas>=2.0
   - matplotlib>=3.7   # cal/val diagnostics + cross-compare figures
   # gridded forcing store (NetCDF)

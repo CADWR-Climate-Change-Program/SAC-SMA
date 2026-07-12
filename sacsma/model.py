@@ -102,6 +102,20 @@ def default_is_outlet(flowlen: float) -> int:
     return 1 if flowlen == 0.0 else 0
 
 
+def _pet_and_recession(tavg, doy, lat, ga_row):
+    """PET series and the optional seasonal ``(uzk, lzpk, lzsk)`` override.
+
+    Static rows: PET = ``hamon_pet(..., Kpet)`` and ``recession=None`` (the
+    bit-identical reference path).  Seasonal rows (day-of-year harmonics): PET =
+    ``Kpet(doy) * rawPET`` and the three recession rates become per-day arrays,
+    selecting the seasonal SAC-SMA path (:func:`sacsma.sma._sacsma_core_seasonal`).
+    """
+    if P.is_seasonal(ga_row):
+        pet = P.kpet_series(ga_row, doy) * hamon_pet(tavg, doy, lat, 1.0)
+        return pet, P.recession_series(ga_row, doy)
+    return hamon_pet(tavg, doy, lat, P.kpet(ga_row)), None
+
+
 def run_hru(
     prcp: np.ndarray,
     tavg: np.ndarray,
@@ -115,9 +129,9 @@ def run_hru(
     is_outlet: int | None = None,
 ) -> np.ndarray:
     """Run the full coupled pipeline for one HRU; return routed flow (mm/day)."""
-    pet = hamon_pet(tavg, doy, lat, P.kpet(ga_row))
+    pet, recession = _pet_and_recession(tavg, doy, lat, ga_row)
     eff_p = snow17(prcp, tavg, doy, is_leap, elev, P.snow_par(ga_row))[0]
-    surf, base, _tet, _state = sac_sma(pet, eff_p, P.sma_par(ga_row))
+    surf, base, _tet, _state = sac_sma(pet, eff_p, P.sma_par(ga_row), recession=recession)
     if is_outlet is None:
         is_outlet = default_is_outlet(flowlen)
     runoff, _baseflow = lohmann(surf, base, flowlen, P.routing_par(ga_row), is_outlet)
@@ -140,9 +154,9 @@ def run_hru_components(
     (e.g. a CalSim node) can either area-weight the un-routed runoff (``surf+base``)
     or Lohmann-route with a catchment-specific ``flowlen``.  See :mod:`sacsma.calsim.catchments`.
     """
-    pet = hamon_pet(tavg, doy, lat, P.kpet(ga_row))
+    pet, recession = _pet_and_recession(tavg, doy, lat, ga_row)
     eff_p = snow17(prcp, tavg, doy, is_leap, elev, P.snow_par(ga_row))[0]
-    surf, base, _tet, _state = sac_sma(pet, eff_p, P.sma_par(ga_row))
+    surf, base, _tet, _state = sac_sma(pet, eff_p, P.sma_par(ga_row), recession=recession)
     return surf, base
 
 
@@ -216,6 +230,7 @@ def run_basin(
     comp_cache: dict | None = None,
     parallel: bool = False,
     product: str = DEFAULT_FORCING,
+    params: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """Forward-simulate one basin from the GA optimum.
 
@@ -229,6 +244,11 @@ def run_basin(
     :func:`load_domain_forcing` and pass it as ``forcing`` so the ~900 MB/var
     read happens a single time across all basins.
 
+    ``params`` substitutes an alternate parameter table for the domain's
+    archived GA optimum (same columns as ``ga_optimum.csv``; keyed by ``key``
+    with an optional per-basin ``basin`` column — the dPL exports use this).
+    Everything else, including the physics, is unchanged.
+
     Returns DataFrame[date, flow] of area-weighted gauge flow (mm/day).
     """
     if forcing is None and (
@@ -241,7 +261,7 @@ def run_basin(
     return _run_basin_native(
         basin, data_dir=data_dir, domain=domain, start=start, end=end,
         progress=progress, forcing=forcing, comp_cache=comp_cache, parallel=parallel,
-        product=product,
+        product=product, params=params,
     )
 
 
@@ -317,6 +337,7 @@ def _run_basin_native(
     comp_cache: dict | None = None,
     parallel: bool = False,
     product: str = DEFAULT_FORCING,
+    params: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """Native-path basin run from the organized ``data/`` artifacts.
 
@@ -334,12 +355,17 @@ def _run_basin_native(
     dd: str | Path = data_dir if data_dir is not None else "data"
     if forcing is None:
         forcing = load_domain_forcing(dd, domain=domain, start=start, end=end, product=product)
-    params_df = load_params(dd, domain=domain)
+    params_df = params if params is not None else load_params(dd, domain=domain)
     # per-watershed calibrations (e.g. 9unimp) repeat shared cells with different
     # params per basin; filter to this basin before indexing by key.
     if "basin" in params_df.columns:
         params_df = params_df[params_df["basin"] == basin]
     params_df = params_df.set_index("key")
+    # Seasonal (day-of-year harmonic) params run only on the serial path — the
+    # numba kernels take scalar params.  Fall back to serial rather than
+    # silently dropping the seasonality.
+    if parallel and any(str(c).endswith("_asin") for c in params_df.columns):
+        parallel = False
     hrus = load_hru_table(dd, domain=domain)
     sub = hrus[hrus["basin"] == basin].reset_index(drop=True)
     if sub.empty:

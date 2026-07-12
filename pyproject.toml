@@ -34,6 +34,11 @@ io = [
 dev = [
     "ruff>=0.4",
 ]
+dpl = [
+    # differentiable SAC-SMA + parameter-learning network (sacsma.dpl); the core
+    # package runs without it. Prefer the conda-forge CUDA build (environment.yml).
+    "torch>=2.10",
+]
 
 [project.scripts]
 sacsma = "sacsma.cli:main"

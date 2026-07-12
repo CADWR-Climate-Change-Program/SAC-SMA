@@ -262,17 +262,50 @@ def _sacsma_core(pet, pr_eff, par, state):
     return surf_tot, base_tot, tet_tot, new_state
 
 
+@njit
+def _sacsma_core_seasonal(pet, pr_eff, par, uzk_t, lzpk_t, lzsk_t, state):
+    """Time-varying-recession variant of :func:`_sacsma_core`.
+
+    ``uzk``/``lzpk``/``lzsk`` (par[5:8]) are supplied as per-day arrays instead
+    of scalars (the dPL seasonal-parameter experiment).  It steps the FROZEN
+    ``_sacsma_core`` one day at a time, injecting that day's recession rates into
+    a copy of ``par`` and carrying state forward -- so each day's numerics are
+    byte-identical to the reference core, and with constant arrays this reduces
+    EXACTLY to ``_sacsma_core`` (the reference physics is never duplicated or
+    edited).  Kpet-seasonality is applied upstream as a PET scaling, not here.
+    """
+    n = pet.shape[0]
+    surf_tot = np.empty(n)
+    base_tot = np.empty(n)
+    tet_tot = np.empty(n)
+    st = state.copy()
+    par_i = par.copy()
+    for i in range(n):
+        par_i[5] = uzk_t[i]
+        par_i[6] = lzpk_t[i]
+        par_i[7] = lzsk_t[i]
+        s, b, t, st = _sacsma_core(pet[i:i + 1], pr_eff[i:i + 1], par_i, st)
+        surf_tot[i] = s[0]
+        base_tot[i] = b[0]
+        tet_tot[i] = t[0]
+    return surf_tot, base_tot, tet_tot, st
+
+
 # Initial state used by the archived 15-CDEC GA run:
 #   UZ uztwc=uzfwc=adimc=0 ; LZ lztwc=lzfsc=lzfpc=100.
 # Order matches the state vector: [uztwc, uzfwc, lztwc, lzfsc, lzfpc, adimc].
 DEFAULT_INIT_STATE = np.array([0.0, 0.0, 100.0, 100.0, 100.0, 0.0])
 
 
-def sac_sma(pet: np.ndarray, pr_eff: np.ndarray, par, init_state=None):
+def sac_sma(pet: np.ndarray, pr_eff: np.ndarray, par, init_state=None,
+            recession=None):
     """Run SAC-SMA over a daily window.
 
     Returns ``(surf, base, tet, new_state)`` in mm/day.  ``pr_eff`` is the
-    SNOW-17 outflow (effective precipitation).
+    SNOW-17 outflow (effective precipitation).  ``recession``, if given, is a
+    tuple of per-day ``(uzk, lzpk, lzsk)`` arrays (the seasonal-parameter path);
+    ``recession=None`` uses the scalar ``par[5:8]`` and is bit-identical to the
+    reference core.
     """
     pet = np.asarray(pet, dtype=float)
     pr_eff = np.asarray(pr_eff, dtype=float)
@@ -280,4 +313,7 @@ def sac_sma(pet: np.ndarray, pr_eff: np.ndarray, par, init_state=None):
     if init_state is None:
         init_state = DEFAULT_INIT_STATE.copy()
     init_state = np.asarray(init_state, dtype=float)
-    return _sacsma_core(pet, pr_eff, par, init_state)
+    if recession is None:
+        return _sacsma_core(pet, pr_eff, par, init_state)
+    uzk_t, lzpk_t, lzsk_t = (np.asarray(a, dtype=float) for a in recession)
+    return _sacsma_core_seasonal(pet, pr_eff, par, uzk_t, lzpk_t, lzsk_t, init_state)
