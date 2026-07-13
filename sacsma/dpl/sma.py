@@ -349,9 +349,10 @@ def run_sacsma(
     if state is None:
         state = SacState.reference_init(n, pet.device, pet.dtype)
     if et_mode == "noah":
-        from .et_noah import NoahCanopyState, noah_et_step
+        from .et_noah import NoahCanopyState, noah_et_step, noah_lite_et_step
         if noah is None:
             raise ValueError("et_mode='noah' requires the noah driver dict")
+        lite = bool(noah.get("lite"))
         cstate = noah.get("canopy") or NoahCanopyState.zeros(n, pet.device, pet.dtype)
         wc = cstate.wc
     grad = torch.is_grad_enabled() and (
@@ -378,10 +379,20 @@ def run_sacsma(
                   "lzfsc": state.lzfsc, "lzfpc": state.lzfpc, "adimc": state.adimc,
                   "wc": wc}
             doy_t = noah["doy"][t] if noah["doy"].dim() == 1 else noah["doy"][:, t]
-            eff_p, ns, et_soil = noah_et_step(
-                st, pr_eff[:, t], pet[:, t],
-                noah["tavg"][:, t], noah["tmin"][:, t], noah["tmax"][:, t],
-                doy_t, noah["lat_rad"], noah["elev"], params, noah["cp"])
+            # index any (N,T) dynamic canopy param (e.g. soil_chi) to day t;
+            # static (N,) canopy params pass through unchanged.
+            cp_t = {k: (v[:, t] if v.dim() == 2 else v)
+                    for k, v in noah["cp"].items()}
+            if lite:
+                eff_p, ns, et_soil = noah_lite_et_step(
+                    st, pr_eff[:, t], pet[:, t], params, cp_t,
+                    noah["veg_frac"], noah["lai"][:, t])
+            else:
+                eff_p, ns, et_soil = noah_et_step(
+                    st, pr_eff[:, t], pet[:, t],
+                    noah["tavg"][:, t], noah["tmin"][:, t], noah["tmax"][:, t],
+                    doy_t, noah["lat_rad"], noah["elev"], params, cp_t,
+                    noah["veg_frac"], noah["lai"][:, t])
             state = SacState(uztwc=ns["uztwc"], uzfwc=ns["uzfwc"], lztwc=ns["lztwc"],
                              lzfsc=ns["lzfsc"], lzfpc=ns["lzfpc"], adimc=ns["adimc"])
             wc = ns["wc"]

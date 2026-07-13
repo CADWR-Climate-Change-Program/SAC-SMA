@@ -110,7 +110,8 @@ def _dpl_train(args: argparse.Namespace) -> int:
         n_inc=args.n_inc, perc_mode=args.perc_mode,
         fracp_floor=args.fracp_floor, dtype=args.dtype, device=args.device,
         loss=args.loss, log_loss_lambda=args.log_lambda,
-        var_loss_lambda=args.var_lambda, lr=args.lr,
+        var_loss_lambda=args.var_lambda, bias_loss_lambda=args.bias_lambda,
+        lr=args.lr,
         lr_warmup_epochs=args.warmup_epochs, n_epochs=args.epochs,
         spinup_refresh_every=args.spinup_refresh,
         hidden=args.hidden, embed=args.embed, dropout=args.dropout,
@@ -122,6 +123,10 @@ def _dpl_train(args: argparse.Namespace) -> int:
         adaptive_loss=args.adaptive_loss, adaptive_loss_beta=args.adaptive_beta,
         seasonal_params=(tuple(args.seasonal.split(",")) if args.seasonal else ()),
         seasonal_amp=args.seasonal_amp,
+        et_mode=args.et, noah_pet=args.noah_pet, canopy_lite=args.canopy_lite,
+        dynamic_params=(tuple(args.dynamic_params.split(","))
+                        if args.dynamic_params else ()),
+        dynamic_amp=args.dynamic_amp, dynamic_window=args.dynamic_window,
         seed=args.seed, use_cuda_graphs=not args.no_graphs,
     )
     train(args.variant, data_dir=args.data_dir, out_dir=args.out, cfg=cfg,
@@ -255,6 +260,28 @@ def main(argv: list[str] | None = None) -> int:
                     help="training domain: 15cdec HRU cloud (7891) or the native "
                          "1/16-deg Livneh grid (2074 cells); baked into the "
                          "checkpoint so evaluate scores the same domain")
+    tr.add_argument("--et", default="sac", choices=["sac", "noah"],
+                    help="ET scheme: sac = frozen Hamon PET (scorable via "
+                         "run_basin); noah = Noah canopy-resistance ET (NEW "
+                         "physics, needs per-cell tmin/tmax = 15cdec_grid, "
+                         "scored via the torch pipeline)")
+    tr.add_argument("--noah-pet", default="hamon",
+                    choices=["hamon", "priestley_taylor"],
+                    help="Noah potential-ET source: hamon = temperature-only "
+                         "(low ET ceiling); priestley_taylor = energy-based from "
+                         "Bristow-Campbell net radiation (lifts the ceiling)")
+    tr.add_argument("--canopy-lite", action="store_true",
+                    help="minimal identifiable Noah ET: AET=beta(soil moisture)*PET "
+                         "with ONE learned exponent (soil_chi); drops the Jarvis "
+                         "resistance, froot, redist_k and the separate canopy trunk "
+                         "(needs --et noah; --noah-pet still selects the potential)")
+    tr.add_argument("--dynamic-params", default="",
+                    help="comma list of params made climate-state-dependent "
+                         "(Kpet | canopy params e.g. soil_chi); '' = static")
+    tr.add_argument("--dynamic-window", type=int, default=365,
+                    help="trailing-precip window (days) for the wetness state index")
+    tr.add_argument("--dynamic-amp", type=float, default=0.5,
+                    help="tanh cap on the state-response coeff |b|")
     tr.add_argument("--out", default=None,
                     help="output dir (default: artifacts/dpl/<variant>)")
     tr.add_argument("--device", default="cuda", choices=["cuda", "cpu"],
@@ -276,6 +303,9 @@ def main(argv: list[str] | None = None) -> int:
     tr.add_argument("--var-lambda", type=float, default=1.0,
                     help="per-chunk variance-matching weight (std ratio - 1)^2; "
                          "counters squared-error variance damping (0 disables)")
+    tr.add_argument("--bias-lambda", type=float, default=0.0,
+                    help="per-chunk bias penalty (mean ratio - 1)^2; the KGE beta "
+                         "term the MSE/NNSE loss lacks (0 disables)")
     tr.add_argument("--fourier-k", type=int, default=0,
                     help="net-v2: spatial Fourier feature order (4k extra "
                          "features; low-frequency regional fields; 0 = off)")

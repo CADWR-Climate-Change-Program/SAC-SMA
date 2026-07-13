@@ -18,7 +18,7 @@ import pandas as pd
 import torch
 
 from ..cdec15 import BASINS, CAL_END, load_gage
-from ..io import load_hru_table, load_params
+from ..io import domain_dir, load_hru_table, load_params
 from ..model import DomainForcing, load_domain_forcing
 from .config import PARAM_ORDER, validate_ga_optimum
 
@@ -38,6 +38,23 @@ class DomainTensors:
     W: torch.Tensor            # (B, N) basin aggregation (rows sum to 1)
     device: torch.device
     dtype: torch.dtype
+    #: per-cell (n_cells, T) Tmin/Tmax for the Noah ET path (CPU float32, like
+    #: forcing.prcp); None unless the domain has a per-cell tminmax sidecar
+    #: (only 15cdec_grid — its cells are ON the WGEN lattice).
+    tmin: np.ndarray | None = None
+    tmax: np.ndarray | None = None
+    #: OBSERVED canopy structure for the Noah ET path (only 15cdec_grid): the
+    #: per-HRU green-vegetation fraction (static, on-device (N,)) and the per-CELL
+    #: daily LAI climatology look-up (CPU float32 (n_cells, 366), indexed by doy).
+    #: Pinned inputs — never learned.  None unless the domain ships the soilveg/
+    #: LAI sidecars.
+    veg_frac: torch.Tensor | None = None
+    lai_lut: np.ndarray | None = None
+    #: climate-STATE index for dynamic (time-varying) parameters: a per-cell
+    #: (n_cells, T) rolling-precip wetness signal, CAL-standardized (no val
+    #: leakage), clamped ~[-3,3] (CPU float32, like tmin).  None unless a dynamic
+    #: run requested it (drought -> negative, wet -> positive).
+    state: np.ndarray | None = None
 
     @property
     def n_hru(self) -> int:
@@ -57,6 +74,36 @@ class DomainTensors:
             np.ascontiguousarray(self.forcing.tavg[self.cell_idx, t0:t1]),
         ).to(self.device, self.dtype)
         return pr, ta, self.doy[t0:t1], self.is_leap[t0:t1]
+
+    def chunk_tmm(self, t0: int, t1: int):
+        """(tmin, tmax) for days [t0, t1) gathered to HRU rows; (None, None) if
+        the domain has no per-cell Tmin/Tmax (Noah ET then uses the tavg fallback)."""
+        if self.tmin is None or self.tmax is None:
+            return None, None
+        tn = torch.as_tensor(
+            np.ascontiguousarray(self.tmin[self.cell_idx, t0:t1]),
+        ).to(self.device, self.dtype)
+        tx = torch.as_tensor(
+            np.ascontiguousarray(self.tmax[self.cell_idx, t0:t1]),
+        ).to(self.device, self.dtype)
+        return tn, tx
+
+    def chunk_lai(self, t0: int, t1: int):
+        """Observed daily LAI (N, t1-t0) for the Noah ET path, gathered to HRU
+        rows by each day's day-of-year; None if the domain has no LAI sidecar."""
+        if self.lai_lut is None:
+            return None
+        doy_idx = self.forcing.doy[t0:t1].astype(np.int64) - 1   # 0..365
+        lai = self.lai_lut[self.cell_idx][:, doy_idx]            # (N, t1-t0)
+        return torch.as_tensor(np.ascontiguousarray(lai)).to(self.device, self.dtype)
+
+    def chunk_state(self, t0: int, t1: int):
+        """Climate-state index (N, t1-t0) for days [t0, t1) gathered to HRU rows;
+        None if the domain has no dynamic-parameter state field."""
+        if self.state is None:
+            return None
+        s = self.state[self.cell_idx, t0:t1]
+        return torch.as_tensor(np.ascontiguousarray(s)).to(self.device, self.dtype)
 
     def ga_params(self, data_dir: str = "data") -> dict[str, torch.Tensor]:
         """Archived GA optimum expanded to per-HRU (N,) tensors, bounds-asserted."""
@@ -116,6 +163,22 @@ def load_cal_obs(
     )
 
 
+def _compute_state_index(forcing, dates, window: int, cal_end: str) -> np.ndarray:
+    """Per-cell climate-state (wetness) index for dynamic parameters: the
+    ``window``-day trailing-mean precipitation, standardized with CALIBRATION-
+    period mean/std only (no val leakage) and clamped to [-3, 3].  Drought reads
+    negative, wet years positive.  ``(n_cells, T)`` float32."""
+    prcp = forcing.prcp.astype(np.float64)                      # (n_cells, T)
+    csum = np.cumsum(prcp, axis=1)
+    roll = np.empty_like(prcp)
+    roll[:, :window] = csum[:, :window] / np.arange(1, window + 1)   # expanding start
+    roll[:, window:] = (csum[:, window:] - csum[:, :-window]) / window
+    cal = dates <= pd.Timestamp(cal_end)
+    mu = roll[:, cal].mean(axis=1, keepdims=True)
+    sd = roll[:, cal].std(axis=1, keepdims=True).clip(min=1e-6)
+    return np.clip((roll - mu) / sd, -3.0, 3.0).astype(np.float32)
+
+
 def load_domain_tensors(
     data_dir: str = "data",
     *,
@@ -123,9 +186,14 @@ def load_domain_tensors(
     device: torch.device | str = "cuda",
     dtype: torch.dtype = torch.float32,
     basins: tuple[str, ...] | None = None,
+    dynamic_window: int | None = None,
 ) -> DomainTensors:
     device = torch.device(device)
     forcing = load_domain_forcing(data_dir, domain=domain)
+    tmin_cells, tmax_cells = _load_percell_tminmax(data_dir, domain, forcing)
+    veg_cells, lai_lut = _load_canopy_obs(data_dir, domain, forcing)
+    state_cells = (None if dynamic_window is None else
+                   _compute_state_index(forcing, forcing.dates, dynamic_window, CAL_END))
     hrus = load_hru_table(data_dir, domain=domain)
     basins = tuple(basins if basins is not None else BASINS)
     hrus = hrus[hrus["basin"].isin(basins)].reset_index(drop=True)
@@ -145,7 +213,76 @@ def load_domain_tensors(
     doy = torch.as_tensor(forcing.doy.astype(np.float64)).to(device, dtype)
     is_leap = torch.as_tensor(forcing.is_leap.astype(bool)).to(device)
 
+    veg_frac = (None if veg_cells is None else
+                torch.as_tensor(veg_cells[cell_idx].astype(np.float64)).to(
+                    device, dtype))
     return DomainTensors(dates=dates, doy=doy, is_leap=is_leap, forcing=forcing,
                          hrus=hrus, basins=basins, cell_idx=cell_idx,
                          lat_rad=lat_rad, elev=elev, flowlen=flowlen,
-                         W=w.to(device), device=device, dtype=dtype)
+                         W=w.to(device), device=device, dtype=dtype,
+                         tmin=tmin_cells, tmax=tmax_cells,
+                         veg_frac=veg_frac, lai_lut=lai_lut, state=state_cells)
+
+
+def _load_canopy_obs(data_dir: str, domain: str, forcing):
+    """OBSERVED canopy structure for the Noah ET path, aligned to ``forcing``
+    cell order — or (None, None) if the sidecars are absent.
+
+    Returns ``(veg_frac_cells (n_cells,), lai_lut (n_cells, 366))``:
+
+    * ``veg_frac`` = LANDFIRE EVC cover fraction (``EVC_cover_pct`` / 100), from
+      ``<domain>/soilveg_continuous.csv``, clamped to CANOPY_BOUNDS.
+    * ``lai_lut`` = the per-cell daily LAI climatology, linearly interpolated
+      from the 46 8-day samples (``lai_doy001..361``) in
+      ``<domain>/lai_climatology.csv`` onto day-of-year 1..366 (winter tail
+      flat-held past the last sample), clamped to CANOPY_BOUNDS.
+
+    Both are PINNED inputs (never learned).  Only 15cdec_grid ships them.
+    """
+    import re
+
+    from .config import CANOPY_BOUNDS
+
+    ddir = domain_dir(data_dir, domain)
+    sv_path = ddir / "soilveg_continuous.csv"
+    lai_path = ddir / "lai_climatology.csv"
+    if not sv_path.exists() or not lai_path.exists():
+        return None, None
+
+    vlo, vhi = CANOPY_BOUNDS["veg_frac"]
+    # observed LAI keeps only a tiny positive floor (numerical safety) — NOT the
+    # learned-param 0.5 bound, which clamped ~half of the driest basins' days and
+    # spuriously inflated their canopy conductance.
+    llo, lhi = 0.05, CANOPY_BOUNDS["lai"][1]
+
+    sv = pd.read_csv(sv_path, usecols=["key", "EVC_cover_pct"]).set_index("key")
+    veg = (sv["EVC_cover_pct"].reindex(forcing.pos).to_numpy(np.float64) / 100.0)
+    veg_frac = np.clip(veg, vlo, vhi).astype(np.float32)              # (n_cells,)
+
+    lai = pd.read_csv(lai_path).rename(columns={"cellkey": "key"}).set_index("key")
+    doy_cols = sorted((c for c in lai.columns if c.startswith("lai_doy")),
+                      key=lambda c: int(re.sub(r"\D", "", c)))
+    sample_doys = np.array([int(re.sub(r"\D", "", c)) for c in doy_cols], float)
+    samples = lai.reindex(forcing.pos)[doy_cols].to_numpy(np.float64)  # (n_cells, 46)
+    target = np.arange(1, 367, dtype=float)                          # doy 1..366
+    lut = np.vstack([np.interp(target, sample_doys, row) for row in samples])
+    lai_lut = np.clip(lut, llo, lhi).astype(np.float32)              # (n_cells, 366)
+    return veg_frac, lai_lut
+
+
+def _load_percell_tminmax(data_dir: str, domain: str, forcing):
+    """Per-cell (n_cells, T) Tmin/Tmax aligned to ``forcing`` cell order, from
+    ``<domain>/tminmax_livneh_percell.nc`` — or (None, None) if absent (the Noah
+    ET path then falls back to synthesising tmin/tmax from tavg).  Only
+    15cdec_grid ships this sidecar (its cells sit on the WGEN lattice)."""
+    path = domain_dir(data_dir, domain) / "tminmax_livneh_percell.nc"
+    if not path.exists():
+        return None, None
+    import xarray as xr
+
+    ds = xr.open_dataset(path)
+    key_row = {str(k): i for i, k in enumerate(ds["key"].values)}
+    order = np.array([key_row[k] for k in forcing.pos], dtype=np.int64)  # forcing order
+    tmin = ds["tmin"].values[order].astype(np.float32)
+    tmax = ds["tmax"].values[order].astype(np.float32)
+    return tmin, tmax

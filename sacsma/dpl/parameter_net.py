@@ -21,7 +21,18 @@ import math
 import torch
 import torch.nn as nn
 
-from .config import BOUNDS, FIXED_PARAMS, FREE_PARAMS, LOG_SPACE_PARAMS, PARAM_GROUPS
+from .config import (
+    BOUNDS,
+    CANOPY_BOUNDS,
+    CANOPY_LEARNED_PARAMS,
+    CANOPY_LITE_LEARNED,
+    CANOPY_LOG_PARAMS,
+    DYNAMIC_SAC_PARAMS,
+    FIXED_PARAMS,
+    FREE_PARAMS,
+    LOG_SPACE_PARAMS,
+    PARAM_GROUPS,
+)
 
 _MIN_NORM = 0.02   # keep prior logits away from the sigmoid tails
 
@@ -61,12 +72,29 @@ class ParameterNet(nn.Module):
                  dropout: float = 0.1, grouped_heads: bool = False,
                  gnn_k: int = 0, n_nodes: int | None = None,
                  seasonal_params: tuple[str, ...] = (),
-                 seasonal_amp: float = 0.18):
+                 seasonal_amp: float = 0.18, canopy: bool = False,
+                 canopy_separate_trunk: bool = True,
+                 canopy_lite: bool = False,
+                 dynamic_params: tuple[str, ...] = (),
+                 dynamic_amp: float = 0.5):
         super().__init__()
         self.grouped_heads = grouped_heads
         self.gnn_k = gnn_k
         self.seasonal_params = tuple(seasonal_params)
         self.seasonal_amp = float(seasonal_amp)
+        self.canopy = bool(canopy)
+        self.canopy_separate_trunk = bool(canopy_separate_trunk)
+        self.canopy_lite = bool(canopy_lite)
+        # which canopy params the head emits: LITE => soil_chi alone (the one
+        # streamflow-identifiable knob); FULL => the 7 physiology params.
+        self._canopy_learned = (CANOPY_LITE_LEARNED if self.canopy_lite
+                                else CANOPY_LEARNED_PARAMS)
+        # climate-state dynamic params, split by which trunk emits the coeff:
+        # SAC params off the shared trunk z, canopy params off the canopy trunk zc.
+        self.dynamic_amp = float(dynamic_amp)
+        self._dyn_sac = tuple(p for p in dynamic_params if p in DYNAMIC_SAC_PARAMS)
+        self._dyn_canopy = tuple(p for p in dynamic_params
+                                 if p in CANOPY_LEARNED_PARAMS)
         self.encoder = nn.Sequential(
             nn.Linear(n_features, hidden), nn.ReLU(), nn.Dropout(dropout),
             nn.Linear(hidden, embed), nn.ReLU(),
@@ -107,6 +135,51 @@ class ParameterNet(nn.Module):
         self.register_buffer("_lo", torch.where(is_log, lo.log(), lo))
         self.register_buffer("_hi", torch.where(is_log, hi.log(), hi))
         self.register_buffer("_is_log", is_log)
+        if self.canopy:
+            # Noah ET head: the LEARNED canopy params per node mapped into
+            # CANOPY_BOUNDS (rcmin log-space) — FULL = 7 physiology params, LITE
+            # = soil_chi alone (``self._canopy_learned``).  veg_frac + lai are
+            # OBSERVED (pinned per cell), NOT emitted here.  ZERO-init the head so
+            # sigmoid(0)=0.5 lands every param at its (log-aware) bound midpoint
+            # — a sane start.  FULL puts the head on a SEPARATE encoder
+            # (canopy_separate_trunk) so the 6 weak/non-identifiable physiology
+            # params cannot perturb the GA-prior SAC pathway; LITE emits the one
+            # soil_chi knob off the SHARED trunk z (no separate encoder needed).
+            # Emitted in a SEPARATE out["_canopy"] dict; NEVER in ga_optimum.
+            if self.canopy_separate_trunk:
+                self.canopy_encoder = nn.Sequential(
+                    nn.Linear(n_features, hidden), nn.ReLU(), nn.Dropout(dropout),
+                    nn.Linear(hidden, embed), nn.ReLU(),
+                )
+            self.canopy_head = nn.Linear(embed, len(self._canopy_learned))
+            with torch.no_grad():
+                self.canopy_head.weight.zero_()
+                self.canopy_head.bias.zero_()
+            clo = torch.tensor([CANOPY_BOUNDS[p][0] for p in self._canopy_learned],
+                               dtype=torch.float64)
+            chi = torch.tensor([CANOPY_BOUNDS[p][1] for p in self._canopy_learned],
+                               dtype=torch.float64)
+            c_is_log = torch.tensor(
+                [p in CANOPY_LOG_PARAMS for p in self._canopy_learned])
+            self.register_buffer("_c_lo", torch.where(c_is_log, clo.log(), clo))
+            self.register_buffer("_c_hi", torch.where(c_is_log, chi.log(), chi))
+            self.register_buffer("_c_is_log", c_is_log)
+
+        # Climate-state DYNAMIC heads: one bounded coeff b per dynamic param,
+        # ZERO-init so the field is EXACTLY static at init (clean superset, like
+        # the seasonal head).  The physics reconstructs param(t)=clamp(base +
+        # b*state(t), lo, hi).  SAC coeffs come off the shared trunk z, canopy
+        # coeffs off the canopy trunk zc.
+        if self._dyn_sac:
+            self.dynamic_head = nn.Linear(embed, len(self._dyn_sac))
+            with torch.no_grad():
+                self.dynamic_head.weight.zero_()
+                self.dynamic_head.bias.zero_()
+        if self._dyn_canopy:
+            self.canopy_dynamic_head = nn.Linear(embed, len(self._dyn_canopy))
+            with torch.no_grad():
+                self.canopy_dynamic_head.weight.zero_()
+                self.canopy_dynamic_head.bias.zero_()
 
     def set_neighbors(self, idx, w) -> None:
         """Load the (N, k) neighbor tables (numpy or tensor) into the buffers."""
@@ -157,6 +230,32 @@ class ParameterNet(nn.Module):
             for i, p in enumerate(self.seasonal_params):
                 out[f"{p}_asin"] = sc[:, 2 * i]
                 out[f"{p}_acos"] = sc[:, 2 * i + 1]
+        if self._dyn_sac:
+            # climate-state response coeff b per SAC dynamic param, off z; the
+            # physics adds b*state(t) in the _seasonal reconstruction.
+            ds = self.dynamic_amp * torch.tanh(self.dynamic_head(z))   # (N, |sac|)
+            for i, p in enumerate(self._dyn_sac):
+                out[f"{p}_dyn"] = ds[:, i]
+        if self.canopy:
+            # LEARNED canopy params (FULL: 7 physiology; LITE: soil_chi) via the
+            # same sigmoid->[lo,hi]->double-where-exp map, off the separate canopy
+            # trunk (FULL) or the shared z (LITE); returned SEPARATELY so they
+            # never collide with ga_optimum names.
+            zc = self.canopy_encoder(x) if self.canopy_separate_trunk else z
+            cs = torch.sigmoid(self.canopy_head(zc))     # (N, |canopy_learned|) in (0,1)
+            clo = self._c_lo.to(cs.dtype)
+            chi = self._c_hi.to(cs.dtype)
+            cv = clo + cs * (chi - clo)
+            csafe = torch.where(self._c_is_log, cv, torch.zeros_like(cv))
+            cv = torch.where(self._c_is_log, csafe.exp(), cv)
+            out["_canopy"] = {p: cv[:, i]
+                              for i, p in enumerate(self._canopy_learned)}
+            if self._dyn_canopy:
+                # climate-state response coeff b per canopy dynamic param, off zc;
+                # forward.run_window reconstructs param(t)=clamp(base+b*state,lo,hi).
+                dc = self.dynamic_amp * torch.tanh(self.canopy_dynamic_head(zc))
+                for i, p in enumerate(self._dyn_canopy):
+                    out["_canopy"][f"{p}_dyn"] = dc[:, i]
         return out
 
 

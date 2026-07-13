@@ -107,12 +107,50 @@ CANOPY_BOUNDS: dict[str, tuple[float, float]] = {
     "wilt_frac": (0.05, 0.5),    # wilting point as a fraction of tension capacity
     "froot":     (0.3, 0.9),     # fraction of roots in the SAC upper zone
     "redist_k":  (0.0, 0.5),     # lower<->upper tension redistribution rate
+    "soil_chi":  (0.5, 2.5),     # bare-soil evap nonlinearity (Ek 2003 chi; was a
+                                 # fixed 2.0 — LEARNED so sparse-veg dry basins can
+                                 # lift bare-soil ET while wet basins keep it high)
 }
 
 #: Canopy parameters mapped in log space (rcmin spans ~2 decades).
 CANOPY_LOG_PARAMS: frozenset[str] = frozenset({"rcmin"})
 
 CANOPY_PARAMS: tuple[str, ...] = tuple(CANOPY_BOUNDS)
+
+#: Canopy structure SUPPLIED FROM OBSERVATION (LANDFIRE EVC cover fraction and
+#: the MODIS/Landsat LAI climatology), NOT learned — these two params scale ET
+#: magnitude almost 1:1, and a uniform midpoint init (veg_frac 0.5, lai 3.25 vs
+#: observed ~0.36 / ~1.3) drove the dry-basin ET-partition failure.  Pinning
+#: them per-cell fixes the magnitude and removes the low-signal overfit; the net
+#: then learns only the unobservable physiology below.  ``veg_frac`` is static
+#: per cell; ``lai`` is the per-cell SEASONAL daily climatology (threaded like a
+#: forcing).  Neither is ever a net output or part of ga_optimum.
+CANOPY_OBSERVED_PARAMS: tuple[str, ...] = ("veg_frac", "lai")
+
+#: The physiology parameters the net actually learns (unobservable): minimum
+#: stomatal resistance, the radiation/VPD Jarvis coefficients, wilting point,
+#: root split, and the lower->upper redistribution rate.  Order follows
+#: CANOPY_BOUNDS insertion (so head columns stay stable).
+CANOPY_LEARNED_PARAMS: tuple[str, ...] = tuple(
+    p for p in CANOPY_PARAMS if p not in CANOPY_OBSERVED_PARAMS)
+
+#: Noah-LITE (``canopy_lite=True``) learned set: ``soil_chi`` ALONE.  A
+#: streamflow-only calibration cannot identify the full 7-param ET partition —
+#: the three Jarvis resistance params (rcmin/rgl/hs) collapse into one
+#: multiplicative factor confounded with Kpet, and froot/redist_k merely
+#: re-implement SAC's own UZ<->LZ machinery.  Lite keeps the ONE identifiable
+#: knob (the moisture-limiter exponent) and drops the rest (dropped params are
+#: pinned at the physical constants in et_noah: ``_LITE_WILT``, ``_LITE_FROOT``;
+#: the Jarvis transpiration + interception + redistribution terms are removed
+#: entirely).  veg_frac + lai stay pinned from observation (0 DOF).
+CANOPY_LITE_LEARNED: tuple[str, ...] = ("soil_chi",)
+
+#: SAC parameters eligible for the climate-state dynamic response.  Kpet ONLY:
+#: it is the ET-volume knob (`pet = Kpet * potential`) and already accepts a
+#: per-day (N,T) field via forward._seasonal — no new physics threading.  The
+#: recessions (uzk/lzpk/lzsk) are deliberately excluded: making them SEASONAL
+#: already hurt (only seasonal Kpet helped), so a dynamic response would too.
+DYNAMIC_SAC_PARAMS: tuple[str, ...] = ("Kpet",)
 
 
 def validate_ga_optimum(params_df) -> None:
@@ -175,6 +213,12 @@ class DplConfig:
     #: per-chunk variance-matching penalty (std-ratio - 1)^2 — counters the
     #: squared-error variance damping (alpha -> r); NOT chunked KGE.
     var_loss_lambda: float = 1.0
+    #: per-chunk BIAS penalty (mean-ratio beta - 1)^2 — the KGE beta term the
+    #: MSE/NNSE loss lacks (it penalizes correlation + variance but NOT volume
+    #: bias, so the optimizer can trade wet-basin over-evaporation for dry-basin
+    #: gains invisibly).  0.0 disables (default = byte-identical baseline); a
+    #: chunk mean over ~366 days is a stable statistic, like the std-ratio above.
+    bias_loss_lambda: float = 0.0
 
     # -- regularizers (opt-in; ALL default-off => byte-identical baseline) ----
     #: attribute-weighted geographic smoothness of the per-HRU parameter FIELD
@@ -216,6 +260,41 @@ class DplConfig:
     #: additive Kpet units): the day-of-year swing is hard-bounded so unbounded
     #: coeffs cannot diverge (they did at LR 1e-3).  0.18 ~ +/-25% of Kpet~1.
     seasonal_amp: float = 0.18
+    #: parameters made time-varying via a CLIMATE-STATE response (generalizes the
+    #: seasonal harmonic): the net emits a bounded coeff b per param and the
+    #: physics reconstructs param(t) = clamp(base + b*state(t), lo, hi), where
+    #: state(t) is a cal-standardized rolling-precip wetness index.  SAC params
+    #: must be in DYNAMIC_SAC_PARAMS (already (N,T)-capable via the seasonal path);
+    #: canopy params in CANOPY_LEARNED_PARAMS (e.g. soil_chi).  Empty = static
+    #: (default).  Zero-init coeffs => exact static field at init (clean superset).
+    dynamic_params: tuple[str, ...] = ()
+    dynamic_amp: float = 0.5     # tanh cap on |b| (state-response amplitude)
+    dynamic_window: int = 365    # rolling-mean window (days) for the wetness state
+    #: ET scheme: "sac" = the frozen Hamon PET (default; scorable through
+    #: run_basin).  "noah" = the Noah canopy-resistance ET (et_noah.py) — NEW
+    #: physics, NOT scorable through run_basin (skill via score_noah_torch).
+    #: Requires ``canopy=True`` (the net's canopy head) and per-cell tmin/tmax.
+    et_mode: str = "sac"
+    #: Noah potential-ET source: "hamon" = the temperature-only Hamon PET the
+    #: canopy params modulate (v1-v4; total ET <= Kpet*Hamon = a low ceiling that
+    #: makes Noah under-extract vs SAC); "priestley_taylor" = an energy-based PET
+    #: from Bristow-Campbell net radiation (FAO-56 Rn) — lifts the ceiling and
+    #: removes the Kpet/canopy ET-scaling redundancy.  Only used when et_mode="noah".
+    noah_pet: str = "hamon"
+    #: emit the learned CANOPY_LEARNED_PARAMS from a canopy head (needed for
+    #: et_mode="noah"; veg_frac + seasonal lai come from observation, not here).
+    canopy: bool = False
+    #: give the canopy head its OWN encoder (decoupled from the SAC trunk) so
+    #: the weak dry-basin canopy signal cannot corrupt the GA-prior SAC pathway
+    #: through a shared embedding.  Only used when canopy=True.
+    canopy_separate_trunk: bool = True
+    #: Noah-LITE ET: the minimal, identifiable rebuild — AET = ed_bare +
+    #: et_canopy on pinned veg with a SINGLE learned exponent (soil_chi); the
+    #: Jarvis resistance (rcmin/rgl/hs), the learned root split (froot) and the
+    #: UZ<->LZ redistribution (redist_k) are dropped, and the canopy head emits
+    #: only CANOPY_LITE_LEARNED off the SHARED trunk (no separate encoder).
+    #: Requires et_mode="noah"; noah_pet still selects Hamon | Priestley-Taylor.
+    canopy_lite: bool = False
     lr: float = 1e-3
     lr_min: float = 1e-5        # cosine-annealed floor
     lr_warmup_epochs: int = 3   # linear warmup protects the GA-prior init
@@ -244,6 +323,25 @@ class DplConfig:
             raise ValueError(f"ninc_mode {self.ninc_mode!r}")
         if self.n_inc < 1:
             raise ValueError("n_inc must be >= 1")
+        if self.et_mode not in ("sac", "noah"):
+            raise ValueError(f"et_mode {self.et_mode!r}")
+        if self.noah_pet not in ("hamon", "priestley_taylor"):
+            raise ValueError(f"noah_pet {self.noah_pet!r}")
+        if self.dynamic_params:
+            allowed = set(DYNAMIC_SAC_PARAMS) | set(CANOPY_LEARNED_PARAMS)
+            bad = [p for p in self.dynamic_params if p not in allowed]
+            if bad:
+                raise ValueError(
+                    f"dynamic_params {bad} not in {sorted(allowed)} "
+                    f"(SAC dynamic limited to the (N,T)-capable set)")
+        if self.et_mode == "noah":
+            self.canopy = True   # the canopy head is required to emit CANOPY_PARAMS
+        if self.canopy_lite:
+            if self.et_mode != "noah":
+                raise ValueError("canopy_lite requires et_mode='noah'")
+            # lite emits only soil_chi off the shared trunk (the separate canopy
+            # encoder existed to protect the SAC pathway from the 6 dropped params)
+            self.canopy_separate_trunk = False
 
 
 def _ensure_conda_dlls_on_path() -> None:

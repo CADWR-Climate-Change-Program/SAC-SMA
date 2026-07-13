@@ -30,8 +30,9 @@ from __future__ import annotations
 
 import torch
 
-from .config import PARAM_ORDER, DplConfig
+from .config import DplConfig
 from .data import DomainTensors
+from .et_noah import NoahCanopyState
 from .forward import PipelineState, routing_uh, run_window
 from .loss import masked_basin_loss
 from .routing import N_TAPS
@@ -47,32 +48,50 @@ _STATE_FIELDS = (
 
 
 def _state_tensors(st: PipelineState) -> list[torch.Tensor]:
-    return [getattr(st if sub is None else getattr(st, sub), name)
-            for sub, name in _STATE_FIELDS]
+    ts = [getattr(st if sub is None else getattr(st, sub), name)
+          for sub, name in _STATE_FIELDS]
+    if st.canopy is not None:              # Noah ET: carry canopy storage wc too
+        ts.append(st.canopy.wc)
+    return ts
 
 
 def _clone_state(st: PipelineState) -> PipelineState:
     t = [x.clone() for x in _state_tensors(st)]
+    canopy = NoahCanopyState(wc=t[12]) if st.canopy is not None else None
     return PipelineState(snow=Snow17State(*t[0:4]), sac=SacState(*t[4:10]),
-                         hist_surf=t[10], hist_base=t[11])
+                         hist_surf=t[10], hist_base=t[11], canopy=canopy)
 
 
 class _WindowBase:
     """Static forcing/state buffers + ping-pong shared by both graphs."""
 
-    def __init__(self, dom: DomainTensors, length: int):
+    def __init__(self, dom: DomainTensors, length: int, et_mode: str = "sac"):
         n, dev, dt = dom.n_hru, dom.device, dom.dtype
         self.dom = dom
         self.length = length
+        self.et_mode = et_mode
         self.pr = torch.zeros(n, length, device=dev, dtype=dt)
         self.ta = torch.zeros(n, length, device=dev, dtype=dt)
         self.doy = torch.zeros(length, device=dev, dtype=dom.doy.dtype)
         self.leap = torch.zeros(length, device=dev, dtype=torch.bool)
+        # Noah ET: per-cell tmin/tmax static forcing buffers + a real canopy
+        # state so wc rides the ping-pong (else it silently resets each window).
+        noah = et_mode == "noah"
+        self.tmin = torch.zeros(n, length, device=dev, dtype=dt) if noah else None
+        self.tmax = torch.zeros(n, length, device=dev, dtype=dt) if noah else None
+        # observed seasonal LAI rides a per-chunk buffer like tmin/tmax; the
+        # static veg_frac is read straight off ``dom`` (a per-cell constant).
+        self.lai = torch.zeros(n, length, device=dev, dtype=dt) if noah else None
+        # climate-state index for dynamic params — another per-chunk buffer,
+        # present only when the domain carries a state field.
+        self.state_idx = (torch.zeros(n, length, device=dev, dtype=dt)
+                          if dom.state is not None else None)
         self.state_in = PipelineState(
             snow=Snow17State.zeros(n, dev, dt),
             sac=SacState.reference_init(n, dev, dt),
             hist_surf=torch.zeros(n, N_TAPS - 1, device=dev, dtype=dt),
             hist_base=torch.zeros(n, N_TAPS - 1, device=dev, dtype=dt),
+            canopy=NoahCanopyState.zeros(n, dev, dt) if noah else None,
         )
         self.state_out: PipelineState | None = None   # captured outputs
 
@@ -84,11 +103,18 @@ class _WindowBase:
     def get_state(self) -> PipelineState:
         return _clone_state(self.state_in)
 
-    def _copy_forcing(self, pr, ta, doy, leap) -> None:
+    def _copy_forcing(self, pr, ta, doy, leap, tmin=None, tmax=None,
+                      lai=None, state_idx=None) -> None:
         self.pr.copy_(pr)
         self.ta.copy_(ta)
         self.doy.copy_(doy)
         self.leap.copy_(leap)
+        if self.et_mode == "noah":
+            self.tmin.copy_(tmin)
+            self.tmax.copy_(tmax)
+            self.lai.copy_(lai)
+        if self.state_idx is not None:
+            self.state_idx.copy_(state_idx)
 
     def _pingpong(self) -> None:
         assert self.state_out is not None
@@ -102,18 +128,31 @@ class NoGradWindow(_WindowBase):
 
     def __init__(self, dom: DomainTensors, cfg: DplConfig, length: int,
                  params: dict[str, torch.Tensor],
-                 uh: tuple[torch.Tensor, torch.Tensor]):
-        super().__init__(dom, length)
-        self.params = {p: params[p].detach().clone() for p in PARAM_ORDER}
+                 uh: tuple[torch.Tensor, torch.Tensor],
+                 canopy_params: dict[str, torch.Tensor] | None = None):
+        super().__init__(dom, length, et_mode=cfg.et_mode)
+        # copy ALL emitted keys (base PARAM_ORDER + any seasonal/dynamic coeffs)
+        # so the no-grad spinup/selection graph applies the same time-varying
+        # field as training — not just the static base.
+        self.params = {p: params[p].detach().clone() for p in params}
         self.uh = (uh[0].detach().clone(), uh[1].detach().clone())
         self._cfg = cfg
+        # Noah ET: static LEARNED canopy params (+ any _dyn coeffs), refreshed per
+        # epoch via set_params (veg_frac/lai are observed, read from dom/buffer).
+        self.canopy_params = (
+            {p: canopy_params[p].detach().clone() for p in canopy_params}
+            if cfg.et_mode == "noah" and canopy_params is not None else None)
 
         def _fwd():
             flow, st = run_window(
                 self.pr, self.ta, self.doy, self.leap, dom.lat_rad, dom.elev,
                 self.params, self.uh, self.state_in,
                 n_inc=cfg.n_inc, perc_mode=cfg.perc_mode,
-                fracp_floor=cfg.fracp_floor, ninc_mode="fixed")
+                fracp_floor=cfg.fracp_floor, ninc_mode="fixed",
+                et_mode=cfg.et_mode, canopy_params=self.canopy_params,
+                tmin=self.tmin, tmax=self.tmax,
+                veg_frac=dom.veg_frac, lai=self.lai, noah_pet=cfg.noah_pet,
+                canopy_lite=cfg.canopy_lite, state_idx=self.state_idx)
             return dom.W @ flow, st
 
         side = torch.cuda.Stream()
@@ -128,16 +167,21 @@ class NoGradWindow(_WindowBase):
             self.basin, self.state_out = _fwd()
 
     def set_params(self, params: dict[str, torch.Tensor],
-                   uh: tuple[torch.Tensor, torch.Tensor]) -> None:
-        for p in PARAM_ORDER:
+                   uh: tuple[torch.Tensor, torch.Tensor],
+                   canopy_params: dict[str, torch.Tensor] | None = None) -> None:
+        for p in self.params:
             self.params[p].copy_(params[p].detach())
         self.uh[0].copy_(uh[0].detach())
         self.uh[1].copy_(uh[1].detach())
+        if self.canopy_params is not None and canopy_params is not None:
+            for p in self.canopy_params:
+                self.canopy_params[p].copy_(canopy_params[p].detach())
 
-    def replay(self, pr, ta, doy, leap) -> torch.Tensor:
+    def replay(self, pr, ta, doy, leap, tmin=None, tmax=None,
+               lai=None, state_idx=None) -> torch.Tensor:
         """One window; carries state; returns the static (B, length) basin flow
         (clone it before the next replay if collecting)."""
-        self._copy_forcing(pr, ta, doy, leap)
+        self._copy_forcing(pr, ta, doy, leap, tmin, tmax, lai, state_idx)
         self.graph.replay()
         self._pingpong()
         return self.basin
@@ -149,7 +193,7 @@ class TrainChunk(_WindowBase):
     def __init__(self, net: torch.nn.Module, dom: DomainTensors,
                  cfg: DplConfig, length: int, x: torch.Tensor,
                  obs_var: torch.Tensor, weight: torch.Tensor | None = None):
-        super().__init__(dom, length)
+        super().__init__(dom, length, et_mode=cfg.et_mode)
         b = dom.W.shape[0]
         self.obs = torch.full((b, length), float("nan"),
                               device=dom.device, dtype=dom.dtype)
@@ -161,19 +205,29 @@ class TrainChunk(_WindowBase):
         self.weight = weight
 
         def _step():
-            params = net(self.x)
+            out = net(self.x)
+            if cfg.et_mode == "noah":               # split off the canopy subdict
+                cp = out.get("_canopy")             # (params.values() must be tensors)
+                params = {k: v for k, v in out.items() if k != "_canopy"}
+            else:
+                cp, params = None, out
             uh = routing_uh(params, dom.flowlen)
             flow, st = run_window(
                 self.pr, self.ta, self.doy, self.leap, dom.lat_rad, dom.elev,
                 params, uh, self.state_in,
                 n_inc=cfg.n_inc, perc_mode=cfg.perc_mode,
-                fracp_floor=cfg.fracp_floor, ninc_mode="fixed")
+                fracp_floor=cfg.fracp_floor, ninc_mode="fixed",
+                et_mode=cfg.et_mode, canopy_params=cp,
+                tmin=self.tmin, tmax=self.tmax,
+                veg_frac=dom.veg_frac, lai=self.lai, noah_pet=cfg.noah_pet,
+                canopy_lite=cfg.canopy_lite, state_idx=self.state_idx)
             basin = dom.W @ flow
             loss = masked_basin_loss(basin, self.obs, self.obs_var,
                                      kind=cfg.loss,
                                      log_lambda=cfg.log_loss_lambda,
                                      log_eps=cfg.log_loss_eps,
                                      var_lambda=cfg.var_loss_lambda,
+                                     bias_lambda=cfg.bias_loss_lambda,
                                      weight=self.weight)
             return loss, st
 
@@ -213,10 +267,11 @@ class TrainChunk(_WindowBase):
         if self.weight is not None:
             self.weight.copy_(w)
 
-    def run(self, pr, ta, doy, leap, obs) -> float:
+    def run(self, pr, ta, doy, leap, obs, tmin=None, tmax=None,
+            lai=None, state_idx=None) -> float:
         """One chunk: replay forward+backward, carry state, return the loss.
         Gradients are left in the net's static ``.grad`` tensors."""
-        self._copy_forcing(pr, ta, doy, leap)
+        self._copy_forcing(pr, ta, doy, leap, tmin, tmax, lai, state_idx)
         self.obs.copy_(obs)
         self.graph.replay()
         self._pingpong()

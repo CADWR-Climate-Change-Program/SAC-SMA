@@ -42,6 +42,7 @@ def masked_basin_loss(
     log_lambda: float = 0.0,
     log_eps: float = 0.01,
     var_lambda: float = 0.0,
+    bias_lambda: float = 0.0,
     weight: torch.Tensor | None = None,
     min_days: int = 90,
 ) -> torch.Tensor:
@@ -76,6 +77,14 @@ def masked_basin_loss(
         vs = ((sim_f - ms) ** 2 * finite).sum(dim=1) / n_safe
         alpha = vs.clamp_min(1e-12).sqrt() / vo.clamp_min(1e-12).sqrt()
         per_basin = per_basin + var_lambda * (alpha - 1.0) ** 2
+
+    if bias_lambda > 0.0:
+        # KGE beta term: per-basin chunk mean-ratio (sim/obs).  Penalizes volume
+        # bias directly (the over-evaporation the squared-error loss tolerates).
+        mo_b = obs_f.sum(dim=1) / n_safe
+        ms_b = sim_f.sum(dim=1) / n_safe
+        beta = ms_b / mo_b.clamp_min(1e-12)
+        per_basin = per_basin + bias_lambda * (beta - 1.0) ** 2
 
     # branch-free mean over valid basins (CUDA-graph capturable: no host sync);
     # no valid basins -> 0.0 with the graph still alive through per_basin.

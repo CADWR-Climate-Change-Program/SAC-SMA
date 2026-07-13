@@ -18,8 +18,12 @@ from dataclasses import dataclass
 
 import torch
 
-from .config import BOUNDS
-from .et_noah import NoahCanopyState, canopy_inputs_fallback
+from .config import BOUNDS, CANOPY_BOUNDS
+from .et_noah import (
+    NoahCanopyState,
+    canopy_inputs_fallback,
+    potential_et_priestley_taylor,
+)
 from .pet import hamon_raw_pet
 from .routing import N_TAPS, build_uh, route
 from .sma import SacState, run_sacsma
@@ -32,19 +36,22 @@ _SEASONAL_RECESSION = ("uzk", "lzpk", "lzsk")
 
 
 def _seasonal(params: dict[str, torch.Tensor], name: str,
-              doy: torch.Tensor) -> torch.Tensor:
-    """Differentiable (N, T) day-of-year reconstruction of a seasonal parameter.
+              doy: torch.Tensor,
+              state: torch.Tensor | None = None) -> torch.Tensor:
+    """Differentiable (N, T) reconstruction of a time-varying parameter.
 
-    ``name(doy) = clamp(mean + a_sin*sin(w*doy) + a_cos*cos(w*doy), lo, hi)`` —
-    the same harmonic the frozen model reconstructs (:mod:`sacsma.parameters`),
-    so zero amplitude coefficients give back the static ``params[name]`` field.
+    ``name(t) = clamp(mean + a_sin*sin(w*doy) + a_cos*cos(w*doy) + b*state(t), lo, hi)``
+    — the day-of-year harmonic (``{name}_asin/_acos``) and/or the climate-state
+    response (``{name}_dyn * state``) are added when their coeffs are present;
+    zero coeffs give back the static ``params[name]`` field.
     """
     lo, hi = BOUNDS[name]
-    sin_t = torch.sin(_SEASONAL_OMEGA * doy)
-    cos_t = torch.cos(_SEASONAL_OMEGA * doy)
-    v = (params[name].unsqueeze(-1)
-         + params[f"{name}_asin"].unsqueeze(-1) * sin_t
-         + params[f"{name}_acos"].unsqueeze(-1) * cos_t)
+    v = params[name].unsqueeze(-1)                              # (N, 1) static base
+    if f"{name}_asin" in params:
+        v = (v + params[f"{name}_asin"].unsqueeze(-1) * torch.sin(_SEASONAL_OMEGA * doy)
+             + params[f"{name}_acos"].unsqueeze(-1) * torch.cos(_SEASONAL_OMEGA * doy))
+    if state is not None and f"{name}_dyn" in params:
+        v = v + params[f"{name}_dyn"].unsqueeze(-1) * state     # (N,1)*(N,T) -> (N,T)
     return v.clamp(lo, hi)
 
 
@@ -100,21 +107,33 @@ def run_window(
     ninc_mode: str = "fixed",
     raw_pet: torch.Tensor | None = None,   # optional precomputed (N, T) PET base
     et_mode: str = "sac",
-    canopy_params: dict[str, torch.Tensor] | None = None,  # CANOPY_BOUNDS, (N,)
+    canopy_params: dict[str, torch.Tensor] | None = None,  # CANOPY_LEARNED, (N,)
     tmin: torch.Tensor | None = None,      # (N, T); None -> tavg fallback
     tmax: torch.Tensor | None = None,
-) -> tuple[torch.Tensor, PipelineState]:
-    """One window through the full pipeline; returns (routed flow (N, T), state).
+    veg_frac: torch.Tensor | None = None,  # (N,) observed veg fraction (Noah)
+    lai: torch.Tensor | None = None,       # (N, T) observed seasonal LAI (Noah)
+    noah_pet: str = "hamon",               # "hamon" | "priestley_taylor" (Noah)
+    canopy_lite: bool = False,             # minimal 1-param Noah ET (et_noah.noah_lite_et_step)
+    state_idx: torch.Tensor | None = None,  # (N, T) climate-state index (dynamic params)
+    return_tet: bool = False,              # also return total ET (N, T) for closure
+) -> tuple[torch.Tensor, PipelineState]:   # (+ tet as a 3rd item when return_tet)
+    """One window through the full pipeline; returns (routed flow (N, T), state),
+    or (flow, state, tet) when ``return_tet`` (total ET, for the mass-balance
+    closure / ET diagnostics — off by default so the hot path is unchanged).
 
-    ``et_mode="noah"`` runs the Noah canopy-resistance ET (``canopy_params``
-    required); ``tmin``/``tmax`` drive the radiation/VPD terms (a fixed-diurnal
-    fallback is synthesised from ``tavg`` when they are absent).
+    ``et_mode="noah"`` runs the Noah canopy-resistance ET: ``canopy_params`` are
+    the LEARNED physiology; ``veg_frac`` (static) and ``lai`` ((N,T) seasonal)
+    are the OBSERVED canopy structure; ``tmin``/``tmax`` drive the radiation/VPD
+    terms (a fixed-diurnal fallback is synthesised from ``tavg`` when absent).
     """
     if raw_pet is None:
         raw_pet = hamon_raw_pet(tavg, doy, lat_rad)
-    # seasonal Kpet (day-of-year harmonic) when the net emits its coeffs, else
-    # the static per-HRU scalar; likewise the seasonal recession override.
-    kpet = (_seasonal(params, "Kpet", doy) if "Kpet_asin" in params
+    # Kpet time-varying reconstruction: day-of-year harmonic (seasonal) and/or a
+    # climate-state response (dynamic) when the net emits their coeffs, else the
+    # static per-HRU scalar.  Recessions stay seasonal-only (dynamic hurts).
+    kpet = (_seasonal(params, "Kpet", doy, state_idx)
+            if ("Kpet_asin" in params
+                or ("Kpet_dyn" in params and state_idx is not None))
             else params["Kpet"].unsqueeze(-1))
     pet = kpet * raw_pet
     recession = ({p: _seasonal(params, p, doy) for p in _SEASONAL_RECESSION}
@@ -126,17 +145,37 @@ def run_window(
     if et_mode == "noah":
         if canopy_params is None:
             raise ValueError("et_mode='noah' requires canopy_params")
+        if veg_frac is None or lai is None:
+            raise ValueError("et_mode='noah' requires observed veg_frac and lai")
         if tmin is None or tmax is None:
             tmin, tmax = canopy_inputs_fallback(tavg)
+        if noah_pet == "priestley_taylor":
+            # energy-based potential replaces Hamon (still scaled by the learned
+            # Kpet, now a mild global calibration knob on a physical PET)
+            pet = kpet * potential_et_priestley_taylor(
+                tavg, tmin, tmax, doy, lat_rad, elev)
+        cp = canopy_params
+        if state_idx is not None and any(k.endswith("_dyn") for k in cp):
+            # climate-state response on canopy params (e.g. soil_chi): reconstruct
+            # param(t)=clamp(base + b*state(t), lo, hi) as (N,T) in physical space
+            # (the canopy head already did the sigmoid->[lo,hi] map for the base).
+            cp = dict(cp)
+            for k in [k for k in cp if k.endswith("_dyn")]:
+                name = k[:-4]
+                lo, hi = CANOPY_BOUNDS[name]
+                b = cp.pop(k)
+                cp[name] = (cp[name].unsqueeze(-1)
+                            + b.unsqueeze(-1) * state_idx).clamp(lo, hi)   # (N,T)
         noah = {"tavg": tavg, "tmin": tmin, "tmax": tmax, "doy": doy,
-                "lat_rad": lat_rad, "elev": elev, "cp": canopy_params,
-                "canopy": state.canopy}
-    surf, base, _tet, sac_state = run_sacsma(pet, eff_p, params, state=state.sac,
-                                             n_inc=n_inc, perc_mode=perc_mode,
-                                             fracp_floor=fracp_floor,
-                                             ninc_mode=ninc_mode,
-                                             et_mode=et_mode, noah=noah,
-                                             recession=recession)
+                "lat_rad": lat_rad, "elev": elev, "cp": cp,
+                "veg_frac": veg_frac, "lai": lai, "canopy": state.canopy,
+                "lite": canopy_lite}
+    surf, base, tet, sac_state = run_sacsma(pet, eff_p, params, state=state.sac,
+                                            n_inc=n_inc, perc_mode=perc_mode,
+                                            fracp_floor=fracp_floor,
+                                            ninc_mode=ninc_mode,
+                                            et_mode=et_mode, noah=noah,
+                                            recession=recession)
     uh_direct, uh_base = uh
     flow = route(surf, uh_direct, state.hist_surf) + route(base, uh_base, state.hist_base)
 
@@ -146,6 +185,8 @@ def run_window(
     new_state = PipelineState(snow=snow_state, sac=sac_state,
                               hist_surf=hist_surf, hist_base=hist_base,
                               canopy=noah["canopy"] if noah is not None else None)
+    if return_tet:
+        return flow, new_state, tet
     return flow, new_state
 
 
