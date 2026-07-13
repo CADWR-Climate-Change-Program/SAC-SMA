@@ -270,6 +270,14 @@ class DplConfig:
     dynamic_params: tuple[str, ...] = ()
     dynamic_amp: float = 0.5     # tanh cap on |b| (state-response amplitude)
     dynamic_window: int = 365    # rolling-mean window (days) for the wetness state
+    #: re-foot the basin aggregation (``dom.W``) onto the CalSim3 catchment
+    #: geometry: each cell is area-weighted by its overlap fraction with the
+    #: basin's CalSim3 catchment, so out-of-catchment cells drop and boundary
+    #: cells down-weight.  Corrects the coarse 1/16-deg grid's systematic
+    #: footprint over-reach (+9..+66% vs the true catchment).  Only basins with a
+    #: CalSim3 catchment are re-footed (the 4 Tulare/Kern basins keep their full
+    #: footprint).  Opt-in; default False => the exact area_weight aggregation.
+    calsim_footprint: bool = False
     #: ET scheme: "sac" = the frozen Hamon PET (default; scorable through
     #: run_basin).  "noah" = the Noah canopy-resistance ET (et_noah.py) — NEW
     #: physics, NOT scorable through run_basin (skill via score_noah_torch).

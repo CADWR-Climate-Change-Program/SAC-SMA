@@ -462,7 +462,9 @@ def evaluate_checkpoint(
     dom = load_domain_tensors(data_dir, domain=domain, device=dev,
                               dtype=torch.float64,
                               dynamic_window=(nc.get("dynamic_window", 365)
-                                              if dyn else None))
+                                              if dyn else None),
+                              calsim_footprint=ck.get("cfg", {}).get(
+                                  "calsim_footprint", False))
     stats = FeatureSet(x=_np.empty((0, 0), dtype=_np.float32), **ck["features"])
     fs = build_features(dom.hrus, variant=variant,
                         forcing=dom.forcing if variant == "climate" else None,

@@ -113,7 +113,7 @@ def _dpl_train(args: argparse.Namespace) -> int:
         var_loss_lambda=args.var_lambda, bias_loss_lambda=args.bias_lambda,
         lr=args.lr,
         lr_warmup_epochs=args.warmup_epochs, n_epochs=args.epochs,
-        spinup_refresh_every=args.spinup_refresh,
+        spinup_refresh_every=args.spinup_refresh, patience=args.patience,
         hidden=args.hidden, embed=args.embed, dropout=args.dropout,
         grouped_heads=args.grouped_heads, fourier_k=args.fourier_k,
         gnn_k=args.gnn_k,
@@ -124,6 +124,7 @@ def _dpl_train(args: argparse.Namespace) -> int:
         seasonal_params=(tuple(args.seasonal.split(",")) if args.seasonal else ()),
         seasonal_amp=args.seasonal_amp,
         et_mode=args.et, noah_pet=args.noah_pet, canopy_lite=args.canopy_lite,
+        calsim_footprint=args.calsim_footprint,
         dynamic_params=(tuple(args.dynamic_params.split(","))
                         if args.dynamic_params else ()),
         dynamic_amp=args.dynamic_amp, dynamic_window=args.dynamic_window,
@@ -275,6 +276,10 @@ def main(argv: list[str] | None = None) -> int:
                          "with ONE learned exponent (soil_chi); drops the Jarvis "
                          "resistance, froot, redist_k and the separate canopy trunk "
                          "(needs --et noah; --noah-pet still selects the potential)")
+    tr.add_argument("--calsim-footprint", action="store_true",
+                    help="re-foot basin aggregation onto the CalSim3 catchments "
+                         "(overlap weights) to correct the coarse-grid footprint "
+                         "over-reach; the 4 Tulare/Kern basins keep full footprint")
     tr.add_argument("--dynamic-params", default="",
                     help="comma list of params made climate-state-dependent "
                          "(Kpet | canopy params e.g. soil_chi); '' = static")
@@ -347,6 +352,10 @@ def main(argv: list[str] | None = None) -> int:
                     help="encoder dropout (0 = deterministic parameter map)")
     tr.add_argument("--warmup-epochs", type=int, default=3,
                     help="linear LR warmup epochs (protects the GA-prior init)")
+    tr.add_argument("--patience", type=int, default=10,
+                    help="early-stop after this many stale cal-KGE selections "
+                         "(lower = stop sooner at plateau; selection cadence is "
+                         "every 2 epochs)")
     tr.add_argument("--spinup-refresh", type=int, default=1,
                     help="re-run the full-prefix spinup every k epochs (k=2 "
                          "reuses one-epoch-stale state on odd epochs — same "

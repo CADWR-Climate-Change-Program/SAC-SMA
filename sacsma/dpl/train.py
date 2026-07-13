@@ -160,7 +160,8 @@ def train(
 
     dom = load_domain_tensors(
         data_dir, domain=domain, device=dev, dtype=dtype, basins=basins,
-        dynamic_window=cfg.dynamic_window if cfg.dynamic_params else None)
+        dynamic_window=cfg.dynamic_window if cfg.dynamic_params else None,
+        calsim_footprint=cfg.calsim_footprint)
     calobs = load_cal_obs(dom, data_dir, cal_start=cfg.cal_start)
     fs = build_features(
         dom.hrus, variant=variant,

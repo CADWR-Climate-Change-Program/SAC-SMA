@@ -179,6 +179,61 @@ def _compute_state_index(forcing, dates, window: int, cal_end: str) -> np.ndarra
     return np.clip((roll - mu) / sd, -3.0, 3.0).astype(np.float32)
 
 
+def _calsim_footprint_weights(hrus: pd.DataFrame, basins: tuple[str, ...],
+                              base_w: np.ndarray, data_dir: str) -> tuple[np.ndarray, list[str]]:
+    """Re-weight ``base_w`` rows by each cell's overlap fraction with the basin's
+    CalSim3 catchment (out-of-catchment cells -> 0, boundary cells down-weighted).
+
+    Only basins with a real CalSim3 catchment (rim + geographically-resolved
+    secondary nodes in the crosswalk) are re-footed; basins without one
+    (Tulare/Kern: PNF/TRM/SCC/ISB) keep their full ``area_weight`` row.  Geometry
+    comes from the CalSim3 ``15cdec`` catchment polygons (crosswalk column
+    ``basin_15cdec``); the coarse cells are 1/16-deg squares overlapped in the
+    equal-area CRS.  Heavy geo deps are imported lazily (only when opted in)."""
+    import geopandas as gpd
+    from shapely import box
+
+    from ..calsim.catchments import (
+        _EQ_CRS,
+        _M2_PER_MI2,
+        calsim_basin_polygons,
+        derive_basin_nodes,
+    )
+
+    polys = calsim_basin_polygons(data_dir, "15cdec")            # basin -> catchment geom
+    have_catchment = set(derive_basin_nodes(data_dir, "15cdec")["basin"].astype(str))
+    step_h = (1.0 / 16.0) / 2.0
+    w = base_w.copy()
+    refooted: list[str] = []
+    for bi, b in enumerate(basins):
+        if b not in have_catchment or polys.get(b) is None:
+            continue                                             # no catchment -> full footprint
+        m = (hrus["basin"] == b).to_numpy()
+        sub = hrus.loc[m, ["key", "lat", "lon"]].drop_duplicates("key")
+        sq = gpd.GeoDataFrame(
+            {"key": sub["key"].to_numpy()},
+            geometry=[box(x - step_h, y - step_h, x + step_h, y + step_h)
+                      for x, y in zip(sub["lon"].astype(float),
+                                      sub["lat"].astype(float), strict=True)],
+            crs="EPSG:4326").to_crs(_EQ_CRS)
+        cell_mi2 = sq.geometry.area.to_numpy() / _M2_PER_MI2
+        poly = gpd.GeoDataFrame(geometry=[polys[b]], crs="EPSG:4326").to_crs(_EQ_CRS)
+        ov = gpd.overlay(sq[["key", "geometry"]], poly, how="intersection", keep_geom_type=True)
+        if ov.empty:
+            continue
+        ov_mi2 = ov.geometry.area.to_numpy() / _M2_PER_MI2
+        ov_by_key = pd.Series(ov_mi2, index=ov["key"].to_numpy()).groupby(level=0).sum()
+        frac = (ov_by_key.reindex(sub["key"]).fillna(0.0).to_numpy() / cell_mi2).clip(0, 1)
+        fmap = dict(zip(sub["key"].to_numpy(), frac, strict=True))
+        fh = np.where(m, hrus["key"].map(fmap).fillna(0.0).to_numpy(), 0.0)
+        wb = base_w[bi] * fh
+        if wb.sum() <= 0:
+            continue
+        w[bi] = wb / wb.sum()
+        refooted.append(b)
+    return w, refooted
+
+
 def load_domain_tensors(
     data_dir: str = "data",
     *,
@@ -187,6 +242,7 @@ def load_domain_tensors(
     dtype: torch.dtype = torch.float32,
     basins: tuple[str, ...] | None = None,
     dynamic_window: int | None = None,
+    calsim_footprint: bool = False,
 ) -> DomainTensors:
     device = torch.device(device)
     forcing = load_domain_forcing(data_dir, domain=domain)
@@ -203,11 +259,17 @@ def load_domain_tensors(
     elev = torch.as_tensor(hrus["elev"].to_numpy(np.float64)).to(device, dtype)
     flowlen = torch.as_tensor(hrus["flowlen"].to_numpy(np.float64)).to(device, dtype)
 
-    w = torch.zeros(len(basins), len(hrus), dtype=dtype)
+    w_np = np.zeros((len(basins), len(hrus)), dtype=np.float64)
     for b_i, b in enumerate(basins):
         rows = np.flatnonzero((hrus["basin"] == b).to_numpy())
         wt = hrus.loc[rows, "area_weight"].to_numpy(np.float64)
-        w[b_i, rows] = torch.as_tensor(wt / wt.sum(), dtype=dtype)
+        w_np[b_i, rows] = wt / wt.sum()
+    if calsim_footprint:
+        w_np, refooted = _calsim_footprint_weights(hrus, basins, w_np, data_dir)
+        print(f"load_domain_tensors: CalSim3 footprint re-foot applied to "
+              f"{len(refooted)}/{len(basins)} basins {refooted} (others keep full "
+              f"footprint)", flush=True)
+    w = torch.as_tensor(w_np, dtype=dtype)
 
     dates = forcing.dates
     doy = torch.as_tensor(forcing.doy.astype(np.float64)).to(device, dtype)
