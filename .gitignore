@@ -39,6 +39,17 @@ artifacts/*
 !artifacts/cdec15
 !artifacts/calsim
 
+# dPL: CANONICAL runs + the track-record log are tracked (tiny nets — best.pt
+# is ~60 KB); exploratory runs stay local under artifacts/dpl/testing/ (see
+# artifacts/dpl/RUNS.md for the full record and old->new mapping).
+!artifacts/dpl
+artifacts/dpl/*
+!artifacts/dpl/RUNS.md
+!artifacts/dpl/hamon
+!artifacts/dpl/pt
+!artifacts/dpl/pt_refined
+!artifacts/dpl/noah_lite
+
 
 
 # Byte-compiled / optimized / DLL files
