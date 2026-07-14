@@ -556,11 +556,16 @@ def _load_canopy_obs(data_dir: str, domain: str, forcing):
     # spuriously inflated their canopy conductance.
     llo, lhi = 0.05, CANOPY_BOUNDS["lai"][1]
 
+    # The fine-HRU domains sample these per HRU, so cells shared between HRUs
+    # repeat their (identical) row — dedupe to a unique per-cell index before
+    # reindexing onto the forcing cell order (grid domains are already unique).
     sv = pd.read_csv(sv_path, usecols=["key", "EVC_cover_pct"]).set_index("key")
+    sv = sv[~sv.index.duplicated()]
     veg = (sv["EVC_cover_pct"].reindex(forcing.pos).to_numpy(np.float64) / 100.0)
     veg_frac = np.clip(veg, vlo, vhi).astype(np.float32)              # (n_cells,)
 
     lai = pd.read_csv(lai_path).rename(columns={"cellkey": "key"}).set_index("key")
+    lai = lai[~lai.index.duplicated()]
     doy_cols = sorted((c for c in lai.columns if c.startswith("lai_doy")),
                       key=lambda c: int(re.sub(r"\D", "", c)))
     sample_doys = np.array([int(re.sub(r"\D", "", c)) for c in doy_cols], float)
