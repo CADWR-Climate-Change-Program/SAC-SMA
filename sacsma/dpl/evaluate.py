@@ -315,6 +315,8 @@ def score_noah_torch(net: torch.nn.Module, x: torch.Tensor, dom: DomainTensors,
                 et_mode="noah", canopy_params=cp, tmin=tn, tmax=tx,
                 veg_frac=dom.veg_frac, lai=dom.chunk_lai(t0, t1),
                 noah_pet=cfg.noah_pet, canopy_lite=cfg.canopy_lite,
+                pt_snow_albedo=cfg.pt_snow_albedo,
+                pt_dewpoint_depression=cfg.pt_dewpoint_depression,
                 state_idx=dom.chunk_state(t0, t1),
                 return_tet=True)
             basin[:, t0:t1] = dom.W @ flow

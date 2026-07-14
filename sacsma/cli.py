@@ -289,11 +289,11 @@ def main(argv: list[str] | None = None) -> int:
     tr.add_argument("--pt-snow-albedo", type=float, default=0.0, metavar="ALBEDO",
                     help="raise the Priestley-Taylor albedo toward this value over "
                          "snow (Snow-17 SWE-driven; ~0.5-0.7 bright snow); 0 = fixed "
-                         "0.23 (sac-pet=priestley_taylor only)")
+                         "0.23 (any PT PET: sac-pet OR noah-pet = priestley_taylor)")
     tr.add_argument("--pt-dewpoint-depression", type=float, default=0.0, metavar="DEGC",
                     help="max dewpoint depression (degC) below Tmin in arid air for "
                          "the PT net-longwave term, scaled by diurnal range; 0 = "
-                         "Tdew=Tmin (sac-pet=priestley_taylor only)")
+                         "Tdew=Tmin (any PT PET: sac-pet OR noah-pet = priestley_taylor)")
     tr.add_argument("--canopy-lite", action="store_true",
                     help="minimal identifiable Noah ET: AET=beta(soil moisture)*PET "
                          "with ONE learned exponent (soil_chi); drops the Jarvis "

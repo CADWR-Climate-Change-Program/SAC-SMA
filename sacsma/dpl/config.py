@@ -333,8 +333,9 @@ class DplConfig:
     #: the frozen SAC ET cascade directly, with NO Noah canopy module.  A warming-
     #: robust ET without the canopy-parameter identifiability problems of Noah.
     sac_pet: str = "hamon"
-    #: Priestley-Taylor refinements (sac_pet="priestley_taylor" only; both
-    #: default 0 => the plain fixed-albedo / Tdew=Tmin PT).  ``pt_snow_albedo``>0
+    #: Priestley-Taylor refinements (any PT PET — sac_pet OR noah_pet =
+    #: "priestley_taylor"; both default 0 => the plain fixed-albedo / Tdew=Tmin
+    #: PT).  ``pt_snow_albedo``>0
     #: raises the PT net-radiation albedo toward this value over snow (driven by
     #: the model's own Snow-17 SWE, so PET collapses under a pack — a bright-snow
     #: value is ~0.5-0.7); ``pt_dewpoint_depression``>0 lowers the dewpoint up to
@@ -423,11 +424,14 @@ class DplConfig:
             raise ValueError("pt_snow_albedo must be in [0, 1)")
         if self.pt_dewpoint_depression < 0.0:
             raise ValueError("pt_dewpoint_depression must be >= 0")
+        pt_active = (
+            (self.et_mode == "sac" and self.sac_pet == "priestley_taylor")
+            or (self.et_mode == "noah" and self.noah_pet == "priestley_taylor"))
         if (self.pt_snow_albedo > 0.0 or self.pt_dewpoint_depression > 0.0) \
-                and not (self.et_mode == "sac" and self.sac_pet == "priestley_taylor"):
+                and not pt_active:
             raise ValueError(
-                "pt_snow_albedo / pt_dewpoint_depression apply only to "
-                "et_mode='sac' with sac_pet='priestley_taylor'")
+                "pt_snow_albedo / pt_dewpoint_depression apply only to a "
+                "Priestley-Taylor PET (sac_pet or noah_pet = 'priestley_taylor')")
         if self.dynamic_params:
             allowed = set(DYNAMIC_SAC_PARAMS) | set(CANOPY_LEARNED_PARAMS)
             bad = [p for p in self.dynamic_params if p not in allowed]

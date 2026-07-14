@@ -141,31 +141,38 @@ def run_window(
     # Priestley-Taylor PET below (and the SWE-observation loss via return_swe).
     # Snow-17 does not depend on the PET, so this reordering is value-identical
     # for every path that does not raise the albedo over snow (pt_snow_albedo == 0).
-    albedo_swe = (raw_pet is None and et_mode == "sac"
-                  and sac_pet == "priestley_taylor" and pt_snow_albedo > 0.0)
+    albedo_swe = (raw_pet is None and pt_snow_albedo > 0.0
+                  and ((et_mode == "sac" and sac_pet == "priestley_taylor")
+                       or (et_mode == "noah" and noah_pet == "priestley_taylor")))
     need_swe = return_swe or albedo_swe
     snow_out = run_snow17(prcp, tavg, doy, is_leap, elev, params,
                           state=state.snow, return_swe=need_swe)
     eff_p, snow_state = snow_out[0], snow_out[1]
     swe = snow_out[2] if need_swe else None
 
+    def _pt_potential():
+        """Refined Priestley-Taylor potential ET: the energy-based PET plus the
+        snow-cover-albedo and arid-dewpoint-depression corrections when enabled.
+        Shared by the plain-SAC PT path and the Noah PT potential so both get the
+        identical refinements (real per-cell tmin/tmax are REQUIRED — there is no
+        tavg fallback: a synthetic diurnal range would diverge train from score)."""
+        if tmin is None or tmax is None:
+            raise ValueError(
+                "priestley_taylor PET requires per-cell tmin/tmax")
+        pt_kwargs = {}
+        if albedo_swe:   # blend PT albedo toward snow where a pack is present
+            pt_kwargs["albedo"] = snow_cover_albedo(swe, pt_snow_albedo)
+        if pt_dewpoint_depression > 0.0:   # lower Tdew below Tmin in arid air
+            pt_kwargs["dewpoint_depression"] = dewpoint_depression_field(
+                tmin, tmax, pt_dewpoint_depression)
+        return potential_et_priestley_taylor(
+            tavg, tmin, tmax, doy, lat_rad, elev, **pt_kwargs)
+
     if raw_pet is None:
         if et_mode == "sac" and sac_pet == "priestley_taylor":
             # energy-based PET for the plain SAC ET (no Noah canopy) — Kpet still
-            # scales it below, exactly as it scales Hamon.  Real per-cell tmin/tmax
-            # are REQUIRED (there is no tavg fallback: a synthetic diurnal range
-            # would silently diverge training from scoring).
-            if tmin is None or tmax is None:
-                raise ValueError(
-                    "sac_pet='priestley_taylor' requires per-cell tmin/tmax")
-            pt_kwargs = {}
-            if albedo_swe:   # blend PT albedo toward snow where a pack is present
-                pt_kwargs["albedo"] = snow_cover_albedo(swe, pt_snow_albedo)
-            if pt_dewpoint_depression > 0.0:   # lower Tdew below Tmin in arid air
-                pt_kwargs["dewpoint_depression"] = dewpoint_depression_field(
-                    tmin, tmax, pt_dewpoint_depression)
-            raw_pet = potential_et_priestley_taylor(
-                tavg, tmin, tmax, doy, lat_rad, elev, **pt_kwargs)
+            # scales it below, exactly as it scales Hamon.
+            raw_pet = _pt_potential()
         else:
             raw_pet = hamon_raw_pet(tavg, doy, lat_rad)
     # Kpet time-varying reconstruction: day-of-year harmonic (seasonal) and/or a
@@ -189,9 +196,9 @@ def run_window(
             raise ValueError("et_mode='noah' requires per-cell tmin/tmax")
         if noah_pet == "priestley_taylor":
             # energy-based potential replaces Hamon (still scaled by the learned
-            # Kpet, now a mild global calibration knob on a physical PET)
-            pet = kpet * potential_et_priestley_taylor(
-                tavg, tmin, tmax, doy, lat_rad, elev)
+            # Kpet, now a mild global calibration knob on a physical PET);
+            # inherits the snow-albedo / dewpoint refinements when enabled
+            pet = kpet * _pt_potential()
         cp = canopy_params
         if state_idx is not None and any(k.endswith("_dyn") for k in cp):
             # climate-state response on canopy params (e.g. soil_chi): reconstruct
