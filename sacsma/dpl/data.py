@@ -11,6 +11,7 @@ the device on demand.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 
 import numpy as np
@@ -161,6 +162,244 @@ def load_cal_obs(
         obs=torch.as_tensor(arr).to(dom.device, dom.dtype),
         obs_var=torch.as_tensor(var).to(dom.device, dom.dtype),
     )
+
+
+#: ET-observation products with 1988 coverage (enter the auxiliary loss).  Per-
+#: cell monthly ET npz produced by scratchpad/{et_ingest,gee_et_ingest}.py; the
+#: directory is external scratch (git-LFS candidate later) — override with
+#: SACSMA_ET_DIR.  Screening-only referees (openet/modis/gldas, 2000/2001+) are
+#: deliberately excluded — they don't cover the calibration window.
+#: max complete calendar months a fixed-length TBPTT chunk can hold (<=12 for a
+#: 366-day chunk; 13 for headroom).  The per-chunk ET target is padded to this.
+ET_MAXM = 13
+ET_DIR = os.environ.get("SACSMA_ET_DIR", r"D:\sacsma-data\et_processed")
+ET_FILES: dict[str, str] = {
+    "gleam": "gleam_cell_monthly.npz",
+    "fluxcom": "fluxcom_cell_monthly.npz",
+    "terraclimate": "terraclimate_gee_cell_monthly.npz",
+    "fldas": "fldas_gee_cell_monthly.npz",
+    "era5land": "era5land_gee_cell_monthly.npz",
+}
+#: SWE products with 1988 coverage (scratchpad/gee_swe_ingest.py; monthly-MEAN
+#: state in mm).  TerraClimate stores END-OF-MONTH snapshots — converted to a
+#: pseudo monthly mean in the loader so its PHASE lines up with the mean-state
+#: products (a snapshot lags the monthly mean ~half a month, the same size as
+#: the across-product phase spread we anchor).  MODIS fSCA / GLDAS (2000+) are
+#: screening referees only.
+SWE_DIR = os.environ.get("SACSMA_SWE_DIR", r"D:\sacsma-data\swe_processed")
+SWE_FILES: dict[str, str] = {
+    "daymet": "daymet_swe_gee_cell_monthly.npz",
+    "terraclimate": "terraclimate_swe_gee_cell_monthly.npz",
+    "fldas": "fldas_swe_gee_cell_monthly.npz",
+    "era5land": "era5land_swe_gee_cell_monthly.npz",
+}
+SWE_SNAPSHOT_PRODUCTS = ("terraclimate",)   # end-of-month -> adjacent-mean fix
+SWE_SNOW_MIN = 10.0   # mm consensus peak below which a basin sits out the loss
+
+
+@dataclass
+class ShapeObs:
+    """Multi-product seasonal-SHAPE target over the calibration window ONLY.
+
+    Holds the raw per-product basin climatologies (mm/month for ET, mm monthly-
+    mean state for SWE) plus the products' INTERANNUAL normalized-cycle spread;
+    :func:`shape_chunk_targets` turns them into per-chunk normalized mu/sigma
+    (level removed) and the per-chunk product min-max level envelope.  Aggregated
+    to basin with the SAME footprint weights (``dom.W``) the model uses.
+    """
+
+    clim: np.ndarray           # (P, B, 12) product cal-climatologies
+    inter: np.ndarray          # (B, 12) across-year std of the normalized cycle
+    basin_w: np.ndarray        # (B,) participation (ET: ones; SWE: snow mask)
+    products: tuple[str, ...]
+
+
+def _basin_monthly_series(dom: DomainTensors, path: str, name: str, var: str,
+                          snapshot: bool):
+    """One product npz -> basin-aggregated monthly series (B, n_months) + dates.
+
+    Per-cell values are broadcast to the HRUs sharing each cell and aggregated by
+    ``dom.W`` (rows sum to 1) — identical support to ``dom.W @ tet``.  For
+    ``snapshot`` products (end-of-month states) the series is converted to a
+    pseudo monthly mean by averaging adjacent snapshots."""
+    z = np.load(path, allow_pickle=True)
+    val = z[var].astype(np.float64)                          # (n_cells, n_months)
+    keys = z["keys"].astype(str)
+    dates = pd.to_datetime(z["dates"])
+    if snapshot:   # mean over month m ~ (eom[m-1] + eom[m]) / 2; first month kept
+        val = np.concatenate([val[:, :1],
+                              0.5 * (val[:, 1:] + val[:, :-1])], axis=1)
+    cell_of = {k: i for i, k in enumerate(keys)}
+    hru_keys = dom.hrus["key"].astype(str).to_numpy()
+    idx = np.array([cell_of.get(k, -1) for k in hru_keys])
+    if (idx < 0).any():
+        raise ValueError(
+            f"{int((idx < 0).sum())} HRU keys absent from product {name!r} "
+            "(the obs losses require the 15cdec_grid domain the products cover)")
+    W = dom.W.detach().double().cpu().numpy()                # (B, n_hru)
+    return W @ np.nan_to_num(val[idx]), dates                # (B, n_months)
+
+
+def _load_shape_obs(dom: DomainTensors, files: dict[str, str], obs_dir: str,
+                    var: str, cal_start: str, cal_end: str,
+                    snapshot: tuple[str, ...] = (),
+                    snow_min: float | None = None) -> ShapeObs:
+    c0, c1 = pd.Timestamp(cal_start), pd.Timestamp(cal_end)
+    clims, inters = [], []
+    for name, fn in files.items():
+        path = os.path.join(obs_dir, fn)
+        if not os.path.exists(path):
+            raise FileNotFoundError(
+                f"obs product {name!r} not found at {path} (set SACSMA_ET_DIR/"
+                "SACSMA_SWE_DIR or run the scratchpad ingest)")
+        series, dates = _basin_monthly_series(dom, path, name, var,
+                                              name in snapshot)
+        cal = (dates >= c0) & (dates <= c1)
+        months = dates.month.to_numpy()
+        years = dates.year.to_numpy()
+        clim = np.full((series.shape[0], 12), np.nan)        # (B, 12)
+        for m in range(1, 13):
+            sel = cal & (months == m)
+            if sel.any():
+                clim[:, m - 1] = np.nanmean(series[:, sel], axis=1)
+        clims.append(clim)
+        # interannual spread of the NORMALIZED cycle: each full calendar year
+        # inside the cal window contributes cycle/its-own-mean; std across years.
+        cycles = []
+        for y in np.unique(years[cal]):
+            sel = cal & (years == y)
+            if sel.sum() == 12:
+                cyc = series[:, sel]                         # (B, 12) Jan..Dec
+                cycles.append(cyc / np.maximum(cyc.mean(axis=1, keepdims=True),
+                                               1e-6))
+        inters.append(np.std(np.stack(cycles, 0), 0, ddof=1) if len(cycles) >= 3
+                      else np.zeros_like(clim))
+    clim = np.stack(clims, 0)                                # (P, B, 12)
+    inter = np.mean(np.stack(inters, 0), 0)                  # (B, 12)
+    if snow_min is not None:   # SWE: ~snow-free basins sit the loss out
+        basin_w = (np.nanmean(np.nanmax(clim, axis=2), axis=0)
+                   >= snow_min).astype(np.float64)
+        inter = inter * basin_w[:, None]                     # keep excluded rows clean
+    else:
+        basin_w = np.ones(clim.shape[1])
+    return ShapeObs(clim=clim, inter=inter, basin_w=basin_w,
+                    products=tuple(files))
+
+
+def load_et_obs(dom: DomainTensors, *, cal_start: str = "1988-10-01",
+                cal_end: str = CAL_END, et_dir: str = ET_DIR) -> ShapeObs:
+    """Multi-product ET shape/level target from the 5 cal-covering products."""
+    return _load_shape_obs(dom, ET_FILES, et_dir, "et", cal_start, cal_end)
+
+
+def load_swe_obs(dom: DomainTensors, *, cal_start: str = "1988-10-01",
+                 cal_end: str = CAL_END, swe_dir: str = SWE_DIR) -> ShapeObs:
+    """Multi-product SWE shape target (monthly-mean state, mm) from the 4
+    cal-covering products; ~snow-free basins (consensus peak < SWE_SNOW_MIN mm)
+    get ``basin_w`` 0.  No level term is ever built from SWE — the products
+    disagree ~85% on peak magnitude; only the accumulation/melt SHAPE is used."""
+    return _load_shape_obs(dom, SWE_FILES, swe_dir, "swe", cal_start, cal_end,
+                           snapshot=SWE_SNAPSHOT_PRODUCTS, snow_min=SWE_SNOW_MIN)
+
+
+def water_balance_anchor(dom: DomainTensors, calobs: CalObs,
+                         etobs: ShapeObs) -> np.ndarray:
+    """(B, 12) monthly ET level-anchor climatology from the water balance.
+
+    Level: annual ET = cal-window mean(P) - mean(Q_obs), both restricted to
+    each basin's gage-covered days (storage change ~ cancels over the window;
+    the hinge band absorbs the residual and any gap-season bias — BND's short
+    gage record is the worst case).  Shape: the annual total is spread over
+    months by the ET products' consensus cycle — level from the one
+    observation that constrains it (the products' brackets span up to 72% of
+    Q in the arid basins), seasonality from the products.  The closure check
+    (2026-07-15) found P-Q inside or at the product bracket at all 15 basins,
+    so the two sources are mutually consistent.
+    """
+    W = dom.W.detach().double().cpu().numpy()                      # (B, N)
+    pr = dom.forcing.prcp[dom.cell_idx,
+                          calobs.t0:calobs.t1].astype(np.float64)  # (N, Tc)
+    p_basin = W @ pr                                               # mm/day
+    q = calobs.obs.detach().double().cpu().numpy()                 # NaN gaps
+    valid = np.isfinite(q)
+    n = valid.sum(axis=1)
+    if (n == 0).any():
+        bad = [b for b, k in zip(dom.basins, n, strict=True) if k == 0]
+        raise ValueError(f"no gage days in the cal window for {bad}")
+    ann = ((np.where(valid, p_basin, 0.0).sum(axis=1)
+            - np.where(valid, q, 0.0).sum(axis=1)) / n) * 365.25   # (B,) mm/yr
+    if (ann <= 0.0).any():
+        bad = [b for b, a in zip(dom.basins, ann, strict=True) if a <= 0.0]
+        raise ValueError(f"nonpositive P-Q level anchor for {bad}")
+    cons = etobs.clim.mean(axis=0)                                 # (B, 12)
+    frac = cons / np.maximum(cons.sum(axis=1, keepdims=True), 1e-6)
+    return frac * ann[:, None]
+
+
+def shape_chunk_targets(obs: ShapeObs, cal_month0: np.ndarray, mask: np.ndarray,
+                        sigma_floor: float = 0.1):
+    """Per-chunk normalized-shape mu/sigma + level envelope from a ShapeObs.
+
+    For the chunk's masked calendar-month slots: each product's climatology
+    subset is normalized by its own masked-month mean (level removed), then
+    ``mu``/``sigma`` are the across-product mean/std of the normalized cycles,
+    sigma inflated by the products' interannual normalized spread (a single
+    chunk is ONE year — a perfect model still deviates from climatology in a
+    wet/dry year) and floored ABSOLUTELY at ``sigma_floor`` (normalized units,
+    O(1)).  ``lo``/``hi`` are the min/max across products of the masked-month
+    TOTAL (the level envelope for the hinge).  Returns numpy
+    (mu (B,M), sigma (B,M), lo (B,), hi (B,))."""
+    p, b, _ = obs.clim.shape
+    maxm = len(cal_month0)
+    sel = mask > 0
+    mu = np.zeros((b, maxm))
+    sig = np.ones((b, maxm))
+    lo = np.zeros(b)
+    hi = np.ones(b)
+    if not sel.any():
+        return mu, sig, lo, hi
+    sub = obs.clim[:, :, cal_month0]                         # (P, B, M)
+    sub_m = sub[:, :, sel]                                   # masked slots only
+    sbar = np.maximum(sub_m.mean(axis=2, keepdims=True), 1e-6)   # (P, B, 1)
+    nhat = sub_m / sbar                                      # normalized cycles
+    mu_m = nhat.mean(axis=0)                                 # (B, m)
+    sig_m = nhat.std(axis=0, ddof=1)
+    inter_m = obs.inter[:, cal_month0][:, sel]               # (B, m)
+    sig_m = np.maximum(np.sqrt(sig_m ** 2 + inter_m ** 2), sigma_floor)
+    mu[:, sel] = mu_m
+    sig[:, sel] = sig_m
+    totals = sub_m.sum(axis=2)                               # (P, B)
+    lo, hi = totals.min(axis=0), totals.max(axis=0)
+    return mu, sig, lo, hi
+
+
+def et_chunk_target(dates: pd.DatetimeIndex, c0: int, length: int,
+                    cal_t0: int, cal_t1: int, maxm: int = ET_MAXM):
+    """Monthly-bucket target for a TBPTT chunk [c0, c0+length): a (length, maxm)
+    day->month-slot sum matrix and the 0-based calendar month of each slot, for
+    the calendar months lying COMPLETELY inside both the chunk and the cal window
+    [cal_t0, cal_t1).  Split/partial months (chunk boundaries, post-CAL_END) get
+    no slot (mask 0) — a partial-month ET sum isn't comparable to a full-month
+    climatology.  Returns (bucket, cal_month0 (maxm,), mask (maxm,))."""
+    c1 = c0 + length
+    all_codes = (dates.year * 12 + dates.month).to_numpy()
+    codes = all_codes[c0:c1]
+    d_month = dates.month.to_numpy()[c0:c1]
+    bucket = np.zeros((length, maxm), np.float64)
+    cal_month0 = np.zeros(maxm, np.int64)
+    mask = np.zeros(maxm, np.float64)
+    slot = 0
+    for code in pd.unique(codes):
+        local = np.nonzero(codes == code)[0]
+        g = np.nonzero(all_codes == code)[0]
+        g = g[(g >= cal_t0) & (g < cal_t1)]
+        if len(g) and g.min() >= c0 and g.max() < c1 and len(local) == len(g) \
+                and slot < maxm:
+            bucket[local, slot] = 1.0
+            cal_month0[slot] = d_month[local[0]] - 1
+            mask[slot] = 1.0
+            slot += 1
+    return bucket, cal_month0, mask
 
 
 def _compute_state_index(forcing, dates, window: int, cal_end: str) -> np.ndarray:
@@ -334,8 +573,8 @@ def _load_canopy_obs(data_dir: str, domain: str, forcing):
 
 def _load_percell_tminmax(data_dir: str, domain: str, forcing):
     """Per-cell (n_cells, T) Tmin/Tmax aligned to ``forcing`` cell order, from
-    ``<domain>/tminmax_livneh_percell.nc`` — or (None, None) if absent (the Noah
-    ET path then falls back to synthesising tmin/tmax from tavg).  Only
+    ``<domain>/tminmax_livneh_percell.nc`` — or (None, None) if absent (the
+    Noah/PT paths then RAISE at run time; there is no tavg fallback).  Only
     15cdec_grid ships this sidecar (its cells sit on the WGEN lattice)."""
     path = domain_dir(data_dir, domain) / "tminmax_livneh_percell.nc"
     if not path.exists():

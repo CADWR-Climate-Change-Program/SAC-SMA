@@ -29,11 +29,10 @@ Reduced-input design (NWS 53 Sec 3.3): the scheme is driven by precipitation
 and temperature only.  It is **tmin/tmax-native** — daily solar radiation via
 Bristow & Campbell (1984) from the diurnal range ``Td = tmax - tmin`` and the
 FAO-56 extraterrestrial radiation, and vapour pressure via the standard
-dewpoint ~= tmin assumption.  When tmin/tmax are absent (the current forcing
-store carries only tavg) a clearly-flagged fallback synthesises ``Td`` from a
-fixed climatological amplitude and takes the dewpoint offset as a constant;
-those two lines are the only non-faithful part and are removed once Livneh
-tmin/tmax is re-ingested.
+dewpoint ~= tmin assumption.  Real per-cell tmin/tmax are REQUIRED (the callers
+raise if they are absent) — there is deliberately no tavg-only synthesis, so a
+run can never silently substitute a fabricated diurnal range for the ingested
+one (that fallback previously let training and scoring diverge unnoticed).
 """
 
 from __future__ import annotations
@@ -52,16 +51,24 @@ _N_CANOPY = 0.5        # Noilhan-Planton wet-fraction exponent
 _GSC = 0.0820          # solar constant, MJ m-2 min-1 (FAO-56)
 # Bristow-Campbell transmittance coefficients (NWS 53 p.17)
 _BC_A, _BC_B, _BC_C = 0.7, 0.007, 2.4
-# tavg-only FALLBACK constant (removed once tmin/tmax are ingested): a fixed
-# diurnal range, split symmetrically about tavg so tmin also serves as the
-# dewpoint proxy for the VPD term.
-_FALLBACK_TD = 10.0    # assumed diurnal range, degC
 
 # -- Priestley-Taylor energy potential (noah_pet="priestley_taylor") ----------
 _ALPHA_PT = 1.26       # Priestley-Taylor coefficient
-_ALBEDO = 0.23         # FAO-56 reference-surface albedo
+_ALBEDO = 0.23         # FAO-56 reference-surface (snow-free) albedo
 _SIGMA_SB = 4.903e-9   # Stefan-Boltzmann, MJ K-4 m-2 day-1 (FAO-56)
 _LAMBDA_MJ = 2.45      # latent heat of vaporisation, MJ/kg (~20 degC)
+
+# -- snow-cover albedo + arid dewpoint depression (PT refinements) ------------
+# The fixed 0.23 reference albedo over-radiates snow-covered ground; blend it
+# toward a bright snow albedo by a smooth cover fraction f = 1 - exp(-SWE/ref)
+# (the model's own Snow-17 SWE drives it).  And Tdew~=Tmin over-estimates the
+# near-surface humidity in ARID air (true dewpoint sits below Tmin there), which
+# under-estimates the net longwave loss and so INFLATES summer PET in exactly
+# the dry basins; depress the dewpoint in proportion to the diurnal range (an
+# aridity proxy), humid air (small range) staying at Tmin.
+_SNOW_COVER_SWE_REF = 15.0   # SWE (mm) e-folding for the snow-cover ramp
+_DD_TD_LO = 8.0              # diurnal range (degC) below which air stays humid
+_DD_TD_HI = 20.0             # diurnal range at/above which the full depression applies
 # -- Beer's-law green-fraction seasonality (sigma tracks LAI phenology) -------
 _BEER_K = 0.5          # canopy extinction coeff for shdfac = 1 - exp(-k*LAI)
 
@@ -133,6 +140,9 @@ def potential_et_priestley_taylor(
     doy: torch.Tensor,        # (T,) or (N, T)
     lat_rad: torch.Tensor,    # (N,)
     elev: torch.Tensor,       # (N,)
+    *,
+    albedo: torch.Tensor | float = _ALBEDO,           # scalar or (N, T) snow-aware
+    dewpoint_depression: torch.Tensor | float = 0.0,  # degC; ea = es(tmin - dd)
 ) -> torch.Tensor:
     """Energy-based potential ET (mm/day), Priestley-Taylor over net radiation.
 
@@ -142,6 +152,13 @@ def potential_et_priestley_taylor(
     (diurnal range) and Rnl the FAO-56 net longwave (dewpoint~=tmin); then
     ``PET = alpha_PT * s/(s+gamma) * Rn / lambda`` (soil heat flux G~=0 daily).
     Fully vectorised over (N, T) — computed once per window in the driver.
+
+    ``albedo`` may be a per-cell/per-day (N, T) field (e.g. raised over snow via
+    :func:`snow_cover_albedo`) instead of the fixed reference value, and
+    ``dewpoint_depression`` (degC, scalar or (N, T)) subtracts from ``tmin`` in
+    the actual-vapour-pressure term so arid air can carry a lower dewpoint than
+    ``tmin`` (:func:`dewpoint_depression_field`).  Both default to the plain
+    fixed-albedo / Tdew=Tmin form, so the base PT is unchanged.
     """
     lat = lat_rad.unsqueeze(-1)                        # (N, 1)
     el = elev.unsqueeze(-1)                            # (N, 1)
@@ -156,8 +173,8 @@ def potential_et_priestley_taylor(
     kt = _BC_A * (1.0 - torch.exp(-_BC_B * td ** _BC_C))
     rs = kt * ra                                       # Bristow-Campbell shortwave
     rso = (0.75 + 2e-5 * el) * ra                      # clear-sky
-    rns = (1.0 - _ALBEDO) * rs
-    ea = _sat_vapour_kpa(tmin)                         # actual vapour pressure
+    rns = (1.0 - albedo) * rs
+    ea = _sat_vapour_kpa(tmin - dewpoint_depression)   # actual vapour pressure
     cloud = (1.35 * (rs / rso.clamp_min(_EPS)).clamp(0.3, 1.0) - 0.35)
     rnl = (_SIGMA_SB * ((tmax + 273.16) ** 4 + (tmin + 273.16) ** 4) / 2.0
            * (0.34 - 0.14 * ea.clamp_min(0.0).sqrt()) * cloud)
@@ -167,6 +184,37 @@ def potential_et_priestley_taylor(
     gamma = 0.000665 * _atm_pressure_kpa(el)
     pet = _ALPHA_PT * slope / (slope + gamma) * rn.clamp_min(0.0) / _LAMBDA_MJ
     return pet.clamp_min(0.0)
+
+
+def snow_cover_albedo(
+    swe: torch.Tensor,                    # (N, T) snow water equivalent, mm
+    snow_albedo: float,                   # bright-snow albedo at full cover
+    swe_ref: float = _SNOW_COVER_SWE_REF,
+    bare_albedo: float = _ALBEDO,
+) -> torch.Tensor:
+    """Blend bare-surface and snow albedo by a smooth snow-cover fraction.
+
+    ``f = 1 - exp(-SWE/swe_ref)`` (differentiable, ->1 for a deep pack, 0 bare);
+    ``albedo = bare + (snow - bare)*f``.  Returned as an (N, T) field for the
+    Priestley-Taylor net radiation so PET collapses under a snowpack.
+    """
+    f = 1.0 - torch.exp(-swe.clamp_min(0.0) / swe_ref)
+    return bare_albedo + (snow_albedo - bare_albedo) * f
+
+
+def dewpoint_depression_field(
+    tmin: torch.Tensor, tmax: torch.Tensor,   # (N, T) degC
+    dd_max: float,                            # max depression (degC) in fully-arid air
+) -> torch.Tensor:
+    """Aridity-scaled dewpoint depression (degC) from the diurnal range.
+
+    Humid air (small ``Td = tmax - tmin``) keeps Tdew~=Tmin (depression 0);
+    arid air (large Td) depresses it up to ``dd_max``, a linear ramp over
+    ``Td in [_DD_TD_LO, _DD_TD_HI]``.  Used to lower the actual vapour pressure
+    (raise the net longwave loss) of the PT PET in dry basins only.
+    """
+    frac = ((tmax - tmin - _DD_TD_LO) / (_DD_TD_HI - _DD_TD_LO)).clamp(0.0, 1.0)
+    return dd_max * frac
 
 
 def canopy_resistance_factor(
@@ -386,17 +434,3 @@ def noah_lite_et_step(
         "wc": st["wc"],           # interception off — canopy store rides unchanged
     }
     return precip, new_state, tet
-
-
-def canopy_inputs_fallback(
-    tavg: torch.Tensor,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Synthesise (tmin, tmax) from tavg when the forcing lacks them.
-
-    A stopgap for the current tavg-only store: a fixed diurnal amplitude and
-    dewpoint offset.  NOT faithful — replaced by real Livneh tmin/tmax after
-    re-ingest (:data:`_FALLBACK_TD`, :data:`_FALLBACK_DEWDEP`).
-    """
-    tmin = tavg - 0.5 * _FALLBACK_TD
-    tmax = tavg + 0.5 * _FALLBACK_TD
-    return tmin, tmax

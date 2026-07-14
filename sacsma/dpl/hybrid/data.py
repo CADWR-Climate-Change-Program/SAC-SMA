@@ -47,7 +47,7 @@ def build_frozen_sim(
     """Frozen SAC-SMA daily sim (mm/day) for all 15 basins: index=date, cols=basins.
 
     ``physics_csv`` = a ga_optimum-shaped parameter table (with a ``basin``
-    column) e.g. ``artifacts/dpl/physical_levers/params_dpl.csv``; ``None`` uses
+    column) e.g. ``artifacts/dpl/testing/physical_levers/params_dpl.csv``; ``None`` uses
     the archived GA optimum.  Cached to ``cache`` if given.
     """
     if cache is not None and Path(cache).exists():

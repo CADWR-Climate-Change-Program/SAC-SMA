@@ -111,9 +111,16 @@ def _dpl_train(args: argparse.Namespace) -> int:
         fracp_floor=args.fracp_floor, dtype=args.dtype, device=args.device,
         loss=args.loss, log_loss_lambda=args.log_lambda,
         var_loss_lambda=args.var_lambda, bias_loss_lambda=args.bias_lambda,
+        et_loss_lambda=args.et_loss_lambda,
+        et_level_lambda=args.et_level_lambda,
+        swe_loss_lambda=args.swe_loss_lambda,
+        shape_sigma_floor=args.shape_sigma_floor,
+        et_anchor_band=args.et_anchor_band,
+        init_from=args.init_from,
         lr=args.lr,
         lr_warmup_epochs=args.warmup_epochs, n_epochs=args.epochs,
-        spinup_refresh_every=args.spinup_refresh, patience=args.patience,
+        spinup_refresh_every=args.spinup_refresh,
+        spinup_start=args.spinup_start, patience=args.patience,
         hidden=args.hidden, embed=args.embed, dropout=args.dropout,
         grouped_heads=args.grouped_heads, fourier_k=args.fourier_k,
         gnn_k=args.gnn_k,
@@ -123,7 +130,10 @@ def _dpl_train(args: argparse.Namespace) -> int:
         adaptive_loss=args.adaptive_loss, adaptive_loss_beta=args.adaptive_beta,
         seasonal_params=(tuple(args.seasonal.split(",")) if args.seasonal else ()),
         seasonal_amp=args.seasonal_amp,
-        et_mode=args.et, noah_pet=args.noah_pet, canopy_lite=args.canopy_lite,
+        et_mode=args.et, noah_pet=args.noah_pet, sac_pet=args.sac_pet,
+        pt_snow_albedo=args.pt_snow_albedo,
+        pt_dewpoint_depression=args.pt_dewpoint_depression,
+        canopy_lite=args.canopy_lite,
         calsim_footprint=args.calsim_footprint,
         dynamic_params=(tuple(args.dynamic_params.split(","))
                         if args.dynamic_params else ()),
@@ -271,6 +281,19 @@ def main(argv: list[str] | None = None) -> int:
                     help="Noah potential-ET source: hamon = temperature-only "
                          "(low ET ceiling); priestley_taylor = energy-based from "
                          "Bristow-Campbell net radiation (lifts the ceiling)")
+    tr.add_argument("--sac-pet", default="hamon",
+                    choices=["hamon", "priestley_taylor"],
+                    help="PET source for the PLAIN SAC ET (et=sac): priestley_taylor "
+                         "drives the frozen SAC ET with energy-based PET, no Noah "
+                         "canopy module")
+    tr.add_argument("--pt-snow-albedo", type=float, default=0.0, metavar="ALBEDO",
+                    help="raise the Priestley-Taylor albedo toward this value over "
+                         "snow (Snow-17 SWE-driven; ~0.5-0.7 bright snow); 0 = fixed "
+                         "0.23 (sac-pet=priestley_taylor only)")
+    tr.add_argument("--pt-dewpoint-depression", type=float, default=0.0, metavar="DEGC",
+                    help="max dewpoint depression (degC) below Tmin in arid air for "
+                         "the PT net-longwave term, scaled by diurnal range; 0 = "
+                         "Tdew=Tmin (sac-pet=priestley_taylor only)")
     tr.add_argument("--canopy-lite", action="store_true",
                     help="minimal identifiable Noah ET: AET=beta(soil moisture)*PET "
                          "with ONE learned exponent (soil_chi); drops the Jarvis "
@@ -311,6 +334,32 @@ def main(argv: list[str] | None = None) -> int:
     tr.add_argument("--bias-lambda", type=float, default=0.0,
                     help="per-chunk bias penalty (mean ratio - 1)^2; the KGE beta "
                          "term the MSE/NNSE loss lacks (0 disables)")
+    tr.add_argument("--et-loss-lambda", type=float, default=0.0,
+                    help="ET seasonal-SHAPE loss weight: inverse-variance pull of "
+                         "the model's NORMALIZED monthly ET cycle to the 5-product "
+                         "consensus shape — level-blind (0 disables)")
+    tr.add_argument("--et-level-lambda", type=float, default=0.0,
+                    help="ET volume envelope hinge weight: zero inside the product "
+                         "min-max total, quadratic outside (catches arid basins "
+                         "above every product; 0 disables)")
+    tr.add_argument("--swe-loss-lambda", type=float, default=0.0,
+                    help="SWE seasonal-SHAPE loss weight: normalized accumulation/"
+                         "melt-cycle pull to the 4-product consensus (snow basins "
+                         "only, no level term; 0 disables)")
+    tr.add_argument("--shape-sigma-floor", type=float, default=0.1,
+                    help="absolute floor on the normalized-cycle ensemble sigma "
+                         "(hedges correlated-products over-confidence; default 0.1)")
+    tr.add_argument("--et-anchor-band", type=float, default=0.0,
+                    help="re-target the ET level hinge to the WATER-BALANCE "
+                         "anchor: per-basin annual ET = cal mean(P) - mean(Q_obs) "
+                         "over gage days, +/- this fractional band (needs "
+                         "--et-level-lambda > 0; 0 = product min-max envelope)")
+    tr.add_argument("--init-from", default="",
+                    help="warm-start checkpoint (e.g. a baseline best.pt): net "
+                         "weights load strict=False so fresh zero-init heads "
+                         "(e.g. --seasonal) start EXACTLY at the donor's field; "
+                         "fresh optimizer/scheduler — pair with a low --lr for "
+                         "the fine-tune regime")
     tr.add_argument("--fourier-k", type=int, default=0,
                     help="net-v2: spatial Fourier feature order (4k extra "
                          "features; low-frequency regional fields; 0 = off)")
@@ -357,10 +406,18 @@ def main(argv: list[str] | None = None) -> int:
                          "(lower = stop sooner at plateau; selection cadence is "
                          "every 2 epochs)")
     tr.add_argument("--spinup-refresh", type=int, default=1,
-                    help="re-run the full-prefix spinup every k epochs (k=2 "
+                    help="re-run the no-grad spinup every k epochs (k=2 "
                          "reuses one-epoch-stale state on odd epochs — same "
                          "staleness order as within-epoch TBPTT drift; "
                          "selection evals always respin fresh)")
+    tr.add_argument("--spinup-start", default="1978-10-01",
+                    help="no-grad spinup cold-start date (default 10 water "
+                         "years before the WY1989 cal window: spans the "
+                         "record-wet WY1982-83, which resets the LZ "
+                         "tension-store memory exactly — measured KGE vs "
+                         "the full prefix 1.000000; clamped to the record "
+                         "start, so pass 1915-01-01 for the exact frozen "
+                         "full-prefix convention)")
     tr.add_argument("--lr", type=float, default=1e-3)
     tr.add_argument("--seed", type=int, default=0)
     tr.add_argument("--no-graphs", action="store_true",
@@ -377,7 +434,9 @@ def main(argv: list[str] | None = None) -> int:
     ev.add_argument("checkpoint", help="path to checkpoints/best.pt")
     ev.add_argument("--data-dir", default="data", help="organized data/ store")
     ev.add_argument("--out", default=None,
-                    help="output dir (default: artifacts/dpl/<variant>)")
+                    help="output dir (default: the checkpoint's own run dir "
+                         "for the standard <run>/checkpoints/*.pt layout, "
+                         "else artifacts/dpl/<variant>)")
     ev.add_argument("--serial", action="store_true",
                     help="disable the parallel (numba prange) frozen model")
     ev.set_defaults(func=_dpl_evaluate)
@@ -392,7 +451,7 @@ def main(argv: list[str] | None = None) -> int:
                     help="feature = SAC-SMA sim as an LSTM input; residual = "
                          "LSTM learns obs-sim, flow = sim + correction")
     hy.add_argument("--physics",
-                    default="artifacts/dpl/physical_levers/params_dpl.csv",
+                    default="artifacts/dpl/testing/physical_levers/params_dpl.csv",
                     help="frozen SAC-SMA parameter table for the physics input "
                          "(empty/'GA' -> archived GA optimum)")
     hy.add_argument("--sim-cache", default="artifacts/dpl/hybrid/frozen_sim.csv",

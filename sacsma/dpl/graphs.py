@@ -8,9 +8,9 @@ and replaying it turns each window into a single graph launch.
 Two capture shapes (both PyTorch stream-capture recipes):
 
 * :class:`NoGradWindow` — forward-only, fixed ``window`` days.  Replayed to
-  stream the long no-grad segments: the full-prefix spinup each epoch and the
-  full-calibration selection forward.  Parameters/UHs are static buffers,
-  refreshed per epoch with ``set_params``.
+  stream the long no-grad segments: the spinup each epoch (from
+  ``cfg.spinup_start``) and the full-calibration selection forward.
+  Parameters/UHs are static buffers, refreshed per epoch with ``set_params``.
 * :class:`TrainChunk` — whole-iteration capture of
   ``net -> UH -> physics chunk -> basin aggregation -> loss -> backward`` for
   a fixed ``chunk`` length.  Gradients land in the network's static ``.grad``
@@ -33,8 +33,9 @@ import torch
 from .config import DplConfig
 from .data import DomainTensors
 from .et_noah import NoahCanopyState
+from .data import ET_MAXM
 from .forward import PipelineState, routing_uh, run_window
-from .loss import masked_basin_loss
+from .loss import level_hinge_loss, masked_basin_loss, shape_pull_loss
 from .routing import N_TAPS
 from .sma import SacState
 from .snow17 import Snow17State
@@ -65,20 +66,26 @@ def _clone_state(st: PipelineState) -> PipelineState:
 class _WindowBase:
     """Static forcing/state buffers + ping-pong shared by both graphs."""
 
-    def __init__(self, dom: DomainTensors, length: int, et_mode: str = "sac"):
+    def __init__(self, dom: DomainTensors, length: int, et_mode: str = "sac",
+                 need_tmm: bool = False):
         n, dev, dt = dom.n_hru, dom.device, dom.dtype
         self.dom = dom
         self.length = length
         self.et_mode = et_mode
+        # per-cell tmin/tmax buffers are needed by the Noah ET AND by the plain
+        # SAC ET when it runs on Priestley-Taylor PET (else the graph would fall
+        # back to a synthetic diurnal range while the eager path uses the real
+        # per-cell values -> graph != eager).
+        self.need_tmm = need_tmm or et_mode == "noah"
         self.pr = torch.zeros(n, length, device=dev, dtype=dt)
         self.ta = torch.zeros(n, length, device=dev, dtype=dt)
         self.doy = torch.zeros(length, device=dev, dtype=dom.doy.dtype)
         self.leap = torch.zeros(length, device=dev, dtype=torch.bool)
-        # Noah ET: per-cell tmin/tmax static forcing buffers + a real canopy
-        # state so wc rides the ping-pong (else it silently resets each window).
+        # Noah ET: canopy state so wc rides the ping-pong (else it silently
+        # resets each window); LAI rides a per-chunk buffer (canopy structure).
         noah = et_mode == "noah"
-        self.tmin = torch.zeros(n, length, device=dev, dtype=dt) if noah else None
-        self.tmax = torch.zeros(n, length, device=dev, dtype=dt) if noah else None
+        self.tmin = torch.zeros(n, length, device=dev, dtype=dt) if self.need_tmm else None
+        self.tmax = torch.zeros(n, length, device=dev, dtype=dt) if self.need_tmm else None
         # observed seasonal LAI rides a per-chunk buffer like tmin/tmax; the
         # static veg_frac is read straight off ``dom`` (a per-cell constant).
         self.lai = torch.zeros(n, length, device=dev, dtype=dt) if noah else None
@@ -109,9 +116,10 @@ class _WindowBase:
         self.ta.copy_(ta)
         self.doy.copy_(doy)
         self.leap.copy_(leap)
-        if self.et_mode == "noah":
+        if self.need_tmm:
             self.tmin.copy_(tmin)
             self.tmax.copy_(tmax)
+        if self.et_mode == "noah":
             self.lai.copy_(lai)
         if self.state_idx is not None:
             self.state_idx.copy_(state_idx)
@@ -130,7 +138,8 @@ class NoGradWindow(_WindowBase):
                  params: dict[str, torch.Tensor],
                  uh: tuple[torch.Tensor, torch.Tensor],
                  canopy_params: dict[str, torch.Tensor] | None = None):
-        super().__init__(dom, length, et_mode=cfg.et_mode)
+        super().__init__(dom, length, et_mode=cfg.et_mode,
+                         need_tmm=cfg.sac_pet == "priestley_taylor")
         # copy ALL emitted keys (base PARAM_ORDER + any seasonal/dynamic coeffs)
         # so the no-grad spinup/selection graph applies the same time-varying
         # field as training — not just the static base.
@@ -152,6 +161,8 @@ class NoGradWindow(_WindowBase):
                 et_mode=cfg.et_mode, canopy_params=self.canopy_params,
                 tmin=self.tmin, tmax=self.tmax,
                 veg_frac=dom.veg_frac, lai=self.lai, noah_pet=cfg.noah_pet,
+                sac_pet=cfg.sac_pet, pt_snow_albedo=cfg.pt_snow_albedo,
+                pt_dewpoint_depression=cfg.pt_dewpoint_depression,
                 canopy_lite=cfg.canopy_lite, state_idx=self.state_idx)
             return dom.W @ flow, st
 
@@ -192,8 +203,10 @@ class TrainChunk(_WindowBase):
 
     def __init__(self, net: torch.nn.Module, dom: DomainTensors,
                  cfg: DplConfig, length: int, x: torch.Tensor,
-                 obs_var: torch.Tensor, weight: torch.Tensor | None = None):
-        super().__init__(dom, length, et_mode=cfg.et_mode)
+                 obs_var: torch.Tensor, weight: torch.Tensor | None = None,
+                 swe_basin_w: torch.Tensor | None = None):
+        super().__init__(dom, length, et_mode=cfg.et_mode,
+                         need_tmm=cfg.sac_pet == "priestley_taylor")
         b = dom.W.shape[0]
         self.obs = torch.full((b, length), float("nan"),
                               device=dom.device, dtype=dom.dtype)
@@ -203,6 +216,31 @@ class TrainChunk(_WindowBase):
         #: SAME tensor is passed here and updated in place via set_weights, so
         #: the captured loss reads the current weights on every replay.
         self.weight = weight
+        #: ET/SWE auxiliary losses (opt-in): static per-chunk target buffers,
+        #: copied in on every replay via set_et_target / set_swe_target.  Init so
+        #: capture sees no NaN and every obs term is 0 at capture (sig=1, mask=0,
+        #: lo=0/hi=1) while its tet/swe backward path IS captured.
+        self.et = cfg.et_loss_lambda > 0.0 or cfg.et_level_lambda > 0.0
+        self.et_shape_lambda = cfg.et_loss_lambda
+        self.et_level_lambda = cfg.et_level_lambda
+        self.swe = cfg.swe_loss_lambda > 0.0
+        self.swe_lambda = cfg.swe_loss_lambda
+        dev, dt = dom.device, dom.dtype
+        if self.et:
+            self.et_bucket = torch.zeros(length, ET_MAXM, device=dev, dtype=dt)
+            self.et_mu = torch.zeros(b, ET_MAXM, device=dev, dtype=dt)
+            self.et_sig = torch.ones(b, ET_MAXM, device=dev, dtype=dt)
+            self.et_mask = torch.zeros(ET_MAXM, device=dev, dtype=dt)
+            self.et_lo = torch.zeros(b, device=dev, dtype=dt)
+            self.et_hi = torch.ones(b, device=dev, dtype=dt)
+        if self.swe:
+            if swe_basin_w is None:
+                raise ValueError("swe_loss_lambda > 0 requires swe_basin_w")
+            self.swe_bucket = torch.zeros(length, ET_MAXM, device=dev, dtype=dt)
+            self.swe_mu = torch.zeros(b, ET_MAXM, device=dev, dtype=dt)
+            self.swe_sig = torch.ones(b, ET_MAXM, device=dev, dtype=dt)
+            self.swe_mask = torch.zeros(ET_MAXM, device=dev, dtype=dt)
+            self.swe_w = swe_basin_w.detach().clone()   # (B,) static snow mask
 
         def _step():
             out = net(self.x)
@@ -212,7 +250,7 @@ class TrainChunk(_WindowBase):
             else:
                 cp, params = None, out
             uh = routing_uh(params, dom.flowlen)
-            flow, st = run_window(
+            res = run_window(
                 self.pr, self.ta, self.doy, self.leap, dom.lat_rad, dom.elev,
                 params, uh, self.state_in,
                 n_inc=cfg.n_inc, perc_mode=cfg.perc_mode,
@@ -220,7 +258,11 @@ class TrainChunk(_WindowBase):
                 et_mode=cfg.et_mode, canopy_params=cp,
                 tmin=self.tmin, tmax=self.tmax,
                 veg_frac=dom.veg_frac, lai=self.lai, noah_pet=cfg.noah_pet,
-                canopy_lite=cfg.canopy_lite, state_idx=self.state_idx)
+                sac_pet=cfg.sac_pet, pt_snow_albedo=cfg.pt_snow_albedo,
+                pt_dewpoint_depression=cfg.pt_dewpoint_depression,
+                canopy_lite=cfg.canopy_lite, state_idx=self.state_idx,
+                return_tet=self.et, return_swe=self.swe)
+            flow, st = (res[0], res[1])
             basin = dom.W @ flow
             loss = masked_basin_loss(basin, self.obs, self.obs_var,
                                      kind=cfg.loss,
@@ -229,6 +271,22 @@ class TrainChunk(_WindowBase):
                                      var_lambda=cfg.var_loss_lambda,
                                      bias_lambda=cfg.bias_loss_lambda,
                                      weight=self.weight)
+            k = 2
+            if self.et:
+                et_monthly = (dom.W @ res[k]) @ self.et_bucket   # (B, MAXM) mm/mo
+                k += 1
+                if self.et_shape_lambda > 0.0:
+                    loss = loss + self.et_shape_lambda * shape_pull_loss(
+                        et_monthly, self.et_mu, self.et_sig, self.et_mask)
+                if self.et_level_lambda > 0.0:
+                    loss = loss + self.et_level_lambda * level_hinge_loss(
+                        et_monthly, self.et_mask, self.et_lo, self.et_hi)
+            if self.swe:
+                # swe_bucket columns are pre-divided by day counts -> monthly MEAN
+                swe_monthly = (dom.W @ res[k]) @ self.swe_bucket
+                loss = loss + self.swe_lambda * shape_pull_loss(
+                    swe_monthly, self.swe_mu, self.swe_sig, self.swe_mask,
+                    basin_w=self.swe_w)
             return loss, st
 
         net.train()
@@ -267,12 +325,38 @@ class TrainChunk(_WindowBase):
         if self.weight is not None:
             self.weight.copy_(w)
 
+    def set_et_target(self, bucket, mu, sig, mask, lo, hi) -> None:
+        """Copy this chunk's ET target (day->month bucket, normalized-shape
+        mu/sig, slot mask, level envelope lo/hi) into the static buffers."""
+        if self.et:
+            self.et_bucket.copy_(bucket)
+            self.et_mu.copy_(mu)
+            self.et_sig.copy_(sig)
+            self.et_mask.copy_(mask)
+            self.et_lo.copy_(lo)
+            self.et_hi.copy_(hi)
+
+    def set_swe_target(self, bucket_mean, mu, sig, mask) -> None:
+        """Copy this chunk's SWE target (day->month MEAN bucket + normalized-
+        shape mu/sig/mask) into the static buffers."""
+        if self.swe:
+            self.swe_bucket.copy_(bucket_mean)
+            self.swe_mu.copy_(mu)
+            self.swe_sig.copy_(sig)
+            self.swe_mask.copy_(mask)
+
     def run(self, pr, ta, doy, leap, obs, tmin=None, tmax=None,
-            lai=None, state_idx=None) -> float:
+            lai=None, state_idx=None, et_target=None, swe_target=None) -> float:
         """One chunk: replay forward+backward, carry state, return the loss.
-        Gradients are left in the net's static ``.grad`` tensors."""
+        Gradients are left in the net's static ``.grad`` tensors.  ``et_target``
+        (bucket, mu, sig, mask, lo, hi) and ``swe_target`` (bucket_mean, mu, sig,
+        mask) are copied in when the respective obs losses are active."""
         self._copy_forcing(pr, ta, doy, leap, tmin, tmax, lai, state_idx)
         self.obs.copy_(obs)
+        if et_target is not None:
+            self.set_et_target(*et_target)
+        if swe_target is not None:
+            self.set_swe_target(*swe_target)
         self.graph.replay()
         self._pingpong()
         return float(self.loss.detach())

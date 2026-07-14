@@ -96,7 +96,7 @@ def score_hybrid(ckpt_path: str | Path, *, data_dir: str = "data",
 def compare_all(out_dir: str | Path = "artifacts/dpl/hybrid",
                 *, ga_csv: str | Path = "artifacts/cdec15/metrics_15cdec.csv",
                 dpl_csv: str | Path =
-                "artifacts/dpl/physical_levers/metrics_dpl_physical.csv") -> pd.DataFrame:
+                "artifacts/dpl/testing/physical_levers/metrics_dpl_physical.csv") -> pd.DataFrame:
     """Merge GA / dPL / hybrid-feature / hybrid-residual cal+val KGE + dumbbell."""
     out = Path(out_dir)
     frames = {}

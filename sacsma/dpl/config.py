@@ -238,6 +238,44 @@ class DplConfig:
     adaptive_loss_momentum: float = 0.5
     adaptive_loss_floor: float = 0.05    # min (1 - KGE) so strong basins keep weight
     adaptive_loss_clip: float = 5.0      # per-basin weight clamp [1/clip, clip]
+    #: ET/SWE-observation auxiliary losses (multi-product, cal-window ONLY,
+    #: leakage-safe; obs are training regularizers, NEVER a selection criterion).
+    #: Redesigned 2026-07-13 after the raw monthly central pull degraded
+    #: streamflow (it pulled LEVEL, which the products disagree on 38-85%, as
+    #: hard as PHASE, which they agree on to ~0.5 month).  Three separable terms:
+    #: * ``et_loss_lambda`` — ET seasonal-SHAPE pull: model's monthly ET is
+    #:   normalized by its own masked-month mean and pulled toward the products'
+    #:   consensus NORMALIZED cycle (inverse-variance; sigma inflated by the
+    #:   products' interannual shape spread, floored at ``shape_sigma_floor``).
+    #:   Level-blind by construction — no volume fight with streamflow.
+    #: * ``et_level_lambda`` — ET volume envelope HINGE: zero force inside the
+    #:   product min-max total, quadratic outside (width-scaled).  Catches the
+    #:   arid basins whose ET sits ABOVE every product without pulling anyone
+    #:   toward the (untrustworthy) ensemble-mean volume.
+    #: * ``swe_loss_lambda`` — SWE seasonal-SHAPE pull (same normalized form) on
+    #:   the model's monthly-MEAN Snow-17 SWE vs 4 products; ~snow-free basins
+    #:   masked out; NO SWE level term ever (85% peak-magnitude disagreement).
+    #: 0.0 each disables; all zero => the obs path is absent = byte-identical.
+    et_loss_lambda: float = 0.0
+    et_level_lambda: float = 0.0
+    swe_loss_lambda: float = 0.0
+    shape_sigma_floor: float = 0.1   # absolute floor on the normalized-cycle sigma
+    #: replace the level hinge's product min-max envelope with a WATER-BALANCE
+    #: anchor: per-basin annual ET = cal-window mean(P) - mean(Q_obs) over the
+    #: gage-covered days, spread over months by the products' consensus cycle,
+    #: hinged at anchor*(1 -/+ band).  Observed and flow-consistent — far
+    #: tighter than the product bracket (which spans up to 72% of Q in the arid
+    #: basins and measurably could not stop the shape term's level leak: the
+    #: 2026-07-15 seasonal-Kpet arm drifted annual ET 10-17% inside it).
+    #: 0 = off (product envelope, exact prior behavior).
+    et_anchor_band: float = 0.0
+    #: warm-start checkpoint path: the net's weights are loaded strict=False
+    #: BEFORE training (heads absent from the donor — e.g. a fresh seasonal
+    #: head — keep their zero-init, so the run starts EXACTLY at the donor's
+    #: parameter field).  Optimizer/scheduler start fresh; combine with a low
+    #: lr for the fine-tune regime (obs losses select within the donor's flow-
+    #: optimal plateau instead of fighting a from-scratch descent).  "" = off.
+    init_from: str = ""
 
     # -- parameter net (net-v2 knobs; defaults = the v1 architecture) --------
     hidden: int = 64
@@ -289,6 +327,23 @@ class DplConfig:
     #: from Bristow-Campbell net radiation (FAO-56 Rn) — lifts the ceiling and
     #: removes the Kpet/canopy ET-scaling redundancy.  Only used when et_mode="noah".
     noah_pet: str = "hamon"
+    #: PET source for the PLAIN SAC ET path (et_mode="sac"): "hamon" (default,
+    #: the frozen temperature PET) or "priestley_taylor" — the energy-based PET
+    #: (Bristow-Campbell Rn, from et_noah.potential_et_priestley_taylor) driving
+    #: the frozen SAC ET cascade directly, with NO Noah canopy module.  A warming-
+    #: robust ET without the canopy-parameter identifiability problems of Noah.
+    sac_pet: str = "hamon"
+    #: Priestley-Taylor refinements (sac_pet="priestley_taylor" only; both
+    #: default 0 => the plain fixed-albedo / Tdew=Tmin PT).  ``pt_snow_albedo``>0
+    #: raises the PT net-radiation albedo toward this value over snow (driven by
+    #: the model's own Snow-17 SWE, so PET collapses under a pack — a bright-snow
+    #: value is ~0.5-0.7); ``pt_dewpoint_depression``>0 lowers the dewpoint up to
+    #: this many degC below Tmin in ARID air (scaled by the diurnal range) so the
+    #: net longwave loss is not under-counted in dry basins (FAO-56 arid Tdew).
+    #: Neither is absorbable by the per-HRU Kpet (both are seasonal/spatial SHAPE
+    #: corrections), unlike a global albedo/alpha which Kpet would just rescale.
+    pt_snow_albedo: float = 0.0
+    pt_dewpoint_depression: float = 0.0
     #: emit the learned CANOPY_LEARNED_PARAMS from a canopy head (needed for
     #: et_mode="noah"; veg_frac + seasonal lai come from observation, not here).
     canopy: bool = False
@@ -309,8 +364,20 @@ class DplConfig:
     weight_decay: float = 1e-5
     grad_clip: float = 1.0
     n_epochs: int = 60
-    spinup_refresh_every: int = 1   # full-prefix no-grad spinup every k epochs
+    spinup_refresh_every: int = 1   # no-grad spinup every k epochs
     cal_start: str = "1988-10-01"   # WY1989 start (cal end = cdec15.CAL_END)
+    #: No-grad spinup cold start.  Ten water years ahead of the cal window is
+    #: enough because the window spans the record-wet WY1982-83, which clamps
+    #: even the big arid-basin LZ tension stores at capacity and so resets the
+    #: cold-start error EXACTLY (lztwc is the one multi-year memory — ~7-yr ET
+    #: drawdown, no clamp in ordinary years; everything else converges inside
+    #: 5 yr).  Measured vs the full prefix (training convention, trained
+    #: params) on the worst-memory basins: MIL/NHG exact (KGE 1.000000,
+    #: max|dQ| 5e-5), arid ISB/SCC keep <= 69 mm of lztwc residual but still
+    #: clear the parity bar (KGE >= 0.999975, max|dQ| <= 3e-3 mm/day); a 5-yr
+    #: window FAILS it (MIL 0.99933, d(lztwc) 363 mm).  Clamped to the record
+    #: start — set <= "1915-01-01" for the exact frozen full-prefix convention.
+    spinup_start: str = "1978-10-01"
     train_chunk_days: int = 366     # TBPTT chunk (fixed length; last chunk's
                                     # post-CAL_END days are NaN-masked in the loss)
     eval_every: int = 2             # full-cal no-grad KGE selection cadence
@@ -335,6 +402,32 @@ class DplConfig:
             raise ValueError(f"et_mode {self.et_mode!r}")
         if self.noah_pet not in ("hamon", "priestley_taylor"):
             raise ValueError(f"noah_pet {self.noah_pet!r}")
+        if self.sac_pet not in ("hamon", "priestley_taylor"):
+            raise ValueError(f"sac_pet {self.sac_pet!r}")
+        if min(self.et_loss_lambda, self.et_level_lambda,
+               self.swe_loss_lambda, self.shape_sigma_floor) < 0.0:
+            raise ValueError("obs-loss lambdas / shape_sigma_floor must be >= 0")
+        if not 0.0 <= self.et_anchor_band < 1.0:
+            raise ValueError("et_anchor_band must be in [0, 1)")
+        if self.et_anchor_band > 0.0 and self.et_level_lambda <= 0.0:
+            raise ValueError(
+                "et_anchor_band re-targets the level hinge — it needs "
+                "et_level_lambda > 0 to have any effect")
+        from datetime import date
+        if date.fromisoformat(self.spinup_start) >= \
+                date.fromisoformat(self.cal_start):
+            raise ValueError(
+                f"spinup_start {self.spinup_start!r} must be before "
+                f"cal_start {self.cal_start!r}")
+        if not 0.0 <= self.pt_snow_albedo < 1.0:
+            raise ValueError("pt_snow_albedo must be in [0, 1)")
+        if self.pt_dewpoint_depression < 0.0:
+            raise ValueError("pt_dewpoint_depression must be >= 0")
+        if (self.pt_snow_albedo > 0.0 or self.pt_dewpoint_depression > 0.0) \
+                and not (self.et_mode == "sac" and self.sac_pet == "priestley_taylor"):
+            raise ValueError(
+                "pt_snow_albedo / pt_dewpoint_depression apply only to "
+                "et_mode='sac' with sac_pet='priestley_taylor'")
         if self.dynamic_params:
             allowed = set(DYNAMIC_SAC_PARAMS) | set(CANOPY_LEARNED_PARAMS)
             bad = [p for p in self.dynamic_params if p not in allowed]

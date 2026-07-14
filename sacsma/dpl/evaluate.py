@@ -131,11 +131,16 @@ def torch_domain_flow(
         while t0 < t_total:
             t1 = min(t0 + chunk_days, t_total)
             pr, ta, doy, leap = dom.chunk(t0, t1)
+            tn, tx = dom.chunk_tmm(t0, t1)   # real per-cell tmin/tmax (required by
+                                             # the PT PET; None for a Hamon domain)
             flow, state = run_window(pr, ta, doy, leap, dom.lat_rad, dom.elev,
                                      params, uh, state, n_inc=cfg.n_inc,
                                      perc_mode=cfg.perc_mode,
                                      fracp_floor=cfg.fracp_floor,
-                                     ninc_mode=cfg.ninc_mode,
+                                     ninc_mode=cfg.ninc_mode, sac_pet=cfg.sac_pet,
+                                     tmin=tn, tmax=tx,
+                                     pt_snow_albedo=cfg.pt_snow_albedo,
+                                     pt_dewpoint_depression=cfg.pt_dewpoint_depression,
                                      state_idx=dom.chunk_state(t0, t1))
             basin_flow[:, t0:t1] = dom.W @ flow
             if progress:
@@ -163,6 +168,9 @@ def score_frozen(
     cal_end: str = CAL_END,
     domain: str = "15cdec",
     parallel: bool = True,
+    pet_source: str = "hamon",
+    pt_snow_albedo: float = 0.0,
+    pt_dewpoint_depression: float = 0.0,
 ) -> pd.DataFrame:
     """Score a parameter table through the FROZEN model vs the observed gage.
 
@@ -172,6 +180,10 @@ def score_frozen(
     summary in the cdec15 figure conventions ->
     ``<out_dir>/metrics_<label>.csv`` + ``figures/``.  Same columns as
     ``metrics_15cdec.csv`` so the GA-vs-dPL comparison is a plain merge.
+
+    ``pet_source="priestley_taylor"`` scores a PT-trained export through the
+    numba PT PET (``sacsma.pet_pt``) with the given refinement knobs — the
+    same fast frozen-numerics convention as the Hamon exports.
     """
     from .._figures import (
         _period_stats,
@@ -202,7 +214,10 @@ def score_frozen(
     records = []
     for b in basins:
         sim = run_basin(b, data_dir=data_dir, domain=domain, forcing=forcing,
-                        params=params, parallel=parallel).rename(
+                        params=params, parallel=parallel,
+                        pet_source=pet_source,
+                        pt_snow_albedo=pt_snow_albedo,
+                        pt_dewpoint_depression=pt_dewpoint_depression).rename(
                             columns={"flow": "flow_sim"})
         obs = load_gage(data_dir, basin=b)[["date", "flow"]].rename(
             columns={"flow": "flow_obs"})
@@ -444,15 +459,38 @@ def evaluate_checkpoint(
     variant = ck["variant"]
     domain = ck.get("domain", "15cdec")
     nc = ck.get("net_config", {})
+    # rebuild the training config tolerantly: checkpoints persist the cfg dict
+    # verbatim, so fields REMOVED in later schema versions (e.g. the retired
+    # et_loss_sigma_floor) must be dropped, not crash the scoring.
+    import dataclasses as _dc
+    known = {f.name for f in _dc.fields(DplConfig)}
+    dropped = sorted(set(ck["cfg"]) - known)
+    if dropped:
+        print(f"note: dropping retired cfg keys from checkpoint: {dropped}",
+              flush=True)
+    cfg = DplConfig(**{k: v for k, v in ck["cfg"].items() if k in known})
     canopy = nc.get("canopy", False)
-    out = Path(out_dir if out_dir is not None else f"artifacts/dpl/{variant}")
+    dyn = tuple(nc.get("dynamic_params", ()))
+    # canopy (Noah ET) and dynamic (time-varying) params are torch-only; a
+    # STATIC checkpoint — Hamon OR Priestley-Taylor — scores through the fast
+    # numba run_basin (PT via sacsma.pet_pt, verified vs the torch pipeline).
+    torch_score = canopy or bool(dyn)
+    if out_dir is not None:
+        out = Path(out_dir)
+    else:
+        # default NEXT TO the checkpoint (<run>/checkpoints/x.pt -> <run>/).
+        # The old artifacts/dpl/<variant> fallback silently CLOBBERED whatever
+        # unrelated run shared the variant name (it overwrote the hamon
+        # `physical` arm's outputs on 2026-07-15); it remains only for a bare
+        # checkpoint outside the standard run layout.
+        ckp = Path(ckpt_path).resolve()
+        out = (ckp.parent.parent if ckp.parent.name == "checkpoints"
+               else Path(f"artifacts/dpl/{variant}"))
+        if label is None and ckp.parent.name == "checkpoints":
+            label = out.name       # metrics_<run>.csv, not metrics_dpl_<variant>
     out.mkdir(parents=True, exist_ok=True)
 
-    dyn = tuple(nc.get("dynamic_params", ()))
-    # Noah (canopy) OR dynamic (time-varying) params score through the torch
-    # pipeline (GPU-friendly; run_basin can't reconstruct either); a plain frozen
-    # Hamon checkpoint scores through run_basin on CPU.
-    if canopy or dyn:
+    if torch_score:
         try:
             dev = pick_device("cuda")
         except RuntimeError:
@@ -492,7 +530,6 @@ def evaluate_checkpoint(
     net.load_state_dict(ck["net"])   # restores baked neighbor buffers too
 
     if canopy:   # Noah ET — NOT scorable via run_basin; torch pipeline instead
-        cfg = DplConfig(**ck["cfg"])
         ccsv = out / "params_canopy.csv"
         export_canopy_params(net, dom, x).to_csv(ccsv, index=False)
         print(f"wrote {ccsv} (Noah canopy params; kept OUT of ga_optimum)",
@@ -507,14 +544,20 @@ def evaluate_checkpoint(
     print(f"wrote {pcsv} ({len(dpl_df)} HRU rows, cal KGE at selection "
           f"{ck.get('cal_kge', float('nan')):.4f})", flush=True)
     if dyn:   # time-varying params — the frozen run_basin can't reconstruct them
-        cfg = DplConfig(**ck["cfg"])
         print(f"dynamic params {dyn} -> torch scoring (run_basin can't reconstruct)",
               flush=True)
         return score_sac_torch(net, x, dom, cfg, data_dir=data_dir, out_dir=out,
                                label=label if label is not None else f"dpl_{variant}")
+    if cfg.sac_pet != "hamon":
+        print(f"sac_pet={cfg.sac_pet} -> frozen scoring via the numba PT PET "
+              f"(snow_albedo={cfg.pt_snow_albedo}, "
+              f"dewpoint_depression={cfg.pt_dewpoint_depression})", flush=True)
     return score_frozen(dpl_df, data_dir, out,
                         label=label if label is not None else f"dpl_{variant}",
-                        domain=domain, parallel=parallel)
+                        domain=domain, parallel=parallel,
+                        pet_source=cfg.sac_pet,
+                        pt_snow_albedo=cfg.pt_snow_albedo,
+                        pt_dewpoint_depression=cfg.pt_dewpoint_depression)
 
 
 def fidelity_benchmark(

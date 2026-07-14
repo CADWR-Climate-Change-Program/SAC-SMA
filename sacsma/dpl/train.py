@@ -1,12 +1,20 @@
-"""dPL training: full-prefix spinup + water-year TBPTT + no-grad KGE selection.
+"""dPL training: truncated no-grad spinup + water-year TBPTT + KGE selection.
 
 Protocol (per epoch):
 
-1. **Spinup** — no-grad forward from the reference cold start at the record
-   start (1915) to the day before the calibration window, under the CURRENT
-   parameters, so the WY1989 initial state is exactly what the frozen model
-   would carry (LZ stores hold multi-year memory).  ``spinup_refresh_every``
-   > 1 reuses a cached state as an explicit approximation.
+1. **Spinup** — no-grad forward from the reference cold start at
+   ``cfg.spinup_start`` (default 1978-10-01, ten water years ahead of the
+   cal window) to the day before the calibration window, under the CURRENT
+   parameters.  The default window spans the record-wet WY1982-83, which
+   clamps the LZ tension stores — the one multi-year memory (~7-yr ET
+   drawdown in the big arid basins) — at capacity, resetting the cold
+   start: measured against the full prefix, cal-window flow agrees to
+   KGE 1.000000 on MIL/NHG and >= 0.999975 on arid ISB/SCC, max|dQ|
+   <= 3e-3 mm/day (a 5-yr window fails the 0.9999 parity bar on MIL).
+   Set ``spinup_start <= "1915-01-01"`` to restore the exact
+   record-start convention.
+   ``spinup_refresh_every`` > 1 reuses a cached state as an explicit
+   approximation.
 2. **Selection** (every ``eval_every`` epochs, pre-update) — continue no-grad
    through the full calibration window and score pooled mean per-basin KGE
    (the GA-comparable exact objective).  Best net -> ``checkpoints/best.pt``;
@@ -30,6 +38,7 @@ import time
 from dataclasses import asdict
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import torch
 
@@ -40,10 +49,20 @@ from .config import (
     DplConfig,
     pick_device,
 )
-from .data import CalObs, DomainTensors, load_cal_obs, load_domain_tensors
+from .data import (
+    CalObs,
+    DomainTensors,
+    et_chunk_target,
+    load_cal_obs,
+    load_domain_tensors,
+    load_et_obs,
+    load_swe_obs,
+    shape_chunk_targets,
+    water_balance_anchor,
+)
 from .features import FeatureSet, build_features
 from .forward import PipelineState, initial_state, routing_uh, run_window
-from .loss import kge_torch, masked_basin_loss
+from .loss import kge_torch, level_hinge_loss, masked_basin_loss, shape_pull_loss
 from .parameter_net import ParameterNet, ga_priors
 from .regularize import (
     adaptive_basin_weights,
@@ -102,7 +121,9 @@ def _stream_nograd(
                                      canopy_params=canopy_params, tmin=tn, tmax=tx,
                                      veg_frac=dom.veg_frac,
                                      lai=dom.chunk_lai(t, te),
-                                     noah_pet=cfg.noah_pet,
+                                     noah_pet=cfg.noah_pet, sac_pet=cfg.sac_pet,
+                                     pt_snow_albedo=cfg.pt_snow_albedo,
+                                     pt_dewpoint_depression=cfg.pt_dewpoint_depression,
                                      canopy_lite=cfg.canopy_lite,
                                      state_idx=dom.chunk_state(t, te))
             if collect:
@@ -163,6 +184,35 @@ def train(
         dynamic_window=cfg.dynamic_window if cfg.dynamic_params else None,
         calsim_footprint=cfg.calsim_footprint)
     calobs = load_cal_obs(dom, data_dir, cal_start=cfg.cal_start)
+    # truncated spinup start (clamped to the record start; == 0 restores the
+    # exact frozen full-prefix convention)
+    spin_t0 = min(int(dom.dates.searchsorted(pd.Timestamp(cfg.spinup_start))),
+                  calobs.t0)
+    etobs = sweobs = anchor_monthly = None
+    if cfg.et_loss_lambda > 0.0 or cfg.et_level_lambda > 0.0:
+        etobs = load_et_obs(dom, cal_start=cfg.cal_start)
+        print(f"train: ET obs loss ON (shape lambda={cfg.et_loss_lambda}, level "
+              f"hinge lambda={cfg.et_level_lambda}, shape sigma floor="
+              f"{cfg.shape_sigma_floor}) — normalized-cycle pull + min-max "
+              f"envelope hinge over {etobs.products}; cal-window only, NOT a "
+              "selection metric", flush=True)
+        if cfg.et_anchor_band > 0.0:
+            anchor_monthly = water_balance_anchor(dom, calobs, etobs)
+            ann = anchor_monthly.sum(axis=1)
+            print(f"train: ET level hinge re-targeted to the WATER-BALANCE "
+                  f"anchor (P - Q_obs) +/- {cfg.et_anchor_band:.0%} "
+                  f"(replaces the product min-max envelope): "
+                  + ", ".join(f"{b} {a:.0f}"
+                              for b, a in zip(dom.basins, ann, strict=True))
+                  + " mm/yr", flush=True)
+    if cfg.swe_loss_lambda > 0.0:
+        sweobs = load_swe_obs(dom, cal_start=cfg.cal_start)
+        n_snow = int(sweobs.basin_w.sum())
+        print(f"train: SWE obs loss ON (shape lambda={cfg.swe_loss_lambda}, "
+              f"sigma floor={cfg.shape_sigma_floor}) — normalized accumulation/"
+              f"melt-cycle pull over {sweobs.products}; {n_snow}/{len(dom.basins)}"
+              " snow basins (no SWE level term); cal-window only, NOT a "
+              "selection metric", flush=True)
     fs = build_features(
         dom.hrus, variant=variant,
         forcing=dom.forcing if variant == "climate" else None,
@@ -239,6 +289,27 @@ def train(
               f"at init)", flush=True)
     priors = ga_priors(load_params(data_dir, domain=domain), dom.hrus)
     net.init_from_priors(priors)
+    if cfg.init_from:
+        if resume:
+            raise ValueError("init_from and resume are mutually exclusive "
+                             "(resume restores this run's own last.pt)")
+        ick = torch.load(cfg.init_from, map_location=dev, weights_only=False)
+        if ick.get("variant") != variant or ick.get("domain") != domain:
+            raise ValueError(
+                f"init_from checkpoint is variant={ick.get('variant')!r} "
+                f"domain={ick.get('domain')!r}; this run is "
+                f"{variant!r}/{domain!r}")
+        # strict=False: heads the donor lacks (e.g. a fresh seasonal head)
+        # keep their zero-init, so training starts EXACTLY at the donor's
+        # parameter field; donor keys the net lacks are a config error.
+        missing, unexpected = net.load_state_dict(ick["net"], strict=False)
+        if unexpected:
+            raise ValueError(f"init_from checkpoint carries heads this net "
+                             f"lacks: {sorted(unexpected)}")
+        print(f"train: warm-start from {cfg.init_from} (epoch {ick['epoch']}, "
+              f"sel cal KGE {ick.get('cal_kge', float('nan')):.4f}); fresh "
+              f"zero-init heads: {sorted(missing) if missing else 'none'}; "
+              "fresh optimizer/scheduler", flush=True)
     opt = torch.optim.AdamW(net.parameters(), lr=cfg.lr,
                             weight_decay=cfg.weight_decay)
     warm = max(int(cfg.lr_warmup_epochs), 0)
@@ -265,6 +336,10 @@ def train(
         print(f"train: resumed at epoch {start_epoch} (best cal KGE {best_kge:.4f})",
               flush=True)
 
+    # SWE snow-basin participation weights (shared by the graph and eager paths)
+    swe_w = (torch.as_tensor(sweobs.basin_w, device=dev, dtype=dtype)
+             if sweobs is not None else None)
+
     # -- CUDA-graph capture (falls back to eager) ---------------------------
     nograd_g = train_g = None
     if cfg.use_cuda_graphs and dev.type == "cuda":
@@ -288,7 +363,7 @@ def train(
             for clen in (cfg.train_chunk_days, cfg.train_chunk_days // 2):
                 try:
                     train_g = TrainChunk(net, dom, cfg, clen, x, calobs.obs_var,
-                                         weight=basin_w)
+                                         weight=basin_w, swe_basin_w=swe_w)
                     break
                 except torch.cuda.OutOfMemoryError:
                     print(f"train: chunk capture OOM at {clen} days — "
@@ -315,7 +390,7 @@ def train(
             nograd_g.set_params(pe, ue, canopy_params=cp_e)
         st0 = initial_state(dom.n_hru, dev, dtype, init_mode=cfg.init_mode,
                             params=pe, et_mode=cfg.et_mode)
-        _, st = _stream_nograd(dom, cfg, pe, ue, 0, calobs.t0, st0,
+        _, st = _stream_nograd(dom, cfg, pe, ue, spin_t0, calobs.t0, st0,
                                graph=nograd_g, canopy_params=cp_e)
         pooled, per_basin = float("nan"), None
         if do_eval:
@@ -347,8 +422,62 @@ def train(
 
     chunk = train_g.length if train_g is not None else cfg.train_chunk_days
     n_chunks = math.ceil((calobs.t1 - calobs.t0) / chunk)
+
+    # per-chunk obs targets — fixed given the chunk grid, so build once.  For
+    # each chunk: the day->month bucket, the normalized-shape mu/sig (per-chunk
+    # because normalization runs over the chunk's masked months), the slot mask,
+    # and (ET only) the min-max level envelope.  None when the loss is off.
+    et_targets: list | None = None
+    swe_targets: list | None = None
+    if etobs is not None or sweobs is not None:
+        et_targets = [] if etobs is not None else None
+        swe_targets = [] if sweobs is not None else None
+        n_slots_total = 0
+        for k in range(n_chunks):
+            c0 = calobs.t0 + k * chunk
+            bucket, cmon0, mask = et_chunk_target(
+                dom.dates, c0, chunk, calobs.t0, calobs.t1)
+            bucket_t = torch.as_tensor(bucket, device=dev, dtype=dtype)
+            mask_t = torch.as_tensor(mask, device=dev, dtype=dtype)
+            if etobs is not None:
+                mu, sig, lo, hi = shape_chunk_targets(
+                    etobs, cmon0, mask, sigma_floor=cfg.shape_sigma_floor)
+                if anchor_monthly is not None:
+                    # water-balance anchor: the hinge envelope becomes the
+                    # anchor total of THIS chunk's masked months +/- the band
+                    # (same seasonal resolution as the product envelope it
+                    # replaces; only the lo/hi VALUES change — the loss and
+                    # captured-graph paths are untouched)
+                    tot = (anchor_monthly[:, cmon0] * mask).sum(axis=1)
+                    lo = tot * (1.0 - cfg.et_anchor_band)
+                    hi = tot * (1.0 + cfg.et_anchor_band)
+                et_targets.append((
+                    bucket_t,
+                    torch.as_tensor(mu, device=dev, dtype=dtype),
+                    torch.as_tensor(sig, device=dev, dtype=dtype),
+                    mask_t,
+                    torch.as_tensor(lo, device=dev, dtype=dtype),
+                    torch.as_tensor(hi, device=dev, dtype=dtype)))
+            if sweobs is not None:
+                # SWE is a STATE: bucket columns divided by day counts -> the
+                # matmul yields the monthly MEAN, matching the obs semantics.
+                days = np.maximum(bucket.sum(axis=0, keepdims=True), 1.0)
+                smu, ssig, _, _ = shape_chunk_targets(
+                    sweobs, cmon0, mask, sigma_floor=cfg.shape_sigma_floor)
+                swe_targets.append((
+                    torch.as_tensor(bucket / days, device=dev, dtype=dtype),
+                    torch.as_tensor(smu, device=dev, dtype=dtype),
+                    torch.as_tensor(ssig, device=dev, dtype=dtype),
+                    mask_t))
+            n_slots_total += int(mask.sum())
+        print(f"train: obs targets = {n_slots_total} complete months over "
+              f"{n_chunks} chunks "
+              f"(ET {'on' if etobs is not None else 'off'}, "
+              f"SWE {'on' if sweobs is not None else 'off'})", flush=True)
     print(f"train[{variant}]: {dom.n_hru} HRUs, {len(dom.basins)} basins, "
           f"{x.shape[1]} features | cal days {calobs.t0}..{calobs.t1} "
+          f"(spinup from day {spin_t0}"
+          f"{' = record start' if spin_t0 == 0 else f' = {cfg.spinup_start}'}) "
           f"({n_chunks} x {chunk}-day chunks) | {cfg.loss} loss "
           f"(log lambda {cfg.log_loss_lambda}) | n_inc={cfg.n_inc} "
           f"perc={cfg.perc_mode} {cfg.dtype} on {dev.type}"
@@ -406,24 +535,47 @@ def train(
                 lai_c = dom.chunk_lai(c0, c0 + chunk)
                 st_c = dom.chunk_state(c0, c0 + chunk)
                 obs_c = _obs_chunk(calobs, c0, c0 + chunk)
+                et_tgt = et_targets[k] if et_targets is not None else None
+                swe_tgt = swe_targets[k] if swe_targets is not None else None
                 if train_g is not None:
-                    loss = train_g.run(pr, ta, doy, leap, obs_c, tn, tx, lai_c, st_c)
+                    loss = train_g.run(pr, ta, doy, leap, obs_c, tn, tx, lai_c,
+                                       st_c, et_target=et_tgt, swe_target=swe_tgt)
                 else:
                     opt.zero_grad(set_to_none=True)
                     params, cp = _split_out(net(x), cfg.et_mode)
                     uh = routing_uh(params, dom.flowlen)
-                    flow, state = run_window(
+                    res = run_window(
                         pr, ta, doy, leap, dom.lat_rad, dom.elev, params, uh,
                         state, n_inc=cfg.n_inc, perc_mode=cfg.perc_mode,
                         fracp_floor=cfg.fracp_floor, ninc_mode="fixed",
                         et_mode=cfg.et_mode, canopy_params=cp, tmin=tn, tmax=tx,
                         veg_frac=dom.veg_frac, lai=lai_c, noah_pet=cfg.noah_pet,
-                        canopy_lite=cfg.canopy_lite, state_idx=st_c)
+                        sac_pet=cfg.sac_pet, pt_snow_albedo=cfg.pt_snow_albedo,
+                        pt_dewpoint_depression=cfg.pt_dewpoint_depression,
+                        canopy_lite=cfg.canopy_lite,
+                        state_idx=st_c, return_tet=et_tgt is not None,
+                        return_swe=swe_tgt is not None)
+                    flow, state = res[0], res[1]
                     loss_t = masked_basin_loss(
                         dom.W @ flow, obs_c, calobs.obs_var, kind=cfg.loss,
                         log_lambda=cfg.log_loss_lambda, log_eps=cfg.log_loss_eps,
                         var_lambda=cfg.var_loss_lambda,
                         bias_lambda=cfg.bias_loss_lambda, weight=basin_w)
+                    ri = 2
+                    if et_tgt is not None:
+                        et_monthly = (dom.W @ res[ri]) @ et_tgt[0]
+                        ri += 1
+                        if cfg.et_loss_lambda > 0.0:
+                            loss_t = loss_t + cfg.et_loss_lambda * shape_pull_loss(
+                                et_monthly, et_tgt[1], et_tgt[2], et_tgt[3])
+                        if cfg.et_level_lambda > 0.0:
+                            loss_t = loss_t + cfg.et_level_lambda * level_hinge_loss(
+                                et_monthly, et_tgt[3], et_tgt[4], et_tgt[5])
+                    if swe_tgt is not None:
+                        swe_monthly = (dom.W @ res[ri]) @ swe_tgt[0]
+                        loss_t = loss_t + cfg.swe_loss_lambda * shape_pull_loss(
+                            swe_monthly, swe_tgt[1], swe_tgt[2], swe_tgt[3],
+                            basin_w=swe_w)
                     loss_t.backward()
                     loss, state = float(loss_t.detach()), state.detach()
                 # spatial-smoothness penalty: an eager net(x) whose gradient

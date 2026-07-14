@@ -152,12 +152,17 @@ def run_snow17(
     elev: torch.Tensor,       # (N,) m
     params: dict[str, torch.Tensor],   # (N,) each
     state: Snow17State | None = None,
+    return_swe: bool = False,
 ) -> tuple[torch.Tensor, Snow17State]:
     """Run Snow-17 over a window; returns (outflow (N, T), final state).
 
     Under ``torch.no_grad()`` the output is written into a preallocated
     buffer; with gradients enabled the per-step outputs are stacked (autograd
     forbids in-place writes into leaves of the graph).
+
+    With ``return_swe`` a third item is returned: the per-day snow water
+    equivalent ``(N, T)`` (ice + retained liquid, end of step) — the driver
+    feeds it to the Priestley-Taylor snow-cover albedo.
     """
     n, t_len = prcp.shape
     if state is None:
@@ -166,14 +171,24 @@ def run_snow17(
         prcp.requires_grad or any(v.requires_grad for v in params.values())
     )
     out = None if grad else torch.empty_like(prcp)
+    swe_out = torch.empty_like(prcp) if (return_swe and not grad) else None
     steps: list[torch.Tensor] = []
+    swe_steps: list[torch.Tensor] = []
     for t in range(t_len):
         state, e_t = snow17_step(state, prcp[:, t], tavg[:, t], doy[t], is_leap[t],
                                  elev, params)
         if grad:
             steps.append(e_t)
+            if return_swe:
+                swe_steps.append(state.w_i + state.w_q)
         else:
             out[:, t] = e_t
+            if return_swe:
+                swe_out[:, t] = state.w_i + state.w_q
     if grad:
         out = torch.stack(steps, dim=-1)
+        if return_swe:
+            swe_out = torch.stack(swe_steps, dim=-1)
+    if return_swe:
+        return out, state, swe_out
     return out, state

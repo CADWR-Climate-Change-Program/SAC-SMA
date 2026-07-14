@@ -21,8 +21,9 @@ import torch
 from .config import BOUNDS, CANOPY_BOUNDS
 from .et_noah import (
     NoahCanopyState,
-    canopy_inputs_fallback,
+    dewpoint_depression_field,
     potential_et_priestley_taylor,
+    snow_cover_albedo,
 )
 from .pet import hamon_raw_pet
 from .routing import N_TAPS, build_uh, route
@@ -113,21 +114,60 @@ def run_window(
     veg_frac: torch.Tensor | None = None,  # (N,) observed veg fraction (Noah)
     lai: torch.Tensor | None = None,       # (N, T) observed seasonal LAI (Noah)
     noah_pet: str = "hamon",               # "hamon" | "priestley_taylor" (Noah)
+    sac_pet: str = "hamon",                # PET source for the plain SAC ET path:
+                                           # "priestley_taylor" swaps Hamon for the
+                                           # energy-based PET (no Noah canopy module)
+    pt_snow_albedo: float = 0.0,           # >0: raise PT albedo over snow (Snow-17
+                                           # SWE-driven) toward this value; 0 = fixed
+    pt_dewpoint_depression: float = 0.0,   # >0: max arid dewpoint depression (degC)
+                                           # on the PT net-longwave term; 0 = Tdew=Tmin
     canopy_lite: bool = False,             # minimal 1-param Noah ET (et_noah.noah_lite_et_step)
     state_idx: torch.Tensor | None = None,  # (N, T) climate-state index (dynamic params)
     return_tet: bool = False,              # also return total ET (N, T) for closure
-) -> tuple[torch.Tensor, PipelineState]:   # (+ tet as a 3rd item when return_tet)
+    return_swe: bool = False,              # also return Snow-17 SWE (N, T) (obs loss)
+) -> tuple[torch.Tensor, PipelineState]:   # (+ tet, then swe, when requested)
     """One window through the full pipeline; returns (routed flow (N, T), state),
-    or (flow, state, tet) when ``return_tet`` (total ET, for the mass-balance
-    closure / ET diagnostics — off by default so the hot path is unchanged).
+    with ``tet`` (total ET) appended when ``return_tet`` and the per-day Snow-17
+    SWE appended when ``return_swe`` (both off by default — hot path unchanged;
+    order is always flow, state, [tet], [swe]).
 
     ``et_mode="noah"`` runs the Noah canopy-resistance ET: ``canopy_params`` are
     the LEARNED physiology; ``veg_frac`` (static) and ``lai`` ((N,T) seasonal)
     are the OBSERVED canopy structure; ``tmin``/``tmax`` drive the radiation/VPD
-    terms (a fixed-diurnal fallback is synthesised from ``tavg`` when absent).
+    terms and are REQUIRED for the Noah ET and the Priestley-Taylor SAC PET (a
+    missing pair raises — there is no synthetic tavg fallback).
     """
+    # Snow-17 first: its SWE trajectory drives the snow-cover albedo of the
+    # Priestley-Taylor PET below (and the SWE-observation loss via return_swe).
+    # Snow-17 does not depend on the PET, so this reordering is value-identical
+    # for every path that does not raise the albedo over snow (pt_snow_albedo == 0).
+    albedo_swe = (raw_pet is None and et_mode == "sac"
+                  and sac_pet == "priestley_taylor" and pt_snow_albedo > 0.0)
+    need_swe = return_swe or albedo_swe
+    snow_out = run_snow17(prcp, tavg, doy, is_leap, elev, params,
+                          state=state.snow, return_swe=need_swe)
+    eff_p, snow_state = snow_out[0], snow_out[1]
+    swe = snow_out[2] if need_swe else None
+
     if raw_pet is None:
-        raw_pet = hamon_raw_pet(tavg, doy, lat_rad)
+        if et_mode == "sac" and sac_pet == "priestley_taylor":
+            # energy-based PET for the plain SAC ET (no Noah canopy) — Kpet still
+            # scales it below, exactly as it scales Hamon.  Real per-cell tmin/tmax
+            # are REQUIRED (there is no tavg fallback: a synthetic diurnal range
+            # would silently diverge training from scoring).
+            if tmin is None or tmax is None:
+                raise ValueError(
+                    "sac_pet='priestley_taylor' requires per-cell tmin/tmax")
+            pt_kwargs = {}
+            if albedo_swe:   # blend PT albedo toward snow where a pack is present
+                pt_kwargs["albedo"] = snow_cover_albedo(swe, pt_snow_albedo)
+            if pt_dewpoint_depression > 0.0:   # lower Tdew below Tmin in arid air
+                pt_kwargs["dewpoint_depression"] = dewpoint_depression_field(
+                    tmin, tmax, pt_dewpoint_depression)
+            raw_pet = potential_et_priestley_taylor(
+                tavg, tmin, tmax, doy, lat_rad, elev, **pt_kwargs)
+        else:
+            raw_pet = hamon_raw_pet(tavg, doy, lat_rad)
     # Kpet time-varying reconstruction: day-of-year harmonic (seasonal) and/or a
     # climate-state response (dynamic) when the net emits their coeffs, else the
     # static per-HRU scalar.  Recessions stay seasonal-only (dynamic hurts).
@@ -139,8 +179,6 @@ def run_window(
     recession = ({p: _seasonal(params, p, doy) for p in _SEASONAL_RECESSION}
                  if "uzk_asin" in params else None)
 
-    eff_p, snow_state = run_snow17(prcp, tavg, doy, is_leap, elev, params,
-                                   state=state.snow)
     noah = None
     if et_mode == "noah":
         if canopy_params is None:
@@ -148,7 +186,7 @@ def run_window(
         if veg_frac is None or lai is None:
             raise ValueError("et_mode='noah' requires observed veg_frac and lai")
         if tmin is None or tmax is None:
-            tmin, tmax = canopy_inputs_fallback(tavg)
+            raise ValueError("et_mode='noah' requires per-cell tmin/tmax")
         if noah_pet == "priestley_taylor":
             # energy-based potential replaces Hamon (still scaled by the learned
             # Kpet, now a mild global calibration knob on a physical PET)
@@ -185,9 +223,12 @@ def run_window(
     new_state = PipelineState(snow=snow_state, sac=sac_state,
                               hist_surf=hist_surf, hist_base=hist_base,
                               canopy=noah["canopy"] if noah is not None else None)
+    out = [flow, new_state]
     if return_tet:
-        return flow, new_state, tet
-    return flow, new_state
+        out.append(tet)
+    if return_swe:
+        out.append(swe)
+    return tuple(out)
 
 
 def routing_uh(params: dict[str, torch.Tensor], flowlen: torch.Tensor):
