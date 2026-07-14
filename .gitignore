@@ -48,6 +48,7 @@ artifacts/dpl/*
 !artifacts/dpl/hamon
 !artifacts/dpl/pt
 !artifacts/dpl/pt_refined
+!artifacts/dpl/pt_refined_ft
 !artifacts/dpl/noah_lite
 
 

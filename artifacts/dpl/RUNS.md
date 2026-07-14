@@ -25,7 +25,7 @@ no-grad spinup from 1978-10-01.
 | `pt` | 15cdec_grid | Priestley–Taylor PET (Bristow–Campbell Rn) for the SAC ET cascade | 0.791/0.823 |
 | `pt_refined` | 15cdec_grid | + snow-cover albedo (0.6) + arid dewpoint depression (2 °C) | 0.799/0.826 |
 | `noah_lite` | 15cdec_grid | Noah-lite canopy ET (1 learned DOF `soil_chi`) on PT potential | ~0.759 cal *(torch)* — params export TODO |
-| `pt_refined_ft` | 15cdec_grid | (PENDING — active run) fine-tune from `pt_refined` + ET/SWE obs losses + seasonal Kpet + P−Q level anchor | running; sel 0.8022@ep10 |
+| `pt_refined_ft` | 15cdec_grid | fine-tune from `pt_refined` + ET/SWE obs losses + seasonal Kpet + P−Q level anchor | **0.810/0.837** |
 
 Old → new: `physical`→`hamon_dense` (lost), `physical_grid_calsim`→`hamon`,
 `physical_pt_calsim`→`pt`, `physical_pt_calsim_refined`→`pt_refined`,
@@ -131,21 +131,26 @@ auto-masked), λ=0.2 each, cal-window only, never a selection metric.
   can't), then Adam-vs-tanh saturation instability (all loss terms worse
   ep8→ep14, harmonics pinned at the ±0.25 joint cap, annual ET drifting
   10–17% inside the product bracket). Stopped ep14. Casualties NHG/TRM/YRS.
-- **`physical_pt_refined_etswe_skpet_ft`** (→ **`pt_refined_ft`** on
-  promotion) — ACTIVE: warm-start from `pt_refined` best.pt (`--init-from`,
+- **`pt_refined_ft`** (ex physical_pt_refined_etswe_skpet_ft) — PROMOTED
+  CANONICAL: warm-start from `pt_refined` best.pt (`--init-from`,
   exact-equivalence verified), lr 2e-4, same obs λs, seasonal Kpet, and the
   level hinge re-targeted to the WATER-BALANCE anchor P−Q_obs ±15%
   (`--et-anchor-band`; replaces the too-wide product envelope; no
-  basin-specific masking anywhere). ep0 sel = donor's 0.7954 exactly;
-  0.8022@ep10 and climbing — first run in the program above 0.80.
+  basin-specific masking anywhere). ep0 sel = donor's 0.7954 exactly; best
+  sel **0.8056@ep16** (early stop ep30). **Frozen 0.810/0.837 — beats the
+  baseline (+0.011/+0.011), beats the Hamon anchor (0.807/0.829), matches
+  the fine-HRU `hamon_dense` (0.810/0.840) on the coarse grid.** 12/15
+  basins improved val; |val pbias| 9.0→7.3; NHG fixed generically by the
+  anchor (val 0.799→0.826, pbias +6.8→+0.1 — no mask needed); ET-shape RMS
+  deadband-z 0.639→0.411 (−36%) with NO basin degraded (the joint arms'
+  NHG/ISB shape casualties are absent: ISB 0.418→0.201). Residual losers:
+  PNF −0.034 / YRS −0.020 / SCC −0.018 val (positive-bias basins pushed
+  higher). The obs information, given a flow-cheap knob (seasonal Kpet),
+  a tight observed level constraint (P−Q), and the fine-tune regime
+  (select within the flow-optimal plateau), IMPROVES flow rather than
+  trading against it.
 
 ## Open items
 - `hamon_dense` retrain (fine-HRU, Hamon, full footprint, current defaults)
-  — queued behind the active GPU run.
-- `noah_lite` has no params export (torch-only path) — run
-  `sacsma dpl evaluate noah_lite/checkpoints/best.pt` when the GPU frees.
-- `hamon` params_dpl.csv regen in flight (evaluate now defaults output to
-  the checkpoint's run dir — the old `artifacts/dpl/<variant>` default is
-  what destroyed `physical`'s derived outputs).
-- `pt_refined_ft`: on success, move the run dir + `skpet_ft_train.log` in as
-  `pt_refined_ft/` and update the lineage table with frozen numbers.
+  — queued behind the `noah_lite` export on the GPU.
+- `noah_lite` params export running (torch eval).
