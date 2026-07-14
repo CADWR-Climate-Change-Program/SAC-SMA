@@ -24,7 +24,7 @@ no-grad spinup from 1978-10-01.
 | `hamon` | 15cdec_grid (2074 cells) | native-grid retrain + CalSim3 footprint | 0.807/0.829 |
 | `pt` | 15cdec_grid | Priestley–Taylor PET (Bristow–Campbell Rn) for the SAC ET cascade | 0.791/0.823 |
 | `pt_refined` | 15cdec_grid | + snow-cover albedo (0.6) + arid dewpoint depression (2 °C) | 0.799/0.826 |
-| `noah_lite` | 15cdec_grid | Noah-lite canopy ET (1 learned DOF `soil_chi`) on PT potential | ~0.759 cal *(torch)* — params export TODO |
+| `noah_lite` | 15cdec_grid | Noah-lite canopy ET (1 learned DOF `soil_chi`) on PT potential | 0.759/0.792 *(torch)* |
 | `pt_refined_ft` | 15cdec_grid | fine-tune from `pt_refined` + ET/SWE obs losses + seasonal Kpet + P−Q level anchor | **0.810/0.837** |
 
 Old → new: `physical`→`hamon_dense` (lost), `physical_grid_calsim`→`hamon`,
@@ -152,5 +152,4 @@ auto-masked), λ=0.2 each, cal-window only, never a selection metric.
 
 ## Open items
 - `hamon_dense` retrain (fine-HRU, Hamon, full footprint, current defaults)
-  — queued behind the `noah_lite` export on the GPU.
-- `noah_lite` params export running (torch eval).
+  — running.
