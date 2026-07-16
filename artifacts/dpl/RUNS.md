@@ -3,19 +3,25 @@
 Structure: **canonical** runs live directly under `artifacts/dpl/<label>`.
 Frozen-physics runs (`hamon_dense`, `hamon`, `pt`, `noah`) carry
 `checkpoints/best.pt`, `train_log.csv`, `params_dpl.csv`, `metrics_<label>.csv`
-(+ `params_canopy.csv` for `noah`). The two canonical SAC×LSTM **ensembles**
-(`noah_lstm_feat`, `noah_lstm_resid`) hold `seed*/checkpoints/best.pt` +
-per-seed `metrics_hybrid_<variant>.csv` and a top-level
-`metrics_hybrid_<variant>.csv` scoring the **ensemble-mean** flow
-(`hybrid.evaluate.score_ensemble`). Exploratory/superseded run artifacts were
-pruned; their findings stay in the track record below (names there no longer
-resolve to on-disk runs). `--physics` is REQUIRED with no default, so `testing/`
-holds only gitignored local scratch; `hybrid/` now holds only the shared
-Noah-lite frozen-sim cache. `fidelity/` is the numerics benchmark
-(infrastructure, not a run). All skill numbers are pooled 15-basin mean KGE,
-frozen-model scoring (numba; PT via `sacsma.pet_pt`, Noah-lite via
-`sacsma.sma_noah_lite`) unless marked *(torch)* — only the full 7-param Noah
-ET (`noah_grid*`) remains torch-only (no frozen core).
+(+ `params_canopy.csv` for `noah`). `noah_ft` (the obs-steered seasonal-melt
+fine-tune of `noah`) is **torch-only** — the frozen `run_basin` cannot
+reconstruct its seasonal MFMAX/MFMIN/MBASE harmonics — so it carries
+`metrics_noah_ft.csv` *(torch)* plus the load-bearing `daily_sim_noah_ft.csv`
+(date×basin mm/day): every frozen-path consumer (climatology,
+forcing-sensitivity, the hybrid sim channel) reads that dump instead of its
+`params_dpl.csv`. The canonical SAC×LSTM **ensemble** `hybrid` (feature
+coupling on `noah_ft`, no doy inputs) holds `seed*/checkpoints/best.pt` +
+per-seed `metrics_hybrid.csv` and a top-level `metrics_hybrid.csv` scoring the
+**ensemble-mean** flow (`hybrid.evaluate.score_ensemble`); the residual
+coupling and the two `noah`-based ensembles were retired 2026-07-16 (see
+below). Exploratory/superseded run artifacts were pruned; their findings stay
+in the track record below (names there no longer resolve to on-disk runs).
+`--physics` is REQUIRED with no default, so `testing/` holds only gitignored
+local scratch. `fidelity/` is the numerics benchmark (infrastructure, not a
+run). All skill numbers are pooled 15-basin mean KGE, frozen-model scoring
+(numba; PT via `sacsma.pet_pt`, Noah-lite via `sacsma.sma_noah_lite`) unless
+marked *(torch)* — `noah_ft` and the full 7-param Noah ET (`noah_grid*`) are
+torch-only (no frozen core).
 
 Standing methods shared by every canonical grid run: `physical` feature
 variant, pooled 15cdec training (daily gage FNF, cal WY1989–2003 / val
@@ -31,8 +37,10 @@ no-grad spinup from 1978-10-01.
 | `hamon` | 15cdec_grid (2074 cells) | native-grid retrain + CalSim3 footprint | 0.807/0.829 |
 | `pt` | 15cdec_grid | Priestley–Taylor PET (Bristow–Campbell Rn) + snow-cover albedo (0.6) + arid dewpoint depression (2 °C) | 0.799/0.826 |
 | `noah` | 15cdec_grid | Noah-lite canopy ET (1 learned DOF `soil_chi`) on PT potential | 0.767/0.799 |
-| `noah_lstm_feat` | 15cdec_grid | SAC×LSTM **feature** hybrid on `noah` physics — 5-seed ensemble mean | 0.923/0.869 |
-| `noah_lstm_resid` | 15cdec_grid | SAC×LSTM **residual** hybrid on `noah` physics — 8-seed ensemble mean | **0.926/0.873** |
+| `noah_ft` | 15cdec_grid | warm-start fine-tune of `noah`: seasonal Kpet + MFMAX/MFMIN/MBASE melt harmonics, identified by ET/SWE-shape obs + P−Q anchor (flow-KGE selection) | 0.765/0.799 *(torch; vs noah-torch 0.759/0.792)* |
+| `hybrid` | 15cdec_grid | SAC×LSTM feature coupling on `noah_ft` physics (sim-cache channel), no doy inputs, temperature-consistency loss λ=0.3 (+2 °C teacher) — 8-seed ensemble mean | **0.912/0.861** *(+2 °C resp ratio 0.78 vs base 0.15)* |
+| ~~`noah_lstm_feat`~~ | 15cdec_grid | RETIRED 2026-07-16 — feature hybrid on `noah` (5 seeds, 0.923/0.869); superseded by `hybrid` | — |
+| ~~`noah_lstm_resid`~~ | 15cdec_grid | RETIRED 2026-07-16 — residual hybrid on `noah` (8 seeds, 0.926/0.873); the residual COUPLING was dropped entirely (regime-conditional volume injection, B1–B3) | — |
 
 **2026-07-15 canonicalization + prune.** Renames: `pt_refined`→`pt` (the plain-PT
 `pt` rung folded in, not kept as its own run), `pt_noah_lite`→`noah`; the two
@@ -199,7 +207,7 @@ auto-masked), λ=0.2 each, cal-window only, never a selection metric.
   (select within the flow-optimal plateau), IMPROVES flow rather than
   trading against it.
 
-## Noah-line seasonal-timing program (2026-07-15, in progress)
+## Noah-line seasonal-timing program (2026-07-15/16, CONCLUDED — A1b promoted)
 
 Why: the climatology shows noah→LSTM *hurts* NML/MRC/ORO (the basins where noah
 already matches CalSim3 FNF, monthly KGE 0.90–0.94) while halving the val
@@ -349,12 +357,92 @@ KGE, correction seas_frac).
   frozen core), NHG regression (snow-free ⇒ melt DOF unconstrained —
   candidate fix: weight melt harmonics by SWE participation), small
   SHA/BND/ORO volume drift (candidate fix: tighter `--et-anchor-band`).
+- **PROMOTED 2026-07-16**: A1b adopted as canonical **`noah_ft`**
+  (`testing/noah_ft_snow` → `artifacts/dpl/noah_ft`; re-evaluated in place,
+  reproduces 0.765/0.799 torch and sel 0.7656 exactly). The trade-offs above
+  were accepted at adoption; NHG melt-DOF weighting and a tighter anchor band
+  stay open as refinement candidates.
+
+## Canonical rebuild on noah_ft (2026-07-16, in progress)
+
+User decisions: adopt A1b as `noah_ft`; **drop the residual coupling
+entirely** (full prune: code + `noah_lstm_resid` artifacts; git history is the
+archive); the feature hybrid becomes THE `hybrid` — retrained on the `noah_ft`
+sim channel (via `--sim-cache daily_sim_noah_ft.csv`), **no doy inputs**; and
+add a **temperature-consistency loss** anchoring the hybrid's warming response
+to the physics.
+
+- **Residual prune + rename**: `hybrid/` package is feature-only
+  (`HybridLSTM` Softplus head always; `variant`/`--resid-mean-lambda`
+  removed; metrics file → `metrics_hybrid.csv`); climatology panel e →
+  noah → noah_ft → Hybrid (noah_ft ingested from its daily dump via the new
+  `TORCH_SIM` route); forcing-sensitivity → hamon/pt/noah/noah_ft + Hybrid
+  (noah_ft detrended run streams the torch pipeline under the per-cell WGEN
+  dT field — `evaluate.noah_torch_daily`, new); `seasonal_compare` references
+  → noah / noah_ft / hybrid. **λ=0 gate PASSED**: 2-epoch feature run,
+  pre-prune code (23f37d5 worktree) vs pruned code — `train_log.csv` loss +
+  cal_kge byte-identical.
+- **Temperature-consistency loss (design)**: teacher = `noah_ft` re-run with
+  tavg/tmin/tmax + 2 °C (`sacsma dpl evaluate --temp-delta 2.0` →
+  `daily_sim_noah_ft_plus2C.csv`); per batch the LSTM is forwarded a second
+  time on the perturbed feature copy (temp channels +ΔT/σ in normalized
+  space, sim channel = teacher sim/scale — the `_hybrid_flow` recipe at train
+  time, same input-noise draw on both copies) and the DAILY response
+  `pred_dt − pred` is pulled to the physics response `(sim_dt − sim)/scale`
+  by MSE × `--temp-lambda`. Hypothesis: the val period is warmer than cal;
+  the hybrids' regime-conditional val volume bias (B1–B3) is the LSTM's own
+  temperature response extrapolating — anchoring dQ/dT to physics attacks it
+  at the root. The WGEN detrending pattern is HELD OUT of training — the
+  forcing-sensitivity figure becomes the independent check.
+- **`testing/hybrid_base`** (8 seeds): the λ_T=0 baseline — feature, no-doy,
+  statics, h64/dropout .35/noise .2, sim-cache = `daily_sim_noah_ft.csv`.
+  Ensemble-mean **0.917/0.865** — matches the retired `noah`-based ensembles'
+  pooled skill (feat 0.869 / resid 0.873 val): nothing lost moving to the
+  noah_ft channel + dropping doy. The fallback canonical.
+- **D2 temp-λ screen (λ ∈ {0.1, 0.3, 1.0} × seeds 0-2, judged 3v3 vs base
+  seeds 0-2; `testing/d2_screen_compare.csv`)**:
+  | group | cal/val KGE | mean \|val β−1\| | +2 °C resp ratio | regime r |
+  |---|---|---|---|---|
+  | base | 0.917/0.857 | 0.078 | **0.15** | 0.88 |
+  | λ=0.1 | 0.919/0.863 | 0.076 | 0.36 | 0.96 |
+  | **λ=0.3** | 0.914/0.860 | 0.077 | **0.78** | 0.97 |
+  | λ=1.0 | 0.897/0.852 | 0.088 | 0.92 | 0.99 |
+  (resp ratio = Σ hybrid ΔQ / Σ physics ΔQ under +2 °C, 3-member mean, all
+  full-lookback days; regime r = monthly-regime correlation of the two ΔQs.)
+  Findings: (1) the UNCONSTRAINED hybrid has almost no warming response
+  (15% of physics; ORO −1.29 = wrong SIGN) — disqualifying for a climate
+  application; (2) the loss dials the response in cleanly — λ=0.3 recovers
+  78% of the physics response (r .97) at ZERO pooled-skill cost, λ=1.0 buys
+  92% but costs cal 0.917→0.897; (3) the NML/MRC/ORO val-β hypothesis is
+  REFUTED — anchoring dQ/dT leaves val β unchanged (NML 0.905→0.897): the
+  regime-conditional bias is intrinsic to cal-only training (B1–B3 stands);
+  the temp loss buys a physics-consistent CLIMATE RESPONSE, not a val-bias
+  fix. **Winner: λ=0.3** → D3 (8 seeds, tl0.3 seeds 0-2 reused).
+- **D3 → PROMOTED as canonical `hybrid`**: 8-seed λ=0.3 ensemble-mean
+  **0.912/0.861** vs the λ=0 baseline's 0.917/0.865 — Δval −0.004, inside
+  the ~0.005 gate, in exchange for the anchored +2 °C response (ratio 0.78,
+  regime r 0.97; the unconstrained baseline delivers 0.15 with ORO
+  wrong-signed). `testing/hybrid_tl_final` → `artifacts/dpl/hybrid`;
+  `hybrid_base` kept in testing/ as the recorded λ=0 fallback. The WGEN
+  detrending pattern was HELD OUT of training — the regenerated
+  forcing-sensitivity figure is the independent temperature-response check.
+  **Held-out WGEN verdict**: the monthly-regime response generalizes fully
+  (Hybrid sits on the physics family: +300 TAF/mo winter gain, −380 June
+  drawdown); the annual-volume response generalizes PARTIALLY (~⅓–½ of
+  noah_ft's early-record signal — the summer-loss side under-delivers).
+  Scoreboard (`hybrid/seasonal_compare_hybrid.csv`): the temp loss does NOT
+  cost the hybrid its timing advantage — val seas_mis 0.047 vs noah_ft 0.085
+  / noah 0.092; CalSim3 monthly KGE 0.867 (best of the three).
 
 ## Open items
-- The Noah-line seasonal-timing program above (Track A fine-tunes + Track B
-  hybrid arms) is in flight; everything else is stable. Canonical set:
-  `hamon_dense`, `hamon`, `pt`, `noah`, and the two SAC×LSTM ensembles
-  `noah_lstm_feat` (0.923/0.869) / `noah_lstm_resid` (0.926/0.873) — the LSTM
-  erases the physics-baseline gap (`noah` physics 0.767/0.799 → ~0.87 val
-  hybrid). `pt_refined_noah_lite` resolved 2026-07-14 (wash + reshuffle, not
-  promoted; see the Noah ET line).
+- Canonical set (2026-07-16): `hamon_dense`, `hamon`, `pt`, `noah`,
+  `noah_ft` *(torch, 0.765/0.799)*, and the SAC×LSTM ensemble `hybrid`
+  (feature-on-noah_ft, no-doy, temp-λ 0.3; 0.912/0.861, +2 °C response
+  anchored to physics). `noah_lstm_feat`/`noah_lstm_resid` retired.
+- noah_ft refinement candidates (not scheduled): SWE-participation-weighted
+  melt harmonics (NHG), tighter `--et-anchor-band` (SHA/BND/ORO drift).
+- Hybrid val volume bias at NML/MRC/ORO remains intrinsic to cal-only
+  training (B1–B3 + D2 all refute fixes); at those basins `noah_ft` is the
+  trustworthy out-of-sample answer.
+- `pt_refined_noah_lite` resolved 2026-07-14 (wash + reshuffle, not promoted;
+  see the Noah ET line).
