@@ -1,10 +1,10 @@
-"""Seasonal-physics arm vs the Noah-LSTM ensembles — did the physics recover the
-LSTM's seasonal-timing correction without its volume-bias downside?
+"""A dPL arm vs the canonical noah / noah_ft / Hybrid series — did the arm
+recover the LSTM's seasonal-timing correction without its volume-bias downside?
 
-Given a seasonal-Kpet / seasonal-snowmelt dPL arm's daily sim (dumped by
-``evaluate.score_noah_torch`` -> ``daily_sim_<label>.csv``), this scores it head to
-head against the frozen ``noah`` baseline and the two canonical LSTM ensembles on
-the metrics that matter for the seasonal question:
+Given an arm's daily sim (dumped by ``evaluate.score_noah_torch`` ->
+``daily_sim_<label>.csv``), this scores it head to head against the frozen
+``noah`` baseline, the canonical ``noah_ft`` seasonal-melt fine-tune, and the
+canonical Hybrid ensemble on the metrics that matter for the seasonal question:
 
 * **daily-gage validation** (vs the daily CDEC gage FNF, dates > ``CAL_END``):
   the KGE decomposition r / alpha / beta / pbias and the monthly seasonal-mismatch
@@ -113,8 +113,8 @@ def seasonal_physics_report(
 
     cache = Path(cache_dir)
     need = {"noah": cache / "sim_noah.csv",
-            "resid": cache / "sim_hybrid_noah-lstm_residual.csv",
-            "feat": cache / "sim_hybrid_noah-lstm_feature.csv",
+            "noah_ft": Path("artifacts/dpl/noah_ft/daily_sim_noah_ft.csv"),
+            "hybrid": cache / "sim_hybrid.csv",
             "c3": cache / "calsim3_fnf_monthly.csv"}
     for k, p in need.items():
         if not p.exists():
@@ -124,8 +124,10 @@ def seasonal_physics_report(
     sims = {
         "arm": pd.read_csv(arm_daily_csv, parse_dates=["date"]).set_index("date"),
         "noah": pd.read_csv(need["noah"], parse_dates=["date"]).set_index("date"),
-        "resid": pd.read_csv(need["resid"], parse_dates=["date"]).set_index("date"),
-        "feat": pd.read_csv(need["feat"], parse_dates=["date"]).set_index("date"),
+        "noah_ft": pd.read_csv(need["noah_ft"],
+                               parse_dates=["date"]).set_index("date"),
+        "hybrid": pd.read_csv(need["hybrid"],
+                              parse_dates=["date"]).set_index("date"),
     }
     c3 = pd.read_csv(need["c3"], parse_dates=["date"]).set_index("date")
     gage = load_gage(data_dir)
@@ -139,7 +141,7 @@ def seasonal_physics_report(
         val = (idx > pd.Timestamp(CAL_END)) & np.isfinite(o.to_numpy())
         obs_all = np.isfinite(o.to_numpy())
         rec: dict[str, float | str] = {"basin": b}
-        for m in ("noah", "arm", "resid", "feat"):
+        for m in ("noah", "noah_ft", "arm", "hybrid"):
             s = sims[m][b].reindex(idx)
             d = _kge_decomp(s.to_numpy()[val], o.to_numpy()[val])
             # monthly seasonal mismatch over the val period vs the gage
@@ -169,7 +171,7 @@ def seasonal_physics_report(
     print(f"wrote {csv}", flush=True)
     _plot(df, basins, out / f"seasonal_compare_{label}.png", label)
     # console summary: means
-    for m in ("noah", "arm", "resid", "feat"):
+    for m in ("noah", "noah_ft", "arm", "hybrid"):
         print(f"  {m:5s}: mean val_KGE={df[f'{m}_val_kge'].mean():.3f}  "
               f"mean seas_mis={df[f'{m}_seas_mis'].mean():.3f}  "
               f"mean CalSim3_KGE={df[f'{m}_c3_kge'].mean():.3f}", flush=True)
@@ -178,9 +180,10 @@ def seasonal_physics_report(
     return df
 
 
-_COLORS = {"noah": "#bcbd22", "arm": "#d62728", "resid": "#2ca02c", "feat": "#9467bd"}
-_NAMES = {"noah": "dPL noah", "arm": "seasonal physics",
-          "resid": "Noah-LSTM resid", "feat": "Noah-LSTM feat"}
+_COLORS = {"noah": "#bcbd22", "noah_ft": "#d62728", "arm": "#17becf",
+           "hybrid": "#9467bd"}
+_NAMES = {"noah": "dPL noah", "noah_ft": "dPL noah_ft", "arm": "arm",
+          "hybrid": "Hybrid"}
 
 
 def _plot(df: pd.DataFrame, basins: list[str], path: Path, label: str) -> None:
@@ -188,7 +191,7 @@ def _plot(df: pd.DataFrame, basins: list[str], path: Path, label: str) -> None:
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    models = ["noah", "arm", "resid", "feat"]
+    models = ["noah", "noah_ft", "arm", "hybrid"]
     rows = [("daily-gage val KGE", "val_kge", (0.0, 1.0)),
             ("seasonal mismatch (val)", "seas_mis", None),
             ("monthly KGE vs CalSim3 FNF", "c3_kge", (0.0, 1.0))]
@@ -218,7 +221,7 @@ def _plot(df: pd.DataFrame, basins: list[str], path: Path, label: str) -> None:
     fig.legend([seen[m] for m in models], [_NAMES[m] for m in models],
                loc="lower center", ncol=n, fontsize=10, frameon=False,
                bbox_to_anchor=(0.5, 0.005))
-    fig.suptitle(f"Seasonal physics ({label}) vs noah + Noah-LSTM ensembles",
+    fig.suptitle(f"Arm ({label}) vs noah / noah_ft / Hybrid",
                  fontsize=13.5, fontweight="bold")
     fig.tight_layout(rect=(0, 0.045, 1, 0.985))
     path.parent.mkdir(parents=True, exist_ok=True)

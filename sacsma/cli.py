@@ -151,7 +151,8 @@ def _dpl_evaluate(args: argparse.Namespace) -> int:
     from .dpl.evaluate import evaluate_checkpoint
 
     evaluate_checkpoint(args.checkpoint, data_dir=args.data_dir,
-                        out_dir=args.out, parallel=not args.serial)
+                        out_dir=args.out, parallel=not args.serial,
+                        temp_delta=args.temp_delta)
     return 0
 
 
@@ -161,15 +162,17 @@ def _dpl_hybrid(args: argparse.Namespace) -> int:
     from .dpl.hybrid.evaluate import compare_all, score_hybrid
     from .dpl.hybrid.train import HybridConfig, train_hybrid
 
-    out = args.out or f"artifacts/dpl/testing/{args.variant}"
+    out = args.out or "artifacts/dpl/testing/hybrid"
     physics = (None if str(args.physics).lower() in ("", "none", "ga")
                else args.physics)
     cfg = HybridConfig(
-        variant=args.variant, use_statics=args.statics, n_epochs=args.epochs,
+        use_statics=args.statics, n_epochs=args.epochs,
         hidden=args.hidden, dropout=args.dropout, lr=args.lr,
         batch_size=args.batch_size, device=args.device, seed=args.seed,
         input_noise=args.input_noise,
-        use_doy=not args.no_doy, resid_mean_lambda=args.resid_mean_lambda,
+        use_doy=not args.no_doy,
+        temp_lambda=args.temp_lambda, temp_delta=args.temp_delta,
+        temp_sim_cache=args.temp_sim_cache,
         physics_domain=args.physics_domain, pet_source=args.sac_pet,
         pt_snow_albedo=args.pt_snow_albedo,
         pt_dewpoint_depression=args.pt_dewpoint_depression,
@@ -468,18 +471,19 @@ def main(argv: list[str] | None = None) -> int:
                          "else artifacts/dpl/<variant>)")
     ev.add_argument("--serial", action="store_true",
                     help="disable the parallel (numba prange) frozen model")
+    ev.add_argument("--temp-delta", type=float, default=0.0,
+                    help="add a uniform delta (degC) to tavg/tmin/tmax and dump "
+                         "the perturbed daily sim (torch path only; label gets a "
+                         "_dT suffix, gage metrics/figures are skipped) — the "
+                         "TEACHER for the hybrid temperature-consistency loss")
     ev.set_defaults(func=_dpl_evaluate)
 
     hy = dpl_sub.add_parser(
         "hybrid",
-        help="train + score a hybrid SAC-SMA x LSTM (feature|residual) on the "
-             "15cdec daily basis -> artifacts/dpl/testing/<variant>/ (local scratch; "
-             "the canonical ensembles noah_lstm_feat/resid are already trained)",
+        help="train + score the hybrid SAC-SMA x LSTM (physics sim as an input "
+             "channel) on the 15cdec daily basis -> artifacts/dpl/testing/hybrid/ "
+             "(local scratch; the canonical ensemble lives at artifacts/dpl/hybrid)",
     )
-    hy.add_argument("--variant", choices=["feature", "residual"],
-                    default="residual",
-                    help="feature = SAC-SMA sim as an LSTM input; residual = "
-                         "LSTM learns obs-sim, flow = sim + correction")
     hy.add_argument("--physics", required=True,
                     help="frozen SAC-SMA parameter table for the physics baseline "
                          "(REQUIRED, no default); 'GA' or '' -> archived GA optimum. "
@@ -518,13 +522,20 @@ def main(argv: list[str] | None = None) -> int:
                          "channel already carries the calendar; an explicit doy "
                          "enables calendar-keyed mean corrections that inject "
                          "val-period volume bias)")
-    hy.add_argument("--resid-mean-lambda", type=float, default=0.0,
-                    help="residual variant: penalty weight on the per-batch "
-                         "per-basin mean of the normalized residual — blocks "
-                         "long-run volume injection (0 disables)")
+    hy.add_argument("--temp-lambda", type=float, default=0.0,
+                    help="temperature-consistency loss weight: pull the hybrid's "
+                         "daily warming response Q(T+dT)-Q(T) toward the physics "
+                         "response (0 disables; needs --temp-sim-cache)")
+    hy.add_argument("--temp-delta", type=float, default=2.0,
+                    help="the perturbation (degC) baked into --temp-sim-cache "
+                         "(must match the --temp-delta the teacher was dumped with)")
+    hy.add_argument("--temp-sim-cache", default="",
+                    help="teacher daily-sim CSV: the SAME physics as --sim-cache "
+                         "re-run under +temp_delta (`sacsma dpl evaluate <physics "
+                         "ckpt> --temp-delta <dT>`)")
     hy.add_argument("--data-dir", default="data", help="organized data/ store")
     hy.add_argument("--out", default=None,
-                    help="output dir (default: artifacts/dpl/testing/<variant>)")
+                    help="output dir (default: artifacts/dpl/testing/hybrid)")
     hy.add_argument("--epochs", type=int, default=60)
     hy.add_argument("--hidden", type=int, default=128, help="LSTM hidden size")
     hy.add_argument("--dropout", type=float, default=0.15)

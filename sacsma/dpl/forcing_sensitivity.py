@@ -1,6 +1,13 @@
 """Temperature-detrending sensitivity (WGEN Product A minus historical Livneh)
-for the dPL hamon, pt and noah physics models plus the two canonical Noah-LSTM
-ensembles (feature + residual, mean over seed members).
+for the dPL hamon, pt, noah and noah_ft physics models plus the canonical
+Hybrid ensemble (mean over seed members, on the noah_ft physics baseline).
+
+``dPL noah_ft`` is torch-only (seasonal melt harmonics): its historical run is
+the canonical ``daily_sim_noah_ft.csv`` dump and its detrended run streams the
+torch pipeline under the per-cell dT field (``evaluate.noah_torch_daily``).
+Because the WGEN detrending never enters the hybrid's TRAINING (the
+temperature-consistency loss trains on a scalar +2degC teacher), the Hybrid
+series here is an INDEPENDENT check of its temperature response.
 
 WGEN Product A detrends temperature to a 1991-2020 baseline (the early record is
 warmed).  It is not packaged for the 15cdec application, so the detrending signal
@@ -48,25 +55,28 @@ MODELS: dict[str, dict] = {
                       pet="priestley_taylor", alb=0.0, dew=0.0, et_scheme="noah_lite",
                       canopy_csv="artifacts/dpl/noah/params_canopy.csv"),
 }
-#: the two canonical Noah-LSTM ENSEMBLES (mean over seed members); both sit on
-#: the same Noah-lite physics baseline (their sac_sim channel = ``dPL noah``,
-#: whose detrended frozen sim is reused as the ensembles' detrended baseline).
-FEAT_ENS = "artifacts/dpl/noah_lstm_feat"
-RESID_ENS = "artifacts/dpl/noah_lstm_resid"
+#: the torch-only seasonal-melt fine-tune: checkpoint (for the detrended torch
+#: run) + its canonical historical daily dump.
+NOAH_FT_CKPT = "artifacts/dpl/noah_ft/checkpoints/best.pt"
+NOAH_FT_DAILY = "artifacts/dpl/noah_ft/daily_sim_noah_ft.csv"
+#: the canonical Hybrid ENSEMBLE (mean over seed members); its sac_sim channel
+#: is the noah_ft physics, whose detrended torch run is re-fed as the ensemble's
+#: detrended baseline.
+HYBRID_ENS = "artifacts/dpl/hybrid"
 #: 2-D encoding so the series separate cleanly: COLOR = physics lineage (blue =
-#: Hamon, red = PT cascade, green = Noah-lite); LINESTYLE = role (solid = pure
-#: physics, dashed = feature ensemble, dash-dot = residual ensemble).  Read the
-#: ET-scheme effect across colours, physics-vs-LSTM within one.
+#: Hamon, red = PT cascade, green = Noah-lite, purple = noah_ft fine-tune);
+#: LINESTYLE = role (solid = pure physics, dashed = LSTM ensemble).  Read the
+#: ET-scheme effect across colours, physics-vs-LSTM within purple.
 STYLE: dict[str, dict] = {
-    "dPL hamon":          dict(color="#1f77b4", lw=2.3, ls="-"),
-    "dPL pt":             dict(color="#d62728", lw=2.3, ls="-"),
-    "dPL noah":           dict(color="#2ca02c", lw=2.3, ls="-"),
-    "Noah-LSTM feature":  dict(color="#2ca02c", lw=2.0, ls="--"),
-    "Noah-LSTM residual": dict(color="#2ca02c", lw=2.0, ls="-."),
+    "dPL hamon":   dict(color="#1f77b4", lw=2.3, ls="-"),
+    "dPL pt":      dict(color="#d62728", lw=2.3, ls="-"),
+    "dPL noah":    dict(color="#2ca02c", lw=2.3, ls="-"),
+    "dPL noah_ft": dict(color="#9467bd", lw=2.3, ls="-"),
+    "Hybrid":      dict(color="#9467bd", lw=2.0, ls="--"),
 }
 #: marker by role (reinforces the linestyle on the monthly plot only; the rolling
 #: time series stays marker-free).
-_ROLE_MARKER = {"-": "o", "--": "s", "-.": "^"}
+_ROLE_MARKER = {"-": "o", "--": "s"}
 
 
 def _norm_key(k) -> str:
@@ -131,15 +141,13 @@ def _frozen_sim(forcing, spec: dict, basins, cache: Path | None = None) -> pd.Da
 
 
 def _hybrid_flow(data_dir, dT, dev, sim_detr: pd.DataFrame, ckpt: str):
-    """(flow_hist, flow_detr) full-record daily hybrid flow (date x basin), for
-    the FEATURE or RESIDUAL variant (read from the checkpoint).
+    """(flow_hist, flow_detr) full-record daily hybrid flow (date x basin).
 
     Detrended features = historical features + dT_basin/sigma on tavg/tmin/tmax
     (additive under z-score) with the sac_sim channel re-fed by the detrended
-    physics sim (feature: per-basin ÷scale; residual: pooled z-score) and — for
-    the residual variant, whose flow = sim + correction — the ``sim`` reconstruction
-    baseline swapped to the detrended sim.  The trained normalisation is reused
-    exactly.  ``ckpt`` is one trained seed member's checkpoint."""
+    physics sim (per-basin ÷scale, as load_hybrid_data does).  The trained
+    normalisation is reused exactly.  ``ckpt`` is one trained seed member's
+    checkpoint."""
     import torch
 
     from .hybrid.data import _CAL_START, DYNAMIC_FEATURES, load_hybrid_data
@@ -148,17 +156,20 @@ def _hybrid_flow(data_dir, dT, dev, sim_detr: pd.DataFrame, ckpt: str):
 
     ck = torch.load(ckpt, map_location="cpu", weights_only=False)
     cfg = ck["cfg"]
-    variant = ck["variant"]
+    if ck.get("variant", "feature") != "feature":
+        raise ValueError("residual hybrid checkpoints are retired (2026-07-16)")
+    use_doy = cfg.get("use_doy", True)
     h = load_hybrid_data(
-        data_dir, variant=variant, physics_csv=ck.get("physics_csv"),
+        data_dir, physics_csv=ck.get("physics_csv"),
         sim_cache=ck.get("sim_cache"), use_statics=bool(ck["n_static"]),
+        use_doy=use_doy,
         domain=cfg.get("physics_domain", "15cdec"),
         pet_source=cfg.get("pet_source", "hamon"),
         pt_snow_albedo=cfg.get("pt_snow_albedo", 0.0),
         pt_dewpoint_depression=cfg.get("pt_dewpoint_depression", 0.0),
         et_scheme=cfg.get("physics_et_scheme", "sac"),
         canopy_csv=cfg.get("canopy_csv") or None, device=dev)
-    model = HybridLSTM(h.n_feat, h.n_static, variant=variant, hidden=cfg["hidden"],
+    model = HybridLSTM(h.n_feat, h.n_static, hidden=cfg["hidden"],
                        static_embed=cfg["static_embed"], dropout=cfg["dropout"]).to(dev)
     model.load_state_dict(ck["model"])
 
@@ -176,7 +187,9 @@ def _hybrid_flow(data_dir, dT, dev, sim_detr: pd.DataFrame, ckpt: str):
     tmax = np.vstack([tmm[f"tmax_{b}"].reindex(dom.dates).to_numpy() for b in dom.basins])
     sd = {"tavg": tavg[:, lo:hi].std() + 1e-8, "tmin": tmin[:, lo:hi].std() + 1e-8,
           "tmax": tmax[:, lo:hi].std() + 1e-8}
-    idx = {n: DYNAMIC_FEATURES.index(n) for n in ("tavg", "tmin", "tmax", "sac_sim")}
+    names = (DYNAMIC_FEATURES if use_doy else
+             tuple(n for n in DYNAMIC_FEATURES if n not in ("sin_doy", "cos_doy")))
+    idx = {n: names.index(n) for n in ("tavg", "tmin", "tmax", "sac_sim")}
 
     sim_d = np.vstack([sim_detr[b].reindex(dom.dates).to_numpy() for b in dom.basins])
     feat_d = h.feat.clone()
@@ -185,16 +198,8 @@ def _hybrid_flow(data_dir, dT, dev, sim_detr: pd.DataFrame, ckpt: str):
     sim_d_t = torch.as_tensor(sim_d, **dev_kw)
     for n in ("tavg", "tmin", "tmax"):
         feat_d[:, :, idx[n]] += dTb_t / sd[n]
-    if variant == "feature":
-        # per-basin target-matched scaling (as load_hybrid_data does)
-        feat_d[:, :, idx["sac_sim"]] = sim_d_t / h.scale[:, None]
-    else:
-        # residual: the sac_sim channel is a POOLED z-score of the historical sim
-        mu = h.sim[:, lo:hi].mean()
-        sd_sim = h.sim[:, lo:hi].std() + 1e-8
-        feat_d[:, :, idx["sac_sim"]] = (sim_d_t - mu) / sd_sim
-    # residual reconstruction is sim + correction -> swap in the detrended sim
-    # baseline (feature ignores data.sim, so this is harmless there).
+    # per-basin target-matched scaling (as load_hybrid_data does)
+    feat_d[:, :, idx["sac_sim"]] = sim_d_t / h.scale[:, None]
     h_detr = dc.replace(h, feat=feat_d, sim=sim_d_t)
 
     def _full(data):
@@ -242,27 +247,37 @@ def assemble(data_dir: str = "data", *, device: str = "cuda") -> dict:
     basins = [b for b in frac.index if frac[b] >= 0.5]
 
     # pure-physics frozen sims over ALL 15 basins (Tulare has dT=0 ->
-    # detrended==historical), cached; dQ subsets to the covered basins.  The
-    # detrended Noah-lite sim doubles as the two ensembles' sac_sim baseline.
+    # detrended==historical), cached; dQ subsets to the covered basins.
     dq: dict[str, pd.DataFrame] = {}
-    noah_detr: pd.DataFrame | None = None
     for label, spec in MODELS.items():
         tag = label.split()[-1]
         h = _frozen_sim(f_hist, spec, BASINS, cd / f"fs_{tag}_hist.csv")
         d = _frozen_sim(f_detr, spec, BASINS, cd / f"fs_{tag}_detr.csv")
         dq[label] = (d - h)[basins]
-        if label == "dPL noah":
-            noah_detr = d
         print(f"  assembled {label}", flush=True)
 
-    # the two canonical Noah-LSTM ENSEMBLES (mean over seed members), each on the
-    # Noah-lite detrended physics baseline
+    # noah_ft is torch-only: historical = the canonical daily dump; detrended =
+    # the torch pipeline under the per-cell dT field (cached).  The detrended
+    # run doubles as the Hybrid ensemble's sac_sim baseline.
+    ft_hist = pd.read_csv(NOAH_FT_DAILY, parse_dates=["date"]).set_index("date")
+    ft_detr_csv = cd / "fs_noah_ft_detr.csv"
+    if ft_detr_csv.exists():
+        ft_detr = pd.read_csv(ft_detr_csv, parse_dates=["date"]).set_index("date")
+    else:
+        from .evaluate import noah_torch_daily
+        ft_detr = noah_torch_daily(NOAH_FT_CKPT, data_dir=data_dir,
+                                   temp_delta=dT)
+        ft_detr_csv.parent.mkdir(parents=True, exist_ok=True)
+        ft_detr.to_csv(ft_detr_csv)
+    dq["dPL noah_ft"] = (ft_detr - ft_hist)[basins]
+    print("  assembled dPL noah_ft (torch)", flush=True)
+
+    # the canonical Hybrid ENSEMBLE (mean over seed members) on the noah_ft
+    # detrended physics baseline
     dev = pick_device(device)
-    for label, ens in (("Noah-LSTM feature", FEAT_ENS),
-                       ("Noah-LSTM residual", RESID_ENS)):
-        fh, fd = _ensemble_flow(data_dir, dT, dev, noah_detr, ens)
-        dq[label] = (fd - fh)[basins]
-        print(f"  assembled {label}", flush=True)
+    fh, fd = _ensemble_flow(data_dir, dT, dev, ft_detr, HYBRID_ENS)
+    dq["Hybrid"] = (fd - fh)[basins]
+    print("  assembled Hybrid", flush=True)
 
     # order north->south (reuse climatology ordering, restricted to covered)
     from .climatology import _basin_order

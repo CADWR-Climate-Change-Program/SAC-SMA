@@ -3,15 +3,22 @@
 For each of the 15 CDEC basins, on the shared 1915->2018 daily record:
 
 * dynamic features (z-scored on the CAL window): basin area-weighted precip &
-  tavg (``W @ HRU forcing``), the frozen SAC-SMA sim, and sin/cos day-of-year;
+  tavg (``W @ HRU forcing``), Tmin/Tmax, the frozen SAC-SMA sim, and (optional,
+  off for the canonical hybrid) sin/cos day-of-year;
 * the observed gage FNF target (``load_gage``, NaN outside gage coverage);
 * optional per-basin statics (elev, flowlen, cal precip mean, snow fraction);
 * the temporal split at :data:`sacsma.cdec15.CAL_END` and the 365-day-lookback
-  sample index for training / evaluation.
+  sample index for training / evaluation;
+* optionally a TEMPERATURE-PERTURBED copy of the feature tensor (``feat_dt``)
+  for the temperature-consistency loss: tavg/tmin/tmax shifted by
+  ``temp_delta`` in normalized space and the sim channel re-fed from a
+  physics run under the same ``temp_delta`` (the teacher daily-sim CSV).
 
 The frozen physics comes from ``run_basin`` under a REQUIRED, explicitly chosen
 parameter table (a canonical dPL export e.g. ``hamon_dense``/``pt``/``noah``,
-or GA) — cached to CSV so the ~15 basin runs happen once.
+or GA) — cached to CSV so the ~15 basin runs happen once.  A torch-only export
+(seasonal ``noah_ft``) enters through ``sim_cache`` pointing at its
+``daily_sim_*.csv`` dump, which short-circuits ``run_basin`` entirely.
 """
 
 from __future__ import annotations
@@ -63,7 +70,8 @@ def build_frozen_sim(
     ``et_scheme="noah_lite"`` scores a Noah-lite (``canopy_lite``) export through
     the numba Noah-lite core (``sacsma.sma_noah_lite``): PT PET forced, the
     per-HRU ``soil_chi`` read from ``canopy_csv`` (a ``params_canopy.csv``
-    table).  Cached to ``cache`` if given.
+    table).  Cached to ``cache`` if given — an EXISTING ``cache`` is returned
+    verbatim, which is how a torch daily-sim dump becomes the physics baseline.
     """
     if cache is not None and Path(cache).exists():
         return pd.read_csv(cache, parse_dates=["date"]).set_index("date")
@@ -111,18 +119,21 @@ def _check_physics_domain(physics_csv: str | Path, domain_keys: set[str],
 class HybridData:
     """Everything the hybrid trainer/evaluator need, all aligned on ``dates``."""
 
-    variant: str                    # "feature" | "residual"
     dates: pd.DatetimeIndex         # (T,)
-    feat: torch.Tensor              # (B, T, F) z-scored dynamics + sin/cos doy
+    feat: torch.Tensor              # (B, T, F) z-scored dynamics (+ sin/cos doy)
     static: torch.Tensor | None     # (B, S) z-scored, or None
-    obs: torch.Tensor               # (B, T) mm/day, NaN where missing
+    obs: torch.Tensor               # (B, T) mm/day, NaN where missing (= target)
     sim: torch.Tensor               # (B, T) mm/day frozen SAC-SMA
-    target: torch.Tensor            # (B, T) mm/day: obs (feature) or obs-sim (residual)
-    scale: torch.Tensor             # (B,) per-basin cal-window target std (denorm)
+    scale: torch.Tensor             # (B,) per-basin cal-window obs std (denorm)
     is_cal: torch.Tensor            # (T,) bool: date <= CAL_END (scoring split)
     train_bt: torch.Tensor          # (M, 2) [basin, day] training samples
     basins: tuple[str, ...]
     device: torch.device
+    #: temperature-perturbed copy of ``feat`` (tavg/tmin/tmax += dT/sigma, sim
+    #: channel = teacher sim / scale) and the teacher sim itself — present only
+    #: when the temperature-consistency loss is on (``temp_sim_cache``).
+    feat_dt: torch.Tensor | None = None
+    sim_dt: torch.Tensor | None = None
 
     @property
     def n_feat(self) -> int:
@@ -132,12 +143,15 @@ class HybridData:
     def n_static(self) -> int:
         return 0 if self.static is None else self.static.shape[-1]
 
-    def gather_windows(self, b_idx: torch.Tensor, t_idx: torch.Tensor) -> torch.Tensor:
-        """(K,) basin & end-day indices -> (K, SEQ_LEN, F) lookback windows."""
+    def gather_windows(self, b_idx: torch.Tensor, t_idx: torch.Tensor,
+                       feat: torch.Tensor | None = None) -> torch.Tensor:
+        """(K,) basin & end-day indices -> (K, SEQ_LEN, F) lookback windows
+        (from ``feat`` if given — e.g. ``feat_dt`` — else ``self.feat``)."""
+        src = self.feat if feat is None else feat
         rel = torch.arange(-SEQ_LEN + 1, 1, device=self.device)      # (SEQ_LEN,)
         tt = t_idx[:, None] + rel[None, :]                           # (K, SEQ_LEN)
         bb = b_idx[:, None].expand(-1, SEQ_LEN)                      # (K, SEQ_LEN)
-        return self.feat[bb, tt]                                     # (K, SEQ_LEN, F)
+        return src[bb, tt]                                           # (K, SEQ_LEN, F)
 
     def eval_days(self, split: str) -> tuple[torch.Tensor, torch.Tensor]:
         """(basin, day) index of every full-lookback day in cal|val|all."""
@@ -158,7 +172,6 @@ class HybridData:
 def load_hybrid_data(
     data_dir: str = "data",
     *,
-    variant: str = "residual",
     physics_csv: str | Path | None = None,
     sim_cache: str | Path | None = None,
     use_statics: bool = False,
@@ -169,6 +182,8 @@ def load_hybrid_data(
     pt_dewpoint_depression: float = 0.0,
     et_scheme: str = "sac",
     canopy_csv: str | Path | None = None,
+    temp_sim_cache: str | Path | None = None,
+    temp_delta: float = 0.0,
     device: torch.device | str = "cuda",
     dtype: torch.dtype = torch.float32,
 ) -> HybridData:
@@ -219,22 +234,19 @@ def load_hybrid_data(
     cal_hi = int(dates.searchsorted(pd.Timestamp(CAL_END))) + 1
     cal_slc = slice(cal_lo, cal_hi)                         # WY1989..2003 training
 
-    # -- target + per-basin denorm scale (cal-window std) ---------------------
-    # (computed BEFORE the dynamic features so the FEATURE variant can put its
-    #  sim channel on the same per-basin scale as the target — see below.)
-    target = obs.copy() if variant == "feature" else (obs - sim)
-    tw = target[:, cal_slc]
+    # -- per-basin denorm scale (cal-window obs std) ---------------------------
+    # (computed BEFORE the dynamic features so the sim channel can share the
+    #  target's per-basin scale — see below.)
+    tw = obs[:, cal_slc]
     scale = np.array([np.nanstd(tw[i]) for i in range(B)]) + 1e-8
 
     # -- dynamic features -----------------------------------------------------
-    # precip/tavg: pooled z-score (cross-basin forcing comparability).  sac_sim:
-    # pooled z-score for the RESIDUAL variant (there sim is added back as a
-    # physical baseline OUTSIDE the normalization, so its input scaling is free);
-    # but the FEATURE variant must OUTPUT flow, and it can only reproduce the
-    # physics baseline (flow = sim) if the sim channel shares the target's
-    # per-basin scale — otherwise "copy the physics" demands a per-basin
-    # ÷scale[b] the pooled, entity-blind net cannot represent.  So the feature
-    # variant scales sim by the per-basin target std, matching obs/scale[b].
+    # precip/tavg/tmin/tmax: pooled z-score (cross-basin forcing comparability).
+    # sac_sim: the net must OUTPUT flow, and it can only reproduce the physics
+    # baseline (flow = sim) if the sim channel shares the target's per-basin
+    # scale — otherwise "copy the physics" demands a per-basin ÷scale[b] the
+    # pooled, entity-blind net cannot represent.  So sim is scaled by the
+    # per-basin target std, matching obs/scale[b].
     doy = dom.forcing.doy.astype(np.float64)               # (T,)
     sin_doy = np.sin(_OMEGA * doy)
     cos_doy = np.cos(_OMEGA * doy)
@@ -246,19 +258,45 @@ def load_hybrid_data(
     names = (DYNAMIC_FEATURES if use_doy else
              tuple(n for n in DYNAMIC_FEATURES if n not in ("sin_doy", "cos_doy")))
     feat_cols = []
+    sd_pooled: dict[str, float] = {}                       # cal-window pooled sigma
     for name in names:
-        if name == "sac_sim" and variant == "feature":
+        if name == "sac_sim":
             feat_cols.append(sim / scale[:, None])         # per-basin, target-matched
         elif name in dyn:
             a = dyn[name]
             mu = a[:, cal_slc].mean()
             sd = a[:, cal_slc].std() + 1e-8
+            sd_pooled[name] = float(sd)
             feat_cols.append((a - mu) / sd)
         elif name == "sin_doy":
             feat_cols.append(np.broadcast_to(sin_doy, (B, T)))
         elif name == "cos_doy":
             feat_cols.append(np.broadcast_to(cos_doy, (B, T)))
     feat = np.stack(feat_cols, axis=-1)                    # (B, T, F)
+
+    # -- temperature-perturbed copy (temperature-consistency loss) ------------
+    # The exact recipe forcing_sensitivity._hybrid_flow uses for counterfactual
+    # inference, applied at load time: shift the z-scored temperature channels
+    # by temp_delta/sigma and re-feed the sim channel from the TEACHER sim (the
+    # same physics run under temp_delta, dumped by `sacsma dpl evaluate
+    # --temp-delta`).  Precip and statics are unchanged.
+    feat_dt = sim_dt = None
+    if temp_sim_cache is not None:
+        if not Path(temp_sim_cache).exists():
+            raise FileNotFoundError(f"temp_sim_cache {temp_sim_cache} not found "
+                                    "(dump it with `sacsma dpl evaluate "
+                                    "<physics ckpt> --temp-delta <dT>`)")
+        dt_df = pd.read_csv(temp_sim_cache, parse_dates=["date"]).set_index("date")
+        sim_dt = np.vstack([dt_df[b].reindex(dates).to_numpy(np.float64)
+                            for b in basins])
+        if not np.isfinite(sim_dt).all():
+            raise ValueError(f"temp_sim_cache {temp_sim_cache} does not cover "
+                             "the full daily record")
+        idx = {n: i for i, n in enumerate(names)}
+        feat_dt = feat.copy()
+        for n in ("tavg", "tmin", "tmax"):
+            feat_dt[:, :, idx[n]] += temp_delta / sd_pooled[n]
+        feat_dt[:, :, idx["sac_sim"]] = sim_dt / scale[:, None]
 
     # -- training sample index (finite obs, full lookback, cal window) --------
     finite = np.isfinite(obs)
@@ -285,10 +323,12 @@ def load_hybrid_data(
         return torch.as_tensor(a).to(device, dtype)
 
     return HybridData(
-        variant=variant, dates=dates,
+        dates=dates,
         feat=_t(feat), static=static,
-        obs=_t(obs), sim=_t(sim), target=_t(target), scale=_t(scale),
+        obs=_t(obs), sim=_t(sim), scale=_t(scale),
         is_cal=torch.as_tensor(is_cal).to(device),
         train_bt=torch.as_tensor(train_bt, dtype=torch.long).to(device),
         basins=basins, device=device,
+        feat_dt=_t(feat_dt) if feat_dt is not None else None,
+        sim_dt=_t(sim_dt) if sim_dt is not None else None,
     )

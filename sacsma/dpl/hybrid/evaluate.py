@@ -1,10 +1,10 @@
 """Score the hybrid vs the observed gage, apples-to-apples with GA and dPL.
 
-Reconstruct the final daily flow (feature: net output; residual: sim +
-correction, clipped >= 0), split at :data:`sacsma.cdec15.CAL_END`, and run the
-SAME ``_figures._period_stats`` used for GA/dPL -> ``metrics_hybrid_<variant>.csv``
-(identical columns to ``metrics_15cdec.csv``).  ``compare_all`` merges the GA,
-dPL and both hybrid tables into one cal/val KGE comparison + a dumbbell figure.
+Reconstruct the daily flow (net output, clipped >= 0), split at
+:data:`sacsma.cdec15.CAL_END`, and run the SAME ``_figures._period_stats``
+used for GA/dPL -> ``metrics_hybrid.csv`` (identical columns to
+``metrics_15cdec.csv``).  ``compare_all`` merges the GA, dPL and hybrid tables
+into one cal/val KGE comparison + a dumbbell figure.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ from .train import predict_days
 
 
 def _reconstruct(model, data) -> np.ndarray:
-    """(B, T) final hybrid flow (mm/day) at observed days (metrics need only those)."""
+    """(B, T) hybrid flow (mm/day) at observed days (metrics need only those)."""
     bb, tt = data.eval_days("all")
     keep = torch.isfinite(data.obs[bb, tt])          # score only observed days
     bb, tt = bb[keep], tt[keep]
@@ -42,11 +42,19 @@ def _device() -> torch.device:
         return torch.device("cpu")
 
 
+def _check_feature(ck: dict) -> None:
+    """The residual variant was retired 2026-07-16 — its checkpoints are dead."""
+    if ck.get("variant", "feature") != "feature":
+        raise ValueError("residual hybrid checkpoints are retired (dropped "
+                         "2026-07-16); only feature checkpoints can be scored")
+
+
 def _load_data(ck: dict, data_dir: str, dev: torch.device):
-    """Rebuild the HybridData for a checkpoint's physics/variant config."""
+    """Rebuild the HybridData for a checkpoint's physics config."""
+    _check_feature(ck)
     cfg = ck["cfg"]
     return load_hybrid_data(
-        data_dir, variant=ck["variant"],
+        data_dir,
         physics_csv=ck.get("physics_csv"),
         sim_cache=ck.get("sim_cache"),
         use_statics=bool(ck["n_static"]),
@@ -61,7 +69,8 @@ def _load_data(ck: dict, data_dir: str, dev: torch.device):
 
 
 def _build_model(ck: dict, data, dev: torch.device) -> HybridLSTM:
-    model = HybridLSTM(data.n_feat, data.n_static, variant=ck["variant"],
+    _check_feature(ck)
+    model = HybridLSTM(data.n_feat, data.n_static,
                        hidden=ck["cfg"]["hidden"],
                        static_embed=ck["cfg"]["static_embed"],
                        dropout=ck["cfg"]["dropout"]).to(dev)
@@ -69,10 +78,9 @@ def _build_model(ck: dict, data, dev: torch.device) -> HybridLSTM:
     return model
 
 
-def _score_pred(pred: np.ndarray, data, data_dir: str, out: Path,
-                variant: str) -> pd.DataFrame:
+def _score_pred(pred: np.ndarray, data, data_dir: str, out: Path) -> pd.DataFrame:
     """Score a (B, T) daily-flow prediction vs the gage, cal/val split ->
-    ``metrics_hybrid_<variant>.csv`` (identical columns to metrics_15cdec.csv)."""
+    ``metrics_hybrid.csv`` (identical columns to metrics_15cdec.csv)."""
     obs = data.obs.cpu().numpy()
     is_cal = np.asarray(data.dates <= pd.Timestamp(CAL_END))
     try:
@@ -100,7 +108,7 @@ def _score_pred(pred: np.ndarray, data, data_dir: str, out: Path,
               f"VAL KGE={val.get('kge', float('nan')):.3f}", flush=True)
     metrics = pd.DataFrame(rows)
     out.mkdir(parents=True, exist_ok=True)
-    csv = out / f"metrics_hybrid_{variant}.csv"
+    csv = out / "metrics_hybrid.csv"
     metrics.round(4).to_csv(csv, index=False)
     print(f"wrote {csv}  (mean cal {metrics['cal_kge'].mean():.3f} / "
           f"val {metrics['val_kge'].mean():.3f})", flush=True)
@@ -114,7 +122,7 @@ def score_hybrid(ckpt_path: str | Path, *, data_dir: str = "data",
     dev = _device()
     data = _load_data(ck, data_dir, dev)
     pred = _reconstruct(_build_model(ck, data, dev), data)
-    return _score_pred(pred, data, data_dir, out, ck["variant"])
+    return _score_pred(pred, data, data_dir, out)
 
 
 def score_ensemble(ens_dir: str | Path, *, data_dir: str = "data",
@@ -123,9 +131,9 @@ def score_ensemble(ens_dir: str | Path, *, data_dir: str = "data",
 
     Averages the per-seed reconstructed flow (mean of member flows — the
     canonical "keep full ensemble, use mean" convention) then scores it vs the
-    gage exactly like :func:`score_hybrid` -> ``metrics_hybrid_<variant>.csv``
-    at ``ens_dir``.  ``seed*/checkpoints/best.pt`` are the members; data is
-    loaded once (every seed shares the physics/variant/domain config)."""
+    gage exactly like :func:`score_hybrid` -> ``metrics_hybrid.csv`` at
+    ``ens_dir``.  ``seed*/checkpoints/best.pt`` are the members; data is
+    loaded once (every seed shares the physics/domain config)."""
     ens = Path(ens_dir)
     ckpts = sorted(ens.glob("seed*/checkpoints/best.pt"))
     if not ckpts:
@@ -141,26 +149,22 @@ def score_ensemble(ens_dir: str | Path, *, data_dir: str = "data",
     # every member shares the identical observed-day mask (same data.obs), so a
     # plain mean equals the per-cell nanmean without the all-NaN empty-slice warning
     pred = np.stack(preds, 0).mean(axis=0)
-    print(f"ensemble {ens.name}: mean of {len(ckpts)} members "
-          f"({ck0['variant']})", flush=True)
-    return _score_pred(pred, data, data_dir, out, ck0["variant"])
+    print(f"ensemble {ens.name}: mean of {len(ckpts)} members", flush=True)
+    return _score_pred(pred, data, data_dir, out)
 
 
 def compare_all(out_dir: str | Path = "artifacts/dpl",
                 *, ga_csv: str | Path = "artifacts/cdec15/metrics_15cdec.csv",
                 dpl_csv: str | Path =
                 "artifacts/dpl/hamon_dense/metrics_hamon_dense.csv",
-                feat_csv: str | Path =
-                "artifacts/dpl/noah_lstm_feat/metrics_hybrid_feature.csv",
-                resid_csv: str | Path =
-                "artifacts/dpl/noah_lstm_resid/metrics_hybrid_residual.csv",
+                hybrid_csv: str | Path =
+                "artifacts/dpl/hybrid/metrics_hybrid.csv",
                 ) -> pd.DataFrame:
-    """Merge GA / dPL / Noah-LSTM feature+residual ensemble cal+val KGE + dumbbell."""
+    """Merge GA / dPL / hybrid-ensemble cal+val KGE + a dumbbell figure."""
     out = Path(out_dir)
     frames = {}
     for name, path in [("GA", ga_csv), ("dPL", dpl_csv),
-                       ("noah_lstm_feat", feat_csv),
-                       ("noah_lstm_resid", resid_csv)]:
+                       ("hybrid", hybrid_csv)]:
         p = Path(path)
         if p.exists():
             d = pd.read_csv(p)[["basin", "cal_kge", "val_kge"]]
@@ -186,8 +190,7 @@ def _dumbbell(merged: pd.DataFrame, path: str | Path) -> None:
 
     cols = [c for c in merged.columns if c.endswith("_val")]
     labels = [c[:-4] for c in cols]
-    colors = {"GA": "#888888", "dPL": "#1f77b4",
-              "noah_lstm_feat": "#ff7f0e", "noah_lstm_resid": "#2ca02c"}
+    colors = {"GA": "#888888", "dPL": "#1f77b4", "hybrid": "#ff7f0e"}
     y = np.arange(len(merged))
     fig, ax = plt.subplots(figsize=(6.5, 0.32 * len(merged) + 1))
     for c, lab in zip(cols, labels, strict=True):

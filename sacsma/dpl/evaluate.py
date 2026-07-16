@@ -276,22 +276,14 @@ def _pipeline_storage(st) -> torch.Tensor:
     return s
 
 
-def score_noah_torch(net: torch.nn.Module, x: torch.Tensor, dom: DomainTensors,
-                     cfg: DplConfig, *, data_dir: str = "data",
-                     out_dir: str | Path = "artifacts/dpl/noah_grid",
-                     label: str = "dpl_noah", temp_delta: float = 0.0,
-                     chunk_days: int = 4096, cal_end: str = CAL_END) -> pd.DataFrame:
-    """Score a Noah-ET net through the TORCH pipeline (Noah is NEW physics — NOT
-    scorable via ``run_basin``).  Streams the full record with ``et_mode='noah'``
-    + per-cell tmin/tmax, aggregates ``dom.W @ flow`` to the outlet, and scores
-    cal/val KGE vs the gage (same columns as ``score_frozen``).  Also reports
-    the per-basin ET partition and a per-HRU water-balance closure.  ``temp_delta``
-    adds ΔT to tavg/tmin/tmax (a one-knob warming-projection run)."""
-    from .._figures import _period_stats, folsom_before_yuba, skill_summary_fig
-    from ..io import load_basin_area, load_hru_table, mmday_to_cfs
-
-    out = Path(out_dir)
-    (out / "figures").mkdir(parents=True, exist_ok=True)
+def _noah_stream(net: torch.nn.Module, x: torch.Tensor, dom: DomainTensors,
+                 cfg: DplConfig, *, temp_delta: float | np.ndarray = 0.0,
+                 chunk_days: int = 4096) -> dict:
+    """Stream the full record through the torch Noah pipeline -> the basin daily
+    flow (``sim``, (B, T) ndarray mm/day) + per-HRU ET sums + water-balance
+    closure.  ``temp_delta`` adds to tavg/tmin/tmax: a scalar degC (warming
+    projection), or a per-forcing-row ``(rows, T)`` array (e.g. the WGEN
+    detrending field) gathered to HRU rows via ``dom.cell_idx``."""
     net.eval()
     with torch.no_grad():
         o = net(x)
@@ -306,13 +298,22 @@ def score_noah_torch(net: torch.nn.Module, x: torch.Tensor, dom: DomainTensors,
     sum_pr = torch.zeros(n, device=dom.device, dtype=dom.dtype)
     sum_fl = torch.zeros(n, device=dom.device, dtype=dom.dtype)
     sum_et = torch.zeros(n, device=dom.device, dtype=dom.dtype)
+    dt_field = None
+    if not isinstance(temp_delta, (int, float)):
+        dt_field = torch.as_tensor(np.ascontiguousarray(
+            np.asarray(temp_delta)[dom.cell_idx])).to(dom.device, dom.dtype)
     with torch.no_grad():
         t0 = 0
         while t0 < tt:
             t1 = min(t0 + chunk_days, tt)
             pr, ta, doy, leap = dom.chunk(t0, t1)
             tn, tx = dom.chunk_tmm(t0, t1)
-            if temp_delta:                      # warming perturbation on all temps
+            if dt_field is not None:            # per-cell temperature field
+                d = dt_field[:, t0:t1]
+                ta = ta + d
+                if tn is not None:
+                    tn, tx = tn + d, tx + d
+            elif temp_delta:                    # scalar warming perturbation
                 ta = ta + temp_delta
                 if tn is not None:
                     tn, tx = tn + temp_delta, tx + temp_delta
@@ -332,14 +333,38 @@ def score_noah_torch(net: torch.nn.Module, x: torch.Tensor, dom: DomainTensors,
             sum_fl += flow.sum(1)
             sum_et += tet.sum(1)
             t0 = t1
-    sim = basin.double().cpu().numpy()
 
     # per-HRU water-balance closure: Σprcp ≈ Σflow + Σtet + ΔS (the routing-tail
     # residual is the only expected slack over the full record)
     dS = _pipeline_storage(state) - _pipeline_storage(st0)
     resid = (sum_pr - sum_fl - sum_et - dS).abs()
     closure_rel = float((resid / sum_pr.clamp_min(1e-6)).max())
-    years = tt / 365.25
+    return dict(sim=basin.double().cpu().numpy(), sum_et=sum_et,
+                closure_rel=closure_rel)
+
+
+def score_noah_torch(net: torch.nn.Module, x: torch.Tensor, dom: DomainTensors,
+                     cfg: DplConfig, *, data_dir: str = "data",
+                     out_dir: str | Path = "artifacts/dpl/noah_grid",
+                     label: str = "dpl_noah", temp_delta: float = 0.0,
+                     chunk_days: int = 4096, cal_end: str = CAL_END) -> pd.DataFrame:
+    """Score a Noah-ET net through the TORCH pipeline (Noah is NEW physics — NOT
+    scorable via ``run_basin``).  Streams the full record with ``et_mode='noah'``
+    + per-cell tmin/tmax, aggregates ``dom.W @ flow`` to the outlet, and scores
+    cal/val KGE vs the gage (same columns as ``score_frozen``).  Also reports
+    the per-basin ET partition and a per-HRU water-balance closure.  ``temp_delta``
+    adds ΔT to tavg/tmin/tmax (a one-knob warming-projection run)."""
+    from .._figures import _period_stats, folsom_before_yuba, skill_summary_fig
+    from ..io import load_basin_area, load_hru_table, mmday_to_cfs
+
+    out = Path(out_dir)
+    (out / "figures").mkdir(parents=True, exist_ok=True)
+    res = _noah_stream(net, x, dom, cfg, temp_delta=temp_delta,
+                       chunk_days=chunk_days)
+    sim = res["sim"]
+    closure_rel = res["closure_rel"]
+    sum_et = res["sum_et"]
+    years = dom.n_time / 365.25
 
     hru = load_hru_table(data_dir, domain="15cdec")
     basins = folsom_before_yuba(
@@ -379,7 +404,8 @@ def score_noah_torch(net: torch.nn.Module, x: torch.Tensor, dom: DomainTensors,
               f"ET={et_mmyr[i]:.0f}mm/yr", flush=True)
 
     metrics = pd.DataFrame(rows)
-    skill_summary_fig(metrics, out / "figures" / "skill_summary.png")
+    if not temp_delta:      # a perturbed run must not clobber the run's figure
+        skill_summary_fig(metrics, out / "figures" / "skill_summary.png")
     lab = label if not temp_delta else f"{label}_plus{temp_delta:g}C"
     csv = out / f"metrics_{lab}.csv"
     metrics.round(4).to_csv(csv, index=False)
@@ -457,15 +483,17 @@ def score_sac_torch(net: torch.nn.Module, x: torch.Tensor, dom: DomainTensors,
     return metrics
 
 
-def evaluate_checkpoint(
+def load_net_from_checkpoint(
     ckpt_path: str | Path,
     data_dir: str = "data",
-    out_dir: str | Path | None = None,
     *,
-    parallel: bool = True,
-    label: str | None = None,
-) -> pd.DataFrame:
-    """best.pt -> params_dpl.csv -> frozen-model metrics (the full Phase-4 path)."""
+    device: torch.device | str | None = None,
+) -> tuple[torch.nn.Module, torch.Tensor, DomainTensors, DplConfig, dict]:
+    """Rebuild ``(net, x, dom, cfg, ck)`` from a training checkpoint — the
+    shared front half of :func:`evaluate_checkpoint` (feature rebuild +
+    ParameterNet restore).  ``device=None`` -> cuda if available, else cpu."""
+    import dataclasses as _dc
+
     import numpy as _np
 
     from ..io import soilveg_path
@@ -479,41 +507,20 @@ def evaluate_checkpoint(
     # rebuild the training config tolerantly: checkpoints persist the cfg dict
     # verbatim, so fields REMOVED in later schema versions (e.g. the retired
     # et_loss_sigma_floor) must be dropped, not crash the scoring.
-    import dataclasses as _dc
     known = {f.name for f in _dc.fields(DplConfig)}
     dropped = sorted(set(ck["cfg"]) - known)
     if dropped:
         print(f"note: dropping retired cfg keys from checkpoint: {dropped}",
               flush=True)
     cfg = DplConfig(**{k: v for k, v in ck["cfg"].items() if k in known})
-    canopy = nc.get("canopy", False)
     dyn = tuple(nc.get("dynamic_params", ()))
-    # canopy (Noah ET) and dynamic (time-varying) params are torch-only; a
-    # STATIC checkpoint — Hamon OR Priestley-Taylor — scores through the fast
-    # numba run_basin (PT via sacsma.pet_pt, verified vs the torch pipeline).
-    torch_score = canopy or bool(dyn)
-    if out_dir is not None:
-        out = Path(out_dir)
-    else:
-        # default NEXT TO the checkpoint (<run>/checkpoints/x.pt -> <run>/).
-        # The old artifacts/dpl/<variant> fallback silently CLOBBERED whatever
-        # unrelated run shared the variant name (it overwrote the hamon
-        # `physical` arm's outputs on 2026-07-15); it remains only for a bare
-        # checkpoint outside the standard run layout.
-        ckp = Path(ckpt_path).resolve()
-        out = (ckp.parent.parent if ckp.parent.name == "checkpoints"
-               else Path(f"artifacts/dpl/{variant}"))
-        if label is None and ckp.parent.name == "checkpoints":
-            label = out.name       # metrics_<run>.csv, not metrics_dpl_<variant>
-    out.mkdir(parents=True, exist_ok=True)
-
-    if torch_score:
+    if device is None:
         try:
             dev = pick_device("cuda")
         except RuntimeError:
             dev = torch.device("cpu")
     else:
-        dev = torch.device("cpu")
+        dev = torch.device(device)
     dom = load_domain_tensors(data_dir, domain=domain, device=dev,
                               dtype=torch.float64,
                               dynamic_window=(nc.get("dynamic_window", 365)
@@ -539,13 +546,88 @@ def evaluate_checkpoint(
                        seasonal_params=tuple(nc.get("seasonal_params", ())),
                        seasonal_amp=nc.get("seasonal_amp", 0.18),
                        seasonal_amp_frac=nc.get("seasonal_amp_frac", 0.10),
-                       canopy=canopy,
+                       canopy=nc.get("canopy", False),
                        canopy_separate_trunk=nc.get("canopy_separate_trunk", True),
                        canopy_lite=nc.get("canopy_lite", False),
                        dynamic_params=dyn,
                        dynamic_amp=nc.get("dynamic_amp", 0.5),
                        ).to(dev, torch.float64)
     net.load_state_dict(ck["net"])   # restores baked neighbor buffers too
+    return net, x, dom, cfg, ck
+
+
+def noah_torch_daily(ckpt_path: str | Path, *, data_dir: str = "data",
+                     temp_delta: float | np.ndarray = 0.0,
+                     chunk_days: int = 4096,
+                     device: torch.device | str | None = None) -> pd.DataFrame:
+    """Daily basin flow (date x basin, mm/day) from a torch-scored Noah
+    checkpoint, optionally under a temperature perturbation: a scalar degC, or
+    a per-forcing-row ``(rows, T)`` field (e.g. the WGEN detrending delta).
+    Pure compute — writes nothing; the forcing-sensitivity counterfactual
+    runner for torch-only exports (seasonal ``noah_ft``)."""
+    net, x, dom, cfg, ck = load_net_from_checkpoint(ckpt_path, data_dir,
+                                                    device=device)
+    if not ck.get("net_config", {}).get("canopy", False):
+        raise ValueError("noah_torch_daily needs a Noah (canopy) checkpoint")
+    res = _noah_stream(net, x, dom, cfg, temp_delta=temp_delta,
+                       chunk_days=chunk_days)
+    df = pd.DataFrame(res["sim"].T, index=dom.dates, columns=list(dom.basins))
+    df.index.name = "date"
+    return df
+
+
+def evaluate_checkpoint(
+    ckpt_path: str | Path,
+    data_dir: str = "data",
+    out_dir: str | Path | None = None,
+    *,
+    parallel: bool = True,
+    label: str | None = None,
+    temp_delta: float = 0.0,
+) -> pd.DataFrame:
+    """best.pt -> params_dpl.csv -> frozen-model metrics (the full Phase-4 path).
+
+    ``temp_delta`` != 0 re-runs the TORCH scorer with tavg/tmin/tmax + delta and
+    dumps the perturbed daily sim (label suffixed ``_plus<delta>C``) — the
+    teacher for the hybrid temperature-consistency loss.  Torch-scored
+    checkpoints only (seasonal/canopy/dynamic)."""
+    ck = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+    variant = ck["variant"]
+    domain = ck.get("domain", "15cdec")
+    nc = ck.get("net_config", {})
+    canopy = nc.get("canopy", False)
+    dyn = tuple(nc.get("dynamic_params", ()))
+    # canopy (Noah ET) and dynamic (time-varying) params are torch-only; a
+    # STATIC checkpoint — Hamon OR Priestley-Taylor — scores through the fast
+    # numba run_basin (PT via sacsma.pet_pt, verified vs the torch pipeline).
+    torch_score = canopy or bool(dyn)
+    if temp_delta and not canopy:
+        raise ValueError("--temp-delta teacher dumps run through the torch Noah "
+                         "scorer only (canopy checkpoints)")
+    if out_dir is not None:
+        out = Path(out_dir)
+    else:
+        # default NEXT TO the checkpoint (<run>/checkpoints/x.pt -> <run>/).
+        # The old artifacts/dpl/<variant> fallback silently CLOBBERED whatever
+        # unrelated run shared the variant name (it overwrote the hamon
+        # `physical` arm's outputs on 2026-07-15); it remains only for a bare
+        # checkpoint outside the standard run layout.
+        ckp = Path(ckpt_path).resolve()
+        out = (ckp.parent.parent if ckp.parent.name == "checkpoints"
+               else Path(f"artifacts/dpl/{variant}"))
+        if label is None and ckp.parent.name == "checkpoints":
+            label = out.name       # metrics_<run>.csv, not metrics_dpl_<variant>
+    out.mkdir(parents=True, exist_ok=True)
+
+    if torch_score:
+        try:
+            dev = pick_device("cuda")
+        except RuntimeError:
+            dev = torch.device("cpu")
+    else:
+        dev = torch.device("cpu")
+    net, x, dom, cfg, ck = load_net_from_checkpoint(ckpt_path, data_dir,
+                                                    device=dev)
 
     if canopy:   # Noah ET — a SEPARATE canopy-param table (kept OUT of ga_optimum)
         ccsv = out / "params_canopy.csv"
@@ -562,7 +644,8 @@ def evaluate_checkpoint(
         print(f"wrote {pcsv} ({len(dpl_df)} HRU rows, cal KGE at selection "
               f"{ck.get('cal_kge', float('nan')):.4f})", flush=True)
         lite = nc.get("canopy_lite", False)
-        if lite and cfg.noah_pet == "priestley_taylor" and not cfg.seasonal_params:
+        if (lite and cfg.noah_pet == "priestley_taylor"
+                and not cfg.seasonal_params and not temp_delta):
             # canonical Noah-lite: score through the fast frozen numba core
             # (sma_noah_lite), verified bit-exact vs the torch pipeline — the
             # SAME frozen-numerics footing as the Hamon/PT exports.  A SEASONAL
@@ -584,6 +667,7 @@ def evaluate_checkpoint(
         # full Noah ET (7-param Jarvis) or Hamon-potential lite: NO frozen core
         # -> the torch pipeline reports skill (mass-balance validated).
         return score_noah_torch(net, x, dom, cfg, data_dir=data_dir, out_dir=out,
+                                temp_delta=temp_delta,
                                 label=label if label is not None
                                 else f"dpl_{variant}_noah")
 

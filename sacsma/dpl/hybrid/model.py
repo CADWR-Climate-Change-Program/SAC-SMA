@@ -1,9 +1,11 @@
 """The hybrid LSTM (ported from neuralhyd-ca ``SingleLSTM``).
 
 Entity-aware, many-to-one: a 365-day window of [basin forcing + SAC-SMA sim
-(+ static embedding)] -> the final hidden state -> a small MLP head.  The head
-is the only variant-dependent piece: ``feature`` predicts streamflow directly
-(Softplus, >= 0); ``residual`` predicts the signed SAC-SMA error (linear).
+(+ static embedding)] -> the final hidden state -> a small MLP head ->
+streamflow (Softplus, >= 0).  The physics sim enters ONLY as an input channel
+(the retired "residual" variant, which predicted an additive correction on the
+sim, re-injected regime-conditional volume bias on every baseline and was
+dropped 2026-07-16 — see RUNS.md).
 
 The net emits a NORMALIZED prediction (the trainer scales the target by each
 basin's cal-window std); denormalization back to mm/day lives in the trainer/
@@ -18,12 +20,9 @@ import torch.nn as nn
 
 class HybridLSTM(nn.Module):
     def __init__(self, n_dynamic: int, n_static: int = 0, *,
-                 variant: str = "residual", hidden: int = 128,
-                 static_embed: int = 16, dropout: float = 0.15):
+                 hidden: int = 128, static_embed: int = 16,
+                 dropout: float = 0.15):
         super().__init__()
-        if variant not in ("feature", "residual"):
-            raise ValueError(f"variant {variant!r}")
-        self.variant = variant
         self.n_static = n_static
         if n_static > 0:
             self.static_encoder = nn.Sequential(
@@ -36,10 +35,10 @@ class HybridLSTM(nn.Module):
             in_size = n_dynamic
         self.lstm = nn.LSTM(in_size, hidden, batch_first=True)
         self.dropout = nn.Dropout(dropout)
-        head: list[nn.Module] = [nn.Linear(hidden, 32), nn.ReLU(), nn.Linear(32, 1)]
-        if variant == "feature":
-            head.append(nn.Softplus())        # streamflow is non-negative
-        self.head = nn.Sequential(*head)
+        self.head = nn.Sequential(
+            nn.Linear(hidden, 32), nn.ReLU(), nn.Linear(32, 1),
+            nn.Softplus(),                     # streamflow is non-negative
+        )
 
     def forward(self, x_dyn: torch.Tensor,
                 x_static: torch.Tensor | None = None) -> torch.Tensor:

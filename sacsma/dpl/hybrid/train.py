@@ -1,11 +1,20 @@
 """Train the hybrid LSTM: MSE-family loss, cal-KGE selection (no val leakage).
 
 The target is per-basin std-normalized (so basins weigh comparably — the NNSE
-spirit), the loss is plain MSE in that space (+ an optional low-flow log term
-for the feature variant).  KGE is used ONLY as the no-grad selection metric,
-pooled over the CAL window (WY1989-2003); validation (WY2004-2018) is never
-read during training or selection.  Denormalization back to mm/day and, for the
-residual variant, the ``sim + correction`` reconstruction happen here.
+spirit), the loss is plain MSE in that space (+ an optional low-flow log term,
++ the optional TEMPERATURE-CONSISTENCY term below).  KGE is used ONLY as the
+no-grad selection metric, pooled over the CAL window (WY1989-2003); validation
+(WY2004-2018) is never read during training or selection.  Denormalization
+back to mm/day happens here.
+
+Temperature-consistency loss (``temp_lambda``): every batch is forwarded a
+second time on the temperature-perturbed feature copy (``HybridData.feat_dt``:
+tavg/tmin/tmax + temp_delta, sim channel from the physics run under the same
+delta) and the hybrid's daily response ``pred_dt - pred`` is pulled toward the
+physics response ``(sim_dt - sim)/scale`` by MSE.  The LSTM keeps its
+within-climate skill but inherits the physics' climate sensitivity — the
+counter to the regime-conditional volume bias cal-only training injects under
+a shifted validation climate.
 """
 
 from __future__ import annotations
@@ -25,7 +34,6 @@ from .model import HybridLSTM
 
 @dataclass
 class HybridConfig:
-    variant: str = "residual"        # "feature" | "residual"
     hidden: int = 128
     static_embed: int = 16
     dropout: float = 0.15
@@ -35,19 +43,20 @@ class HybridConfig:
     #: blocks the doy-conditioned mean corrections that injected val-period
     #: volume bias at the basins the physics already had right (NML/MRC/ORO).
     use_doy: bool = True
-    #: residual variant only: penalty on the per-batch PER-BASIN mean of the
-    #: normalized residual, lambda * mean_b(m_b^2) over basins with >= 8
-    #: samples in the batch.  Zero-anchored: the physics owns volume, the LSTM
-    #: owns timing (it will fight legitimate bias correction at physics-biased
-    #: basins — acceptable because the physics fine-tune / P-Q anchor owns
-    #: that job).  0 disables.
-    resid_mean_lambda: float = 0.0
     physics_domain: str = "15cdec"   # HRU resolution of the frozen sim + forcing
     pet_source: str = "hamon"        # "hamon" | "priestley_taylor" (match --physics)
     pt_snow_albedo: float = 0.0      # PT snow-albedo refinement (pt = 0.6)
     pt_dewpoint_depression: float = 0.0   # PT dewpoint refinement (pt = 2.0)
     physics_et_scheme: str = "sac"   # "sac" | "noah_lite" (Noah-lite external ET)
     canopy_csv: str = ""             # params_canopy.csv (soil_chi) for noah_lite
+    #: temperature-consistency loss weight; 0 disables (no second forward).
+    temp_lambda: float = 0.0
+    #: the perturbation (degC) baked into ``temp_sim_cache`` — must match the
+    #: --temp-delta the teacher sim was dumped with.
+    temp_delta: float = 2.0
+    #: teacher daily-sim CSV: the SAME physics as the sim channel, re-run with
+    #: tavg/tmin/tmax + temp_delta (`sacsma dpl evaluate <ckpt> --temp-delta`).
+    temp_sim_cache: str = ""
     lr: float = 4e-4
     weight_decay: float = 1e-4
     grad_clip: float = 1.0
@@ -56,20 +65,22 @@ class HybridConfig:
     lr_min: float = 1e-5
     batch_size: int = 512
     input_noise: float = 0.1         # gaussian input jitter (regularizer)
-    log_lambda: float = 0.15         # low-flow term (feature variant only)
+    log_lambda: float = 0.15         # low-flow log-space term
     log_eps: float = 0.01
     eval_every: int = 2
     patience: int = 12
     seed: int = 0
     device: str = "cuda"
 
+    def __post_init__(self):
+        if self.temp_lambda > 0 and not self.temp_sim_cache:
+            raise ValueError("temp_lambda > 0 requires temp_sim_cache "
+                             "(the physics daily sim under temp_delta)")
 
-def _denorm_flow(pred_norm, data, bb, tt):
-    """Normalized net output -> physical mm/day flow (per variant)."""
-    flow = pred_norm * data.scale[bb]
-    if data.variant == "residual":
-        flow = data.sim[bb, tt] + flow
-    return flow
+
+def _denorm_flow(pred_norm, data, bb):
+    """Normalized net output -> physical mm/day flow."""
+    return pred_norm * data.scale[bb]
 
 
 @torch.no_grad()
@@ -81,12 +92,12 @@ def predict_days(model, data, bb, tt, batch: int = 4096):
         t = tt[i:i + batch]
         st = data.static[b] if data.static is not None else None
         out[i:i + batch] = _denorm_flow(model(data.gather_windows(b, t), st),
-                                        data, b, t)
+                                        data, b)
     return out
 
 
 def pooled_kge(model, data, split: str) -> tuple[float, list[float]]:
-    """Mean per-basin KGE of the reconstructed flow over ``split`` days."""
+    """Mean per-basin KGE of the predicted flow over ``split`` days."""
     bb, tt = data.eval_days(split)
     flow = predict_days(model, data, bb, tt).cpu().numpy()
     obs = data.obs[bb, tt].cpu().numpy()
@@ -115,7 +126,7 @@ def train_hybrid(cfg: HybridConfig, *, data_dir: str = "data",
             tag += f"_{cfg.physics_et_scheme}"
         sim_cache = out.parent / f"{tag}.csv"
 
-    data = load_hybrid_data(data_dir, variant=cfg.variant, physics_csv=physics_csv,
+    data = load_hybrid_data(data_dir, physics_csv=physics_csv,
                             sim_cache=sim_cache, use_statics=cfg.use_statics,
                             use_doy=cfg.use_doy,
                             domain=cfg.physics_domain, pet_source=cfg.pet_source,
@@ -123,8 +134,11 @@ def train_hybrid(cfg: HybridConfig, *, data_dir: str = "data",
                             pt_dewpoint_depression=cfg.pt_dewpoint_depression,
                             et_scheme=cfg.physics_et_scheme,
                             canopy_csv=cfg.canopy_csv or None,
+                            temp_sim_cache=(cfg.temp_sim_cache or None)
+                            if cfg.temp_lambda > 0 else None,
+                            temp_delta=cfg.temp_delta,
                             device=dev)
-    model = HybridLSTM(data.n_feat, data.n_static, variant=cfg.variant,
+    model = HybridLSTM(data.n_feat, data.n_static,
                        hidden=cfg.hidden, static_embed=cfg.static_embed,
                        dropout=cfg.dropout).to(dev)
     opt = torch.optim.AdamW(model.parameters(), lr=cfg.lr,
@@ -138,8 +152,10 @@ def train_hybrid(cfg: HybridConfig, *, data_dir: str = "data",
 
     bt = data.train_bt
     m = len(bt)
-    print(f"hybrid[{cfg.variant}]: {len(data.basins)} basins, {data.n_feat} dyn "
-          f"+ {data.n_static} static feats, {m} cal samples on {dev}", flush=True)
+    print(f"hybrid: {len(data.basins)} basins, {data.n_feat} dyn "
+          f"+ {data.n_static} static feats, {m} cal samples on {dev}"
+          + (f", temp loss dT={cfg.temp_delta:+.1f} lambda={cfg.temp_lambda}"
+             if cfg.temp_lambda > 0 else ""), flush=True)
 
     best = -1e9
     best_state = None
@@ -156,29 +172,31 @@ def train_hybrid(cfg: HybridConfig, *, data_dir: str = "data",
             b = bt[idx, 0]
             t = bt[idx, 1]
             x = data.gather_windows(b, t)
-            if cfg.input_noise > 0:
-                x = x + cfg.input_noise * torch.randn_like(x)
+            noise = (cfg.input_noise * torch.randn_like(x)
+                     if cfg.input_noise > 0 else None)
+            if noise is not None:
+                x = x + noise
             st = data.static[b] if data.static is not None else None
             pred = model(x, st)
-            targ = data.target[b, t] / data.scale[b]
+            targ = data.obs[b, t] / data.scale[b]
             loss = ((pred - targ) ** 2).mean()
-            if cfg.variant == "feature" and cfg.log_lambda > 0:
+            if cfg.log_lambda > 0:
                 flow = (pred * data.scale[b]).clamp_min(0.0)
                 o = data.obs[b, t]
                 loss = loss + cfg.log_lambda * (
                     (torch.log(flow + cfg.log_eps)
                      - torch.log(o + cfg.log_eps)) ** 2).mean()
-            if cfg.variant == "residual" and cfg.resid_mean_lambda > 0:
-                nb_b = len(data.basins)
-                ones = torch.ones_like(pred)
-                cnt = torch.zeros(nb_b, device=pred.device,
-                                  dtype=pred.dtype).index_add_(0, b, ones)
-                s = torch.zeros(nb_b, device=pred.device,
-                                dtype=pred.dtype).index_add_(0, b, pred)
-                m_b = s / cnt.clamp_min(1.0)                 # per-basin batch mean
-                w = (cnt >= 8).to(pred.dtype)                # skip thin basins
-                loss = loss + cfg.resid_mean_lambda * (
-                    (w * m_b ** 2).sum() / w.sum().clamp_min(1.0))
+            if cfg.temp_lambda > 0:
+                # second forward on the perturbed copy, SAME noise (so the
+                # delta is not noise-dominated); anchor the hybrid's daily
+                # response to the physics response, per-basin normalized.
+                x_dt = data.gather_windows(b, t, feat=data.feat_dt)
+                if noise is not None:
+                    x_dt = x_dt + noise
+                pred_dt = model(x_dt, st)
+                d_phys = (data.sim_dt[b, t] - data.sim[b, t]) / data.scale[b]
+                loss = loss + cfg.temp_lambda * (
+                    ((pred_dt - pred) - d_phys) ** 2).mean()
             opt.zero_grad(set_to_none=True)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
@@ -208,7 +226,7 @@ def train_hybrid(cfg: HybridConfig, *, data_dir: str = "data",
 
     if best_state is not None:
         model.load_state_dict(best_state)
-    ckpt = {"model": model.state_dict(), "cfg": asdict(cfg), "variant": cfg.variant,
+    ckpt = {"model": model.state_dict(), "cfg": asdict(cfg),
             "physics_csv": str(physics_csv) if physics_csv else None,
             "sim_cache": str(sim_cache), "n_feat": data.n_feat,
             "n_static": data.n_static, "best_cal_kge": best}
@@ -217,5 +235,5 @@ def train_hybrid(cfg: HybridConfig, *, data_dir: str = "data",
     pd_log = np.array(log_rows)
     np.savetxt(out / "train_log.csv", pd_log,
                header="epoch,loss,cal_kge,lr,epoch_s", delimiter=",", comments="")
-    print(f"hybrid[{cfg.variant}]: best cal KGE {best:.4f} -> {out}", flush=True)
+    print(f"hybrid: best cal KGE {best:.4f} -> {out}", flush=True)
     return ckpt

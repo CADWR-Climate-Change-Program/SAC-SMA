@@ -17,10 +17,13 @@ step against CalSim3 FNF:
   b  dPL hamon_dense       vs  dPL hamon                  (fine HRU -> grid+footprint)
   c  dPL hamon             vs  dPL pt                     (Hamon -> Priestley-Taylor)
   d  dPL pt                vs  dPL noah                   (PT cascade -> Noah-lite ET)
-  e  dPL noah vs Noah-LSTM residual / feature            (the LSTM correction)
+  e  dPL noah -> dPL noah_ft -> Hybrid   (seasonal-melt fine-tune, then the LSTM)
 
-The two Noah-LSTM series are the CANONICAL seed ENSEMBLES (mean of member daily
-flows), both on the Noah-lite physics baseline.
+``dPL noah_ft`` (the obs-steered seasonal-melt fine-tune) is TORCH-only — the
+frozen ``run_basin`` cannot reconstruct its seasonal MFMAX/MFMIN/MBASE — so it
+enters through its canonical ``daily_sim_noah_ft.csv`` dump (``TORCH_SIM``).
+``Hybrid`` is the CANONICAL seed ENSEMBLE (mean of member daily flows) on the
+noah_ft physics baseline.
 Output: ``artifacts/calsim/compare/figures/cdec15_climatology_{a..e}.png``.
 
 A dPL-side artifact (needs torch for the hybrids) that reads the lightweight
@@ -58,12 +61,16 @@ FROZEN: dict[str, dict] = {
                               et_scheme="noah_lite",
                               canopy_csv="artifacts/dpl/noah/params_canopy.csv"),
 }
+#: torch-only sims: label -> canonical daily-sim CSV (the frozen run_basin
+#: cannot reconstruct these — seasonal snow params live only in the torch net).
+TORCH_SIM: dict[str, str] = {
+    "dPL noah_ft": "artifacts/dpl/noah_ft/daily_sim_noah_ft.csv",
+}
 #: hybrid sims: label -> canonical ENSEMBLE dir (seed*/checkpoints/best.pt
-#: averaged; physics settings read from the member ckpt cfg).  Both sit on the
-#: Noah-lite physics baseline.
+#: averaged; physics settings read from the member ckpt cfg).  The canonical
+#: hybrid sits on the noah_ft physics baseline (sim channel = its daily dump).
 HYBRID: dict[str, str] = {
-    "Noah-LSTM residual": "artifacts/dpl/noah_lstm_resid",
-    "Noah-LSTM feature":  "artifacts/dpl/noah_lstm_feat",
+    "Hybrid": "artifacts/dpl/hybrid",
 }
 
 #: per-series line style (identity by hue; CalSim3 FNF emphasized in black).
@@ -75,8 +82,8 @@ STYLE: dict[str, dict] = {
     "dPL hamon":          dict(color="#1f77b4", lw=1.9),
     "dPL pt":             dict(color="#ff7f0e", lw=1.9),
     "dPL noah":           dict(color="#bcbd22", lw=2.0),
-    "Noah-LSTM residual": dict(color="#2ca02c", lw=2.1),
-    "Noah-LSTM feature":  dict(color="#9467bd", lw=2.1),
+    "dPL noah_ft":        dict(color="#d62728", lw=2.0),
+    "Hybrid":             dict(color="#9467bd", lw=2.1),
 }
 
 #: (tag, subtitle, [model labels]) -- each renders one 11-basin figure.
@@ -89,8 +96,8 @@ COMPARISONS: list[tuple[str, str, list[str]]] = [
         ["dPL hamon", "dPL pt"]),
     ("d", "canopy ET: PT cascade → Noah-lite external ET",
         ["dPL pt", "dPL noah"]),
-    ("e", "LSTM correction on Noah-lite physics: residual + feature ensembles",
-        ["dPL noah", "Noah-LSTM residual", "Noah-LSTM feature"]),
+    ("e", "seasonal-melt fine-tune, then the LSTM: noah → noah_ft → Hybrid",
+        ["dPL noah", "dPL noah_ft", "Hybrid"]),
 ]
 
 
@@ -122,9 +129,11 @@ def _daily_ensemble(ens_dir: str, data_dir: str, device, cache: Path) -> pd.Data
     if not ckpts:
         raise FileNotFoundError(f"no seed*/checkpoints/best.pt under {ens_dir}")
     ck0 = torch.load(ckpts[0], map_location="cpu", weights_only=False)
-    cfg, variant = ck0["cfg"], ck0["variant"]
+    cfg = ck0["cfg"]
+    if ck0.get("variant", "feature") != "feature":
+        raise ValueError("residual hybrid checkpoints are retired (2026-07-16)")
     data = load_hybrid_data(
-        data_dir, variant=variant, physics_csv=ck0.get("physics_csv"),
+        data_dir, physics_csv=ck0.get("physics_csv"),
         sim_cache=ck0.get("sim_cache"), use_statics=bool(ck0["n_static"]),
         use_doy=cfg.get("use_doy", True),
         domain=cfg.get("physics_domain", "15cdec"),
@@ -137,7 +146,7 @@ def _daily_ensemble(ens_dir: str, data_dir: str, device, cache: Path) -> pd.Data
     accum = None
     for cp in ckpts:
         ck = torch.load(cp, map_location="cpu", weights_only=False)
-        model = HybridLSTM(data.n_feat, data.n_static, variant=variant,
+        model = HybridLSTM(data.n_feat, data.n_static,
                            hidden=cfg["hidden"], static_embed=cfg["static_embed"],
                            dropout=cfg["dropout"]).to(device)
         model.load_state_dict(ck["model"])
@@ -251,11 +260,17 @@ def assemble(data_dir: str = "data", *, device: str = "cuda") -> dict:
         clim[label] = _climatology(monthly[label])
         print(f"  assembled {label}", flush=True)
 
+    for label, csv in TORCH_SIM.items():   # torch-only exports: read the dump
+        daily = pd.read_csv(csv, parse_dates=["date"]).set_index("date")
+        monthly[label] = _monthly_taf(daily, areas)
+        clim[label] = _climatology(monthly[label])
+        print(f"  assembled {label} (torch daily sim)", flush=True)
+
     dev = pick_device(device)
     for label, ens_dir in HYBRID.items():
         tag = label.replace(" ", "_").lower()
         daily = _daily_ensemble(ens_dir, data_dir, dev,
-                                cachedir / f"sim_hybrid_{tag}.csv")
+                                cachedir / f"sim_{tag}.csv")
         monthly[label] = _monthly_taf(daily, areas)
         clim[label] = _climatology(monthly[label])
         print(f"  assembled {label}", flush=True)
@@ -266,7 +281,7 @@ def assemble(data_dir: str = "data", *, device: str = "cuda") -> dict:
 
     # monthly KGE/NSE of each model vs CalSim3 FNF over the combined period
     metrics: dict[str, dict[str, tuple[float, float, float, float]]] = {}
-    for label in [*FROZEN, *HYBRID]:
+    for label in [*FROZEN, *TORCH_SIM, *HYBRID]:
         metrics[label] = {b: _score(monthly[label][b], obs[b])
                           for b in order if b in monthly[label] and b in obs}
     print(f"  observed: CalSim3 FNF for {order}", flush=True)
@@ -368,7 +383,7 @@ def _plot_metrics_bars(data: dict, path: Path) -> None:
     import matplotlib.pyplot as plt
 
     metrics, order = data["metrics"], data["order"]
-    models = [*FROZEN, *HYBRID]
+    models = [*FROZEN, *TORCH_SIM, *HYBRID]
     n = len(models)
     width = 0.86 / n
     # (row label, value from a (kge,nse,pbias,smv) tuple, y-lower)
@@ -424,7 +439,7 @@ def _plot_metrics_bars_agg(data: dict, path: Path) -> None:
     import matplotlib.pyplot as plt
 
     metrics, order = data["metrics"], data["order"]
-    models = [*FROZEN, *HYBRID]
+    models = [*FROZEN, *TORCH_SIM, *HYBRID]
     rows = [
         ("KGE", lambda m: m[0], (0.0, 1.05)),
         ("| PBIAS |  (%)", lambda m: abs(m[2]), None),
