@@ -238,37 +238,6 @@ class DplConfig:
     adaptive_loss_momentum: float = 0.5
     adaptive_loss_floor: float = 0.05    # min (1 - KGE) so strong basins keep weight
     adaptive_loss_clip: float = 5.0      # per-basin weight clamp [1/clip, clip]
-    #: ET/SWE-observation auxiliary losses (multi-product, cal-window ONLY,
-    #: leakage-safe; obs are training regularizers, NEVER a selection criterion).
-    #: Redesigned 2026-07-13 after the raw monthly central pull degraded
-    #: streamflow (it pulled LEVEL, which the products disagree on 38-85%, as
-    #: hard as PHASE, which they agree on to ~0.5 month).  Three separable terms:
-    #: * ``et_loss_lambda`` — ET seasonal-SHAPE pull: model's monthly ET is
-    #:   normalized by its own masked-month mean and pulled toward the products'
-    #:   consensus NORMALIZED cycle (inverse-variance; sigma inflated by the
-    #:   products' interannual shape spread, floored at ``shape_sigma_floor``).
-    #:   Level-blind by construction — no volume fight with streamflow.
-    #: * ``et_level_lambda`` — ET volume envelope HINGE: zero force inside the
-    #:   product min-max total, quadratic outside (width-scaled).  Catches the
-    #:   arid basins whose ET sits ABOVE every product without pulling anyone
-    #:   toward the (untrustworthy) ensemble-mean volume.
-    #: * ``swe_loss_lambda`` — SWE seasonal-SHAPE pull (same normalized form) on
-    #:   the model's monthly-MEAN Snow-17 SWE vs 4 products; ~snow-free basins
-    #:   masked out; NO SWE level term ever (85% peak-magnitude disagreement).
-    #: 0.0 each disables; all zero => the obs path is absent = byte-identical.
-    et_loss_lambda: float = 0.0
-    et_level_lambda: float = 0.0
-    swe_loss_lambda: float = 0.0
-    shape_sigma_floor: float = 0.1   # absolute floor on the normalized-cycle sigma
-    #: replace the level hinge's product min-max envelope with a WATER-BALANCE
-    #: anchor: per-basin annual ET = cal-window mean(P) - mean(Q_obs) over the
-    #: gage-covered days, spread over months by the products' consensus cycle,
-    #: hinged at anchor*(1 -/+ band).  Observed and flow-consistent — far
-    #: tighter than the product bracket (which spans up to 72% of Q in the arid
-    #: basins and measurably could not stop the shape term's level leak: the
-    #: 2026-07-15 seasonal-Kpet arm drifted annual ET 10-17% inside it).
-    #: 0 = off (product envelope, exact prior behavior).
-    et_anchor_band: float = 0.0
     #: warm-start checkpoint path: the net's weights are loaded strict=False
     #: BEFORE training (heads absent from the donor — e.g. a fresh seasonal
     #: head — keep their zero-init, so the run starts EXACTLY at the donor's
@@ -405,15 +374,6 @@ class DplConfig:
             raise ValueError(f"noah_pet {self.noah_pet!r}")
         if self.sac_pet not in ("hamon", "priestley_taylor"):
             raise ValueError(f"sac_pet {self.sac_pet!r}")
-        if min(self.et_loss_lambda, self.et_level_lambda,
-               self.swe_loss_lambda, self.shape_sigma_floor) < 0.0:
-            raise ValueError("obs-loss lambdas / shape_sigma_floor must be >= 0")
-        if not 0.0 <= self.et_anchor_band < 1.0:
-            raise ValueError("et_anchor_band must be in [0, 1)")
-        if self.et_anchor_band > 0.0 and self.et_level_lambda <= 0.0:
-            raise ValueError(
-                "et_anchor_band re-targets the level hinge — it needs "
-                "et_level_lambda > 0 to have any effect")
         from datetime import date
         if date.fromisoformat(self.spinup_start) >= \
                 date.fromisoformat(self.cal_start):

@@ -111,11 +111,6 @@ def _dpl_train(args: argparse.Namespace) -> int:
         fracp_floor=args.fracp_floor, dtype=args.dtype, device=args.device,
         loss=args.loss, log_loss_lambda=args.log_lambda,
         var_loss_lambda=args.var_lambda, bias_loss_lambda=args.bias_lambda,
-        et_loss_lambda=args.et_loss_lambda,
-        et_level_lambda=args.et_level_lambda,
-        swe_loss_lambda=args.swe_loss_lambda,
-        shape_sigma_floor=args.shape_sigma_floor,
-        et_anchor_band=args.et_anchor_band,
         init_from=args.init_from,
         lr=args.lr,
         lr_warmup_epochs=args.warmup_epochs, n_epochs=args.epochs,
@@ -165,7 +160,12 @@ def _dpl_hybrid(args: argparse.Namespace) -> int:
     cfg = HybridConfig(
         variant=args.variant, use_statics=args.statics, n_epochs=args.epochs,
         hidden=args.hidden, dropout=args.dropout, lr=args.lr,
-        batch_size=args.batch_size, device=args.device, seed=args.seed)
+        batch_size=args.batch_size, device=args.device, seed=args.seed,
+        input_noise=args.input_noise,
+        physics_domain=args.physics_domain, pet_source=args.sac_pet,
+        pt_snow_albedo=args.pt_snow_albedo,
+        pt_dewpoint_depression=args.pt_dewpoint_depression,
+        physics_et_scheme=args.physics_et, canopy_csv=args.canopy_params)
     train_hybrid(cfg, data_dir=args.data_dir, out_dir=out,
                  physics_csv=physics, sim_cache=args.sim_cache)
     score_hybrid(Path(out) / "checkpoints" / "best.pt",
@@ -175,8 +175,17 @@ def _dpl_hybrid(args: argparse.Namespace) -> int:
     return 0
 
 
+def _dpl_climatology(args: argparse.Namespace) -> int:
+    from .dpl.climatology import make_cdec15_climatology
+
+    make_cdec15_climatology(data_dir=args.data_dir, out_dir=args.out,
+                            device=args.device)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="sacsma", description="Distributed SAC-SMA for CA watersheds")
+    parser = argparse.ArgumentParser(
+        prog="sacsma", description="Distributed SAC-SMA for CA watersheds")
     sub = parser.add_subparsers(dest="command", required=True)
 
     run = sub.add_parser("run", help="forward-simulate a basin (or ALL) for a domain")
@@ -220,7 +229,8 @@ def main(argv: list[str] | None = None) -> int:
 
     cs = sub.add_parser(
         "calsim",
-        help="cross-compare CalSim3 (actual) vs VIC vs multi-set SAC-SMA -> artifacts/calsim/<run>/",
+        help="cross-compare CalSim3 (actual) vs VIC vs multi-set SAC-SMA "
+             "-> artifacts/calsim/<run>/",
     )
     cs.add_argument("--data-dir", default="data", help="organized data/ store")
     cs.add_argument("--artifacts-dir", default="artifacts", help="output root")
@@ -334,26 +344,6 @@ def main(argv: list[str] | None = None) -> int:
     tr.add_argument("--bias-lambda", type=float, default=0.0,
                     help="per-chunk bias penalty (mean ratio - 1)^2; the KGE beta "
                          "term the MSE/NNSE loss lacks (0 disables)")
-    tr.add_argument("--et-loss-lambda", type=float, default=0.0,
-                    help="ET seasonal-SHAPE loss weight: inverse-variance pull of "
-                         "the model's NORMALIZED monthly ET cycle to the 5-product "
-                         "consensus shape — level-blind (0 disables)")
-    tr.add_argument("--et-level-lambda", type=float, default=0.0,
-                    help="ET volume envelope hinge weight: zero inside the product "
-                         "min-max total, quadratic outside (catches arid basins "
-                         "above every product; 0 disables)")
-    tr.add_argument("--swe-loss-lambda", type=float, default=0.0,
-                    help="SWE seasonal-SHAPE loss weight: normalized accumulation/"
-                         "melt-cycle pull to the 4-product consensus (snow basins "
-                         "only, no level term; 0 disables)")
-    tr.add_argument("--shape-sigma-floor", type=float, default=0.1,
-                    help="absolute floor on the normalized-cycle ensemble sigma "
-                         "(hedges correlated-products over-confidence; default 0.1)")
-    tr.add_argument("--et-anchor-band", type=float, default=0.0,
-                    help="re-target the ET level hinge to the WATER-BALANCE "
-                         "anchor: per-basin annual ET = cal mean(P) - mean(Q_obs) "
-                         "over gage days, +/- this fractional band (needs "
-                         "--et-level-lambda > 0; 0 = product min-max envelope)")
     tr.add_argument("--init-from", default="",
                     help="warm-start checkpoint (e.g. a baseline best.pt): net "
                          "weights load strict=False so fresh zero-init heads "
@@ -450,13 +440,37 @@ def main(argv: list[str] | None = None) -> int:
                     default="residual",
                     help="feature = SAC-SMA sim as an LSTM input; residual = "
                          "LSTM learns obs-sim, flow = sim + correction")
-    hy.add_argument("--physics",
-                    default="artifacts/dpl/testing/physical_levers/params_dpl.csv",
-                    help="frozen SAC-SMA parameter table for the physics input "
-                         "(empty/'GA' -> archived GA optimum)")
-    hy.add_argument("--sim-cache", default="artifacts/dpl/hybrid/frozen_sim.csv",
-                    help="cache path for the frozen 15-basin daily sim "
-                         "(delete it when --physics changes)")
+    hy.add_argument("--physics", required=True,
+                    help="frozen SAC-SMA parameter table for the physics baseline "
+                         "(REQUIRED, no default); 'GA' or '' -> archived GA optimum. "
+                         "Must match --physics-domain (validated at load: fine "
+                         "15cdec ~6033 keys, 15cdec_grid ~2074).")
+    hy.add_argument("--physics-domain", default="15cdec",
+                    choices=["15cdec", "15cdec_grid"],
+                    help="HRU resolution of the frozen sim + forcing features "
+                         "(default: 15cdec fine; 15cdec_grid for the pt/noah "
+                         "grid exports)")
+    hy.add_argument("--sac-pet", default="hamon",
+                    choices=["hamon", "priestley_taylor"],
+                    help="PET source of the frozen sim -- MUST match the --physics "
+                         "export (priestley_taylor for pt/noah)")
+    hy.add_argument("--pt-snow-albedo", type=float, default=0.0,
+                    help="PT snow-cover albedo refinement, match the export "
+                         "(pt = 0.6; needs --sac-pet priestley_taylor)")
+    hy.add_argument("--pt-dewpoint-depression", type=float, default=0.0,
+                    help="PT arid dewpoint-depression refinement, match the export "
+                         "(pt = 2.0; needs --sac-pet priestley_taylor)")
+    hy.add_argument("--physics-et", default="sac",
+                    choices=["sac", "noah_lite"],
+                    help="frozen-sim ET scheme: sac = the E1-E5 cascade; noah_lite "
+                         "= the Noah-lite external ET (noah; forces PT, "
+                         "needs --canopy-params)")
+    hy.add_argument("--canopy-params", default="",
+                    help="params_canopy.csv (soil_chi) for --physics-et noah_lite")
+    hy.add_argument("--sim-cache", default=None,
+                    help="cache path for the frozen 15-basin daily sim (default: a "
+                         "physics-tagged file in the run's parent dir; delete it if "
+                         "you change the --physics export or PT knobs)")
     hy.add_argument("--statics", action="store_true",
                     help="add per-basin static features (elev/flowlen/precip/snow)")
     hy.add_argument("--data-dir", default="data", help="organized data/ store")
@@ -465,6 +479,8 @@ def main(argv: list[str] | None = None) -> int:
     hy.add_argument("--epochs", type=int, default=60)
     hy.add_argument("--hidden", type=int, default=128, help="LSTM hidden size")
     hy.add_argument("--dropout", type=float, default=0.15)
+    hy.add_argument("--input-noise", type=float, default=0.1,
+                    help="gaussian input-jitter regularizer std (0 disables)")
     hy.add_argument("--lr", type=float, default=4e-4)
     hy.add_argument("--batch-size", type=int, default=512)
     hy.add_argument("--device", default="cuda", help="cuda | cpu")
@@ -472,6 +488,19 @@ def main(argv: list[str] | None = None) -> int:
     hy.add_argument("--compare", action="store_true",
                     help="also write the GA/dPL/hybrid comparison + dumbbell")
     hy.set_defaults(func=_dpl_hybrid)
+
+    cl = dpl_sub.add_parser(
+        "climatology",
+        help="per-watershed mean-monthly TAF regime (GA + dPL + hybrids) vs the "
+             "observed CalSim3 FNF, as a 5-step ablation + all-series metric bars "
+             "-> artifacts/calsim/compare/figures/cdec15_climatology_*.png",
+    )
+    cl.add_argument("--data-dir", default="data", help="organized data/ store")
+    cl.add_argument("--out", default="artifacts/calsim/compare",
+                    help="output root (figures -> <out>/figures/)")
+    cl.add_argument("--device", default="cuda", choices=["cuda", "cpu"],
+                    help="torch device for the hybrid reconstructions")
+    cl.set_defaults(func=_dpl_climatology)
 
     args = parser.parse_args(argv)
     return args.func(args)

@@ -10,8 +10,8 @@ An LSTM is coupled to the FROZEN SAC-SMA daily simulation two ways (variants):
 Both are scored through ``metrics.kge`` / ``_figures._period_stats`` with the
 temporal split at :data:`sacsma.cdec15.CAL_END`, so the numbers are directly
 comparable to the GA (``metrics_15cdec.csv``) and dPL (``metrics_dpl_*.csv``)
-tables.  The physics baseline is the frozen ``run_basin`` sim from a chosen
-parameter table (the dPL ``physical_levers`` arm, the seasonal winner, or GA).
+tables.  The physics baseline is the frozen ``run_basin`` sim from a REQUIRED,
+explicitly named parameter table (a canonical dPL export or GA).
 
 Everything here imports torch at module scope — import it only from the CLI
 handlers (lazily), never from the torch-free core package paths.

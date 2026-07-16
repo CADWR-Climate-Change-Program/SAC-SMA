@@ -30,6 +30,12 @@ class HybridConfig:
     static_embed: int = 16
     dropout: float = 0.15
     use_statics: bool = False
+    physics_domain: str = "15cdec"   # HRU resolution of the frozen sim + forcing
+    pet_source: str = "hamon"        # "hamon" | "priestley_taylor" (match --physics)
+    pt_snow_albedo: float = 0.0      # PT snow-albedo refinement (pt = 0.6)
+    pt_dewpoint_depression: float = 0.0   # PT dewpoint refinement (pt = 2.0)
+    physics_et_scheme: str = "sac"   # "sac" | "noah_lite" (Noah-lite external ET)
+    canopy_csv: str = ""             # params_canopy.csv (soil_chi) for noah_lite
     lr: float = 4e-4
     weight_decay: float = 1e-4
     grad_clip: float = 1.0
@@ -90,10 +96,20 @@ def train_hybrid(cfg: HybridConfig, *, data_dir: str = "data",
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     if sim_cache is None:
-        sim_cache = out.parent / "frozen_sim.csv"
+        # physics-tagged so distinct baselines never share a stale sim cache
+        # (et_scheme appended only when != "sac" so existing caches stay valid)
+        tag = f"frozen_sim_{cfg.physics_domain}_{cfg.pet_source}"
+        if cfg.physics_et_scheme != "sac":
+            tag += f"_{cfg.physics_et_scheme}"
+        sim_cache = out.parent / f"{tag}.csv"
 
     data = load_hybrid_data(data_dir, variant=cfg.variant, physics_csv=physics_csv,
                             sim_cache=sim_cache, use_statics=cfg.use_statics,
+                            domain=cfg.physics_domain, pet_source=cfg.pet_source,
+                            pt_snow_albedo=cfg.pt_snow_albedo,
+                            pt_dewpoint_depression=cfg.pt_dewpoint_depression,
+                            et_scheme=cfg.physics_et_scheme,
+                            canopy_csv=cfg.canopy_csv or None,
                             device=dev)
     model = HybridLSTM(data.n_feat, data.n_static, variant=cfg.variant,
                        hidden=cfg.hidden, static_embed=cfg.static_embed,

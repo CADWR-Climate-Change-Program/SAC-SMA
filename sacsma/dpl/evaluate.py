@@ -171,6 +171,8 @@ def score_frozen(
     pet_source: str = "hamon",
     pt_snow_albedo: float = 0.0,
     pt_dewpoint_depression: float = 0.0,
+    et_scheme: str = "sac",
+    canopy_params: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """Score a parameter table through the FROZEN model vs the observed gage.
 
@@ -184,7 +186,12 @@ def score_frozen(
     ``pet_source="priestley_taylor"`` scores a PT-trained export through the
     numba PT PET (``sacsma.pet_pt``) with the given refinement knobs — the
     same fast frozen-numerics convention as the Hamon exports.
-    """
+
+    ``et_scheme="noah_lite"`` scores a Noah-lite (``canopy_lite``) export through
+    the numba Noah-lite external-ET SAC core (``sacsma.sma_noah_lite``): PT PET
+    forced, the learned per-HRU ``soil_chi`` taken from ``canopy_params`` (a
+    ``params_canopy.csv`` table).  Same frozen-numerics convention — the Noah-ET
+    dPL then reports on the identical footing as the Hamon/PT runs."""
     from .._figures import (
         _period_stats,
         basin_diagnostics_fig,
@@ -217,7 +224,8 @@ def score_frozen(
                         params=params, parallel=parallel,
                         pet_source=pet_source,
                         pt_snow_albedo=pt_snow_albedo,
-                        pt_dewpoint_depression=pt_dewpoint_depression).rename(
+                        pt_dewpoint_depression=pt_dewpoint_depression,
+                        et_scheme=et_scheme, canopy_params=canopy_params).rename(
                             columns={"flow": "flow_sim"})
         obs = load_gage(data_dir, basin=b)[["date", "flow"]].rename(
             columns={"flow": "flow_obs"})
@@ -531,11 +539,37 @@ def evaluate_checkpoint(
                        ).to(dev, torch.float64)
     net.load_state_dict(ck["net"])   # restores baked neighbor buffers too
 
-    if canopy:   # Noah ET — NOT scorable via run_basin; torch pipeline instead
+    if canopy:   # Noah ET — a SEPARATE canopy-param table (kept OUT of ga_optimum)
         ccsv = out / "params_canopy.csv"
-        export_canopy_params(net, dom, x).to_csv(ccsv, index=False)
+        canopy_df = export_canopy_params(net, dom, x)
+        canopy_df.to_csv(ccsv, index=False)
         print(f"wrote {ccsv} (Noah canopy params; kept OUT of ga_optimum)",
               flush=True)
+        # The learned SAC params still export (canopy runs used to skip this,
+        # leaving noah with no params_dpl.csv) — the Noah-lite frozen
+        # path and the hybrid physics baseline both need them.
+        dpl_df = export_params(net, dom, x)
+        pcsv = out / "params_dpl.csv"
+        dpl_df.to_csv(pcsv, index=False)
+        print(f"wrote {pcsv} ({len(dpl_df)} HRU rows, cal KGE at selection "
+              f"{ck.get('cal_kge', float('nan')):.4f})", flush=True)
+        lite = nc.get("canopy_lite", False)
+        if lite and cfg.noah_pet == "priestley_taylor":
+            # canonical Noah-lite: score through the fast frozen numba core
+            # (sma_noah_lite), verified bit-exact vs the torch pipeline — the
+            # SAME frozen-numerics footing as the Hamon/PT exports.
+            print("canopy_lite + PT -> frozen Noah-lite scoring "
+                  "(sacsma.sma_noah_lite)", flush=True)
+            pt_alb = cfg.pt_snow_albedo or 0.0
+            pt_dd = cfg.pt_dewpoint_depression or 0.0
+            return score_frozen(
+                dpl_df, data_dir, out,
+                label=label if label is not None else f"dpl_{variant}",
+                domain=domain, parallel=parallel, pet_source="priestley_taylor",
+                pt_snow_albedo=pt_alb, pt_dewpoint_depression=pt_dd,
+                et_scheme="noah_lite", canopy_params=canopy_df)
+        # full Noah ET (7-param Jarvis) or Hamon-potential lite: NO frozen core
+        # -> the torch pipeline reports skill (mass-balance validated).
         return score_noah_torch(net, x, dom, cfg, data_dir=data_dir, out_dir=out,
                                 label=label if label is not None
                                 else f"dpl_{variant}_noah")

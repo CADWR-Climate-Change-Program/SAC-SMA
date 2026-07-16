@@ -85,6 +85,59 @@ def lai_climatology_path(data_dir: str | Path = "data", domain: str = DEFAULT_DO
     return domain_dir(data_dir, domain) / f"lai_climatology{_sfx(domain)}.csv"
 
 
+#: Noah-lite observed-canopy clamps — keep in sync with dpl.config.CANOPY_BOUNDS
+#: (veg_frac) and dpl.data._load_canopy_obs (the tiny observed-LAI floor, NOT the
+#: learned 0.5 bound, which clamped ~half the driest basins' days).
+_VEG_FRAC_LO, _VEG_FRAC_HI = 0.0, 1.0
+_LAI_OBS_LO, _LAI_OBS_HI = 0.05, 6.0
+
+
+def load_canopy_obs(
+    data_dir: str | Path = "data", domain: str = DEFAULT_DOMAIN,
+) -> tuple[pd.Series, pd.DataFrame]:
+    """OBSERVED canopy structure for the Noah-lite ET path, keyed by grid-cell
+    ``key`` — the torch-free core loader the frozen ``run_basin`` Noah-lite path
+    uses (mirror of ``sacsma.dpl.data._load_canopy_obs``, which aligns the same
+    inputs to the torch domain-tensor cell order).
+
+    Returns ``(veg_frac, lai_lut)``:
+
+    * ``veg_frac`` — pd.Series (index ``key``) of the LANDFIRE EVC cover fraction
+      (``EVC_cover_pct`` / 100), clamped to [0, 1];
+    * ``lai_lut`` — pd.DataFrame (index ``key``, columns day-of-year 1..366) of
+      the per-cell daily LAI climatology, linearly interpolated from the 46
+      8-day ``lai_doy*`` samples and clamped to the observed floor/ceiling.
+
+    Rows are deduped by ``key`` (fine-HRU domains repeat identical per-cell rows).
+    Raises ``FileNotFoundError`` if the sidecars are absent (only the grid
+    domains — e.g. ``15cdec_grid`` — ship them)."""
+    import re
+
+    sv_path = soilveg_path(data_dir, domain)
+    lai_path = lai_climatology_path(data_dir, domain)
+    if not sv_path.exists() or not lai_path.exists():
+        raise FileNotFoundError(
+            f"Noah-lite canopy sidecars not found for domain {domain!r}: "
+            f"{sv_path.name} / {lai_path.name}")
+
+    sv = pd.read_csv(sv_path, usecols=["key", "EVC_cover_pct"]).set_index("key")
+    sv = sv[~sv.index.duplicated()]
+    veg_frac = (sv["EVC_cover_pct"] / 100.0).clip(_VEG_FRAC_LO, _VEG_FRAC_HI)
+    veg_frac.name = "veg_frac"
+
+    lai = pd.read_csv(lai_path).rename(columns={"cellkey": "key"}).set_index("key")
+    lai = lai[~lai.index.duplicated()]
+    doy_cols = sorted((c for c in lai.columns if c.startswith("lai_doy")),
+                      key=lambda c: int(re.sub(r"\D", "", c)))
+    sample_doys = np.array([int(re.sub(r"\D", "", c)) for c in doy_cols], float)
+    target = np.arange(1, 367, dtype=float)                          # doy 1..366
+    lut = np.vstack([np.interp(target, sample_doys, row)
+                     for row in lai[doy_cols].to_numpy(np.float64)])
+    lut = np.clip(lut, _LAI_OBS_LO, _LAI_OBS_HI)
+    lai_lut = pd.DataFrame(lut, index=lai.index, columns=np.arange(1, 367))
+    return veg_frac, lai_lut
+
+
 #: 1 cfs sustained for a day, spread over 1 mi^2, equals this many mm.
 #: (1 cfs = 0.0283168 m^3/s; x86400 s; / (mi^2 = 2.589988e6 m^2); x1000 mm/m)
 _CFS_DAY_PER_MI2_MM = 0.944628

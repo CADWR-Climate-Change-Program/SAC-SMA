@@ -29,6 +29,7 @@ from .pet import _hamon_core, hamon_pet
 from .pet_pt import _pt_core, pt_raw_pet
 from .routing import _lohmann_core_nb, lohmann
 from .sma import _sacsma_core, sac_sma
+from .sma_noah_lite import _sacsma_noah_lite_core, sac_sma_noah_lite
 from .snow17 import _snow17_core, snow17
 
 if HAVE_NUMBA:
@@ -96,6 +97,43 @@ if HAVE_NUMBA:
         return total
 
     @njit(parallel=True)
+    def _basin_kernel_noah_lite(
+        prcp_cells, tavg_cells, tmin_cells, tmax_cells, cell_idx,
+        doy_f, doy_i, is_leap, lat_rad, elev, flowlen, is_outlet,
+        kpet, snow_par, sma_par, rout_par, wnorm,
+        veg_frac, soil_chi, lai_lut, snow_albedo, dewpoint_depression,
+    ):
+        """:func:`_basin_kernel_pt` with the Noah-LITE external ET (canopy_lite dPL
+        exports): Snow-17 -> Priestley-Taylor PET -> the Noah-lite SAC core
+        (:func:`sacsma.sma_noah_lite._sacsma_noah_lite_core`), Lohmann-routed.
+        ``veg_frac``/``soil_chi`` are per-HRU; ``lai_lut`` is the (nh, 366) daily
+        LAI climatology, indexed per day by ``doy_i``."""
+        T = prcp_cells.shape[1]
+        nh = cell_idx.shape[0]
+        total = np.zeros(T)
+        for h in prange(nh):
+            c = cell_idx[h]
+            pr = prcp_cells[c]
+            tv = tavg_cells[c]
+            snow_init = np.zeros(4)
+            eff, _melt, swe, _st, _in = _snow17_core(
+                pr, tv, doy_i, is_leap, elev[h], snow_par[h], snow_init)
+            raw = _pt_core(tv, tmin_cells[c], tmax_cells[c], doy_f, lat_rad[h],
+                           elev[h], swe, snow_albedo, dewpoint_depression)
+            pet = kpet[h] * raw
+            lai_h = np.empty(T)
+            for t in range(T):
+                lai_h[t] = lai_lut[h, doy_i[t] - 1]
+            sma_init = np.empty(6)
+            sma_init[0] = 0.0; sma_init[1] = 0.0; sma_init[2] = 100.0
+            sma_init[3] = 100.0; sma_init[4] = 100.0; sma_init[5] = 0.0
+            surf, base, _t, _s = _sacsma_noah_lite_core(
+                pet, eff, veg_frac[h], lai_h, soil_chi[h], sma_par[h], sma_init)
+            runoff = _lohmann_core_nb(surf, base, flowlen[h], rout_par[h], is_outlet[h])
+            total += wnorm[h] * runoff
+        return total
+
+    @njit(parallel=True)
     def _local_runoff_kernel(
         prcp_cells, tavg_cells, cell_idx, doy_f, doy_i, is_leap,
         lat_rad, elev, kpet, snow_par, sma_par,
@@ -124,6 +162,7 @@ if HAVE_NUMBA:
 else:  # pragma: no cover - Numba absent
     _basin_kernel = None
     _basin_kernel_pt = None
+    _basin_kernel_noah_lite = None
     _local_runoff_kernel = None
 
 
@@ -228,6 +267,47 @@ def run_hru_components(
     return surf, base
 
 
+def run_hru_noah_lite(
+    prcp: np.ndarray,
+    tavg: np.ndarray,
+    tmin: np.ndarray,
+    tmax: np.ndarray,
+    doy: np.ndarray,
+    is_leap: np.ndarray,
+    *,
+    lat: float,
+    elev: float,
+    ga_row,
+    veg_frac: float,
+    lai_series: np.ndarray,
+    soil_chi: float,
+    pt_snow_albedo: float = 0.0,
+    pt_dewpoint_depression: float = 0.0,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Per-HRU SMA outputs ``(surf, base)`` for the Noah-LITE external ET path
+    (``canopy_lite`` dPL exports) — the frozen-pipeline mirror of the torch
+    ``et_mode='noah'`` + ``canopy_lite`` scoring.
+
+    Snow-17 (its SWE drives the optional PT snow-cover albedo) -> Priestley-Taylor
+    PET (``Kpet`` scaled) -> the Noah-lite SAC core.  ``veg_frac``/``soil_chi``
+    are the per-HRU pinned green fraction and learned moisture-limiter exponent;
+    ``lai_series`` is the (T,) observed daily LAI (day-of-year climatology).
+    Requires per-cell ``tmin``/``tmax`` (the PT PET).  Seasonal ``Kpet`` is not
+    supported here (no canonical Noah-lite export uses it)."""
+    if P.is_seasonal(ga_row):
+        raise NotImplementedError(
+            "seasonal Kpet is not supported on the Noah-lite frozen path")
+    eff_p, _melt, swe, _st, _in = snow17(prcp, tavg, doy, is_leap, elev,
+                                         P.snow_par(ga_row))
+    raw = pt_raw_pet(tavg, tmin, tmax, doy, lat, elev, swe=swe,
+                     snow_albedo=pt_snow_albedo,
+                     dewpoint_depression=pt_dewpoint_depression)
+    pet = P.kpet(ga_row) * raw
+    surf, base, _tet, _state = sac_sma_noah_lite(
+        pet, eff_p, veg_frac, lai_series, soil_chi, P.sma_par(ga_row))
+    return surf, base
+
+
 def run_hru_local(
     prcp: np.ndarray,
     tavg: np.ndarray,
@@ -319,6 +399,8 @@ def run_basin(
     pet_source: str = "hamon",
     pt_snow_albedo: float = 0.0,
     pt_dewpoint_depression: float = 0.0,
+    et_scheme: str = "sac",
+    canopy_params: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """Forward-simulate one basin from the GA optimum.
 
@@ -343,6 +425,15 @@ def run_basin(
     albedo (Snow-17 SWE-driven) and arid dewpoint depression.  Needs the
     per-cell tmin/tmax sidecar (attached on demand).
 
+    ``et_scheme="noah_lite"`` scores a Noah-lite (``canopy_lite``) dPL export:
+    the frozen E1-E5 ET cascade is replaced by the Noah-lite two-term external
+    ET (``sacsma.sma_noah_lite``, numba mirror of the torch
+    ``et_mode='noah'`` + ``canopy_lite`` path).  It forces the Priestley-Taylor
+    PET, needs the per-cell tmin/tmax and the observed canopy sidecars
+    (``io.load_canopy_obs``), and takes the learned per-HRU ``soil_chi`` from
+    ``canopy_params`` (a ``params_canopy.csv``-shaped table keyed by
+    ``key``/``basin``).
+
     Returns DataFrame[date, flow] of area-weighted gauge flow (mm/day).
     """
     if forcing is None and (
@@ -358,6 +449,7 @@ def run_basin(
         product=product, params=params, pet_source=pet_source,
         pt_snow_albedo=pt_snow_albedo,
         pt_dewpoint_depression=pt_dewpoint_depression,
+        et_scheme=et_scheme, canopy_params=canopy_params,
     )
 
 
@@ -474,6 +566,8 @@ def _run_basin_native(
     pet_source: str = "hamon",
     pt_snow_albedo: float = 0.0,
     pt_dewpoint_depression: float = 0.0,
+    et_scheme: str = "sac",
+    canopy_params: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """Native-path basin run from the organized ``data/`` artifacts.
 
@@ -488,10 +582,13 @@ def _run_basin_native(
     """
     from .io import load_hru_table
 
+    if et_scheme not in ("sac", "noah_lite"):
+        raise ValueError(f"et_scheme {et_scheme!r}")
     dd: str | Path = data_dir if data_dir is not None else "data"
     if forcing is None:
         forcing = load_domain_forcing(dd, domain=domain, start=start, end=end, product=product)
-    if pet_source == "priestley_taylor":
+    noah_lite = et_scheme == "noah_lite"
+    if pet_source == "priestley_taylor" or noah_lite:
         attach_tminmax(dd, domain, forcing)   # no-op if already attached
     params_df = params if params is not None else load_params(dd, domain=domain)
     # per-watershed calibrations (e.g. 9unimp) repeat shared cells with different
@@ -514,6 +611,13 @@ def _run_basin_native(
     wnorm = wnorm / wnorm.sum()
 
     dates, doy, is_leap = forcing.dates, forcing.doy, forcing.is_leap
+
+    if noah_lite:
+        return _run_basin_noah_lite(
+            basin, sub, params_df, canopy_params, forcing, wnorm, dd, domain,
+            dates, doy, is_leap, parallel=parallel, progress=progress,
+            pt_snow_albedo=pt_snow_albedo,
+            pt_dewpoint_depression=pt_dewpoint_depression)
 
     if parallel and _basin_kernel is not None:
         total = _run_basin_parallel(sub, params_df, forcing, wnorm,
@@ -545,6 +649,101 @@ def _run_basin_native(
                                     P.routing_par(ga_row), is_outlet)
         total += wnorm[i] * runoff
     return pd.DataFrame({"date": dates, "flow": total})
+
+
+def _resolve_canopy(sub, canopy_params: pd.DataFrame | None, basin: str,
+                    dd: str | Path, domain: str):
+    """Per-HRU ``(veg_frac (n,), soil_chi (n,), lai_lut (n, 366))`` for the
+    Noah-lite path, aligned to ``sub`` HRU order.  ``veg_frac``/LAI come from the
+    observed canopy sidecars (:func:`sacsma.io.load_canopy_obs`); ``soil_chi``
+    from ``canopy_params`` (a ``params_canopy.csv`` table, filtered to ``basin``
+    and keyed by ``key`` — cells shared between basins carry per-basin values)."""
+    from .io import load_canopy_obs
+
+    if canopy_params is None:
+        raise ValueError("et_scheme='noah_lite' requires canopy_params (soil_chi)")
+    cp = canopy_params
+    if "basin" in cp.columns:
+        cp = cp[cp["basin"] == basin]
+    cp = cp.set_index("key")
+    veg_obs, lai_obs = load_canopy_obs(dd, domain)
+    keys = sub["key"].to_numpy()
+    veg = veg_obs.reindex(keys).to_numpy(dtype=float)
+    soil_chi = cp["soil_chi"].reindex(keys).to_numpy(dtype=float)
+    lai_lut = lai_obs.reindex(keys).to_numpy(dtype=float)      # (n, 366)
+    if np.isnan(veg).any() or np.isnan(lai_lut).any():
+        raise ValueError(f"missing observed canopy (veg/LAI) for basin {basin}")
+    if np.isnan(soil_chi).any():
+        raise ValueError(f"missing soil_chi in canopy_params for basin {basin}")
+    return veg, soil_chi, lai_lut
+
+
+def _run_basin_noah_lite(basin, sub, params_df, canopy_params, forcing, wnorm,
+                         dd, domain, dates, doy, is_leap, *, parallel, progress,
+                         pt_snow_albedo, pt_dewpoint_depression) -> pd.DataFrame:
+    """Noah-lite (``canopy_lite``) basin run: PT PET + the Noah-lite external ET
+    SAC core, area-weighted to the gauge (serial or the ``prange`` kernel)."""
+    veg, soil_chi, lai_lut = _resolve_canopy(sub, canopy_params, basin, dd, domain)
+
+    if parallel and _basin_kernel_noah_lite is not None:
+        total = _run_basin_noah_lite_parallel(
+            sub, params_df, forcing, wnorm, veg, soil_chi, lai_lut,
+            pt_snow_albedo, pt_dewpoint_depression)
+        return pd.DataFrame({"date": dates, "flow": total})
+
+    doy_i = np.asarray(doy).astype(np.int64)
+    total = np.zeros(len(dates))
+    n = len(sub)
+    for i, hru in enumerate(sub.itertuples(index=False)):
+        if progress and (i % 200 == 0):
+            print(f"  {basin}: HRU {i + 1}/{n}", flush=True)
+        c = forcing.pos[hru.key]
+        ga_row = params_df.loc[hru.key]
+        lai_series = lai_lut[i][doy_i - 1]
+        surf, base = run_hru_noah_lite(
+            forcing.prcp[c], forcing.tavg[c], forcing.tmin[c], forcing.tmax[c],
+            doy, is_leap, lat=float(hru.lat), elev=float(hru.elev), ga_row=ga_row,
+            veg_frac=veg[i], lai_series=lai_series, soil_chi=soil_chi[i],
+            pt_snow_albedo=pt_snow_albedo,
+            pt_dewpoint_depression=pt_dewpoint_depression)
+        is_outlet = default_is_outlet(float(hru.flowlen))
+        runoff, _baseflow = lohmann(surf, base, float(hru.flowlen),
+                                    P.routing_par(ga_row), is_outlet)
+        total += wnorm[i] * runoff
+    return pd.DataFrame({"date": dates, "flow": total})
+
+
+def _run_basin_noah_lite_parallel(sub, params_df, forcing, wnorm, veg, soil_chi,
+                                  lai_lut, pt_snow_albedo, pt_dewpoint_depression):
+    """Flat per-HRU bundle -> :func:`_basin_kernel_noah_lite` (the PT + Noah-lite
+    external-ET kernel).  Requires the per-cell tmin/tmax (attach_tminmax)."""
+    if forcing.tmin is None or forcing.tmax is None:
+        raise ValueError("Noah-lite parallel run needs attach_tminmax() first")
+    keys = sub["key"].to_numpy()
+    cell_idx = np.fromiter((forcing.pos[k] for k in keys), dtype=np.int64, count=len(keys))
+    pr = params_df.loc[keys]
+    kpet = np.ascontiguousarray(pr["Kpet"].to_numpy(dtype=float))
+    snow_par = np.ascontiguousarray(pr[list(P._SNOW_COLS)].to_numpy(dtype=float))
+    sma_par = np.ascontiguousarray(pr[list(P._SMA_COLS)].to_numpy(dtype=float))
+    rout_par = np.ascontiguousarray(pr[list(P._ROUT_COLS)].to_numpy(dtype=float))
+    lat_rad = np.ascontiguousarray(np.deg2rad(sub["lat"].to_numpy(dtype=float)))
+    elev = np.ascontiguousarray(sub["elev"].to_numpy(dtype=float))
+    flowlen = np.ascontiguousarray(sub["flowlen"].to_numpy(dtype=float))
+    is_outlet = (flowlen == 0.0).astype(np.int64)
+    prcp_cells, tavg_cells = forcing.forcing_f64()
+    if "tmin" not in forcing._f64:
+        forcing._f64["tmin"] = np.ascontiguousarray(forcing.tmin, dtype=np.float64)
+        forcing._f64["tmax"] = np.ascontiguousarray(forcing.tmax, dtype=np.float64)
+    doy_f = forcing.doy.astype(np.float64)
+    doy_i = forcing.doy.astype(np.int64)
+    is_leap = forcing.is_leap.astype(np.int64)
+    return _basin_kernel_noah_lite(
+        prcp_cells, tavg_cells, forcing._f64["tmin"], forcing._f64["tmax"],
+        cell_idx, doy_f, doy_i, is_leap, lat_rad, elev, flowlen, is_outlet,
+        kpet, snow_par, sma_par, rout_par, np.ascontiguousarray(wnorm),
+        np.ascontiguousarray(veg), np.ascontiguousarray(soil_chi),
+        np.ascontiguousarray(lai_lut), float(pt_snow_albedo),
+        float(pt_dewpoint_depression))
 
 
 def _run_basin_parallel(sub, params_df, forcing: DomainForcing, wnorm: np.ndarray,

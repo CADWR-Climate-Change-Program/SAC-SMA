@@ -1,6 +1,7 @@
 # custom
 *sublime*
 CLAUDE.md
+.claude*
 
 # --- Working / reference-only material (kept LOCAL, never committed) ---
 # tmp/ holds local scratch work and the original reference material the tracked
@@ -38,18 +39,22 @@ artifacts/*
 !artifacts/README.md
 !artifacts/cdec15
 !artifacts/calsim
+# derived daily/monthly sim cache for the dpl climatology artifact (regenerable)
+artifacts/calsim/compare/_climatology_cache/
 
-# dPL: CANONICAL runs + the track-record log are tracked (tiny nets — best.pt
-# is ~60 KB); exploratory runs stay local under artifacts/dpl/testing/ (see
-# artifacts/dpl/RUNS.md for the full record and old->new mapping).
+# dPL: CANONICAL runs + the fidelity numerics gate + the track-record log are
+# tracked (tiny nets — best.pt is ~60 KB); exploratory runs stay local under
+# artifacts/dpl/testing/ (see artifacts/dpl/RUNS.md for the record + old->new map).
 !artifacts/dpl
 artifacts/dpl/*
 !artifacts/dpl/RUNS.md
+!artifacts/dpl/fidelity
+!artifacts/dpl/hamon_dense
 !artifacts/dpl/hamon
 !artifacts/dpl/pt
-!artifacts/dpl/pt_refined
-!artifacts/dpl/pt_refined_ft
-!artifacts/dpl/noah_lite
+!artifacts/dpl/noah
+!artifacts/dpl/noah_lstm_feat
+!artifacts/dpl/noah_lstm_resid
 
 
 
