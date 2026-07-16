@@ -126,6 +126,7 @@ def _daily_ensemble(ens_dir: str, data_dir: str, device, cache: Path) -> pd.Data
     data = load_hybrid_data(
         data_dir, variant=variant, physics_csv=ck0.get("physics_csv"),
         sim_cache=ck0.get("sim_cache"), use_statics=bool(ck0["n_static"]),
+        use_doy=cfg.get("use_doy", True),
         domain=cfg.get("physics_domain", "15cdec"),
         pet_source=cfg.get("pet_source", "hamon"),
         pt_snow_albedo=cfg.get("pt_snow_albedo", 0.0),

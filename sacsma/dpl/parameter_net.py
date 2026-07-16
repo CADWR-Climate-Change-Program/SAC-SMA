@@ -72,7 +72,8 @@ class ParameterNet(nn.Module):
                  dropout: float = 0.1, grouped_heads: bool = False,
                  gnn_k: int = 0, n_nodes: int | None = None,
                  seasonal_params: tuple[str, ...] = (),
-                 seasonal_amp: float = 0.18, canopy: bool = False,
+                 seasonal_amp: float = 0.18, seasonal_amp_frac: float = 0.10,
+                 canopy: bool = False,
                  canopy_separate_trunk: bool = True,
                  canopy_lite: bool = False,
                  dynamic_params: tuple[str, ...] = (),
@@ -116,6 +117,12 @@ class ParameterNet(nn.Module):
             with torch.no_grad():
                 self.seasonal_head.weight.zero_()
                 self.seasonal_head.bias.zero_()
+            # per-param cap = frac*(hi-lo), repeated for (a_sin, a_cos); a static
+            # buffer (baked into the state_dict like _lo/_hi) so eval restores it.
+            caps = [seasonal_amp_frac * (BOUNDS[p][1] - BOUNDS[p][0])
+                    for p in self.seasonal_params for _ in range(2)]
+            self.register_buffer("_seasonal_cap",
+                                 torch.tensor(caps, dtype=torch.float64))
         if gnn_k > 0:
             if n_nodes is None:
                 raise ValueError("gnn_k > 0 requires n_nodes (the fixed HRU count)")
@@ -225,8 +232,8 @@ class ParameterNet(nn.Module):
         for p, c in FIXED_PARAMS.items():
             out[p] = torch.full((n,), c, device=x.device, dtype=s.dtype)
         if self.seasonal_params:
-            # tanh-capped: |a_sin|,|a_cos| <= seasonal_amp (additive Kpet units).
-            sc = self.seasonal_amp * torch.tanh(self.seasonal_head(z))  # (N, 2*S)
+            # tanh-capped per-param: |a_sin|,|a_cos| <= frac*(hi-lo) (relative swing).
+            sc = self._seasonal_cap.to(z.dtype) * torch.tanh(self.seasonal_head(z))  # (N, 2*S)
             for i, p in enumerate(self.seasonal_params):
                 out[f"{p}_asin"] = sc[:, 2 * i]
                 out[f"{p}_acos"] = sc[:, 2 * i + 1]

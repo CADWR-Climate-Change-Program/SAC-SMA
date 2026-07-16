@@ -34,6 +34,9 @@ from .snow17 import Snow17State, run_snow17
 _SEASONAL_OMEGA = 2.0 * math.pi / 365.0
 #: recession rates that get a seasonal shape when the net emits their coeffs.
 _SEASONAL_RECESSION = ("uzk", "lzpk", "lzsk")
+#: Snow-17 melt parameters that get a day-of-year shape when the net emits their
+#: coeffs — reconstructed to (N, T) and threaded per-step into run_snow17.
+_SEASONAL_SNOW = ("MFMAX", "MFMIN", "MBASE")
 
 
 def _seasonal(params: dict[str, torch.Tensor], name: str,
@@ -145,8 +148,13 @@ def run_window(
                   and ((et_mode == "sac" and sac_pet == "priestley_taylor")
                        or (et_mode == "noah" and noah_pet == "priestley_taylor")))
     need_swe = return_swe or albedo_swe
+    # day-of-year melt-factor reconstruction (MFMAX/MFMIN/MBASE): (N, T) fields
+    # threaded per-step into Snow-17.  Absent coeffs -> None -> static path.
+    snow_seasonal = ({p: _seasonal(params, p, doy) for p in _SEASONAL_SNOW
+                      if f"{p}_asin" in params} or None)
     snow_out = run_snow17(prcp, tavg, doy, is_leap, elev, params,
-                          state=state.snow, return_swe=need_swe)
+                          state=state.snow, return_swe=need_swe,
+                          seasonal=snow_seasonal)
     eff_p, snow_state = snow_out[0], snow_out[1]
     swe = snow_out[2] if need_swe else None
 

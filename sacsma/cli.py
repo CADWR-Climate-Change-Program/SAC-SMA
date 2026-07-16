@@ -111,6 +111,12 @@ def _dpl_train(args: argparse.Namespace) -> int:
         fracp_floor=args.fracp_floor, dtype=args.dtype, device=args.device,
         loss=args.loss, log_loss_lambda=args.log_lambda,
         var_loss_lambda=args.var_lambda, bias_loss_lambda=args.bias_lambda,
+        et_loss_lambda=args.et_loss_lambda,
+        et_level_lambda=args.et_level_lambda,
+        swe_loss_lambda=args.swe_loss_lambda,
+        shape_sigma_floor=args.shape_sigma_floor,
+        et_anchor_band=args.et_anchor_band,
+        et_products=args.et_products,
         init_from=args.init_from,
         lr=args.lr,
         lr_warmup_epochs=args.warmup_epochs, n_epochs=args.epochs,
@@ -125,6 +131,7 @@ def _dpl_train(args: argparse.Namespace) -> int:
         adaptive_loss=args.adaptive_loss, adaptive_loss_beta=args.adaptive_beta,
         seasonal_params=(tuple(args.seasonal.split(",")) if args.seasonal else ()),
         seasonal_amp=args.seasonal_amp,
+        seasonal_amp_frac=args.seasonal_amp_frac,
         et_mode=args.et, noah_pet=args.noah_pet, sac_pet=args.sac_pet,
         pt_snow_albedo=args.pt_snow_albedo,
         pt_dewpoint_depression=args.pt_dewpoint_depression,
@@ -162,6 +169,7 @@ def _dpl_hybrid(args: argparse.Namespace) -> int:
         hidden=args.hidden, dropout=args.dropout, lr=args.lr,
         batch_size=args.batch_size, device=args.device, seed=args.seed,
         input_noise=args.input_noise,
+        use_doy=not args.no_doy, resid_mean_lambda=args.resid_mean_lambda,
         physics_domain=args.physics_domain, pet_source=args.sac_pet,
         pt_snow_albedo=args.pt_snow_albedo,
         pt_dewpoint_depression=args.pt_dewpoint_depression,
@@ -344,6 +352,31 @@ def main(argv: list[str] | None = None) -> int:
     tr.add_argument("--bias-lambda", type=float, default=0.0,
                     help="per-chunk bias penalty (mean ratio - 1)^2; the KGE beta "
                          "term the MSE/NNSE loss lacks (0 disables)")
+    tr.add_argument("--et-loss-lambda", type=float, default=0.0,
+                    help="ET seasonal-SHAPE loss weight: inverse-variance pull of "
+                         "the model's NORMALIZED monthly ET cycle to the 5-product "
+                         "consensus shape — level-blind (0 disables)")
+    tr.add_argument("--et-level-lambda", type=float, default=0.0,
+                    help="ET volume envelope hinge weight: zero inside the product "
+                         "min-max total, quadratic outside (catches arid basins "
+                         "above every product; 0 disables)")
+    tr.add_argument("--swe-loss-lambda", type=float, default=0.0,
+                    help="SWE seasonal-SHAPE loss weight: normalized accumulation/"
+                         "melt-cycle pull to the 4-product consensus (snow basins "
+                         "only, no level term; 0 disables)")
+    tr.add_argument("--shape-sigma-floor", type=float, default=0.1,
+                    help="absolute floor on the normalized-cycle ensemble sigma "
+                         "(hedges correlated-products over-confidence; default 0.1)")
+    tr.add_argument("--et-anchor-band", type=float, default=0.0,
+                    help="re-target the ET level hinge to the WATER-BALANCE "
+                         "anchor: per-basin annual ET = cal mean(P) - mean(Q_obs) "
+                         "over gage days, +/- this fractional band (needs "
+                         "--et-level-lambda > 0; 0 = product min-max envelope)")
+    tr.add_argument("--et-products", default="",
+                    help="comma list restricting the ET obs target to named "
+                         "products (e.g. fluxcom = the single-product steering "
+                         "arm; one product requires --et-anchor-band > 0). "
+                         "Empty = all 5 (consensus)")
     tr.add_argument("--init-from", default="",
                     help="warm-start checkpoint (e.g. a baseline best.pt): net "
                          "weights load strict=False so fresh zero-init heads "
@@ -385,6 +418,12 @@ def main(argv: list[str] | None = None) -> int:
                     help="tanh cap on the harmonic coeffs |a_sin|,|a_cos| (additive "
                          "param units); hard-bounds the day-of-year swing so it "
                          "cannot diverge (0.18 ~ +/-25%% of Kpet~1)")
+    tr.add_argument("--seasonal-amp-frac", type=float, default=0.10,
+                    help="PER-PARAM harmonic cap as a fraction of each seasonal "
+                         "param's bound range (supersedes --seasonal-amp): each "
+                         "param gets a comparable RELATIVE day-of-year swing, so a "
+                         "mixed set (Kpet + melt factors) is balanced (0.10 -> Kpet "
+                         "+/-0.21, MFMAX/MFMIN +/-0.50, MBASE +/-0.50)")
     tr.add_argument("--hidden", type=int, default=64, help="trunk width")
     tr.add_argument("--embed", type=int, default=32, help="embedding width")
     tr.add_argument("--dropout", type=float, default=0.1,
@@ -474,6 +513,15 @@ def main(argv: list[str] | None = None) -> int:
                          "you change the --physics export or PT knobs)")
     hy.add_argument("--statics", action="store_true",
                     help="add per-basin static features (elev/flowlen/precip/snow)")
+    hy.add_argument("--no-doy", action="store_true",
+                    help="drop the sin/cos day-of-year LSTM inputs (the sim "
+                         "channel already carries the calendar; an explicit doy "
+                         "enables calendar-keyed mean corrections that inject "
+                         "val-period volume bias)")
+    hy.add_argument("--resid-mean-lambda", type=float, default=0.0,
+                    help="residual variant: penalty weight on the per-batch "
+                         "per-basin mean of the normalized residual — blocks "
+                         "long-run volume injection (0 disables)")
     hy.add_argument("--data-dir", default="data", help="organized data/ store")
     hy.add_argument("--out", default=None,
                     help="output dir (default: artifacts/dpl/testing/<variant>)")

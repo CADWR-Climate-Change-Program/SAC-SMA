@@ -153,6 +153,7 @@ def run_snow17(
     params: dict[str, torch.Tensor],   # (N,) each
     state: Snow17State | None = None,
     return_swe: bool = False,
+    seasonal: dict[str, torch.Tensor] | None = None,
 ) -> tuple[torch.Tensor, Snow17State]:
     """Run Snow-17 over a window; returns (outflow (N, T), final state).
 
@@ -163,20 +164,29 @@ def run_snow17(
     With ``return_swe`` a third item is returned: the per-day snow water
     equivalent ``(N, T)`` (ice + retained liquid, end of step) — the driver
     feeds it to the Priestley-Taylor snow-cover albedo.
+
+    ``seasonal`` optionally maps a melt-parameter name (``MFMAX``/``MFMIN``/
+    ``MBASE``) to a per-day ``(N, T)`` field reconstructed by the caller from the
+    net's day-of-year harmonic coeffs; each step overrides that scalar param with
+    the day's slice.  ``None`` (the default) leaves every param static — the
+    forward is byte-identical to the pre-seasonal path.
     """
     n, t_len = prcp.shape
     if state is None:
         state = Snow17State.zeros(n, prcp.device, prcp.dtype)
     grad = torch.is_grad_enabled() and (
         prcp.requires_grad or any(v.requires_grad for v in params.values())
+        or (seasonal is not None and any(v.requires_grad for v in seasonal.values()))
     )
     out = None if grad else torch.empty_like(prcp)
     swe_out = torch.empty_like(prcp) if (return_swe and not grad) else None
     steps: list[torch.Tensor] = []
     swe_steps: list[torch.Tensor] = []
     for t in range(t_len):
+        p_t = (params if seasonal is None
+               else {**params, **{k: v[:, t] for k, v in seasonal.items()}})
         state, e_t = snow17_step(state, prcp[:, t], tavg[:, t], doy[t], is_leap[t],
-                                 elev, params)
+                                 elev, p_t)
         if grad:
             steps.append(e_t)
             if return_swe:

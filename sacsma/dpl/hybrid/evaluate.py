@@ -50,6 +50,7 @@ def _load_data(ck: dict, data_dir: str, dev: torch.device):
         physics_csv=ck.get("physics_csv"),
         sim_cache=ck.get("sim_cache"),
         use_statics=bool(ck["n_static"]),
+        use_doy=cfg.get("use_doy", True),
         domain=cfg.get("physics_domain", "15cdec"),
         pet_source=cfg.get("pet_source", "hamon"),
         pt_snow_albedo=cfg.get("pt_snow_albedo", 0.0),

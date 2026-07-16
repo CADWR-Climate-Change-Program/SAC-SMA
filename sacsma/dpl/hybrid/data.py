@@ -162,6 +162,7 @@ def load_hybrid_data(
     physics_csv: str | Path | None = None,
     sim_cache: str | Path | None = None,
     use_statics: bool = False,
+    use_doy: bool = True,
     domain: str = "15cdec",
     pet_source: str = "hamon",
     pt_snow_albedo: float = 0.0,
@@ -238,8 +239,14 @@ def load_hybrid_data(
     sin_doy = np.sin(_OMEGA * doy)
     cos_doy = np.cos(_OMEGA * doy)
     dyn = {"precip": prcp, "tavg": tavg, "tmin": tmin, "tmax": tmax, "sac_sim": sim}
+    # use_doy=False drops the sin/cos day-of-year channels: the sim channel
+    # already carries the calendar (Snow-17 melt sinusoid, seasonal LAI, PT
+    # radiation), and an explicit doy input is what lets the net learn a
+    # calendar-keyed mean correction that carries unchecked into validation.
+    names = (DYNAMIC_FEATURES if use_doy else
+             tuple(n for n in DYNAMIC_FEATURES if n not in ("sin_doy", "cos_doy")))
     feat_cols = []
-    for name in DYNAMIC_FEATURES:
+    for name in names:
         if name == "sac_sim" and variant == "feature":
             feat_cols.append(sim / scale[:, None])         # per-basin, target-matched
         elif name in dyn:

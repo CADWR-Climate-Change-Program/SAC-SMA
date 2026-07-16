@@ -383,6 +383,13 @@ def score_noah_torch(net: torch.nn.Module, x: torch.Tensor, dom: DomainTensors,
     lab = label if not temp_delta else f"{label}_plus{temp_delta:g}C"
     csv = out / f"metrics_{lab}.csv"
     metrics.round(4).to_csv(csv, index=False)
+    # daily sim (date x basin, mm/day) — the torch reporting path's only route to
+    # a daily series (run_basin can't reconstruct a seasonal/Noah net); consumed
+    # by the seasonal-vs-LSTM comparison (sacsma.dpl.seasonal_compare).
+    daily_csv = out / f"daily_sim_{lab}.csv"
+    pd.DataFrame(sim.T, index=dom.dates, columns=list(dom.basins)).rename_axis(
+        "date").to_csv(daily_csv)
+    print(f"wrote {daily_csv} (daily sim mm/day)", flush=True)
     scc_isb = metrics.set_index("basin")["val_kge"].reindex(
         ["SCC", "ISB"]).round(3).tolist()
     print(f"wrote {csv}  (mean cal {metrics['cal_kge'].mean():.3f} / "
@@ -531,6 +538,7 @@ def evaluate_checkpoint(
                        n_nodes=x.shape[0] if gnn_k > 0 else None,
                        seasonal_params=tuple(nc.get("seasonal_params", ())),
                        seasonal_amp=nc.get("seasonal_amp", 0.18),
+                       seasonal_amp_frac=nc.get("seasonal_amp_frac", 0.10),
                        canopy=canopy,
                        canopy_separate_trunk=nc.get("canopy_separate_trunk", True),
                        canopy_lite=nc.get("canopy_lite", False),
@@ -554,10 +562,15 @@ def evaluate_checkpoint(
         print(f"wrote {pcsv} ({len(dpl_df)} HRU rows, cal KGE at selection "
               f"{ck.get('cal_kge', float('nan')):.4f})", flush=True)
         lite = nc.get("canopy_lite", False)
-        if lite and cfg.noah_pet == "priestley_taylor":
+        if lite and cfg.noah_pet == "priestley_taylor" and not cfg.seasonal_params:
             # canonical Noah-lite: score through the fast frozen numba core
             # (sma_noah_lite), verified bit-exact vs the torch pipeline — the
-            # SAME frozen-numerics footing as the Hamon/PT exports.
+            # SAME frozen-numerics footing as the Hamon/PT exports.  A SEASONAL
+            # Noah-lite export cannot use this path — the frozen run_basin raises
+            # on day-of-year params (model.py:run_hru_components_noah_lite) and
+            # the exported params_dpl.csv carries {MFMAX,...}_asin columns the
+            # frozen path cannot read (never feed it to build_frozen_sim) — so it
+            # falls through to the torch pipeline below.
             print("canopy_lite + PT -> frozen Noah-lite scoring "
                   "(sacsma.sma_noah_lite)", flush=True)
             pt_alb = cfg.pt_snow_albedo or 0.0

@@ -30,6 +30,18 @@ class HybridConfig:
     static_embed: int = 16
     dropout: float = 0.15
     use_statics: bool = False
+    #: feed sin/cos day-of-year to the LSTM.  False removes the only explicit
+    #: calendar input — corrections must then key off forcing/state/sim, which
+    #: blocks the doy-conditioned mean corrections that injected val-period
+    #: volume bias at the basins the physics already had right (NML/MRC/ORO).
+    use_doy: bool = True
+    #: residual variant only: penalty on the per-batch PER-BASIN mean of the
+    #: normalized residual, lambda * mean_b(m_b^2) over basins with >= 8
+    #: samples in the batch.  Zero-anchored: the physics owns volume, the LSTM
+    #: owns timing (it will fight legitimate bias correction at physics-biased
+    #: basins — acceptable because the physics fine-tune / P-Q anchor owns
+    #: that job).  0 disables.
+    resid_mean_lambda: float = 0.0
     physics_domain: str = "15cdec"   # HRU resolution of the frozen sim + forcing
     pet_source: str = "hamon"        # "hamon" | "priestley_taylor" (match --physics)
     pt_snow_albedo: float = 0.0      # PT snow-albedo refinement (pt = 0.6)
@@ -105,6 +117,7 @@ def train_hybrid(cfg: HybridConfig, *, data_dir: str = "data",
 
     data = load_hybrid_data(data_dir, variant=cfg.variant, physics_csv=physics_csv,
                             sim_cache=sim_cache, use_statics=cfg.use_statics,
+                            use_doy=cfg.use_doy,
                             domain=cfg.physics_domain, pet_source=cfg.pet_source,
                             pt_snow_albedo=cfg.pt_snow_albedo,
                             pt_dewpoint_depression=cfg.pt_dewpoint_depression,
@@ -155,6 +168,17 @@ def train_hybrid(cfg: HybridConfig, *, data_dir: str = "data",
                 loss = loss + cfg.log_lambda * (
                     (torch.log(flow + cfg.log_eps)
                      - torch.log(o + cfg.log_eps)) ** 2).mean()
+            if cfg.variant == "residual" and cfg.resid_mean_lambda > 0:
+                nb_b = len(data.basins)
+                ones = torch.ones_like(pred)
+                cnt = torch.zeros(nb_b, device=pred.device,
+                                  dtype=pred.dtype).index_add_(0, b, ones)
+                s = torch.zeros(nb_b, device=pred.device,
+                                dtype=pred.dtype).index_add_(0, b, pred)
+                m_b = s / cnt.clamp_min(1.0)                 # per-basin batch mean
+                w = (cnt >= 8).to(pred.dtype)                # skip thin basins
+                loss = loss + cfg.resid_mean_lambda * (
+                    (w * m_b ** 2).sum() / w.sum().clamp_min(1.0))
             opt.zero_grad(set_to_none=True)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
