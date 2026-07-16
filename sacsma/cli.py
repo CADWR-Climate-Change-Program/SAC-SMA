@@ -154,7 +154,7 @@ def _dpl_hybrid(args: argparse.Namespace) -> int:
     from .dpl.hybrid.evaluate import compare_all, score_hybrid
     from .dpl.hybrid.train import HybridConfig, train_hybrid
 
-    out = args.out or f"artifacts/dpl/hybrid/{args.variant}"
+    out = args.out or f"artifacts/dpl/testing/{args.variant}"
     physics = (None if str(args.physics).lower() in ("", "none", "ga")
                else args.physics)
     cfg = HybridConfig(
@@ -434,7 +434,8 @@ def main(argv: list[str] | None = None) -> int:
     hy = dpl_sub.add_parser(
         "hybrid",
         help="train + score a hybrid SAC-SMA x LSTM (feature|residual) on the "
-             "15cdec daily basis -> artifacts/dpl/hybrid/<variant>/",
+             "15cdec daily basis -> artifacts/dpl/testing/<variant>/ (local scratch; "
+             "the canonical ensembles noah_lstm_feat/resid are already trained)",
     )
     hy.add_argument("--variant", choices=["feature", "residual"],
                     default="residual",
@@ -475,7 +476,7 @@ def main(argv: list[str] | None = None) -> int:
                     help="add per-basin static features (elev/flowlen/precip/snow)")
     hy.add_argument("--data-dir", default="data", help="organized data/ store")
     hy.add_argument("--out", default=None,
-                    help="output dir (default: artifacts/dpl/hybrid/<variant>)")
+                    help="output dir (default: artifacts/dpl/testing/<variant>)")
     hy.add_argument("--epochs", type=int, default=60)
     hy.add_argument("--hidden", type=int, default=128, help="LSTM hidden size")
     hy.add_argument("--dropout", type=float, default=0.15)
