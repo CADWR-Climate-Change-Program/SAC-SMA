@@ -199,9 +199,162 @@ auto-masked), λ=0.2 each, cal-window only, never a selection metric.
   (select within the flow-optimal plateau), IMPROVES flow rather than
   trading against it.
 
+## Noah-line seasonal-timing program (2026-07-15, in progress)
+
+Why: the climatology shows noah→LSTM *hurts* NML/MRC/ORO (the basins where noah
+already matches CalSim3 FNF, monthly KGE 0.90–0.94) while halving the val
+seasonal mismatch everywhere else (0.092→~0.04). Diagnosis: ~37% of the LSTM
+residual correction is a fixed winter→spring MELT shift (ORO −0.34 mm/d Feb /
++0.39 May), ~63% interannual; the damage at the good basins is val-period
+VOLUME bias (NML β 0.954→0.901) injected by a calendar-keyed mean correction —
+`sin/cos_doy` are LSTM inputs and nothing constrains the residual's long-run
+mean. Program: obs-steered physics fine-tune on noah (the `pt_refined_ft`
+recipe, resurrected) + hybrid application fixes (`--no-doy`,
+`--resid-mean-lambda`). Scoreboard = `dpl.seasonal_compare.seasonal_physics_report`
+(daily-gage val KGE decomposition, val seasonal mismatch, monthly-vs-CalSim3
+KGE, correction seas_frac).
+
+- **Obs-loss infra RESURRECTED** (from `2ff8076`, reverse of the `cdf3018`
+  prune) into the seasonal-snow working tree: `loss.shape_pull_loss` /
+  `level_hinge_loss`, the `data.py` obs loaders + P−Q anchor, config/CLI λs.
+  Gates: λ=0 byte-identity vs the pre-merge run (loss + cal_kge to the last
+  digit); graph==eager with ET+SWE+anchor+4 seasonal params on (2.6e-5 rel,
+  selection bit-identical, 0 skips — first-ever run of swe-capture × seasonal
+  snow). New: `--et-products` (single-product steering; one product requires
+  the P−Q anchor; σ falls back to interannual spread + floor), and an
+  **ep0-donor gate** in train.py (warm-start ep0 selection must reproduce the
+  donor's sel cal-KGE).
+- **⚠ TRUNCATED SPINUP IS UNSAFE FOR TRAINED dPL FIELDS.** The ep0 gate caught
+  the canonical noah donor evaluating at 0.6552 under the 1978-10-01 truncated
+  spinup vs its 0.7594 selection (full-spinup era); `--spinup-start 1915-01-02`
+  reproduces 0.7594 EXACTLY. Cause: the learned field carries >10-yr state
+  memory (lzfsm ≈ 4000 mm fills at ~1–2 mm/day) — the truncation was
+  parity-verified on GA params only. Consequences: (1) every warm-start /
+  fine-tune MUST run full spinup; (2) selection scores are NOT comparable
+  across spinup bases (the seas_kpet control's 0.728 sel vs 0.754 scored gap
+  is partly this); (3) the earlier "fresh-Adam transient wrecks warm-starts —
+  from-scratch required" reading was WRONG — the warm start was exact all
+  along, the evaluation basis was broken.
+- **`testing/noah_seas_kpet`** — CONTROL: flow-only seasonal Kpet, from
+  scratch (n_inc 5, 40 ep, truncated spinup). Torch-scored **0.754/0.790** vs
+  noah-torch 0.759/0.792; val seasonal mismatch **0.097 vs noah 0.092**
+  (UNCHANGED), CalSim3 KGE 0.848 vs 0.861. Confirms the retired program's
+  conclusion on noah: flow alone cannot use the seasonal DOF — the obs signal
+  identifies it (`seasonal_compare_seas_kpet_flowonly.csv`).
+- **A2.0 pre-registered single-product pick: `fluxcom`** — minimizes RMS
+  |annual product ET − (P−Q_obs)| over the 15 basins (61.5 mm/yr; next
+  terraclimate 85.8, fldas 98.2, era5land 136, gleam 149; smallest mean bias
+  +31; closest at 6/15 basins). The flow-consistent criterion lands on the
+  same product the model's own ET level sits on (model ≈ FLUXCOM in the San
+  Joaquin) — "closest to the model" and "closest to P−Q" agree because the
+  model's level is flow-pinned (scratchpad a20_product_pick.py).
+- **`testing/noah_ft_kpet`** (A1a) — the pt_refined_ft recipe VERBATIM on noah
+  (`--init-from noah/best.pt --lr 2e-4 --patience 6 --seasonal Kpet` + λ
+  0.2/0.2/0.2 + P−Q anchor ±15%, n_inc 10, FULL spinup; ep0 gate = 0.7594
+  exact). **DOES NOT TRANSFER: selection never exceeded the donor** (early
+  stop ep14; best.pt = the donor field). The final obs-shaped ckpt
+  (final_ckpt/, scored for diagnosis only) is flow-neutral (0.757/0.794 vs
+  noah-torch 0.759/0.792) with val seasonal mismatch UNCHANGED (0.091 vs
+  0.092) — even though the net swung Kpet ±21% seasonally (amp med 0.18 on
+  base 0.83). **Mechanism = the pt_refined_noah_lite lesson**: Noah-lite AET
+  = β(SM)^χ·Kpet·PET — summer is water-limited (Kpet inert) and winter PET is
+  tiny, so the seasonal-ET knob that reshaped the PT cascade is structurally
+  damped before it reaches the hydrograph. Seasonal-ET timing is NOT a lever
+  on the noah scheme.
+- **`testing/noah_ft_snow`** (A1b) — A1a + `--seasonal Kpet,MFMAX,MFMIN,MBASE`
+  (`--seasonal-amp-frac 0.10`). **D1 WINNER — the melt DOF works where the ET
+  DOF was damped**: sel 0.7594→**0.7656@ep44** (the only arm to beat the
+  donor; early stop ep58), torch-scored **0.765/0.799 vs noah 0.759/0.792**.
+  Val seasonal mismatch 0.092→**0.085**; the program's target basins fixed
+  WITHOUT the LSTM's volume injection: NML CalSim3 KGE 0.924→**0.939**
+  (β 0.958), MRC 0.940→**0.970** (β 0.989) — the LSTM had dragged both below
+  ~0.91 at β≈0.90. Also TLG 0.839→0.862, MIL 0.746→0.785, YRS 0.870→0.891.
+  **The learned harmonics ARE the diagnosed winter→spring shift, in physics:**
+  MBASE +~0.4°C in mid-winter (suppresses warm-spell melt), MFMAX amplitude
+  added IN PHASE with Snow-17's Jun-21 sinusoid (stronger winter/spring melt
+  contrast → later melt), Kpet peaking late-Jan (+0.2 on 0.79 — fills the
+  known winter ET deficit, trims winter runoff). Costs: NHG CalSim3 0.751→
+  0.647 (snow-free ⇒ its melt DOF is unconstrained by the SWE loss; β 1.075→
+  0.930) and SHA/BND/ORO −0.03 via β −0.04 (the seasonal-Kpet level leak the
+  ±15% anchor band tolerates — a tighter band is the candidate fix). Gap to
+  the LSTM remains large (seas_mis 0.085 vs 0.043): the fixed harmonic can
+  only address the ~37% climatological share, and captures ~1/4 of it.
+- **`testing/noah_ft_1prod`** (A2) — A1b recipe + `--et-products fluxcom`
+  (the pre-registered P−Q-closest product; single-product σ = interannual +
+  0.1 floor, envelope replaced by the P−Q anchor). **LOSES the D2
+  head-to-head: selection never exceeded the donor** (early stop ep14 like
+  A1a; no instability — obs loss descended 0.77→0.50 cleanly) even though it
+  carried the same melt DOF that lifted A1b to 0.7656. Final-ckpt diagnosis:
+  0.757/0.797, seas_mis 0.084 (≈A1b — the melt DOF does the seasonal work in
+  both). Verdict: the stricter single-product ET pull (σ at the floor,
+  ~2.6× the init obs loss) BURNS the gradient budget that the consensus arm
+  spent improving flow — consensus + P−Q anchor is the right use of the
+  products, closing the single-product question. First launch was an A1b
+  duplicate (the `--et-products` kwarg wasn't threaded into DplConfig in
+  `_dpl_train` — argparse silently dropped it; fixed, and the launch-line
+  product printout is now part of the gate check). **D2 WINNER: A1b
+  (`noah_ft_snow`).** Seasonal arms are TORCH-scored — compare vs noah-torch
+  0.759/0.792, never the frozen 0.767/0.799.
+- **`testing/noah_lstm_resid_nodoy`** (B1) — residual hybrid WITHOUT the
+  sin/cos day-of-year inputs (`--no-doy`, 5 dyn channels), seeds 0–2,
+  canonical cfg, judged 3-member-mean vs canonical seeds 0–2 (never 3v8;
+  `compare_3v3.csv`). **Doy is redundant but NOT causal**: pooled val 0.871 =
+  0.871 (cal 0.923 vs 0.920 — zero skill cost), yet the val volume injection
+  is UNCHANGED (mean |val β−1| 0.064 = 0.064; NML β 0.913 vs 0.914, MRC 0.948
+  vs 0.964) — the LSTM reconstructs the same seasonal mean correction from
+  tavg/sim. Falsifies the strong doy hypothesis; the bias lives in the
+  residual's unconstrained MEAN → B2 is the live fix. D3: no 8-seed extension
+  on B1 alone.
+- **`testing/noah_lstm_resid_volpen_l{0.1,0.3,1.0}`** (B2) —
+  `--resid-mean-lambda` screen on seed 0 (penalty = λ·mean_b(per-batch
+  per-basin mean of the normalized residual)², basins ≥8 samples/batch).
+  **INERT ON THE TARGET, with a clean mechanism**: sel cal 0.920/0.918/0.905
+  (vs 0.923 plain) but seed-0 NML val β only 0.905→0.908/0.907/0.916 and
+  mean |val β−1| flat 0.067→0.066/0.065/0.070 (λ=1.0 costs pooled val
+  0.868→0.860 for +0.011 NML β). The penalty is satisfied ON THE CAL
+  DISTRIBUTION — the val volume bias is a REGIME-CONDITIONAL correction that
+  averages ~0 over cal but not over the shifted WY2004-18 climate; no
+  cal-window penalty (zero- or cal-mean-anchored) can constrain it.
+  **Track B conclusion: neither doy removal nor mean-penalties fix the val
+  volume injection — the fix is to SHRINK the residual's job (better physics
+  → B3). No 8-seed extension for B1/B2.**
+- **`testing/noah_lstm_resid_ft`** (B3) — 8-seed residual ensemble on the
+  **A1b physics** (`--physics GA --sim-cache
+  testing/noah_ft_snow/daily_sim_noah_ft_snow.csv` — the torch daily dump IS
+  the sim channel via the cache short-circuit; run_basin never executes; sim
+  provenance = torch numerics, full 1915–2018). **HYPOTHESIS REFUTED**:
+  ensemble-mean 0.931/0.870 vs canonical 0.926/0.873; CalSim3 0.877 vs 0.886;
+  and the target-basin val β got WORSE (NML 0.891 vs 0.901, MRC 0.929 vs
+  0.946) even though the A1b physics underneath has healthy β (0.958/0.989).
+  The LSTM correction dominates whatever physics it sits on and re-injects
+  its regime-conditional bias — the mirror of "the LSTM erases the physics
+  gap": it erases physics IMPROVEMENTS too.
+- **A3 (`--dynamic-params Kpet`) SKIPPED on evidence**: both A1a (seasonal)
+  and the flow-only control show the Kpet channel is β(SM)-damped on noah —
+  a climate-state Kpet routes through the same dead multiplier.
+- **PROGRAM CONCLUSION (2026-07-16; combined scoreboard =
+  `testing/noah_seasonal_program_scoreboard.csv`)**: (1) the ~37%
+  climatological share of the LSTM's seasonal correction is partially
+  absorbable in physics via MELT-timing DOF identified by SWE-shape obs
+  (A1b: seas_mis 0.092→0.085, NML/MRC CalSim3 0.939/0.970 — ABOVE the
+  hybrids' 0.78-0.87 at those basins — with healthy volume); ET-side seasonal
+  levers are dead on the noah scheme. (2) The hybrids' val volume bias at the
+  already-good basins is INTRINSIC to cal-only residual learning under
+  climate shift — not fixable by doy removal (B1), mean penalties (B2), or a
+  better physics baseline (B3). Practical reading: the LSTM ensembles remain
+  the pooled skill ceiling (val 0.873), but AT the basins where the physics
+  already matches CalSim3 (NML/MRC/ORO) the physics is the more trustworthy
+  out-of-sample answer, and A1b widens exactly that margin. A1b promotion
+  trade-offs if considered: torch-only scoring (seasonal params have no
+  frozen core), NHG regression (snow-free ⇒ melt DOF unconstrained —
+  candidate fix: weight melt harmonics by SWE participation), small
+  SHA/BND/ORO volume drift (candidate fix: tighter `--et-anchor-band`).
+
 ## Open items
-- (none active). Canonical set is complete: `hamon_dense`, `hamon`, `pt`, `noah`,
-  and the two SAC×LSTM ensembles `noah_lstm_feat` (0.923/0.869) /
-  `noah_lstm_resid` (0.926/0.873) — the LSTM erases the physics-baseline gap
-  (`noah` physics 0.767/0.799 → ~0.87 val hybrid). `pt_refined_noah_lite`
-  resolved 2026-07-14 (wash + reshuffle, not promoted; see the Noah ET line).
+- The Noah-line seasonal-timing program above (Track A fine-tunes + Track B
+  hybrid arms) is in flight; everything else is stable. Canonical set:
+  `hamon_dense`, `hamon`, `pt`, `noah`, and the two SAC×LSTM ensembles
+  `noah_lstm_feat` (0.923/0.869) / `noah_lstm_resid` (0.926/0.873) — the LSTM
+  erases the physics-baseline gap (`noah` physics 0.767/0.799 → ~0.87 val
+  hybrid). `pt_refined_noah_lite` resolved 2026-07-14 (wash + reshuffle, not
+  promoted; see the Noah ET line).
