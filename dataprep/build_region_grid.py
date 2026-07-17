@@ -33,7 +33,6 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import xarray as xr
 
 WGEN_DIR = r"C:\Users\warnold_la\Local\WGEN_NonDetrend_Unsplit_Statewide"
 GPKG = "data/calsim/gis/calsim3.gpkg"
@@ -48,14 +47,13 @@ def norm_key(k: str) -> str:
 
 
 def domain_cells(root: Path, domain: str) -> set[str]:
+    """A domain's grid cells from its hruinfo table (verified identical to the
+    retired per-domain forcing stores' key sets, 2026-07-16)."""
     if domain == "15cdec_grid":
         hi = pd.read_csv(root / "data" / "cdec15_grid" / "hruinfo.csv")
-        return {norm_key(k) for k in hi["key"].astype(str)}
-    ds = xr.open_dataset(root / "data" / "calsim" / "forcing"
-                         / f"historical_livneh_unsplit_{domain}.nc")
-    keys = {norm_key(k) for k in np.asarray(ds["key"]).astype(str)}
-    ds.close()
-    return keys
+    else:
+        hi = pd.read_csv(root / "data" / "calsim" / f"hruinfo_{domain}.csv")
+    return {norm_key(k) for k in hi["key"].astype(str)}
 
 
 def footprint_cells(root: Path) -> set[str]:

@@ -26,6 +26,12 @@ CDEC15_DOMAIN = "15cdec"
 CDEC15_GRID_DOMAIN = "15cdec_grid"
 #: the CalSim/CalLite application's domains.
 CALSIM_DOMAINS = ("9unimp", "11obs", "12rim")
+#: 1/16-deg-grid-based domains — these read the UNIFIED region forcing stores
+#: (``data/region/forcing/<product>.nc``: one file per product at the region
+#: grid, prcp/tmin/tmax with tavg derived; built by
+#: dataprep/build_region_forcing.py).  The fine ``15cdec`` domain keeps its
+#: own dense off-grid store (special interpolation treatment upstream).
+REGION_DOMAINS = (CDEC15_GRID_DOMAIN, *CALSIM_DOMAINS)
 
 
 def domain_dir(data_dir: str | Path = "data", domain: str = DEFAULT_DOMAIN) -> Path:
@@ -68,8 +74,21 @@ def forcing_name(domain: str = DEFAULT_DOMAIN, product: str = DEFAULT_FORCING) -
 def forcing_path(
     data_dir: str | Path = "data", domain: str = DEFAULT_DOMAIN, product: str = DEFAULT_FORCING
 ) -> Path:
-    """Full path of a domain's forcing store (``<app dir>/forcing/<name>.nc``)."""
+    """Full path of a domain's forcing store.
+
+    Grid-based domains (:data:`REGION_DOMAINS`) share the unified region store
+    ``data/region/forcing/<product>.nc``; the fine ``15cdec`` domain keeps its
+    per-domain ``<app dir>/forcing/<name>.nc``."""
+    if domain in REGION_DOMAINS:
+        return Path(data_dir) / "region" / "forcing" / f"{product}.nc"
     return domain_dir(data_dir, domain) / "forcing" / forcing_name(domain, product)
+
+
+def norm_grid_key(k: str) -> str:
+    """Normalize a ``<lat>_<lon>`` cell key to the region store's 5-decimal
+    convention (the calsim HRU tables carry 6-decimal fixed-format keys)."""
+    lat, lon = str(k).split("_")
+    return f"{round(float(lat), 5)}_{round(float(lon), 5)}"
 
 
 def soilveg_path(data_dir: str | Path = "data", domain: str = DEFAULT_DOMAIN) -> Path:
@@ -219,16 +238,45 @@ def load_forcing(
 ):
     """Open the domain-wide forcing store (xarray Dataset, dims (key, time)).
 
-    One store per modeling ``domain`` and forcing ``product`` (default: the
-    Livneh-unsplit historical grid) — grid cells indexed by ``key``
-    (``lat_lon``), shared across HRUs/basins.  HRU-level attributes (elev,
-    flowlen, area_weight, …) live in the HRU table, not here.  ``name``
-    overrides the resolved filename entirely.
+    Grid cells indexed by ``key`` (``lat_lon``), shared across HRUs/basins;
+    HRU-level attributes (elev, flowlen, area_weight, …) live in the HRU
+    table, not here.  ``name`` overrides the resolved filename entirely.
+
+    Grid-based domains (:data:`REGION_DOMAINS`) are served from the UNIFIED
+    region store: the domain's cells are selected (via its HRU table) and
+    relabelled to the domain's native key strings, and ``tavg`` is derived as
+    ``(tmax+tmin)/2`` (the committed stores' exact convention) — so the
+    returned dataset looks exactly like the retired per-domain files
+    (``prcp``/``tavg``), plus ``tmin``/``tmax``.
     """
     import xarray as xr
 
-    d = domain_dir(data_dir, domain) / "forcing"
-    return xr.open_dataset(d / name if name else forcing_path(data_dir, domain, product))
+    if name:
+        return xr.open_dataset(domain_dir(data_dir, domain) / "forcing" / name)
+    path = forcing_path(data_dir, domain, product)
+    ds = xr.open_dataset(path)
+    if domain not in REGION_DOMAINS:
+        return ds
+    hru_keys = load_hru_table(data_dir, domain)["key"].astype(str)
+    uniq = list(dict.fromkeys(hru_keys))
+    want = [norm_grid_key(k) for k in uniq]
+    have = set(str(k) for k in ds["key"].values)
+    absent = [u for u, w in zip(uniq, want, strict=True) if w not in have]
+    if absent:
+        raise KeyError(
+            f"{len(absent)} {domain} cells absent from {path.name} (first: "
+            f"{absent[:3]}) — e.g. outside the historical_lto release coverage")
+    sub = ds.sel(key=want)
+    tavg = ((sub["tmin"].astype("float64") + sub["tmax"].astype("float64"))
+            / 2.0).astype("float32")
+    out = xr.Dataset(
+        {"prcp": sub["prcp"], "tavg": tavg,
+         "tmin": sub["tmin"], "tmax": sub["tmax"]},
+        attrs=ds.attrs,
+    ).assign_coords(key=uniq)
+    lat = np.array([float(k.split("_")[0]) for k in want])
+    lon = np.array([float(k.split("_")[1]) for k in want])
+    return out.assign_coords(lat=("key", lat), lon=("key", lon))
 
 
 def doy_and_leap(dates: pd.Series | pd.DatetimeIndex) -> tuple[np.ndarray, np.ndarray]:

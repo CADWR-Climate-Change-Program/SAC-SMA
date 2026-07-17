@@ -609,17 +609,23 @@ def _load_canopy_obs(data_dir: str, domain: str, forcing):
 
 def _load_percell_tminmax(data_dir: str, domain: str, forcing):
     """Per-cell (n_cells, T) Tmin/Tmax aligned to ``forcing`` cell order, from
-    ``<domain>/tminmax_livneh_percell.nc`` — or (None, None) if absent (the
-    Noah/PT paths then RAISE at run time; there is no tavg fallback).  Only
-    15cdec_grid ships this sidecar (its cells sit on the WGEN lattice)."""
-    path = domain_dir(data_dir, domain) / "tminmax_livneh_percell.nc"
+    the unified region forcing store (``data/region/forcing``) — or
+    (None, None) for non-grid domains (the Noah/PT paths then RAISE at run
+    time; there is no tavg fallback)."""
+    from ..io import REGION_DOMAINS, forcing_path, norm_grid_key
+
+    if domain not in REGION_DOMAINS:
+        return None, None
+    path = forcing_path(data_dir, domain)
     if not path.exists():
         return None, None
     import xarray as xr
 
     ds = xr.open_dataset(path)
     key_row = {str(k): i for i, k in enumerate(ds["key"].values)}
-    order = np.array([key_row[k] for k in forcing.pos], dtype=np.int64)  # forcing order
+    order = np.array([key_row[norm_grid_key(k)] for k in forcing.pos],
+                     dtype=np.int64)  # forcing order
     tmin = ds["tmin"].values[order].astype(np.float32)
     tmax = ds["tmax"].values[order].astype(np.float32)
+    ds.close()
     return tmin, tmax

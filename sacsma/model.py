@@ -517,26 +517,29 @@ def load_domain_forcing(
     return DomainForcing(pos=pos, prcp=prcp, tavg=tavg, dates=dates, doy=doy, is_leap=is_leap)
 
 
-def attach_tminmax(data_dir: str | Path, domain: str, forcing: DomainForcing) -> None:
+def attach_tminmax(data_dir: str | Path, domain: str, forcing: DomainForcing,
+                   product: str = DEFAULT_FORCING) -> None:
     """Attach per-cell Tmin/Tmax to a :class:`DomainForcing` in place (no-op if
-    already attached) from ``<domain>/tminmax_livneh_percell.nc`` — required by
-    the Priestley-Taylor PET (``pet_source="priestley_taylor"``).  The sidecar
-    shares the forcing store's cells and time axis; rows are re-ordered to the
-    forcing's cell order.  Only ``15cdec_grid`` ships this sidecar."""
+    already attached) — required by the Priestley-Taylor PET
+    (``pet_source="priestley_taylor"``).  Grid-based domains read them from
+    the same unified region forcing store the prcp/tavg came from
+    (``data/region/forcing/<product>.nc``); the fine ``15cdec`` domain has no
+    per-cell tmin/tmax (its HRU points are off the 1/16-deg grid)."""
     if forcing.tmin is not None and forcing.tmax is not None:
         return
-    from .io import domain_dir
+    from .io import REGION_DOMAINS, norm_grid_key
 
-    path = Path(domain_dir(data_dir, domain)) / "tminmax_livneh_percell.nc"
-    if not path.exists():
+    if domain not in REGION_DOMAINS:
         raise FileNotFoundError(
-            f"Priestley-Taylor PET needs per-cell tmin/tmax; sidecar not found: {path}")
+            f"Priestley-Taylor PET needs per-cell tmin/tmax; domain {domain!r} "
+            "has no grid-based forcing store (only the region domains do)")
     import xarray as xr
 
-    ds = xr.open_dataset(path)
+    ds = xr.open_dataset(forcing_path(data_dir, domain, product))
     try:
         key_row = {str(k): i for i, k in enumerate(ds["key"].values)}
-        order = np.array([key_row[k] for k in forcing.pos], dtype=np.int64)
+        order = np.array([key_row[norm_grid_key(k)] for k in forcing.pos],
+                         dtype=np.int64)
         tmin = ds["tmin"].values[order]
         tmax = ds["tmax"].values[order]
     finally:
@@ -544,7 +547,7 @@ def attach_tminmax(data_dir: str | Path, domain: str, forcing: DomainForcing) ->
     t = forcing.prcp.shape[1]
     if tmin.shape[1] != t:   # e.g. a time-sliced forcing window
         raise ValueError(
-            f"tminmax sidecar time axis ({tmin.shape[1]}) != forcing ({t}); "
+            f"tminmax time axis ({tmin.shape[1]}) != forcing ({t}); "
             "PT runs currently require the full unsliced record")
     forcing.tmin = tmin
     forcing.tmax = tmax

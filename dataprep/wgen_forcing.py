@@ -132,7 +132,18 @@ def scan_x10(master_path: str, out_csv: str) -> None:
 
     Records every (cell, day) where a committed calsim store equals master/10
     within write precision — the correction ``--cut`` applies and ``--verify``
-    expects.  Any calsim mismatch that is NOT an exact x10 aborts."""
+    expects.  Any calsim mismatch that is NOT an exact x10 aborts.
+
+    HISTORICAL: the per-domain calsim stores this scans were retired by the
+    unified region store (2026-07-16, git history) — the committed table is
+    frozen provenance and cannot be re-derived from a clone."""
+    probe = (Path("data") / "calsim" / "forcing"
+             / f"historical_livneh_unsplit_{CALSIM_DOMAINS[0]}.nc")
+    if not probe.exists():
+        raise SystemExit(
+            "--scan-x10 needs the retired per-domain calsim stores (git "
+            f"history; {probe} absent) — data/region/prcp_x10_artifacts.csv "
+            "is the frozen result")
     master = xr.open_dataset(master_path)
     pairs: dict[tuple[str, pd.Timestamp], float] = {}
     for dom in CALSIM_DOMAINS:
@@ -186,23 +197,19 @@ def _compare(master: xr.Dataset, ref_path: Path, pairs: list[tuple[str, str]],
 
 
 def verify(master_path: str, x10_csv: str) -> None:
+    """Master (RAW lineage) vs the unified region store (x10-CORRECTED):
+    the prcp difference must be exactly the committed artifact table, and
+    tmin/tmax must be bit-equal."""
     master = xr.open_dataset(master_path)
-    root = Path("data")
     x10 = _x10_table(x10_csv)
     if x10 is None:
-        print(f"  ({x10_csv} absent — run --scan-x10 first for the calsim gates)")
-    # the cdec15 lineage is RAW — the master must match it bit-for-bit, no table
-    _compare(master, root / "cdec15_grid" / "forcing" / "historical_livneh_unsplit.nc",
-             [("prcp", "prcp"), ("tavg", "tavg")], tol=1e-4)
-    _compare(master, root / "cdec15_grid" / "tminmax_livneh_percell.nc",
-             [("tmin", "tmin"), ("tmax", "tmax")], tol=1e-5)
-    # the calsim stores carry the /10 artifact correction — expect the table
-    for d in CALSIM_DOMAINS:
-        _compare(master, root / "calsim" / "forcing"
-                 / f"historical_livneh_unsplit_{d}.nc",
-                 [("prcp", "prcp"), ("tavg", "tavg")], tol=6e-3, x10=x10)
+        raise SystemExit(f"{x10_csv} absent — it is committed; restore it")
+    _compare(master, Path("data") / "region" / "forcing"
+             / "historical_livneh_unsplit.nc",
+             [("prcp", "prcp"), ("tmin", "tmin"), ("tmax", "tmax")],
+             tol=1e-5, x10=x10)
     master.close()
-    print("VERIFY: all committed stores reproduced from the master")
+    print("VERIFY: region store == master with exactly the x10 table applied")
 
 
 def _warn_x10_suspects(sub: xr.Dataset, keys: list[str],

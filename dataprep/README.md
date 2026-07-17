@@ -36,8 +36,9 @@ targets this list.
 | ET obs: terraclimate/fldas/era5land | `gee_obs_region.py` | GEE (`--project ee-warnold`) | `data/region/et_obs/*.npz` | region burn running (spec v2, see below) |
 | SWE obs: daymet/terraclimate/fldas/era5land | `gee_obs_region.py` | GEE (same run) | `data/region/swe_obs/*.npz` | region burn running |
 | ET referees: openet (1999-10..2024-12), modis (2000-01..2025-12) | `gee_obs_region.py --products openet modis` | GEE (explicit run; excluded from `all` and from the training losses) | `data/region/et_obs/{openet,modis}_gee_cell_monthly.npz` | queued after the main burn |
-| daily forcing MASTER | `wgen_forcing.py` | WGEN NonDetrend-Unsplit statewide ASCII (local) | **local only**: `D:\sacsma-data\forcing\livneh_unsplit_nondetrend_daily_region.nc` | **done** (+ `--cut` for new basins) |
-| ×10 precip-artifact table | `wgen_forcing.py --scan-x10` | committed calsim stores vs the master | `data/region/prcp_x10_artifacts.csv` (197 pairs) | **done** |
+| daily forcing MASTER (raw) | `wgen_forcing.py` | WGEN NonDetrend-Unsplit statewide ASCII (local) | **local only**: `D:\sacsma-data\forcing\livneh_unsplit_nondetrend_daily_region.nc` | **done** (`--verify` proves region store == master + table) |
+| ×10 precip-artifact table | `wgen_forcing.py --scan-x10` | the retired per-domain calsim stores (git history) | `data/region/prcp_x10_artifacts.csv` (197 pairs, FROZEN) | **done** |
+| **UNIFIED region forcing** | `build_region_forcing.py` | master (+ table) / OneDrive Product_A / OneDrive LTO | `data/region/forcing/{historical_livneh_unsplit,wgen_product_a,historical_lto}.nc` (~3.1 GB LFS; prcp/tmin/tmax, tavg derived at load) | **done** — replaced the per-domain calsim + cdec15_grid stores (2026-07-16); parity gate re-passed |
 
 **Verification rules**: `local_obs_region.py --verify` reproduces the legacy
 2074-cell `D:\sacsma-data` npz (rel RMS < 1e-3 — PASSED at 1e-7: the raw

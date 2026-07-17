@@ -105,9 +105,7 @@ the store's `product` attribute). Ingested 2026-07; also excludes `15cdec`
 
 | File (×3 domains) | Size | What / provenance | Consumed by |
 |-------------------|------|-------------------|-------------|
-| `forcing/historical_livneh_unsplit_<domain>.nc` | 53–240 MB (LFS) | Livneh-unsplit daily forcing for the domain's grid cells | `io.load_forcing` → `model.run_basin` |
-| `forcing/wgen_product_a_<domain>.nc` | 56–251 MB (LFS) | **WGEN Product A** daily forcing (1915–2018) for the same grid cells: identical unsplit precipitation, temperature detrended to 1991–2020 (see Forcing provenance) | `io.load_forcing(product="wgen_product_a")` → `sacsma run --forcing wgen_product_a` |
-| `forcing/historical_lto_<domain>.nc` | 59–265 MB (LFS) | **Historical LTO** daily forcing (**1915–2021**) for the same grid cells: the LTO-study observed climate — pre-correction ("split") Livneh precipitation lineage; temperature matches the unsplit store (see Forcing provenance) | `io.load_forcing(product="historical_lto")` → `sacsma run --forcing historical_lto` |
+| *(forcing)* | — | The per-domain forcing stores were RETIRED 2026-07-16 (git history): all grid-based domains now read the **unified region stores** `data/region/forcing/<product>.nc` — `io.load_forcing` selects the domain's cells via its hruinfo table and derives `tavg = (tmax+tmin)/2`. See `data/region` below | `io.load_forcing` → `model.run_basin` |
 | `hruinfo_<domain>.csv` | 0.04–0.19 MB | Per-HRU attribute table (as above); shared cells appear once per owning watershed | `io.load_hru_table` |
 | `ga_optimum_<domain>.csv` | 0.2–1.0 MB | The archived **per-watershed** GA optima; carries a `basin` column (shared cells hold different params per watershed) | `io.load_params` |
 | `simflow_<domain>.csv` | 10–12 MB | The MATLAB simulated flow — exact parity target (all 32 CalLite watersheds reproduce it exactly) | `io.load_reference` |
@@ -171,9 +169,28 @@ gates — every ingest must reproduce its committed/legacy predecessor first).
 | `et_obs/{openet,modis}_gee_cell_monthly.npz` | pending | Benchmark-only ET referees at full available span: OpenET ensemble (`et_ensemble_mad`, 30 m mosaic, 1999-10→2024-12) + MOD16A2GF (8-day ET summed monthly ×0.1, 500 m, 2000-01→2025-12). NOT in the training `ET_FILES` | future benchmarking only |
 | `prcp_x10_artifacts.csv` | 8 KB | The raw lineage's misplaced-decimal precip spikes: 197 (cell, day) pairs over 168 cells, 7 isolated summer days, each exactly 10× too large. The calsim stores corrected them ÷10; the cdec15 stores kept them raw (146 shared cells — a pre-existing upstream inconsistency). Derived by `wgen_forcing.py --scan-x10` from the calsim-vs-master diff. Exact ONLY at calsim-covered cells — no corrected reference exists elsewhere (the OneDrive `Historical_Unsplit` copy is raw-identical), so `--cut` warns about suspect cell-days at footprint-only cells instead of editing | `wgen_forcing.py --cut` (applies ÷10 by default) and `--verify` |
 
-The **daily forcing master** deliberately lives on local disk, NOT in the repo
+### `data/region/forcing/` — the UNIFIED forcing stores (2026-07-16)
+
+One file per product at the region grid, **3 variables each**
+(`prcp`/`tmin`/`tmax` float32, per-cell chunked, zlib; `tavg` is derived at
+load as `(tmax+tmin)/2` — the retired stores' exact convention).  These
+replaced the per-domain `data/calsim/forcing/*.nc` + `data/cdec15_grid/`
+forcing + tminmax sidecar (the same cells were stored up to 4× across domain
+files, and tmin/tmax lived in a separate file).  Everything 1/16°-grid-based
+(calsim SAC-SMA, dPL, hybrids) reads them via `io.load_forcing`;
+`data/cdec15/forcing` (dense off-grid fine-HRU product, special upstream
+interpolation) is deliberately separate.  Built + verified by
+`dataprep/build_region_forcing.py`; parity gate re-passed for every domain
+with a simflow reference (BND/CacheCreek/SHA/SHAST, KGE > 0.9999).
+
+| File | Size | What / provenance |
+|------|------|-------------------|
+| `historical_livneh_unsplit.nc` | 1.06 GB (LFS) | 4410 cells × 1915–2018, from the local WGEN NonDetrend-Unsplit master, **×10 artifacts corrected ÷10** per `prcp_x10_artifacts.csv` (the calsim stores' convention; the retired cdec15_grid store was raw — its dPL consumers are retrained). Verified: == calsim stores to write precision incl. artifact days; vs the raw grid store exactly the 175 table pairs |
+| `wgen_product_a.nc` | 1.03 GB (LFS) | 4410 cells × 1915–2018, verbatim from the OneDrive release (already ×10-corrected upstream). Verified bit-exact vs all retired per-domain stores |
+| `historical_lto.nc` | 1.00 GB (LFS) | 4058 cells × 1915–2021 (352 region cells are outside the LTO release: Kern/Tule + Goose Lake — those basins cannot run LTO, unchanged from before); Mt Shasta cell neighbor-filled per the documented recipe. Verified bit-exact vs all retired per-domain stores |
+
+The **daily forcing master** (raw lineage) lives on local disk, NOT in the repo
 (`D:\sacsma-data\forcing\livneh_unsplit_nondetrend_daily_region.nc`; rebuild
-anytime with `dataprep/wgen_forcing.py --build-master`, provenance above).
-`wgen_forcing.py --cut <name> --cells <csv> --out-dir <dir>` emits a new
-basin's `historical_livneh_unsplit_<name>.nc` (prcp + tavg) and
-`tminmax_livneh_percell_<name>.nc` in the committed cdec15_grid schema.
+anytime with `dataprep/wgen_forcing.py --build-master`; `--verify` proves
+region store == master + the ×10 table).  `wgen_forcing.py --cut` emits
+custom out-of-repo cuts (e.g. for external tools).
