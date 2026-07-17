@@ -35,6 +35,7 @@ targets this list.
 | ET obs: gleam, fluxcom | `local_obs_region.py` | `D:\sacsma-data\{gleam,fluxcom}` raw | `data/region/et_obs/*.npz` | **done** (verified 1e-7) |
 | ET obs: terraclimate/fldas/era5land | `gee_obs_region.py` | GEE (`--project ee-warnold`) | `data/region/et_obs/*.npz` | region burn running (spec v2, see below) |
 | SWE obs: daymet/terraclimate/fldas/era5land | `gee_obs_region.py` | GEE (same run) | `data/region/swe_obs/*.npz` | region burn running |
+| ET referees: openet (1999-10..2024-12), modis (2000-01..2025-12) | `gee_obs_region.py --products openet modis` | GEE (explicit run; excluded from `all` and from the training losses) | `data/region/et_obs/{openet,modis}_gee_cell_monthly.npz` | queued after the main burn |
 | daily forcing MASTER | `wgen_forcing.py` | WGEN NonDetrend-Unsplit statewide ASCII (local) | **local only**: `D:\sacsma-data\forcing\livneh_unsplit_nondetrend_daily_region.nc` | **done** (+ `--cut` for new basins) |
 | ×10 precip-artifact table | `wgen_forcing.py --scan-x10` | committed calsim stores vs the master | `data/region/prcp_x10_artifacts.csv` (197 pairs) | **done** |
 

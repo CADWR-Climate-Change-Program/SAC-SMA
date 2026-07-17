@@ -74,13 +74,18 @@ PRODUCTS: dict[str, dict] = {
         kind="monthly", scale=11132, var="et",
         out="et_obs/era5land_gee_cell_monthly.npz",
         to_mm=lambda v, nd: v * -1000.0),             # m (negative) -> mm/month
-    # --- ET referee (benchmark-only: no calibration-window coverage) ----------
+    # --- ET referees (benchmark-only: no calibration-window coverage) ---------
     "openet": dict(
         coll="projects/openet/assets/ensemble/conus/gridmet/monthly/v2_0",
         band="et_ensemble_mad", kind="monthly_mosaic", scale=30,
         span=("1999-10-01", "2024-12-01"), chunk=1500, referee=True,
         var="et", out="et_obs/openet_gee_cell_monthly.npz",
         to_mm=lambda v, nd: v),                       # mm/month; 25 tiles/month
+    "modis": dict(
+        coll="MODIS/061/MOD16A2GF", band="ET", kind="monthly_sum", scale=500,
+        span=("2000-01-01", "2025-12-01"), referee=True,
+        var="et", out="et_obs/modis_gee_cell_monthly.npz",
+        to_mm=lambda v, nd: v * 0.1),   # sum of 8-day kg m-2 composites x 0.1
     # --- SWE (mm monthly-mean state; terraclimate = end-of-month snapshot) ---
     "daymet_swe": dict(
         coll="NASA/ORNL/DAYMET_V4", band="swe", kind="daily_mean",
@@ -103,6 +108,7 @@ PRODUCTS: dict[str, dict] = {
 #: existing 2074-cell stores for --verify (product -> path)
 VERIFY_AGAINST = {
     "openet": r"D:\sacsma-data\et_processed\openet_gee_cell_monthly.npz",
+    "modis": r"D:\sacsma-data\et_processed\modis_gee_cell_monthly.npz",
     "terraclimate": r"D:\sacsma-data\et_processed\terraclimate_gee_cell_monthly.npz",
     "fldas": r"D:\sacsma-data\et_processed\fldas_gee_cell_monthly.npz",
     "era5land": r"D:\sacsma-data\et_processed\era5land_gee_cell_monthly.npz",
@@ -141,6 +147,8 @@ def _month_image(ee, spec: dict, d: pd.Timestamp):
         return coll.mean()
     if spec["kind"] == "monthly_mosaic":
         return coll.mosaic()
+    if spec["kind"] == "monthly_sum":   # n-day composites starting in month
+        return coll.sum()
     return coll.first()
 
 
