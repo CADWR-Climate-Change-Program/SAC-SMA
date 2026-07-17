@@ -17,7 +17,7 @@ matter for the seasonal question:
   ever absorb).
 
 The noah / LSTM daily series and the CalSim3 monthly FNF are read from the cached
-climatology artifacts (``artifacts/calsim/compare/_climatology_cache``); run
+climatology artifacts (``artifacts/dpl/_climatology_cache``); run
 ``sacsma.dpl.climatology.make_cdec15_climatology`` first if they are absent.
 
 Writes ``seasonal_compare_<label>.csv`` + ``seasonal_compare_<label>.png``.
@@ -34,7 +34,7 @@ from ..cdec15 import CAL_END, load_gage
 from ..io import mmday_to_cfs
 from ..metrics import seasonal_mismatch
 
-_CACHE = Path("artifacts/calsim/compare/_climatology_cache")
+_CACHE = Path("artifacts/dpl/_climatology_cache")
 #: combined out-of-calibration period (mirrors climatology._PERIOD).
 _PERIOD = [("1949-10-01", "1987-09-30"), ("2003-10-01", "2018-12-31")]
 _AF_PER_CFS_DAY = 1.98347

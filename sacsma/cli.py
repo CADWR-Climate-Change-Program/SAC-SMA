@@ -558,10 +558,10 @@ def main(argv: list[str] | None = None) -> int:
         "climatology",
         help="per-watershed mean-monthly TAF regime (GA + dPL + hybrids) vs the "
              "observed CalSim3 FNF, as a 5-step ablation + all-series metric bars "
-             "-> artifacts/calsim/compare/figures/cdec15_climatology_*.png",
+             "-> artifacts/dpl/figures/cdec15_climatology_*.png",
     )
     cl.add_argument("--data-dir", default="data", help="organized data/ store")
-    cl.add_argument("--out", default="artifacts/calsim/compare",
+    cl.add_argument("--out", default="artifacts/dpl",
                     help="output root (figures -> <out>/figures/)")
     cl.add_argument("--device", default="cuda", choices=["cuda", "cpu"],
                     help="torch device for the hybrid reconstructions")

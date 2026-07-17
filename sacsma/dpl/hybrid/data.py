@@ -298,7 +298,7 @@ def load_hybrid_data(
     # use_pet adds the raw PT potential (the physics' energy-demand signal) as
     # an input channel — recomputed from the forcing (deterministic, cached).
     if use_pet:
-        pet_cache = (Path("artifacts/calsim/compare/_climatology_cache")
+        pet_cache = (Path("artifacts/dpl/_climatology_cache")
                      / f"basin_pet_pt_{domain}.csv")
         if pet_cache.exists():
             pdf = pd.read_csv(pet_cache, parse_dates=["date"]).set_index("date")

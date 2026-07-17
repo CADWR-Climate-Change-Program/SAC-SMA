@@ -28,7 +28,7 @@ Two figures on the basin-aggregated flow change dQ = detrended - historical:
     toward zero as the record approaches the 1991-2020 baseline);
   * the monthly dQ regime over the pre-1950 period (largest detrending effect).
 
-Output: artifacts/calsim/compare/figures/cdec15_forcing_sensitivity_*.png.
+Output: artifacts/dpl/figures/cdec15_forcing_sensitivity_*.png.
 """
 
 from __future__ import annotations
@@ -256,7 +256,7 @@ def assemble(data_dir: str = "data", *, device: str = "cuda") -> dict:
 
     areas = basin_areas(data_dir, domain="15cdec")
     f_hist, f_detr, dT = _forcings(data_dir)
-    cd = Path("artifacts/calsim/compare/_climatology_cache")
+    cd = Path("artifacts/dpl/_climatology_cache")
     # basins covered by WGEN: dT non-zero for >=50% of their cells
     hru = load_hru_table(data_dir, domain=DOMAIN)
     covered = {_norm_key(k) for k, r in f_hist.pos.items() if np.any(dT[r] != 0.0)}
@@ -367,7 +367,7 @@ def _plot_monthly(data: dict, path: Path) -> None:
 
 
 def make_forcing_sensitivity(data_dir: str = "data",
-                             out_dir: str | Path = "artifacts/calsim/compare",
+                             out_dir: str | Path = "artifacts/dpl",
                              *, device: str = "cuda") -> dict:
     data = assemble(data_dir, device=device)
     figdir = Path(out_dir) / "figures"

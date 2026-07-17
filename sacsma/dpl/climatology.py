@@ -26,7 +26,7 @@ to the +2 °C torch teacher.  (``noah_ft``, the obs-steered seasonal-melt
 fine-tune, was DEMOTED 2026-07-17: pooled val ties frozen noah, CalSim3 a
 wash, NHG + north-state volume worse — the head-to-head record lives in
 ``artifacts/dpl/RUNS.md``.)
-Output: ``artifacts/calsim/compare/figures/cdec15_climatology_{a..e}.png``.
+Output: ``artifacts/dpl/figures/cdec15_climatology_{a..e}.png``.
 
 A dPL-side artifact (needs torch for the hybrids) that reads the lightweight
 CalSim3-FNF loader from ``calsim.compare``; it never makes calsim depend on torch.
@@ -254,7 +254,7 @@ def assemble(data_dir: str = "data", *, device: str = "cuda") -> dict:
     from .config import pick_device
 
     areas = basin_areas(data_dir, domain="15cdec")
-    cachedir = Path("artifacts/calsim/compare/_climatology_cache")
+    cachedir = Path("artifacts/dpl/_climatology_cache")
     cachedir.mkdir(parents=True, exist_ok=True)
 
     monthly: dict[str, pd.DataFrame] = {}
@@ -484,7 +484,7 @@ def _plot_metrics_bars_agg(data: dict, path: Path) -> None:
 
 
 def make_cdec15_climatology(data_dir: str = "data",
-                            out_dir: str | Path = "artifacts/calsim/compare",
+                            out_dir: str | Path = "artifacts/dpl",
                             *, device: str = "cuda") -> dict:
     """Assemble every series and render the five ablation figures + the
     all-series metric-bar summaries (per-basin and basin-aggregated)."""

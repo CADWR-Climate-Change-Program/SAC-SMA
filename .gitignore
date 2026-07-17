@@ -39,8 +39,6 @@ artifacts/*
 !artifacts/README.md
 !artifacts/cdec15
 !artifacts/calsim
-# derived daily/monthly sim cache for the dpl climatology artifact (regenerable)
-artifacts/calsim/compare/_climatology_cache/
 
 # dPL: CANONICAL runs + the fidelity numerics gate + the track-record log are
 # tracked (tiny nets — best.pt is ~60 KB); exploratory runs stay local under
@@ -57,6 +55,9 @@ artifacts/dpl/*
 !artifacts/dpl/hybrid_pet_dt
 !artifacts/dpl/hybrid_progression.png
 !artifacts/dpl/hybrid_progression.csv
+!artifacts/dpl/figures
+# regenerable dpl climatology/forcing sim cache (was under calsim/compare/)
+artifacts/dpl/_climatology_cache/
 
 
 
