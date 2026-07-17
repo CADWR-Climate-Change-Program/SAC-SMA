@@ -33,17 +33,28 @@ targets this list.
 | grid definition | `build_region_grid.py` | domain hruinfo/forcing keys | `data/region/grid_cells.csv` (0.1 MB) | **done** |
 | statics: soilveg + LAI climatology | `build_region_statics.py` | the 4 committed per-domain sidecars | `data/region/{soilveg_continuous,lai_climatology}.csv` (~4 MB) | **partial: 2480/4410 cells** — the 1930 footprint-only cells have no committed sidecar; fill path = a raster ingest (POLARIS/LANDFIRE/3DEP/MODIS-LAI on `D:\sacsma-data\raw_gis`) gated on reproducing the committed calsim point-sample rows |
 | ET obs: gleam, fluxcom | `local_obs_region.py` | `D:\sacsma-data\{gleam,fluxcom}` raw | `data/region/et_obs/*.npz` | **done** (verified 1e-7) |
-| ET obs: terraclimate/fldas/era5land | `gee_obs_region.py` | GEE (user-run export) | `data/region/et_obs/*.npz` | script ready — needs `--project` |
-| SWE obs: daymet/terraclimate/fldas/era5land | `gee_obs_region.py` | GEE (user-run export) | `data/region/swe_obs/*.npz` | script ready (same run) |
+| ET obs: terraclimate/fldas/era5land | `gee_obs_region.py` | GEE (`--project ee-warnold`) | `data/region/et_obs/*.npz` | region burn running (spec v2, see below) |
+| SWE obs: daymet/terraclimate/fldas/era5land | `gee_obs_region.py` | GEE (same run) | `data/region/swe_obs/*.npz` | region burn running |
 | daily forcing MASTER | `wgen_forcing.py` | WGEN NonDetrend-Unsplit statewide ASCII (local) | **local only**: `D:\sacsma-data\forcing\livneh_unsplit_nondetrend_daily_region.nc` | **done** (+ `--cut` for new basins) |
 | ×10 precip-artifact table | `wgen_forcing.py --scan-x10` | committed calsim stores vs the master | `data/region/prcp_x10_artifacts.csv` (197 pairs) | **done** |
 
-**Verification rule for every ingest**: reproduce the existing committed/legacy
-store first (the original ingest scripts were session scratch and are lost —
-the stores define correctness).  `local_obs_region.py --verify` and
-`gee_obs_region.py --verify` diff against the 2074-cell `D:\sacsma-data` npz
-(rel RMS < 1e-3 required); `wgen_forcing.py --verify` reproduces the committed
-forcing + tminmax stores from the master.
+**Verification rules**: `local_obs_region.py --verify` reproduces the legacy
+2074-cell `D:\sacsma-data` npz (rel RMS < 1e-3 — PASSED at 1e-7: the raw
+sources are local and pinned); `wgen_forcing.py --verify` reproduces the
+committed forcing + tminmax stores from the master (PASSED).  **The GEE
+products are the exception** (decision 2026-07-16): the reproduce-the-snapshot
+gate FAILED — daymet was a fixable scale error (1 km native, not 11132 m),
+but ERA5-Land shows genuine asset drift (rel RMS ~0.2 vs the snapshot under
+every reduction tried; GEE reprocesses assets and the original pipeline is
+lost), so the snapshot is irreproducible in principle.  The region store is
+therefore **its own spec** — cell-rectangle mean at each asset's native
+scale, asset versions as of the export date (recorded in each npz's ``meta``)
+— and everything that consumed the old snapshot is **retrained on it**:
+`noah_ft` (warm-start fine-tune of `noah`, which is flow-only and unaffected)
+→ the +2 °C teacher → the `hybrid`/`hybrid_pet_dt` ensembles.
+`gee_obs_region.py --verify` remains as an asset-drift REPORT vs the legacy
+snapshot, not a gate.  The legacy `D:\` npz stay frozen as the record of what
+the pre-region canonical trained on.
 
 ## Provenance notes (established 2026-07-16)
 
@@ -86,18 +97,19 @@ forcing + tminmax stores from the master.
 
 ## GEE export runbook (user-run)
 
-Needs an EE-registered cloud project (the stored credentials carry none):
+Project = `ee-warnold` (EE-registered; the stored credentials carry none):
 
 ```
-earthengine authenticate                              # if stale
-python dataprep/gee_obs_region.py --verify --project <your-ee-project>   # must PASS all 7
-python dataprep/gee_obs_region.py --products all --project <your-ee-project>  # ~1-2 h
+python dataprep/gee_obs_region.py --products all --project ee-warnold  # region burn, hours
+python dataprep/gee_obs_region.py --verify --project ee-warnold        # optional drift report
 ```
 
 Outputs land in `data/region/{et_obs,swe_obs}/*.npz` (LFS via `data/**/*.npz`).
 After all 9 obs products exist region-wide, flip `sacsma/dpl/data.py`
-`ET_DIR`/`SWE_DIR` defaults to the in-repo store (env overrides kept) and
-retire the `D:\sacsma-data\{et,swe}_processed` dependency.
+`ET_DIR`/`SWE_DIR` defaults to the in-repo store (env overrides kept), retire
+the `D:\sacsma-data\{et,swe}_processed` dependency, and run the retrain chain
+(noah_ft fine-tune → +2 °C teacher → hybrid ensembles; recipes in
+`artifacts/dpl/RUNS.md`).
 
 ## New-basin setup (the end state)
 
