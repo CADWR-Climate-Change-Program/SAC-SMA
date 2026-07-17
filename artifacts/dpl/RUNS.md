@@ -9,9 +9,11 @@ reconstruct its seasonal MFMAX/MFMIN/MBASE harmonics — so it carries
 `metrics_noah_ft.csv` *(torch)* plus the load-bearing `daily_sim_noah_ft.csv`
 (date×basin mm/day): every frozen-path consumer (climatology,
 forcing-sensitivity, the hybrid sim channel) reads that dump instead of its
-`params_dpl.csv`. The canonical SAC×LSTM **ensemble** `hybrid` (feature
-coupling on `noah_ft`, no doy inputs) holds `seed*/checkpoints/best.pt` +
-per-seed `metrics_hybrid.csv` and a top-level `metrics_hybrid.csv` scoring the
+`params_dpl.csv`. The canonical SAC×LSTM **ensembles** — `hybrid` (basic
+feature coupling on `noah_ft`, no doy inputs) and `hybrid_pet_dt` (+ the raw
+PT-potential input + the ΔT-consistency loss; kept as a PAIR to show the
+climate-response improvement) — hold `seed*/checkpoints/best.pt` + per-seed
+`metrics_hybrid.csv` and a top-level `metrics_hybrid.csv` scoring the
 **ensemble-mean** flow (`hybrid.evaluate.score_ensemble`); the residual
 coupling and the two `noah`-based ensembles were retired 2026-07-16 (see
 below). Exploratory/superseded run artifacts were pruned; their findings stay
@@ -38,7 +40,8 @@ no-grad spinup from 1978-10-01.
 | `pt` | 15cdec_grid | Priestley–Taylor PET (Bristow–Campbell Rn) + snow-cover albedo (0.6) + arid dewpoint depression (2 °C) | 0.799/0.826 |
 | `noah` | 15cdec_grid | Noah-lite canopy ET (1 learned DOF `soil_chi`) on PT potential | 0.767/0.799 |
 | `noah_ft` | 15cdec_grid | warm-start fine-tune of `noah`: seasonal Kpet + MFMAX/MFMIN/MBASE melt harmonics, identified by ET/SWE-shape obs + P−Q anchor (flow-KGE selection) | 0.765/0.799 *(torch; vs noah-torch 0.759/0.792)* |
-| `hybrid` | 15cdec_grid | SAC×LSTM feature coupling on `noah_ft` physics (sim-cache channel), no doy inputs, temperature-consistency loss λ=0.3 (+2 °C teacher) — 8-seed ensemble mean | **0.912/0.861** *(+2 °C resp ratio 0.78 vs base 0.15)* |
+| `hybrid` | 15cdec_grid | SAC×LSTM feature coupling on `noah_ft` physics (sim-cache channel), no doy inputs — 8-seed ensemble mean. The BASIC hybrid: the skill step, with ~no warming response (+2 °C resp ratio 0.15) | 0.917/0.865 |
+| `hybrid_pet_dt` | 15cdec_grid | `hybrid` + the raw PT-potential input channel (`--pet-input`) + the temperature-consistency loss λ=0.3 (+2 °C teacher) — 8-seed ensemble mean. Same skill, physics-consistent climate response (+2 °C resp ratio **0.89**, regime r 0.97) | **0.917/0.864** |
 | ~~`noah_lstm_feat`~~ | 15cdec_grid | RETIRED 2026-07-16 — feature hybrid on `noah` (5 seeds, 0.923/0.869); superseded by `hybrid` | — |
 | ~~`noah_lstm_resid`~~ | 15cdec_grid | RETIRED 2026-07-16 — residual hybrid on `noah` (8 seeds, 0.926/0.873); the residual COUPLING was dropped entirely (regime-conditional volume injection, B1–B3) | — |
 
@@ -433,12 +436,53 @@ to the physics.
   Scoreboard (`hybrid/seasonal_compare_hybrid.csv`): the temp loss does NOT
   cost the hybrid its timing advantage — val seas_mis 0.047 vs noah_ft 0.085
   / noah 0.092; CalSim3 monthly KGE 0.867 (best of the three).
+- **PET-input arm (`testing/hybrid_pet`, 3 seeds, λ=0; user-directed)**: the
+  raw PT potential (basin-average, alb 0/dew 0 — exactly the noah_ft energy
+  demand, recomputed from forcing via `hybrid.data.basin_pet_pt`, opt-in
+  `--pet-input`, cached `basin_pet_pt_<domain>.csv`) added as a 6th dynamic
+  channel alongside the temps. Judged 3v3 (`testing/pet_screen_compare.csv`):
+  **PET is a SKILL lever, not a RESPONSE lever** — best pooled val of any
+  group (0.921/**0.870** vs base 0.857 / canon 0.860) and best |val β−1|
+  (0.074), but +2 °C resp ratio **0.19** ≈ the unconstrained 0.15 (ORO/NHG/
+  SCC/NML still wrong-signed). Same "redundant, not causal" pattern as doy:
+  the LSTM uses physics-shaped INPUTS as information; only the training-time
+  anchor moves dQ/dT. PET under any ΔT/forcing recomputes EXACTLY (a
+  deterministic function of T), so the perturbed training copy and the WGEN
+  counterfactual are clean for pet-input checkpoints.
+- **PET + temp-loss composition (`testing/hybrid_pet_tl`, 3 seeds, λ=0.3,
+  +2 °C teacher)**: they TRADE, not stack — **strongest response of any arm
+  (ratio 0.89, regime r 0.97; wrong-signed basins eliminated: ORO +0.17,
+  NHG +0.15)** but the PET skill bonus is spent doing it (val 0.870→0.860 =
+  canonical's level). Passes the promotion gate (val = canonical, response >
+  canonical 0.78) — held pending the λ=0.1 screen below.
+- **PET + λ=0.1 (`testing/hybrid_pet_tl0.1`, 3 seeds; resumed + judged
+  2026-07-16)**: the light-anchor corner does NOT dominate — 0.920/0.863
+  (+0.003 val over λ=0.3) but response ratio **0.70** < the no-PET canonical's
+  0.78, regime r 0.94, and SHA/BND/ORO/NHG back at ~zero/wrong-signed. The
+  skill-vs-response frontier is pet(0.870, 0.19) → pet_tl0.1(0.863, 0.70) →
+  pet_tl(0.860, 0.89); the no-PET canonical (0.860, 0.78) is STRICTLY
+  DOMINATED by pet_tl. **5-way winner: PET + λ=0.3** (equal skill, strongest
+  + cleanest response).
+- **FINAL PROMOTION (2026-07-16, user-directed naming + set)**: the winner ×8
+  = **`hybrid_pet_dt`** (0.917/**0.864** ensemble-mean — skill-neutral vs the
+  basic hybrid at 8 seeds, +2 °C response 0.89) and the λ=0 no-PET baseline
+  `hybrid_base` ×8 promoted as **`hybrid`** (0.917/0.865, response 0.15) so
+  the canonical set SHOWS the improvement: `hybrid` (the LSTM skill step) →
+  `hybrid_pet_dt` (same skill, physics-consistent climate response). The
+  intermediate no-PET λ=0.3 ensemble (0.912/0.861, response 0.78) is RETIRED
+  — dominated by `hybrid_pet_dt` on every axis (git history: 55c4e3c).
+  "dt" = the ΔT-consistency loss (formerly "tl"/temp-loss in the screens).
+  Figures: climatology panel e = noah → noah_ft → Hybrid → Hybrid PET+dT;
+  forcing-sensitivity carries BOTH ensembles (the flat-response basic Hybrid
+  vs the physics-tracking PET+dT is the improvement exhibit).
 
 ## Open items
 - Canonical set (2026-07-16): `hamon_dense`, `hamon`, `pt`, `noah`,
-  `noah_ft` *(torch, 0.765/0.799)*, and the SAC×LSTM ensemble `hybrid`
-  (feature-on-noah_ft, no-doy, temp-λ 0.3; 0.912/0.861, +2 °C response
-  anchored to physics). `noah_lstm_feat`/`noah_lstm_resid` retired.
+  `noah_ft` *(torch, 0.765/0.799)*, and the two SAC×LSTM ensembles
+  `hybrid` (basic: 0.917/0.865, +2 °C response 0.15) and `hybrid_pet_dt`
+  (PET input + ΔT-consistency λ0.3: 0.917/0.864, response 0.89) — kept as a
+  PAIR to show the climate-response improvement. `noah_lstm_feat`/
+  `noah_lstm_resid` and the intermediate no-PET λ0.3 ensemble retired.
 - noah_ft refinement candidates (not scheduled): SWE-participation-weighted
   melt harmonics (NHG), tighter `--et-anchor-band` (SHA/BND/ORO drift).
 - Hybrid val volume bias at NML/MRC/ORO remains intrinsic to cal-only
