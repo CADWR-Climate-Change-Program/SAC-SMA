@@ -80,10 +80,21 @@ def consolidate(root: Path, grid: pd.DataFrame, stem: str, out: Path) -> None:
         parts.append(cal[d].loc[keep].assign(src=f"calsim_{d}"))
         covered |= set(keep)
     df = pd.concat(parts).reindex(grid["key"])
-    if df["src"].isna().any():
-        miss = df.index[df["src"].isna()]
-        raise SystemExit(f"{stem}: {len(miss)} region cells uncovered "
-                         f"(first: {list(miss[:3])})")
+    uncovered = df.index[df["src"].isna()]
+    if len(uncovered):
+        # footprint-sweep cells beyond the modeling domains have no committed
+        # sidecar — they stay ABSENT from the statics store (documented gap;
+        # a verified raster ingest is the fill path). Domain cells must be there.
+        dom_cols = [c for c in grid.columns if c.startswith("in_")
+                    and c != "in_calsim3_fp"]
+        gd = grid.set_index("key")
+        dom_miss = [k for k in uncovered if gd.loc[k, dom_cols].sum() > 0]
+        if dom_miss:
+            raise SystemExit(f"{stem}: {len(dom_miss)} DOMAIN cells uncovered "
+                             f"(first: {dom_miss[:3]})")
+        print(f"  {stem}: {len(uncovered)} footprint-only cells have no "
+              "committed statics source — left out (see dataprep/README.md)")
+        df = df.dropna(subset=["src"])
     df.index.name = "key"
     df.to_csv(out)
     n_src = df["src"].value_counts().to_dict()

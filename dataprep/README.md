@@ -9,20 +9,29 @@ per-cell stores plus these living tools to (re)build and extend them.
 
 ## The region grid
 
-`build_region_grid.py` → `data/region/grid_cells.csv` (**done**): **2480
-cells** of the 1/16° Livneh grid — the union of the four modeling domains
-(15cdec_grid 2074 ∪ 9unimp 414 ∪ 11obs 1770 ∪ 12rim 1594; the CalSim
-footprints overlap 15cdec heavily — only 406 cells are calsim-only).  Keys are
-normalized 5-decimal `<lat>_<lon>` (`round(x, 5)`; the calsim stores carry
-6-decimal fixed-format keys — `sacsma.dpl.data._norm_obs_key` bridges).
-Membership flags `in_<domain>` per cell.  Every ingest below targets this list.
+`build_region_grid.py` → `data/region/grid_cells.csv` (**done**): **4410
+cells** of the 1/16° Livneh grid — the union of
+
+* the four modeling domains (15cdec_grid 2074 ∪ 9unimp 414 ∪ 11obs 1770 ∪
+  12rim 1594 = 2480 cells; the CalSim domains overlap 15cdec heavily), and
+* the **full CalSim3 footprint** — every cell whose rectangle intersects any
+  polygon of `data/calsim/gis/calsim3.gpkg` (both layers: all 215 Rim
+  watersheds incl. Goose Lake + the 170 Valley polygons), adding 1930 cells
+  beyond the domains so every CalSim3 rim location is coverable, not just the
+  ones the modeling domains carry.  14 sweep cells are dropped as absent from
+  the land-only WGEN store (Delta/open-water).
+
+Keys are normalized 5-decimal `<lat>_<lon>` (`round(x, 5)`; the calsim stores
+carry 6-decimal fixed-format keys — `sacsma.dpl.data._norm_obs_key` bridges).
+Membership flags `in_<domain>` + `in_calsim3_fp` per cell.  Every ingest below
+targets this list.
 
 ## Layer roadmap
 
 | layer | script | source | in-repo store | status |
 |---|---|---|---|---|
 | grid definition | `build_region_grid.py` | domain hruinfo/forcing keys | `data/region/grid_cells.csv` (0.1 MB) | **done** |
-| statics: soilveg + LAI climatology | `build_region_statics.py` | the 4 committed per-domain sidecars | `data/region/{soilveg_continuous,lai_climatology}.csv` (~4 MB) | **done** |
+| statics: soilveg + LAI climatology | `build_region_statics.py` | the 4 committed per-domain sidecars | `data/region/{soilveg_continuous,lai_climatology}.csv` (~4 MB) | **partial: 2480/4410 cells** — the 1930 footprint-only cells have no committed sidecar; fill path = a raster ingest (POLARIS/LANDFIRE/3DEP/MODIS-LAI on `D:\sacsma-data\raw_gis`) gated on reproducing the committed calsim point-sample rows |
 | ET obs: gleam, fluxcom | `local_obs_region.py` | `D:\sacsma-data\{gleam,fluxcom}` raw | `data/region/et_obs/*.npz` | **done** (verified 1e-7) |
 | ET obs: terraclimate/fldas/era5land | `gee_obs_region.py` | GEE (user-run export) | `data/region/et_obs/*.npz` | script ready — needs `--project` |
 | SWE obs: daymet/terraclimate/fldas/era5land | `gee_obs_region.py` | GEE (user-run export) | `data/region/swe_obs/*.npz` | script ready (same run) |
@@ -66,6 +75,14 @@ forcing + tminmax stores from the master.
   `data/region/prcp_x10_artifacts.csv` (from `--scan-x10`) is the auditable
   correction, applied by `--cut` by default (`--no-fix-x10` reproduces the
   raw cdec15 convention) and expected by `--verify` at the calsim stores.
+  **The table is exact only where a committed calsim store exists.**  The
+  OneDrive `BASE/WGEN/Historical_Unsplit` copy was checked and is identical
+  to the local store (raw) — the corrections live only in the original
+  study's per-domain meteo files, so no corrected reference exists for the
+  footprint-only cells, and no value threshold reproduces the known table
+  (the upstream fix was station-informed).  `--cut` therefore WARNS about
+  suspect cell-days there (≥30 mm on a known artifact day and >2× the cell's
+  other-summer max) instead of editing them — a human decision.
 
 ## GEE export runbook (user-run)
 
@@ -93,6 +110,8 @@ A basin inside the region needs only a delineation + a gage/FNF target:
    `tminmax_livneh_percell_<name>.nc`, in the committed cdec15_grid schema
    (×10 artifact days corrected by default; `--no-fix-x10` for the raw
    cdec15 convention).
-3. Statics: rows from `data/region/{soilveg_continuous,lai_climatology}.csv`.
+3. Statics: rows from `data/region/{soilveg_continuous,lai_climatology}.csv`
+   (currently the 2480 modeling-domain cells; footprint-only cells await the
+   raster ingest — see the roadmap).
 4. Obs losses: the region npz stores cover the cells (SACSMA_ET_DIR /
    SACSMA_SWE_DIR until the data.py defaults flip).

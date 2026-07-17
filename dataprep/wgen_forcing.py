@@ -205,6 +205,43 @@ def verify(master_path: str, x10_csv: str) -> None:
     print("VERIFY: all committed stores reproduced from the master")
 
 
+def _warn_x10_suspects(sub: xr.Dataset, keys: list[str],
+                       x10: pd.DataFrame | None) -> None:
+    """Warn about POSSIBLE x10 artifacts the reference table cannot cover.
+
+    The table is exact only where a committed calsim store exists; the
+    upstream correction was station-informed (no value threshold reproduces
+    it — calibration against the 197 known pairs found no clean separator),
+    so cells outside the modeling domains may carry uncorrected spikes on the
+    same known days.  Flag cut cell-days on those days whose value is >= 30 mm
+    AND > 2x the cell's own max summer daily precip over the rest of the
+    record — a HUMAN decision, never an automatic edit."""
+    if x10 is None or not len(x10):
+        return
+    t = pd.to_datetime(np.asarray(sub["time"]))
+    days = np.array(sorted(set(pd.to_datetime(x10["date"]))),
+                    dtype="datetime64[ns]")
+    art = np.isin(t.values, days)
+    summer = (t.month >= 6) & (t.month <= 9) & ~art
+    prcp = sub["prcp"].to_numpy()
+    base = prcp[:, summer].max(axis=1)
+    covered = {(r["key"], pd.Timestamp(r["date"])) for _, r in x10.iterrows()}
+    hits = []
+    for j in np.where(art)[0]:
+        v = prcp[:, j]
+        for i in np.where((v >= 30.0) & (v > 2.0 * base))[0]:
+            if (keys[i], t[j]) not in covered:
+                hits.append(f"{keys[i]} {t[j].date()} {v[i]:.1f} mm")
+    if hits:
+        print(f"WARNING: {len(hits)} cell-days look like UNCORRECTED x10 "
+              "artifacts (outside the reference table's calsim coverage) — "
+              "inspect before trusting summer extremes:")
+        for h in hits[:20]:
+            print("   ", h)
+        if len(hits) > 20:
+            print(f"    ... and {len(hits) - 20} more")
+
+
 def cut(master_path: str, name: str, cells_csv: str, out_dir: str,
         x10_csv: str, fix_x10: bool) -> None:
     cells = pd.read_csv(cells_csv)
@@ -216,12 +253,13 @@ def cut(master_path: str, name: str, cells_csv: str, out_dir: str,
                          f"(first: {missing[:3]}) — outside the region?")
     sub = master.sel(key=keys).load()
     nfix = 0
+    x10 = _x10_table(x10_csv)
     if fix_x10:
-        x10 = _x10_table(x10_csv)
         if x10 is None:
             raise SystemExit(f"{x10_csv} absent — run --scan-x10 first, or "
                              "pass --no-fix-x10 for the raw cdec15 convention")
         nfix = _apply_x10(sub["prcp"].values, keys, np.asarray(sub["time"]), x10)
+    _warn_x10_suspects(sub, keys, x10)
     od = Path(out_dir)
     od.mkdir(parents=True, exist_ok=True)
     tavg = ((sub["tmin"].astype(np.float64) + sub["tmax"].astype(np.float64))
