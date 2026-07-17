@@ -1,8 +1,8 @@
 """REGION ET/SWE observation ingest from Google Earth Engine.
 
 Re-exports the 7 GEE-derived obs products (3 ET + 4 SWE) over the region
-1/16-deg grid (``data/region/grid_cells.csv``, 4100 cells = 15cdec_grid +
-9unimp + 11obs + 12rim) in the exact per-cell monthly form the dPL obs losses
+1/16-deg grid (``data/region/grid_cells.csv``, 2480 cells = 15cdec_grid ∪
+9unimp ∪ 11obs ∪ 12rim) in the exact per-cell monthly form the dPL obs losses
 consume (``sacsma.dpl.data.ET_FILES``/``SWE_FILES`` npz:
 keys/dates/<var>/lat/lon).  The two non-GEE products (GLEAM, FLUXCOM) have
 local raw sources and their own ingest (dataprep/local_obs_region.py).
@@ -22,7 +22,7 @@ project: ``earthengine authenticate`` + pass ``--project <your-ee-project>``):
      (rel RMS < 1e-3) before the region run.  Catches band/unit drift in
      GEE assets since the original ingest.
   2. ``python dataprep/gee_obs_region.py --products all --project <id>``
-     the region burn (4100 cells x 372 months; ~1-2 h — one-time).
+     the region burn (2480 cells x 372 months; ~1 h — one-time).
      Writes data/region/et_obs/<p>_cell_monthly.npz and
      data/region/swe_obs/<p>_swe_cell_monthly.npz.
 

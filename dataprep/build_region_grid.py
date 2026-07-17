@@ -2,7 +2,7 @@
 
 The auxiliary-data region is the UNION of the four modeling domains' grid
 cells — ``15cdec_grid`` (2074 cells, from its hruinfo) plus the CalSim domains
-``9unimp``/``11obs``/``12rim`` (their forcing-store keys) — 4100 cells total.
+``9unimp``/``11obs``/``12rim`` (their forcing-store keys) — 2480 cells total.
 Keys are normalized to the ``sacsma.io`` 5-decimal ``<lat>_<lon>`` convention
 (``round(x, 5)``; the calsim stores carry 6-decimal fixed-format keys).
 Membership flags ``in_<domain>`` record which domains touch each cell.
