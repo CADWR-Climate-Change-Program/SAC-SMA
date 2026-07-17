@@ -165,16 +165,16 @@ def load_cal_obs(
 
 
 #: ET-observation products with 1988 coverage (enter the auxiliary loss).  Per-
-#: cell monthly ET npz.  The in-repo REGION store (``data/region/et_obs``,
-#: dataprep/{local_obs_region,gee_obs_region}.py) is replacing the original
-#: 2074-cell ``D:\`` scratch store; the default flips once all 5 products land
-#: there — override with SACSMA_ET_DIR meanwhile.  Screening-only referees
-#: (openet/modis/gldas, 2000/2001+) are deliberately excluded — they don't
-#: cover the calibration window.
+#: cell monthly ET npz from the in-repo REGION store (``data/region/et_obs``,
+#: dataprep/{local_obs_region,gee_obs_region}.py; GEE products spec v2,
+#: exported 2026-07-16).  The original 2074-cell ``D:\`` scratch store is a
+#: frozen record of the pre-region snapshot — override with SACSMA_ET_DIR to
+#: point back at it.  Benchmark-only referees (openet/modis, 2000+) are
+#: deliberately excluded — they don't cover the calibration window.
 #: max complete calendar months a fixed-length TBPTT chunk can hold (<=12 for a
 #: 366-day chunk; 13 for headroom).  The per-chunk ET target is padded to this.
 ET_MAXM = 13
-ET_DIR = os.environ.get("SACSMA_ET_DIR", r"D:\sacsma-data\et_processed")
+ET_DIR = os.environ.get("SACSMA_ET_DIR", os.path.join("data", "region", "et_obs"))
 ET_FILES: dict[str, str] = {
     "gleam": "gleam_cell_monthly.npz",
     "fluxcom": "fluxcom_cell_monthly.npz",
@@ -182,13 +182,14 @@ ET_FILES: dict[str, str] = {
     "fldas": "fldas_gee_cell_monthly.npz",
     "era5land": "era5land_gee_cell_monthly.npz",
 }
-#: SWE products with 1988 coverage (scratchpad/gee_swe_ingest.py; monthly-MEAN
+#: SWE products with 1988 coverage (``data/region/swe_obs``,
+#: dataprep/gee_obs_region.py; monthly-MEAN
 #: state in mm).  TerraClimate stores END-OF-MONTH snapshots — converted to a
 #: pseudo monthly mean in the loader so its PHASE lines up with the mean-state
 #: products (a snapshot lags the monthly mean ~half a month, the same size as
 #: the across-product phase spread we anchor).  MODIS fSCA / GLDAS (2000+) are
 #: screening referees only.
-SWE_DIR = os.environ.get("SACSMA_SWE_DIR", r"D:\sacsma-data\swe_processed")
+SWE_DIR = os.environ.get("SACSMA_SWE_DIR", os.path.join("data", "region", "swe_obs"))
 SWE_FILES: dict[str, str] = {
     "daymet": "daymet_swe_gee_cell_monthly.npz",
     "terraclimate": "terraclimate_swe_gee_cell_monthly.npz",

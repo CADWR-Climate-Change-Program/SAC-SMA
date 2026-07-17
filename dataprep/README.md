@@ -107,11 +107,14 @@ python dataprep/gee_obs_region.py --verify --project ee-warnold        # optiona
 ```
 
 Outputs land in `data/region/{et_obs,swe_obs}/*.npz` (LFS via `data/**/*.npz`).
-After all 9 obs products exist region-wide, flip `sacsma/dpl/data.py`
-`ET_DIR`/`SWE_DIR` defaults to the in-repo store (env overrides kept), retire
-the `D:\sacsma-data\{et,swe}_processed` dependency, and run the retrain chain
-(noah_ft fine-tune → +2 °C teacher → hybrid ensembles; recipes in
-`artifacts/dpl/RUNS.md`).
+The `sacsma/dpl/data.py` `ET_DIR`/`SWE_DIR` defaults were flipped to the
+in-repo store 2026-07-16 (env overrides kept; the frozen
+`D:\sacsma-data\{et,swe}_processed` snapshot is reachable via
+`SACSMA_ET_DIR`/`SACSMA_SWE_DIR`).  Drift at the level training consumes
+(15cdec basin-aggregated monthly climatology): ET rel RMS 1.1%, SWE 4.1%,
+snowy-basin mask unchanged — the retrain chain (noah_ft fine-tune → +2 °C
+teacher → hybrid ensembles; recipes in `artifacts/dpl/RUNS.md`) reruns on
+this basis.
 
 ## New-basin setup (the end state)
 
@@ -127,5 +130,5 @@ A basin inside the region needs only a delineation + a gage/FNF target:
 3. Statics: rows from `data/region/{soilveg_continuous,lai_climatology}.csv`
    (currently the 2480 modeling-domain cells; footprint-only cells await the
    raster ingest — see the roadmap).
-4. Obs losses: the region npz stores cover the cells (SACSMA_ET_DIR /
-   SACSMA_SWE_DIR until the data.py defaults flip).
+4. Obs losses: the region npz stores cover the cells (the `data.py`
+   defaults; SACSMA_ET_DIR / SACSMA_SWE_DIR override).
