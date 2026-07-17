@@ -535,6 +535,20 @@ multi-product basin means.
   ~zero — but every large-magnitude basin correct-signed) — the anchor
   survives the channel swap and now matches physics in the pooled sum
   (old channel: 0.89).
+- **Progression exhibit (`hybrid_progression.png`/`.csv`; user-requested)**:
+  the missing middle rung `testing/hybrid_pet_noah` (PET input, NO ΔT loss)
+  trained ×8 on the same channel: ensemble-mean 0.921/**0.872** — the best
+  val of the three arms (PET = skill lever, reconfirmed on the new basis) —
+  but +2 °C resp ratio **0.24** (regime r 0.96): the response stays ~flat
+  without the training-time anchor. The three-arm progression
+  (0.869/−0.57 → 0.872/0.24 → 0.864/1.04) isolates the two levers: the PET
+  INPUT buys ~+0.003 val and almost none of the response; the ΔT LOSS buys
+  the full physics response for ~−0.008 val. Panel b localizes the basic
+  arm's failure: its regime SHAPE is right (r 0.95) but it overshoots the
+  winter/spring flow gain ~+80% while matching the summer loss, so the
+  ANNUAL total comes out wrong-signed — the pathology lives in the annual
+  sum, not the seasonal pattern. Canonical set unchanged (the pair); the
+  PET-only rung stays in gitignored testing/ as the exhibit's middle point.
 - **Trajectory head-room (recorded, NOT applied — user kept 60 epochs)**:
   the hybrid runs are epoch-capped, not converged — patience-12 never
   fires, most seeds run to ep58-59, 6/14 seeds still drift upward across

@@ -53,9 +53,10 @@ artifacts/dpl/*
 !artifacts/dpl/hamon
 !artifacts/dpl/pt
 !artifacts/dpl/noah
-!artifacts/dpl/noah_ft
 !artifacts/dpl/hybrid
 !artifacts/dpl/hybrid_pet_dt
+!artifacts/dpl/hybrid_progression.png
+!artifacts/dpl/hybrid_progression.csv
 
 
 

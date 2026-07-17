@@ -1,0 +1,4 @@
+arm,cal_kge,val_kge,resp_ratio,regime_r
+Hybrid,0.9172,0.8694,-0.5716,0.9472
+Hybrid PET,0.9209,0.8719,0.2395,0.9637
+Hybrid PET+dT,0.916,0.8636,1.0383,0.9713
