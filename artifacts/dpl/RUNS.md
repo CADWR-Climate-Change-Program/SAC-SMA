@@ -1,38 +1,42 @@
 # dPL run track record
 
-Structure: **canonical** runs live directly under `artifacts/dpl/<label>`.
-Frozen-physics runs (`hamon_dense`, `hamon`, `pt`, `noah`) carry
-`checkpoints/best.pt`, `train_log.csv`, `params_dpl.csv`, `metrics_<label>.csv`
-(+ `params_canopy.csv` for `noah`). `noah` additionally carries two TORCH
-daily dumps (date×basin mm/day): `daily_sim_noah_torch.csv` — the hybrids'
-sim channel — and `daily_sim_noah_plus2C.csv` (+ `metrics_noah_plus2C.csv`),
-the +2 °C teacher for the ΔT-consistency loss; channel and teacher come from
-ONE pipeline (torch numerics) so the training-time response delta is
-numerics-consistent. The canonical SAC×LSTM **ensembles** — `hybrid` (basic
-feature coupling on the `noah` torch channel, no doy inputs) and
-`hybrid_pet_dt` (+ the raw PT-potential input + the ΔT-consistency loss; kept
-as a PAIR to show the climate-response improvement) — hold
-`seed*/checkpoints/best.pt` + per-seed `metrics_hybrid.csv` and a top-level
-`metrics_hybrid.csv` scoring the **ensemble-mean** flow
-(`hybrid.evaluate.score_ensemble`); the residual coupling and the first
-`noah`-based ensembles were retired 2026-07-16, and `noah_ft` (the seasonal
-melt fine-tune, canonical 2026-07-16→17) was **DEMOTED 2026-07-17** after a
-new-basis head-to-head (see the track record; git history + gitignored
-`testing/noah_ft_region` hold the record). Exploratory/superseded run
-artifacts were pruned; their findings stay in the track record below (names
-there no longer resolve to on-disk runs). `--physics` is REQUIRED with no
-default, so `testing/` holds only gitignored local scratch. `fidelity/` is
-the numerics benchmark (infrastructure, not a run). All skill numbers are
-pooled 15-basin mean KGE, frozen-model scoring (numba; PT via
-`sacsma.pet_pt`, Noah-lite via `sacsma.sma_noah_lite`) unless marked
-*(torch)* — seasonal-melt fine-tunes and the full 7-param Noah ET
-(`noah_grid*`) are torch-only (no frozen core).
+## Layout
 
-Standing methods shared by every canonical grid run: `physical` feature
-variant, pooled 15cdec training (daily gage FNF, cal WY1989–2003 / val
-WY2004–2018), CalSim3-footprint aggregation (`--calsim-footprint`), NNSE+log
-loss + variance-matching term, cal-KGE selection every 2 epochs, truncated
-no-grad spinup from 1978-10-01.
+Canonical runs live directly under `artifacts/dpl/<label>`. The frozen-physics runs
+(`hamon_dense`, `hamon`, `pt`, `noah`) each carry `checkpoints/best.pt`,
+`train_log.csv`, `params_dpl.csv`, and `metrics_<label>.csv` (plus
+`params_canopy.csv` for `noah`).
+
+`noah` also carries two torch daily dumps (date × basin, mm/day):
+`daily_sim_noah_torch.csv`, the hybrids' sim channel, and
+`daily_sim_noah_plus2C.csv` (with `metrics_noah_plus2C.csv`), the +2 °C teacher for
+the ΔT-consistency loss. Channel and teacher come from one pipeline (torch
+numerics), so the training-time response delta is numerics-consistent.
+
+The two canonical SAC×LSTM ensembles are `hybrid` (basic feature coupling on the
+`noah` torch channel, no day-of-year inputs) and `hybrid_pet_dt` (adds the raw
+PT-potential input and the ΔT-consistency loss). They are kept as a pair to show
+the climate-response improvement. Each holds `seed*/checkpoints/best.pt` and
+per-seed `metrics_hybrid.csv`, plus a top-level `metrics_hybrid.csv` scoring the
+ensemble-mean flow (`hybrid.evaluate.score_ensemble`). The residual coupling and
+the first `noah`-based ensembles were retired 2026-07-16, and `noah_ft` (the
+seasonal-melt fine-tune, canonical 2026-07-16→17) was demoted 2026-07-17 after a
+new-basis head-to-head — see the track record; git history and the gitignored
+`testing/noah_ft_region` hold the record.
+
+Superseded run artifacts were pruned, but their findings stay in the track record
+below (the names there no longer resolve to on-disk runs). `--physics` is required
+with no default, so `testing/` holds only gitignored local scratch, and `fidelity/`
+is the numerics benchmark, not a run. All skill numbers are pooled 15-basin mean
+KGE under frozen-model scoring (numba; PT via `sacsma.pet_pt`, Noah-lite via
+`sacsma.sma_noah_lite`) unless marked *(torch)* — the seasonal-melt fine-tunes and
+the full 7-param Noah ET (`noah_grid*`) are torch-only, with no frozen core.
+
+Standing methods shared by every canonical grid run: the `physical` feature
+variant; pooled 15cdec training (daily gage FNF, cal WY1989–2003 / val WY2004–2018);
+CalSim3-footprint aggregation (`--calsim-footprint`); an NNSE+log loss with a
+variance-matching term; cal-KGE selection every 2 epochs; and a truncated no-grad
+spinup from 1978-10-01.
 
 ## Canonical lineage
 

@@ -1,12 +1,12 @@
 # Raw California/CONUS GIS — provenance & manifest
 
-Continuous soil/vegetation/terrain rasters staged locally to (a) replace the
-opaque one-hot `soil_class`/`veg_class` HRU features with physical continua for
-the dPL parameter net (the `physical` feature variant), and (b) let the domain
-extend from the 15 CDEC basins to **all of California** without re-downloading.
-Preference: high-quality **California/CONUS** products over global. This tree is
-**gitignored** (`.gitignore: data/raw_gis/*`); only this provenance doc, the
-reusable HRU sampler (`sample_gis.py`), and the small per-HRU derived CSVs
+Continuous soil, vegetation, and terrain rasters staged locally, for two purposes:
+to replace the opaque one-hot `soil_class`/`veg_class` HRU features with physical
+continua for the dPL parameter net (the `physical` feature variant), and to let the
+domain extend from the 15 CDEC basins to all of California without re-downloading.
+The preference is high-quality California/CONUS products over global ones. This tree
+is gitignored (`data/raw_gis/*`); only this provenance doc, the reusable HRU sampler
+(`sample_gis.py`), and the small per-HRU derived CSVs
 (`data/<app>/soilveg_continuous*.csv`, `lai_climatology*.csv`) are committed.
 
 **California extent fetched:** lat 32–42 N, lon −125 to −114 W (1° tiles;
@@ -90,21 +90,21 @@ rasterio + pyhdf + pyproj; NOT importable by the core `sacsma` package).
 - `data/<app>/lai_climatology<sfx>.csv` — HRU × 46 8-day DOY LAI climatology
   (the Noah-ET canopy driver).
 
-**Sampling conventions.** Each HRU is a point (its lat/lon); rasters are sampled
-there. Terrain derivatives use a windowed neighbourhood (sub-grid roughness),
-not a single noisy 30 m slope. **Water-body gapfill:** POLARIS nodata over
-reservoirs is backfilled with the nearest finite pixel in an 81-px window (a
-reservoir HRU's true soil *is* the surrounding land); LAI pixels that are always
-fill (open water/permanent snow) borrow the nearest valid HRU's climatology.
-Both are flagged. For 15cdec: 35 HRUs POLARIS-gapfilled, 239 LAI-gapfilled;
-otherwise complete (7891/7891 finite, no NaN).
+**Sampling conventions.** Each HRU is a point (its lat/lon), and rasters are
+sampled there. Terrain derivatives use a windowed neighbourhood for sub-grid
+roughness rather than a single noisy 30 m slope. Water bodies are gap-filled:
+POLARIS nodata over reservoirs is backfilled with the nearest finite pixel in an
+81-px window (a reservoir HRU's true soil is the surrounding land), and LAI pixels
+that are always fill (open water or permanent snow) borrow the nearest valid HRU's
+climatology. Both are flagged. For 15cdec, 35 HRUs are POLARIS-gap-filled and 239
+LAI-gap-filled; otherwise the sample is complete (7891/7891 finite, no NaN).
 
-**Depth aggregation (a modelling choice, done in `sacsma.dpl.features`, NOT the
-sampler).** The `physical` feature variant collapses the 6 POLARIS depths into
-two SAC-SMA storage zones — surface/upper 0–30 cm (depth-weighted 0-5,5-15,15-30)
-and deep/lower 30–200 cm (30-60,60-100,100-200) — for each of sand/clay/ksat/
-theta_s, and encodes LAI peak-DOY as sin/cos. The raw 6-depth columns stay in the
-CSV so a different aggregation never requires re-sampling.
+**Depth aggregation** is a modelling choice made in `sacsma.dpl.features`, not the
+sampler. The `physical` feature variant collapses the six POLARIS depths into two
+SAC-SMA storage zones — surface/upper 0–30 cm (depth-weighted 0-5, 5-15, 15-30) and
+deep/lower 30–200 cm (30-60, 60-100, 100-200) — for each of sand, clay, ksat, and
+theta_s, and encodes LAI peak-DOY as sin/cos. The raw six-depth columns stay in the
+CSV, so a different aggregation never requires re-sampling.
 
 ### Derived (committed) products consumed by the model
 - `data/<app>/soilveg_continuous<sfx>.csv` + `lai_climatology<sfx>.csv` — per-HRU

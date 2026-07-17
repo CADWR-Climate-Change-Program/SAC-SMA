@@ -1,21 +1,21 @@
 # `data/` inventory
 
-Complete manifest of the tracked data store: **what each file is, where it came
-from, and what consumes it.** The store is split by application — `cdec15/`
-(the 15-CDEC domain) and `calsim/` (the CalSim/CalLite domains `9unimp`,
-`11obs`, `12rim` plus the CalSim3/VIC references). Every file is referenced by
-package code — there are **no orphans**. Sizes are approximate.
+A complete manifest of the tracked data store — what each file is, where it came
+from, and what consumes it. The store is split by application: `cdec15/` (the
+15-CDEC domain) and `calsim/` (the CalSim/CalLite domains `9unimp`, `11obs`,
+`12rim`, plus the CalSim3 and VIC references). Every file is referenced by package
+code; there are no orphans. Sizes are approximate.
 
-All tables are plain **CSV** (openable in Excel or a text editor); only the
-gridded forcing stores are NetCDF, tracked with **git-LFS** (`data/**/*.nc` in
-`.gitattributes`). One file is a **hand-edited source of truth** and is never
+All tables are plain CSV (openable in Excel or a text editor); only the gridded
+forcing stores are NetCDF, tracked with git-LFS (`data/**/*.nc` in
+`.gitattributes`). One file is a hand-edited source of truth, never
 auto-overwritten: `calsim/calsim_crosswalk.csv` 🔒.
 
-All of this data was derived once from the archived MATLAB-era study materials
-of **Wi & Steinschneider** (Cornell / UMass Amherst; CA DWR watershed studies)
-and from CalSim3/VIC model output. The one-time ingest scripts were retired and
-live in git history (the pre-reorg checkpoint commit `ad89558` and earlier);
-this file is the provenance record.
+All of it was derived once from the archived MATLAB-era study materials of Wi &
+Steinschneider (Cornell / UMass Amherst; CA DWR watershed studies) and from CalSim3
+and VIC model output. The one-time ingest scripts were retired and live in git
+history (the pre-reorg checkpoint commit `ad89558` and earlier); this file is the
+provenance record.
 
 ## Conventions
 
@@ -33,60 +33,55 @@ this file is the provenance record.
 
 ## Forcing provenance (all domains)
 
-The historical meteorology is the **Livneh 1/16° gridded product with the
-unsplit-precipitation basis** — precipitation carries the Pierce et al. (2021)
-storm-splitting correction (no artificial multi-day splitting of storm
-totals); temperature is Livneh, PRISM-adjusted and bias-corrected. The store
-filenames carry the provenance (`historical_livneh_unsplit*.nc`). This is the
-same precipitation basis as the VIC benchmark (`vic_routed_monthly.csv`,
-routed from the VIC `Historical_Unsplit` run), so the SAC-SMA-vs-VIC
-cross-compare is apples-to-apples on forcing.
+The historical meteorology is the Livneh 1/16° gridded product on the
+unsplit-precipitation basis. Precipitation carries the Pierce et al. (2021)
+storm-splitting correction, so storm totals are not artificially split across
+multiple days; temperature is Livneh, PRISM-adjusted and bias-corrected. The store
+filenames record this (`historical_livneh_unsplit*.nc`). The VIC benchmark shares
+the basis — `vic_routed_monthly.csv` is routed from the VIC `Historical_Unsplit`
+run — so the SAC-SMA-vs-VIC cross-compare is apples-to-apples on forcing.
 
-The per-cell source of this lineage survives locally as the **WGEN
-NonDetrend-Unsplit statewide ASCII store**
-(`C:\Users\warnold_la\Local\WGEN_NonDetrend_Unsplit_Statewide`, one
-`data_<lat>_<lon>` file per cell: `year month day prcp tmax tmin`, daily
-1915-01-01 → 2018-12-31, 13,786 cells): verified 2026-07-16, `prcp` matches
-every committed `historical_livneh_unsplit*` store to float32 rounding and the
-committed `tavg` is exactly `(tmax+tmin)/2` (the calsim stores match to their
-3-decimal write precision, ≤5e-3). `dataprep/wgen_forcing.py` packs the region
-cells into a local master and cuts new-basin forcing from it (see
-`data/region` below).
+The per-cell source of this lineage survives locally as the WGEN
+NonDetrend-Unsplit statewide ASCII store
+(`C:\Users\warnold_la\Local\WGEN_NonDetrend_Unsplit_Statewide`: one
+`data_<lat>_<lon>` file per cell, `year month day prcp tmax tmin`, daily
+1915-01-01 → 2018-12-31, 13,786 cells). Verified 2026-07-16 — `prcp` matches every
+committed `historical_livneh_unsplit*` store to float32 rounding, and the committed
+`tavg` is exactly `(tmax+tmin)/2` (the calsim stores match to their 3-decimal write
+precision, ≤5e-3). `dataprep/wgen_forcing.py` packs the region cells into a local
+master and cuts new-basin forcing from it (see `data/region` below).
 
-The CalSim domains additionally carry the **WGEN Product A** forcing
-(`wgen_product_a_<domain>.nc`) — scenario 1 of the DWR gridded weather
-generator release ("Gridded Weather Generator Perturbations…", data.ca.gov),
-the **historical-parallel sequence** used by the CalSim3 stochastic-input
-pipeline (it forced the pipeline's VIC Product A validation run).
-Empirically verified against the Livneh-unsplit store: **precipitation is
-identical** (same unsplit basis, released rounded to 0.01 mm); the difference
-is **temperature detrended to a 1991–2020 baseline** — the early record is
-warmed (+0.40 °C in the 1910s, tapering linearly to ~0 by the 2010s).
-`tavg = (tmax+tmin)/2`. Ingested 2026-07 from the per-cell ASCII files
-(`BASE/WGEN/Product_A/1/meteo_<lat>_<lon>`, columns `year month day prcp tmax
-tmin`) in the OneDrive copy of the `calsim3-stochastic-input-generation` data
-store, for exactly the domain's HRU grid cells, written with the same schema/
-compression as the Livneh stores. **`15cdec` has no WGEN store** — its HRU
-points are off the 1/16° grid (study-specific centroids), so the release does
-not cover them without a nearest-cell mapping the original study never
-defined.
+The CalSim domains also carry the WGEN Product A forcing
+(`wgen_product_a_<domain>.nc`) — scenario 1 of the DWR gridded weather-generator
+release ("Gridded Weather Generator Perturbations…", data.ca.gov), the
+historical-parallel sequence used by the CalSim3 stochastic-input pipeline (it
+forced the pipeline's VIC Product A validation run). Checked against the
+Livneh-unsplit store, the precipitation is identical (same unsplit basis, released
+rounded to 0.01 mm); the difference is temperature, detrended to a 1991–2020
+baseline, which warms the early record (+0.40 °C in the 1910s, tapering linearly to
+~0 by the 2010s). `tavg = (tmax+tmin)/2`. Ingested 2026-07 from the per-cell ASCII
+files (`BASE/WGEN/Product_A/1/meteo_<lat>_<lon>`, columns `year month day prcp tmax
+tmin`) in the OneDrive copy of the `calsim3-stochastic-input-generation` store, for
+exactly the domain's HRU grid cells, in the same schema and compression as the
+Livneh stores. `15cdec` has no WGEN store: its HRU points sit off the 1/16° grid
+(study-specific centroids), so the release does not cover them without a
+nearest-cell mapping the original study never defined.
 
-The third product is **Historical LTO** (`historical_lto_<domain>.nc`) — the
-observed-climate VIC forcing carried over from the CalSim3 **LTO
-(Long-Term Operations) study** (`BASE/Historical_Climate_LTO/1_Historical`,
-per-cell `data_<lat>_<lon>` ASCII: `prcp tmax tmin wind`, no date columns,
-implicit **daily 1915-01-01 → 2021-12-31** — three years past the other
-stores; wind is dropped). This is the **pre-Pierce-2021 ("split") Livneh
-precipitation lineage**: empirically vs the unsplit store, temperature is the
-same product (Δ ≈ +0.02 °C uniform) but precipitation is a genuinely
-different realization — daily correlation 0.83–0.93 per cell, annual totals
-within ±7%, storm mass preserved but daily values differing well beyond the
-storm-splitting signature. `tavg = (tmax+tmin)/2`, same schema/compression,
-same HRU grid cells. One cell is absent from the release
-(`41.46875_-122.15625`, Mt Shasta flank, ≤0.12% of the BND/SHA/SHAST areas)
-and is **filled from its southern neighbor** `41.40625_-122.15625` (noted in
-the store's `product` attribute). Ingested 2026-07; also excludes `15cdec`
-(same off-grid reason as WGEN).
+The third product is Historical LTO (`historical_lto_<domain>.nc`), the
+observed-climate VIC forcing carried over from the CalSim3 LTO (Long-Term
+Operations) study (`BASE/Historical_Climate_LTO/1_Historical`, per-cell
+`data_<lat>_<lon>` ASCII: `prcp tmax tmin wind`, no date columns, implicit daily
+1915-01-01 → 2021-12-31, three years past the other stores; wind is dropped). This
+is the pre-Pierce-2021 "split" Livneh precipitation lineage. Against the unsplit
+store the temperature is the same product (Δ ≈ +0.02 °C uniform), but the
+precipitation is a genuinely different realization: daily correlation 0.83–0.93 per
+cell, annual totals within ±7%, storm mass preserved but daily values differing
+well beyond the storm-splitting signature. `tavg = (tmax+tmin)/2`, same schema and
+compression, same HRU grid cells. One cell is missing from the release
+(`41.46875_-122.15625`, Mt Shasta flank, ≤0.12% of the BND/SHA/SHAST areas) and is
+filled from its southern neighbor `41.40625_-122.15625` (noted in the store's
+`product` attribute). Ingested 2026-07; like WGEN, it excludes `15cdec` for the
+same off-grid reason.
 
 ## `data/cdec15/` — the 15-CDEC application
 
@@ -154,10 +149,10 @@ diagnostics; `coverage_by_set.csv` reports each set's honest `cov_frac` and
 
 ## `data/region/` — auxiliary-data region store (dPL fine-tuning)
 
-The compact processed layers needed to (re)train/fine-tune the dPL models on
-any basin **within the cdec15 + CalSim areas** (built 2026-07-16;
-`dataprep/README.md` documents the living build tools and the verification
-gates — every ingest must reproduce its committed/legacy predecessor first).
+The compact processed layers for (re)training and fine-tuning the dPL models on any
+basin within the cdec15 + CalSim areas (built 2026-07-16). `dataprep/README.md`
+documents the build tools and the verification gates — every ingest must reproduce
+its committed or legacy predecessor first.
 
 | File | Size | What / provenance | Consumed by |
 |------|------|-------------------|-------------|
@@ -171,17 +166,17 @@ gates — every ingest must reproduce its committed/legacy predecessor first).
 
 ### `data/region/forcing/` — the UNIFIED forcing stores (2026-07-16)
 
-One file per product at the region grid, **3 variables each**
-(`prcp`/`tmin`/`tmax` float32, per-cell chunked, zlib; `tavg` is derived at
-load as `(tmax+tmin)/2` — the retired stores' exact convention).  These
-replaced the per-domain `data/calsim/forcing/*.nc` + `data/cdec15_grid/`
-forcing + tminmax sidecar (the same cells were stored up to 4× across domain
-files, and tmin/tmax lived in a separate file).  Everything 1/16°-grid-based
-(calsim SAC-SMA, dPL, hybrids) reads them via `io.load_forcing`;
-`data/cdec15/forcing` (dense off-grid fine-HRU product, special upstream
-interpolation) is deliberately separate.  Built + verified by
-`dataprep/build_region_forcing.py`; parity gate re-passed for every domain
-with a simflow reference (BND/CacheCreek/SHA/SHAST, KGE > 0.9999).
+One file per product at the region grid, three variables each (`prcp`, `tmin`,
+`tmax` as float32, per-cell chunked, zlib; `tavg` is derived at load as
+`(tmax+tmin)/2`, the retired stores' exact convention). These replaced the
+per-domain `data/calsim/forcing/*.nc`, the `data/cdec15_grid/` forcing, and the
+tminmax sidecar — the same cells had been stored up to 4× across domain files, with
+tmin/tmax in a separate file. Everything on the 1/16° grid (calsim SAC-SMA, dPL,
+hybrids) reads them via `io.load_forcing`; `data/cdec15/forcing` (the dense
+off-grid fine-HRU product, with its own upstream interpolation) is deliberately
+kept separate. Built and verified by `dataprep/build_region_forcing.py`, with the
+parity gate re-passed for every domain that has a simflow reference (BND,
+CacheCreek, SHA, SHAST; KGE > 0.9999).
 
 | File | Size | What / provenance |
 |------|------|-------------------|
@@ -189,8 +184,8 @@ with a simflow reference (BND/CacheCreek/SHA/SHAST, KGE > 0.9999).
 | `wgen_product_a.nc` | 1.03 GB (LFS) | 4410 cells × 1915–2018, verbatim from the OneDrive release (already ×10-corrected upstream). Verified bit-exact vs all retired per-domain stores |
 | `historical_lto.nc` | 1.00 GB (LFS) | 4058 cells × 1915–2021 (352 region cells are outside the LTO release: Kern/Tule + Goose Lake — those basins cannot run LTO, unchanged from before); Mt Shasta cell neighbor-filled per the documented recipe. Verified bit-exact vs all retired per-domain stores |
 
-The **daily forcing master** (raw lineage) lives on local disk, NOT in the repo
-(`D:\sacsma-data\forcing\livneh_unsplit_nondetrend_daily_region.nc`; rebuild
-anytime with `dataprep/wgen_forcing.py --build-master`; `--verify` proves
-region store == master + the ×10 table).  `wgen_forcing.py --cut` emits
-custom out-of-repo cuts (e.g. for external tools).
+The daily forcing master (raw lineage) lives on local disk, not in the repo
+(`D:\sacsma-data\forcing\livneh_unsplit_nondetrend_daily_region.nc`). Rebuild it
+anytime with `dataprep/wgen_forcing.py --build-master`; `--verify` proves the region
+store equals the master plus the ×10 table. `wgen_forcing.py --cut` emits custom
+out-of-repo cuts, e.g. for external tools.
