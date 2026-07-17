@@ -59,24 +59,31 @@ MODELS: dict[str, dict] = {
 #: run) + its canonical historical daily dump.
 NOAH_FT_CKPT = "artifacts/dpl/noah_ft/checkpoints/best.pt"
 NOAH_FT_DAILY = "artifacts/dpl/noah_ft/daily_sim_noah_ft.csv"
-#: the canonical Hybrid ENSEMBLE (mean over seed members); its sac_sim channel
-#: is the noah_ft physics, whose detrended torch run is re-fed as the ensemble's
-#: detrended baseline.
-HYBRID_ENS = "artifacts/dpl/hybrid"
+#: the canonical Hybrid ENSEMBLES (mean over seed members); both sac_sim
+#: channels are the noah_ft physics, whose detrended torch run is re-fed as the
+#: ensembles' detrended baseline.  ``Hybrid`` (plain: no PET, no dT loss) is
+#: the improvement BASELINE — its near-flat/wrong-signed response against
+#: ``Hybrid PET+dT`` (PT-potential input + temperature-consistency loss) is
+#: the point of this figure.
+ENSEMBLES: dict[str, str] = {
+    "Hybrid":        "artifacts/dpl/hybrid",
+    "Hybrid PET+dT": "artifacts/dpl/hybrid_pet_dt",
+}
 #: 2-D encoding so the series separate cleanly: COLOR = physics lineage (blue =
 #: Hamon, red = PT cascade, green = Noah-lite, purple = noah_ft fine-tune);
-#: LINESTYLE = role (solid = pure physics, dashed = LSTM ensemble).  Read the
-#: ET-scheme effect across colours, physics-vs-LSTM within purple.
+#: LINESTYLE = role (solid = pure physics, dashed/dash-dot = LSTM ensembles).
+#: Read the ET-scheme effect across colours, physics-vs-LSTM within purple.
 STYLE: dict[str, dict] = {
-    "dPL hamon":   dict(color="#1f77b4", lw=2.3, ls="-"),
-    "dPL pt":      dict(color="#d62728", lw=2.3, ls="-"),
-    "dPL noah":    dict(color="#2ca02c", lw=2.3, ls="-"),
-    "dPL noah_ft": dict(color="#9467bd", lw=2.3, ls="-"),
-    "Hybrid":      dict(color="#9467bd", lw=2.0, ls="--"),
+    "dPL hamon":     dict(color="#1f77b4", lw=2.3, ls="-"),
+    "dPL pt":        dict(color="#d62728", lw=2.3, ls="-"),
+    "dPL noah":      dict(color="#2ca02c", lw=2.3, ls="-"),
+    "dPL noah_ft":   dict(color="#9467bd", lw=2.3, ls="-"),
+    "Hybrid":        dict(color="#9467bd", lw=2.0, ls="--"),
+    "Hybrid PET+dT": dict(color="#9467bd", lw=2.0, ls="-."),
 }
 #: marker by role (reinforces the linestyle on the monthly plot only; the rolling
 #: time series stays marker-free).
-_ROLE_MARKER = {"-": "o", "--": "s"}
+_ROLE_MARKER = {"-": "o", "--": "s", "-.": "^"}
 
 
 def _norm_key(k) -> str:
@@ -150,7 +157,7 @@ def _hybrid_flow(data_dir, dT, dev, sim_detr: pd.DataFrame, ckpt: str):
     checkpoint."""
     import torch
 
-    from .hybrid.data import _CAL_START, DYNAMIC_FEATURES, load_hybrid_data
+    from .hybrid.data import _CAL_START, feature_names, load_hybrid_data
     from .hybrid.model import HybridLSTM
     from .hybrid.train import predict_days
 
@@ -159,10 +166,11 @@ def _hybrid_flow(data_dir, dT, dev, sim_detr: pd.DataFrame, ckpt: str):
     if ck.get("variant", "feature") != "feature":
         raise ValueError("residual hybrid checkpoints are retired (2026-07-16)")
     use_doy = cfg.get("use_doy", True)
+    use_pet = cfg.get("use_pet", False)
     h = load_hybrid_data(
         data_dir, physics_csv=ck.get("physics_csv"),
         sim_cache=ck.get("sim_cache"), use_statics=bool(ck["n_static"]),
-        use_doy=use_doy,
+        use_doy=use_doy, use_pet=use_pet,
         domain=cfg.get("physics_domain", "15cdec"),
         pet_source=cfg.get("pet_source", "hamon"),
         pt_snow_albedo=cfg.get("pt_snow_albedo", 0.0),
@@ -187,8 +195,7 @@ def _hybrid_flow(data_dir, dT, dev, sim_detr: pd.DataFrame, ckpt: str):
     tmax = np.vstack([tmm[f"tmax_{b}"].reindex(dom.dates).to_numpy() for b in dom.basins])
     sd = {"tavg": tavg[:, lo:hi].std() + 1e-8, "tmin": tmin[:, lo:hi].std() + 1e-8,
           "tmax": tmax[:, lo:hi].std() + 1e-8}
-    names = (DYNAMIC_FEATURES if use_doy else
-             tuple(n for n in DYNAMIC_FEATURES if n not in ("sin_doy", "cos_doy")))
+    names = feature_names(use_doy, use_pet)
     idx = {n: names.index(n) for n in ("tavg", "tmin", "tmax", "sac_sim")}
 
     sim_d = np.vstack([sim_detr[b].reindex(dom.dates).to_numpy() for b in dom.basins])
@@ -198,6 +205,16 @@ def _hybrid_flow(data_dir, dT, dev, sim_detr: pd.DataFrame, ckpt: str):
     sim_d_t = torch.as_tensor(sim_d, **dev_kw)
     for n in ("tavg", "tmin", "tmax"):
         feat_d[:, :, idx[n]] += dTb_t / sd[n]
+    if use_pet:
+        # PET is deterministic in T — recompute exactly under the dT field,
+        # normalized with the trained (historical cal-window) stats.
+        from .hybrid.data import basin_pet_pt
+        pet_h = basin_pet_pt(dom)
+        pet_d = basin_pet_pt(dom, delta_t=dT)
+        mu_p = pet_h[:, lo:hi].mean()
+        sd_p = pet_h[:, lo:hi].std() + 1e-8
+        feat_d[:, :, names.index("pet")] = torch.as_tensor(
+            (pet_d - mu_p) / sd_p, **dev_kw)
     # per-basin target-matched scaling (as load_hybrid_data does)
     feat_d[:, :, idx["sac_sim"]] = sim_d_t / h.scale[:, None]
     h_detr = dc.replace(h, feat=feat_d, sim=sim_d_t)
@@ -272,12 +289,13 @@ def assemble(data_dir: str = "data", *, device: str = "cuda") -> dict:
     dq["dPL noah_ft"] = (ft_detr - ft_hist)[basins]
     print("  assembled dPL noah_ft (torch)", flush=True)
 
-    # the canonical Hybrid ENSEMBLE (mean over seed members) on the noah_ft
+    # the canonical Hybrid ENSEMBLES (mean over seed members) on the noah_ft
     # detrended physics baseline
     dev = pick_device(device)
-    fh, fd = _ensemble_flow(data_dir, dT, dev, ft_detr, HYBRID_ENS)
-    dq["Hybrid"] = (fd - fh)[basins]
-    print("  assembled Hybrid", flush=True)
+    for label, ens in ENSEMBLES.items():
+        fh, fd = _ensemble_flow(data_dir, dT, dev, ft_detr, ens)
+        dq[label] = (fd - fh)[basins]
+        print(f"  assembled {label}", flush=True)
 
     # order north->south (reuse climatology ordering, restricted to covered)
     from .climatology import _basin_order

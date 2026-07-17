@@ -43,6 +43,10 @@ class HybridConfig:
     #: blocks the doy-conditioned mean corrections that injected val-period
     #: volume bias at the basins the physics already had right (NML/MRC/ORO).
     use_doy: bool = True
+    #: feed the raw PT potential (basin-average, alb 0 / dew 0 — exactly the
+    #: noah/noah_ft energy demand, recomputed from forcing) as an input
+    #: channel: a physics-shaped temperature pathway for the LSTM.
+    use_pet: bool = False
     physics_domain: str = "15cdec"   # HRU resolution of the frozen sim + forcing
     pet_source: str = "hamon"        # "hamon" | "priestley_taylor" (match --physics)
     pt_snow_albedo: float = 0.0      # PT snow-albedo refinement (pt = 0.6)
@@ -128,7 +132,7 @@ def train_hybrid(cfg: HybridConfig, *, data_dir: str = "data",
 
     data = load_hybrid_data(data_dir, physics_csv=physics_csv,
                             sim_cache=sim_cache, use_statics=cfg.use_statics,
-                            use_doy=cfg.use_doy,
+                            use_doy=cfg.use_doy, use_pet=cfg.use_pet,
                             domain=cfg.physics_domain, pet_source=cfg.pet_source,
                             pt_snow_albedo=cfg.pt_snow_albedo,
                             pt_dewpoint_depression=cfg.pt_dewpoint_depression,

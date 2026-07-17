@@ -59,6 +59,7 @@ def _load_data(ck: dict, data_dir: str, dev: torch.device):
         sim_cache=ck.get("sim_cache"),
         use_statics=bool(ck["n_static"]),
         use_doy=cfg.get("use_doy", True),
+        use_pet=cfg.get("use_pet", False),
         domain=cfg.get("physics_domain", "15cdec"),
         pet_source=cfg.get("pet_source", "hamon"),
         pt_snow_albedo=cfg.get("pt_snow_albedo", 0.0),
@@ -159,12 +160,15 @@ def compare_all(out_dir: str | Path = "artifacts/dpl",
                 "artifacts/dpl/hamon_dense/metrics_hamon_dense.csv",
                 hybrid_csv: str | Path =
                 "artifacts/dpl/hybrid/metrics_hybrid.csv",
+                pet_dt_csv: str | Path =
+                "artifacts/dpl/hybrid_pet_dt/metrics_hybrid.csv",
                 ) -> pd.DataFrame:
     """Merge GA / dPL / hybrid-ensemble cal+val KGE + a dumbbell figure."""
     out = Path(out_dir)
     frames = {}
     for name, path in [("GA", ga_csv), ("dPL", dpl_csv),
-                       ("hybrid", hybrid_csv)]:
+                       ("hybrid", hybrid_csv),
+                       ("hybrid_pet_dt", pet_dt_csv)]:
         p = Path(path)
         if p.exists():
             d = pd.read_csv(p)[["basin", "cal_kge", "val_kge"]]
@@ -190,7 +194,8 @@ def _dumbbell(merged: pd.DataFrame, path: str | Path) -> None:
 
     cols = [c for c in merged.columns if c.endswith("_val")]
     labels = [c[:-4] for c in cols]
-    colors = {"GA": "#888888", "dPL": "#1f77b4", "hybrid": "#ff7f0e"}
+    colors = {"GA": "#888888", "dPL": "#1f77b4", "hybrid": "#ff7f0e",
+              "hybrid_pet_dt": "#17becf"}
     y = np.arange(len(merged))
     fig, ax = plt.subplots(figsize=(6.5, 0.32 * len(merged) + 1))
     for c, lab in zip(cols, labels, strict=True):

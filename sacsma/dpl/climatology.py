@@ -67,10 +67,14 @@ TORCH_SIM: dict[str, str] = {
     "dPL noah_ft": "artifacts/dpl/noah_ft/daily_sim_noah_ft.csv",
 }
 #: hybrid sims: label -> canonical ENSEMBLE dir (seed*/checkpoints/best.pt
-#: averaged; physics settings read from the member ckpt cfg).  The canonical
-#: hybrid sits on the noah_ft physics baseline (sim channel = its daily dump).
+#: averaged; physics settings read from the member ckpt cfg).  Both sit on the
+#: noah_ft physics baseline (sim channel = its daily dump): ``Hybrid`` is the
+#: plain feature ensemble (no PET channel, no dT loss — the skill step),
+#: ``Hybrid PET+dT`` adds the PT-potential input + the temperature-consistency
+#: loss (the physics-consistent climate response, same skill).
 HYBRID: dict[str, str] = {
     "Hybrid": "artifacts/dpl/hybrid",
+    "Hybrid PET+dT": "artifacts/dpl/hybrid_pet_dt",
 }
 
 #: per-series line style (identity by hue; CalSim3 FNF emphasized in black).
@@ -84,6 +88,7 @@ STYLE: dict[str, dict] = {
     "dPL noah":           dict(color="#bcbd22", lw=2.0),
     "dPL noah_ft":        dict(color="#d62728", lw=2.0),
     "Hybrid":             dict(color="#9467bd", lw=2.1),
+    "Hybrid PET+dT":      dict(color="#17becf", lw=2.1),
 }
 
 #: (tag, subtitle, [model labels]) -- each renders one 11-basin figure.
@@ -96,8 +101,8 @@ COMPARISONS: list[tuple[str, str, list[str]]] = [
         ["dPL hamon", "dPL pt"]),
     ("d", "canopy ET: PT cascade → Noah-lite external ET",
         ["dPL pt", "dPL noah"]),
-    ("e", "seasonal-melt fine-tune, then the LSTM: noah → noah_ft → Hybrid",
-        ["dPL noah", "dPL noah_ft", "Hybrid"]),
+    ("e", "seasonal-melt fine-tune, then the LSTM: noah → noah_ft → Hybrid → +PET+dT",
+        ["dPL noah", "dPL noah_ft", "Hybrid", "Hybrid PET+dT"]),
 ]
 
 
@@ -136,6 +141,7 @@ def _daily_ensemble(ens_dir: str, data_dir: str, device, cache: Path) -> pd.Data
         data_dir, physics_csv=ck0.get("physics_csv"),
         sim_cache=ck0.get("sim_cache"), use_statics=bool(ck0["n_static"]),
         use_doy=cfg.get("use_doy", True),
+        use_pet=cfg.get("use_pet", False),
         domain=cfg.get("physics_domain", "15cdec"),
         pet_source=cfg.get("pet_source", "hamon"),
         pt_snow_albedo=cfg.get("pt_snow_albedo", 0.0),
@@ -268,7 +274,7 @@ def assemble(data_dir: str = "data", *, device: str = "cuda") -> dict:
 
     dev = pick_device(device)
     for label, ens_dir in HYBRID.items():
-        tag = label.replace(" ", "_").lower()
+        tag = Path(ens_dir).name                # sim_hybrid / sim_hybrid_pet_dt
         daily = _daily_ensemble(ens_dir, data_dir, dev,
                                 cachedir / f"sim_{tag}.csv")
         monthly[label] = _monthly_taf(daily, areas)

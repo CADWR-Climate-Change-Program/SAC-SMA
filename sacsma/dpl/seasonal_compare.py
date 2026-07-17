@@ -115,6 +115,7 @@ def seasonal_physics_report(
     need = {"noah": cache / "sim_noah.csv",
             "noah_ft": Path("artifacts/dpl/noah_ft/daily_sim_noah_ft.csv"),
             "hybrid": cache / "sim_hybrid.csv",
+            "hybrid_pet_dt": cache / "sim_hybrid_pet_dt.csv",
             "c3": cache / "calsim3_fnf_monthly.csv"}
     for k, p in need.items():
         if not p.exists():
@@ -128,6 +129,8 @@ def seasonal_physics_report(
                                parse_dates=["date"]).set_index("date"),
         "hybrid": pd.read_csv(need["hybrid"],
                               parse_dates=["date"]).set_index("date"),
+        "hybrid_pet_dt": pd.read_csv(need["hybrid_pet_dt"],
+                                     parse_dates=["date"]).set_index("date"),
     }
     c3 = pd.read_csv(need["c3"], parse_dates=["date"]).set_index("date")
     gage = load_gage(data_dir)
@@ -141,7 +144,7 @@ def seasonal_physics_report(
         val = (idx > pd.Timestamp(CAL_END)) & np.isfinite(o.to_numpy())
         obs_all = np.isfinite(o.to_numpy())
         rec: dict[str, float | str] = {"basin": b}
-        for m in ("noah", "noah_ft", "arm", "hybrid"):
+        for m in ("noah", "noah_ft", "arm", "hybrid", "hybrid_pet_dt"):
             s = sims[m][b].reindex(idx)
             d = _kge_decomp(s.to_numpy()[val], o.to_numpy()[val])
             # monthly seasonal mismatch over the val period vs the gage
@@ -171,7 +174,7 @@ def seasonal_physics_report(
     print(f"wrote {csv}", flush=True)
     _plot(df, basins, out / f"seasonal_compare_{label}.png", label)
     # console summary: means
-    for m in ("noah", "noah_ft", "arm", "hybrid"):
+    for m in ("noah", "noah_ft", "arm", "hybrid", "hybrid_pet_dt"):
         print(f"  {m:5s}: mean val_KGE={df[f'{m}_val_kge'].mean():.3f}  "
               f"mean seas_mis={df[f'{m}_seas_mis'].mean():.3f}  "
               f"mean CalSim3_KGE={df[f'{m}_c3_kge'].mean():.3f}", flush=True)
@@ -180,10 +183,10 @@ def seasonal_physics_report(
     return df
 
 
-_COLORS = {"noah": "#bcbd22", "noah_ft": "#d62728", "arm": "#17becf",
-           "hybrid": "#9467bd"}
+_COLORS = {"noah": "#bcbd22", "noah_ft": "#d62728", "arm": "#ff7f0e",
+           "hybrid": "#9467bd", "hybrid_pet_dt": "#17becf"}
 _NAMES = {"noah": "dPL noah", "noah_ft": "dPL noah_ft", "arm": "arm",
-          "hybrid": "Hybrid"}
+          "hybrid": "Hybrid", "hybrid_pet_dt": "Hybrid PET+dT"}
 
 
 def _plot(df: pd.DataFrame, basins: list[str], path: Path, label: str) -> None:
@@ -191,7 +194,7 @@ def _plot(df: pd.DataFrame, basins: list[str], path: Path, label: str) -> None:
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    models = ["noah", "noah_ft", "arm", "hybrid"]
+    models = ["noah", "noah_ft", "arm", "hybrid", "hybrid_pet_dt"]
     rows = [("daily-gage val KGE", "val_kge", (0.0, 1.0)),
             ("seasonal mismatch (val)", "seas_mis", None),
             ("monthly KGE vs CalSim3 FNF", "c3_kge", (0.0, 1.0))]
@@ -221,7 +224,7 @@ def _plot(df: pd.DataFrame, basins: list[str], path: Path, label: str) -> None:
     fig.legend([seen[m] for m in models], [_NAMES[m] for m in models],
                loc="lower center", ncol=n, fontsize=10, frameon=False,
                bbox_to_anchor=(0.5, 0.005))
-    fig.suptitle(f"Arm ({label}) vs noah / noah_ft / Hybrid",
+    fig.suptitle(f"Arm ({label}) vs noah / noah_ft / Hybrid / Hybrid PET+dT",
                  fontsize=13.5, fontweight="bold")
     fig.tight_layout(rect=(0, 0.045, 1, 0.985))
     path.parent.mkdir(parents=True, exist_ok=True)

@@ -170,7 +170,7 @@ def _dpl_hybrid(args: argparse.Namespace) -> int:
         hidden=args.hidden, dropout=args.dropout, lr=args.lr,
         batch_size=args.batch_size, device=args.device, seed=args.seed,
         input_noise=args.input_noise,
-        use_doy=not args.no_doy,
+        use_doy=not args.no_doy, use_pet=args.pet_input,
         temp_lambda=args.temp_lambda, temp_delta=args.temp_delta,
         temp_sim_cache=args.temp_sim_cache,
         physics_domain=args.physics_domain, pet_source=args.sac_pet,
@@ -522,6 +522,11 @@ def main(argv: list[str] | None = None) -> int:
                          "channel already carries the calendar; an explicit doy "
                          "enables calendar-keyed mean corrections that inject "
                          "val-period volume bias)")
+    hy.add_argument("--pet-input", action="store_true",
+                    help="add the raw PT potential (basin-average, alb 0/dew 0 "
+                         "— the noah energy demand, recomputed from forcing) as "
+                         "an LSTM input channel: a physics-shaped temperature "
+                         "pathway")
     hy.add_argument("--temp-lambda", type=float, default=0.0,
                     help="temperature-consistency loss weight: pull the hybrid's "
                          "daily warming response Q(T+dT)-Q(T) toward the physics "

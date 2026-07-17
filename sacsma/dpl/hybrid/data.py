@@ -38,8 +38,24 @@ SEQ_LEN = 365                     # lookback window (last day = target); == spin
 _OMEGA = 2.0 * np.pi / 365.0
 _CAL_START = "1988-10-01"         # WY1989 (matches DplConfig.cal_start)
 #: dynamic feature order fed to the LSTM (statics are appended by the model).
+#: ``pet`` (raw PT potential — the physics' energy-demand signal) and the
+#: sin/cos day-of-year are OPT-IN; see :func:`feature_names`.
 DYNAMIC_FEATURES: tuple[str, ...] = (
-    "precip", "tavg", "tmin", "tmax", "sac_sim", "sin_doy", "cos_doy")
+    "precip", "tavg", "tmin", "tmax", "pet", "sac_sim", "sin_doy", "cos_doy")
+
+
+def feature_names(use_doy: bool, use_pet: bool) -> tuple[str, ...]:
+    """The active dynamic-channel names, in DYNAMIC_FEATURES order.
+
+    Every consumer that needs channel indices (training, evaluation, the
+    forcing-sensitivity counterfactuals) derives them from THIS filter so old
+    checkpoints (no pet, doy on) keep their layout."""
+    drop = set()
+    if not use_doy:
+        drop |= {"sin_doy", "cos_doy"}
+    if not use_pet:
+        drop.add("pet")
+    return tuple(n for n in DYNAMIC_FEATURES if n not in drop)
 #: basin-average daily Tmin/Tmax (pre-ingested from the WGEN 1/16-deg grid;
 #: see scratchpad/ingest_tminmax.py).  Adds the diurnal-range signal a single
 #: tavg discards; basin tavg reproduces the stored forcing to 0.37 degC.
@@ -97,6 +113,33 @@ def build_frozen_sim(
 
 def _has_seasonal(params: pd.DataFrame) -> bool:
     return any(str(c).endswith("_asin") for c in params.columns)
+
+
+def basin_pet_pt(dom, delta_t: float | np.ndarray = 0.0) -> np.ndarray:
+    """(B, T) basin-average raw PT PET (mm/day) — alb 0 / dew 0, i.e. exactly
+    the potential the noah/noah_ft physics sees, BEFORE the learned Kpet.
+
+    Recomputed from the per-cell forcing + tmin/tmax sidecar (deterministic and
+    parameter-free), so any counterfactual is exact: ``delta_t`` shifts all
+    three temperatures — a scalar degC (warming), or a per-forcing-row
+    ``(rows, T)`` field (e.g. the WGEN detrending delta)."""
+    from ...pet_pt import pt_raw_pet
+
+    if dom.tmin is None or dom.tmax is None:
+        raise ValueError("the pet input channel needs the per-cell tmin/tmax "
+                         "sidecar (15cdec_grid domain)")
+    d = (np.asarray(delta_t)[dom.cell_idx]
+         if not isinstance(delta_t, (int, float)) else float(delta_t))
+    tavg = dom.forcing.tavg[dom.cell_idx].astype(np.float64) + d
+    tmin = dom.tmin[dom.cell_idx].astype(np.float64) + d
+    tmax = dom.tmax[dom.cell_idx].astype(np.float64) + d
+    doy = dom.forcing.doy.astype(np.float64)
+    lat = dom.hrus["lat"].to_numpy(np.float64)
+    elev = dom.hrus["elev"].to_numpy(np.float64)
+    pet = np.empty_like(tavg)
+    for i in range(tavg.shape[0]):
+        pet[i] = pt_raw_pet(tavg[i], tmin[i], tmax[i], doy, lat[i], elev[i])
+    return dom.W.numpy() @ pet
 
 
 def _check_physics_domain(physics_csv: str | Path, domain_keys: set[str],
@@ -176,6 +219,7 @@ def load_hybrid_data(
     sim_cache: str | Path | None = None,
     use_statics: bool = False,
     use_doy: bool = True,
+    use_pet: bool = False,
     domain: str = "15cdec",
     pet_source: str = "hamon",
     pt_snow_albedo: float = 0.0,
@@ -251,14 +295,31 @@ def load_hybrid_data(
     sin_doy = np.sin(_OMEGA * doy)
     cos_doy = np.cos(_OMEGA * doy)
     dyn = {"precip": prcp, "tavg": tavg, "tmin": tmin, "tmax": tmax, "sac_sim": sim}
+    # use_pet adds the raw PT potential (the physics' energy-demand signal) as
+    # an input channel — recomputed from the forcing (deterministic, cached).
+    if use_pet:
+        pet_cache = (Path("artifacts/calsim/compare/_climatology_cache")
+                     / f"basin_pet_pt_{domain}.csv")
+        if pet_cache.exists():
+            pdf = pd.read_csv(pet_cache, parse_dates=["date"]).set_index("date")
+            pet_b = np.vstack([pdf[b].reindex(dates).to_numpy(np.float64)
+                               for b in basins])
+        else:
+            pet_b = basin_pet_pt(dom)
+            pet_cache.parent.mkdir(parents=True, exist_ok=True)
+            pdf = pd.DataFrame(pet_b.T, index=dates, columns=list(basins))
+            pdf.index.name = "date"
+            pdf.to_csv(pet_cache)
+            print(f"hybrid: cached basin PT PET -> {pet_cache}", flush=True)
+        dyn["pet"] = pet_b
     # use_doy=False drops the sin/cos day-of-year channels: the sim channel
     # already carries the calendar (Snow-17 melt sinusoid, seasonal LAI, PT
     # radiation), and an explicit doy input is what lets the net learn a
     # calendar-keyed mean correction that carries unchecked into validation.
-    names = (DYNAMIC_FEATURES if use_doy else
-             tuple(n for n in DYNAMIC_FEATURES if n not in ("sin_doy", "cos_doy")))
+    names = feature_names(use_doy, use_pet)
     feat_cols = []
-    sd_pooled: dict[str, float] = {}                       # cal-window pooled sigma
+    mu_pooled: dict[str, float] = {}                       # cal-window pooled stats
+    sd_pooled: dict[str, float] = {}
     for name in names:
         if name == "sac_sim":
             feat_cols.append(sim / scale[:, None])         # per-basin, target-matched
@@ -266,6 +327,7 @@ def load_hybrid_data(
             a = dyn[name]
             mu = a[:, cal_slc].mean()
             sd = a[:, cal_slc].std() + 1e-8
+            mu_pooled[name] = float(mu)
             sd_pooled[name] = float(sd)
             feat_cols.append((a - mu) / sd)
         elif name == "sin_doy":
@@ -296,6 +358,10 @@ def load_hybrid_data(
         feat_dt = feat.copy()
         for n in ("tavg", "tmin", "tmax"):
             feat_dt[:, :, idx[n]] += temp_delta / sd_pooled[n]
+        if use_pet:      # PET is a deterministic function of T — recompute exactly
+            pet_dt = basin_pet_pt(dom, delta_t=temp_delta)
+            feat_dt[:, :, idx["pet"]] = ((pet_dt - mu_pooled["pet"])
+                                         / sd_pooled["pet"])
         feat_dt[:, :, idx["sac_sim"]] = sim_dt / scale[:, None]
 
     # -- training sample index (finite obs, full lookback, cal window) --------

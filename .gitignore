@@ -55,6 +55,7 @@ artifacts/dpl/*
 !artifacts/dpl/noah
 !artifacts/dpl/noah_ft
 !artifacts/dpl/hybrid
+!artifacts/dpl/hybrid_pet_dt
 
 
 
