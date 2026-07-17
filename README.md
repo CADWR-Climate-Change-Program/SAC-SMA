@@ -9,6 +9,11 @@ Scott Steinschneider** (Cornell / UMass Amherst) for the CA DWR watershed
 studies; this repo runs those calibrations natively in Python (and reproduces
 the original MATLAB simulations exactly — see Results).
 
+📖 **[Documentation site](https://cadwr-climate-change-program.github.io/SAC-SMA/)** —
+the full technical report (*SAC-SMA Hydrologic Modeling for CalSim Stochastic
+Hydrology*: current implementation, evaluation, and differentiable
+reimplementation), built from [`docs/`](docs/) and deployed to GitHub Pages.
+
 ## Two applications
 
 The package is organized as a generic core plus two clearly separated
