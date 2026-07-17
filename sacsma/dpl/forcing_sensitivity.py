@@ -1,13 +1,15 @@
 """Temperature-detrending sensitivity (WGEN Product A minus historical Livneh)
-for the dPL hamon, pt, noah and noah_ft physics models plus the canonical
-Hybrid ensemble (mean over seed members, on the noah_ft physics baseline).
+for the dPL hamon, pt and noah physics models plus the canonical Hybrid
+ensembles (mean over seed members, on the noah physics baseline).
 
-``dPL noah_ft`` is torch-only (seasonal melt harmonics): its historical run is
-the canonical ``daily_sim_noah_ft.csv`` dump and its detrended run streams the
-torch pipeline under the per-cell dT field (``evaluate.noah_torch_daily``).
-Because the WGEN detrending never enters the hybrid's TRAINING (the
-temperature-consistency loss trains on a scalar +2degC teacher), the Hybrid
-series here is an INDEPENDENT check of its temperature response.
+The ensembles' sac_sim channel is noah's TORCH daily run (their training
+channel), so the detrended channel is rebuilt by streaming the torch pipeline
+under the per-cell dT field (``evaluate.noah_torch_daily`` on the noah ckpt) —
+numerics-matched to the channel the LSTMs were trained on (the displayed
+``dPL noah`` series stays the frozen run_basin pair).  Because the WGEN
+detrending never enters the hybrid's TRAINING (the temperature-consistency
+loss trains on a scalar +2degC teacher), the Hybrid series here is an
+INDEPENDENT check of its temperature response.
 
 WGEN Product A detrends temperature to a 1991-2020 baseline (the early record is
 warmed).  It is not packaged for the 15cdec application, so the detrending signal
@@ -55,12 +57,12 @@ MODELS: dict[str, dict] = {
                       pet="priestley_taylor", alb=0.0, dew=0.0, et_scheme="noah_lite",
                       canopy_csv="artifacts/dpl/noah/params_canopy.csv"),
 }
-#: the torch-only seasonal-melt fine-tune: checkpoint (for the detrended torch
-#: run) + its canonical historical daily dump.
-NOAH_FT_CKPT = "artifacts/dpl/noah_ft/checkpoints/best.pt"
-NOAH_FT_DAILY = "artifacts/dpl/noah_ft/daily_sim_noah_ft.csv"
+#: the noah checkpoint: the ensembles' sac_sim channel is its TORCH daily run
+#: (``daily_sim_noah_torch.csv`` baked into the seed ckpts), so the detrended
+#: channel streams the torch pipeline under the dT field.
+NOAH_CKPT = "artifacts/dpl/noah/checkpoints/best.pt"
 #: the canonical Hybrid ENSEMBLES (mean over seed members); both sac_sim
-#: channels are the noah_ft physics, whose detrended torch run is re-fed as the
+#: channels are the noah physics, whose detrended torch run is re-fed as the
 #: ensembles' detrended baseline.  ``Hybrid`` (plain: no PET, no dT loss) is
 #: the improvement BASELINE — its near-flat/wrong-signed response against
 #: ``Hybrid PET+dT`` (PT-potential input + temperature-consistency loss) is
@@ -70,16 +72,15 @@ ENSEMBLES: dict[str, str] = {
     "Hybrid PET+dT": "artifacts/dpl/hybrid_pet_dt",
 }
 #: 2-D encoding so the series separate cleanly: COLOR = physics lineage (blue =
-#: Hamon, red = PT cascade, green = Noah-lite, purple = noah_ft fine-tune);
-#: LINESTYLE = role (solid = pure physics, dashed/dash-dot = LSTM ensembles).
-#: Read the ET-scheme effect across colours, physics-vs-LSTM within purple.
+#: Hamon, red = PT cascade, green = Noah-lite); LINESTYLE = role (solid = pure
+#: physics, dashed/dash-dot = LSTM ensembles).  Read the ET-scheme effect
+#: across colours, physics-vs-LSTM within green.
 STYLE: dict[str, dict] = {
     "dPL hamon":     dict(color="#1f77b4", lw=2.3, ls="-"),
     "dPL pt":        dict(color="#d62728", lw=2.3, ls="-"),
     "dPL noah":      dict(color="#2ca02c", lw=2.3, ls="-"),
-    "dPL noah_ft":   dict(color="#9467bd", lw=2.3, ls="-"),
-    "Hybrid":        dict(color="#9467bd", lw=2.0, ls="--"),
-    "Hybrid PET+dT": dict(color="#9467bd", lw=2.0, ls="-."),
+    "Hybrid":        dict(color="#2ca02c", lw=2.0, ls="--"),
+    "Hybrid PET+dT": dict(color="#2ca02c", lw=2.0, ls="-."),
 }
 #: marker by role (reinforces the linestyle on the monthly plot only; the rolling
 #: time series stays marker-free).
@@ -273,27 +274,25 @@ def assemble(data_dir: str = "data", *, device: str = "cuda") -> dict:
         dq[label] = (d - h)[basins]
         print(f"  assembled {label}", flush=True)
 
-    # noah_ft is torch-only: historical = the canonical daily dump; detrended =
-    # the torch pipeline under the per-cell dT field (cached).  The detrended
-    # run doubles as the Hybrid ensemble's sac_sim baseline.
-    ft_hist = pd.read_csv(NOAH_FT_DAILY, parse_dates=["date"]).set_index("date")
-    ft_detr_csv = cd / "fs_noah_ft_detr.csv"
-    if ft_detr_csv.exists():
-        ft_detr = pd.read_csv(ft_detr_csv, parse_dates=["date"]).set_index("date")
+    # the ensembles' detrended sac_sim channel: noah's TORCH run under the dT
+    # field (numerics-matched to the training channel; cached).  Not displayed —
+    # the dPL noah series above is the frozen run_basin pair.
+    nt_detr_csv = cd / "fs_noah_torch_detr.csv"
+    if nt_detr_csv.exists():
+        nt_detr = pd.read_csv(nt_detr_csv, parse_dates=["date"]).set_index("date")
     else:
         from .evaluate import noah_torch_daily
-        ft_detr = noah_torch_daily(NOAH_FT_CKPT, data_dir=data_dir,
+        nt_detr = noah_torch_daily(NOAH_CKPT, data_dir=data_dir,
                                    temp_delta=dT)
-        ft_detr_csv.parent.mkdir(parents=True, exist_ok=True)
-        ft_detr.to_csv(ft_detr_csv)
-    dq["dPL noah_ft"] = (ft_detr - ft_hist)[basins]
-    print("  assembled dPL noah_ft (torch)", flush=True)
+        nt_detr_csv.parent.mkdir(parents=True, exist_ok=True)
+        nt_detr.to_csv(nt_detr_csv)
+    print("  assembled the noah torch detrended channel", flush=True)
 
-    # the canonical Hybrid ENSEMBLES (mean over seed members) on the noah_ft
+    # the canonical Hybrid ENSEMBLES (mean over seed members) on the noah
     # detrended physics baseline
     dev = pick_device(device)
     for label, ens in ENSEMBLES.items():
-        fh, fd = _ensemble_flow(data_dir, dT, dev, ft_detr, ens)
+        fh, fd = _ensemble_flow(data_dir, dT, dev, nt_detr, ens)
         dq[label] = (fd - fh)[basins]
         print(f"  assembled {label}", flush=True)
 

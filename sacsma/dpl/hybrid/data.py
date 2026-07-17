@@ -17,7 +17,7 @@ For each of the 15 CDEC basins, on the shared 1915->2018 daily record:
 The frozen physics comes from ``run_basin`` under a REQUIRED, explicitly chosen
 parameter table (a canonical dPL export e.g. ``hamon_dense``/``pt``/``noah``,
 or GA) — cached to CSV so the ~15 basin runs happen once.  A torch-only export
-(seasonal ``noah_ft``) enters through ``sim_cache`` pointing at its
+(e.g. the canonical noah TORCH run) enters through ``sim_cache`` pointing at its
 ``daily_sim_*.csv`` dump, which short-circuits ``run_basin`` entirely.
 """
 
@@ -117,7 +117,7 @@ def _has_seasonal(params: pd.DataFrame) -> bool:
 
 def basin_pet_pt(dom, delta_t: float | np.ndarray = 0.0) -> np.ndarray:
     """(B, T) basin-average raw PT PET (mm/day) — alb 0 / dew 0, i.e. exactly
-    the potential the noah/noah_ft physics sees, BEFORE the learned Kpet.
+    the potential the noah physics sees, BEFORE the learned Kpet.
 
     Recomputed from the per-cell forcing + tmin/tmax sidecar (deterministic and
     parameter-free), so any counterfactual is exact: ``delta_t`` shifts all

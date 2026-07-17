@@ -11,7 +11,8 @@ split at :data:`sacsma.cdec15.CAL_END`, so the numbers are directly comparable
 to the GA (``metrics_15cdec.csv``) and dPL (``metrics_dpl_*.csv``) tables.  The
 physics baseline is the frozen ``run_basin`` sim from a REQUIRED, explicitly
 named parameter table (a canonical dPL export or GA) — or, for torch-only
-physics (seasonal ``noah_ft``), its ``daily_sim_*.csv`` dump via ``--sim-cache``.
+physics (e.g. the canonical noah TORCH daily run), its ``daily_sim_*.csv``
+dump via ``--sim-cache``.
 
 Everything here imports torch at module scope — import it only from the CLI
 handlers (lazily), never from the torch-free core package paths.

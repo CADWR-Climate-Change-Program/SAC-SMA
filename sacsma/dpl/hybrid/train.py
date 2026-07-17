@@ -44,7 +44,7 @@ class HybridConfig:
     #: volume bias at the basins the physics already had right (NML/MRC/ORO).
     use_doy: bool = True
     #: feed the raw PT potential (basin-average, alb 0 / dew 0 — exactly the
-    #: noah/noah_ft energy demand, recomputed from forcing) as an input
+    #: noah energy demand, recomputed from forcing) as an input
     #: channel: a physics-shaped temperature pathway for the LSTM.
     use_pet: bool = False
     physics_domain: str = "15cdec"   # HRU resolution of the frozen sim + forcing

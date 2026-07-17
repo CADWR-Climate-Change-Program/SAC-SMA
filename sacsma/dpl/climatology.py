@@ -17,13 +17,15 @@ step against CalSim3 FNF:
   b  dPL hamon_dense       vs  dPL hamon                  (fine HRU -> grid+footprint)
   c  dPL hamon             vs  dPL pt                     (Hamon -> Priestley-Taylor)
   d  dPL pt                vs  dPL noah                   (PT cascade -> Noah-lite ET)
-  e  dPL noah -> dPL noah_ft -> Hybrid   (seasonal-melt fine-tune, then the LSTM)
+  e  dPL noah -> Hybrid -> Hybrid PET+dT   (the LSTM step on the noah physics)
 
-``dPL noah_ft`` (the obs-steered seasonal-melt fine-tune) is TORCH-only — the
-frozen ``run_basin`` cannot reconstruct its seasonal MFMAX/MFMIN/MBASE — so it
-enters through its canonical ``daily_sim_noah_ft.csv`` dump (``TORCH_SIM``).
-``Hybrid`` is the CANONICAL seed ENSEMBLE (mean of member daily flows) on the
-noah_ft physics baseline.
+``Hybrid`` / ``Hybrid PET+dT`` are the CANONICAL seed ENSEMBLES (mean of member
+daily flows) on the noah physics baseline — the sim channel is noah's TORCH
+daily dump (``artifacts/dpl/noah/daily_sim_noah_torch.csv``), numerics-matched
+to the +2 °C torch teacher.  (``noah_ft``, the obs-steered seasonal-melt
+fine-tune, was DEMOTED 2026-07-17: pooled val ties frozen noah, CalSim3 a
+wash, NHG + north-state volume worse — the head-to-head record lives in
+``artifacts/dpl/RUNS.md``.)
 Output: ``artifacts/calsim/compare/figures/cdec15_climatology_{a..e}.png``.
 
 A dPL-side artifact (needs torch for the hybrids) that reads the lightweight
@@ -61,14 +63,13 @@ FROZEN: dict[str, dict] = {
                               et_scheme="noah_lite",
                               canopy_csv="artifacts/dpl/noah/params_canopy.csv"),
 }
-#: torch-only sims: label -> canonical daily-sim CSV (the frozen run_basin
-#: cannot reconstruct these — seasonal snow params live only in the torch net).
-TORCH_SIM: dict[str, str] = {
-    "dPL noah_ft": "artifacts/dpl/noah_ft/daily_sim_noah_ft.csv",
-}
+#: torch-only sims: label -> canonical daily-sim CSV (for models the frozen
+#: run_basin cannot reconstruct).  Empty since the noah_ft demotion (2026-07-17);
+#: the ingestion route stays for future torch-only exports.
+TORCH_SIM: dict[str, str] = {}
 #: hybrid sims: label -> canonical ENSEMBLE dir (seed*/checkpoints/best.pt
 #: averaged; physics settings read from the member ckpt cfg).  Both sit on the
-#: noah_ft physics baseline (sim channel = its daily dump): ``Hybrid`` is the
+#: noah physics baseline (sim channel = its torch daily dump): ``Hybrid`` is the
 #: plain feature ensemble (no PET channel, no dT loss — the skill step),
 #: ``Hybrid PET+dT`` adds the PT-potential input + the temperature-consistency
 #: loss (the physics-consistent climate response, same skill).
@@ -86,7 +87,6 @@ STYLE: dict[str, dict] = {
     "dPL hamon":          dict(color="#1f77b4", lw=1.9),
     "dPL pt":             dict(color="#ff7f0e", lw=1.9),
     "dPL noah":           dict(color="#bcbd22", lw=2.0),
-    "dPL noah_ft":        dict(color="#d62728", lw=2.0),
     "Hybrid":             dict(color="#9467bd", lw=2.1),
     "Hybrid PET+dT":      dict(color="#17becf", lw=2.1),
 }
@@ -101,8 +101,8 @@ COMPARISONS: list[tuple[str, str, list[str]]] = [
         ["dPL hamon", "dPL pt"]),
     ("d", "canopy ET: PT cascade → Noah-lite external ET",
         ["dPL pt", "dPL noah"]),
-    ("e", "seasonal-melt fine-tune, then the LSTM: noah → noah_ft → Hybrid → +PET+dT",
-        ["dPL noah", "dPL noah_ft", "Hybrid", "Hybrid PET+dT"]),
+    ("e", "the LSTM step: noah → Hybrid → +PET+dT",
+        ["dPL noah", "Hybrid", "Hybrid PET+dT"]),
 ]
 
 

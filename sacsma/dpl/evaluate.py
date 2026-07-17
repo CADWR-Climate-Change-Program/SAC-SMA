@@ -564,7 +564,8 @@ def noah_torch_daily(ckpt_path: str | Path, *, data_dir: str = "data",
     checkpoint, optionally under a temperature perturbation: a scalar degC, or
     a per-forcing-row ``(rows, T)`` field (e.g. the WGEN detrending delta).
     Pure compute — writes nothing; the forcing-sensitivity counterfactual
-    runner for torch-only exports (seasonal ``noah_ft``)."""
+    runner for torch-side counterfactuals (e.g. the hybrid ensembles' detrended
+    noah sim channel)."""
     net, x, dom, cfg, ck = load_net_from_checkpoint(ckpt_path, data_dir,
                                                     device=device)
     if not ck.get("net_config", {}).get("canopy", False):
