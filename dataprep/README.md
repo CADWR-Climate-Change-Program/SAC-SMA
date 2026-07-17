@@ -33,8 +33,8 @@ targets this list.
 | grid definition | `build_region_grid.py` | domain hruinfo/forcing keys | `data/region/grid_cells.csv` (0.1 MB) | **done** |
 | statics: soilveg + LAI climatology | `build_region_statics.py` | the 4 committed per-domain sidecars | `data/region/{soilveg_continuous,lai_climatology}.csv` (~4 MB) | **partial: 2480/4410 cells** — the 1930 footprint-only cells have no committed sidecar; fill path = a raster ingest (POLARIS/LANDFIRE/3DEP/MODIS-LAI on `D:\sacsma-data\raw_gis`) gated on reproducing the committed calsim point-sample rows |
 | ET obs: gleam, fluxcom | `local_obs_region.py` | `D:\sacsma-data\{gleam,fluxcom}` raw | `data/region/et_obs/*.npz` | **done** (verified 1e-7) |
-| ET obs: terraclimate/fldas/era5land | `gee_obs_region.py` | GEE (`--project ee-warnold`) | `data/region/et_obs/*.npz` | region burn running (spec v2, see below) |
-| SWE obs: daymet/terraclimate/fldas/era5land | `gee_obs_region.py` | GEE (same run) | `data/region/swe_obs/*.npz` | region burn running |
+| ET obs: terraclimate/fldas/era5land | `gee_obs_region.py` | GEE (`--project ee-warnold`) | `data/region/et_obs/*.npz` | **done** (exported 2026-07-16, spec v2, see below) |
+| SWE obs: daymet/terraclimate/fldas/era5land | `gee_obs_region.py` | GEE (same run) | `data/region/swe_obs/*.npz` | **done** (exported 2026-07-16) |
 | ET referees: openet (1999-10..2024-12), modis (2000-01..2025-12) | `gee_obs_region.py --products openet modis` | GEE (explicit run; excluded from `all` and from the training losses) | `data/region/et_obs/{openet,modis}_gee_cell_monthly.npz` | queued after the main burn |
 | daily forcing MASTER (raw) | `wgen_forcing.py` | WGEN NonDetrend-Unsplit statewide ASCII (local) | **local only**: `D:\sacsma-data\forcing\livneh_unsplit_nondetrend_daily_region.nc` | **done** (`--verify` proves region store == master + table) |
 | ×10 precip-artifact table | `wgen_forcing.py --scan-x10` | the retired per-domain calsim stores (git history) | `data/region/prcp_x10_artifacts.csv` (197 pairs, FROZEN) | **done** |
