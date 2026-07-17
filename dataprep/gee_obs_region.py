@@ -49,12 +49,16 @@ GRID_CSV = "data/region/grid_cells.csv"
 DATES = pd.date_range("1988-01-01", "2018-12-01", freq="MS")
 CELL_DEG = 1.0 / 16.0
 
-#: product -> (collection, band, kind, scale, to_mm)
-#: kind: "monthly" = one image per month; "daily_mean" = daily collection,
-#: monthly mean of the daily band.  scale = the asset's NATIVE resolution (m)
-#: — the reduction samples the cell rectangle at this density (verified: a
-#: coarser scale aliases the mean; daymet@11132 vs its 1 km native gave a
-#: 0.33 rel RMS error).  to_mm(value, days_in_month) -> mm.
+#: product -> (collection, band, kind, scale, to_mm [, span, chunk, referee])
+#: kind: "monthly" = one image per month; "monthly_mosaic" = several spatial
+#: tiles per month (mosaic them); "daily_mean" = daily collection, monthly
+#: mean of the daily band.  scale = the asset's NATIVE resolution (m) — the
+#: reduction samples the cell rectangle at this density (verified: a coarser
+#: scale aliases the mean; daymet@11132 vs its 1 km native gave a 0.33 rel
+#: RMS error).  span = product-specific month range (default DATES).
+#: referee=True products are benchmark-only (post-2000 coverage, excluded
+#: from the training losses and from ``--products all``; run explicitly).
+#: to_mm(value, days_in_month) -> mm.
 PRODUCTS: dict[str, dict] = {
     # --- ET (mm/month totals) -------------------------------------------------
     "terraclimate": dict(
@@ -70,6 +74,13 @@ PRODUCTS: dict[str, dict] = {
         kind="monthly", scale=11132, var="et",
         out="et_obs/era5land_gee_cell_monthly.npz",
         to_mm=lambda v, nd: v * -1000.0),             # m (negative) -> mm/month
+    # --- ET referee (benchmark-only: no calibration-window coverage) ----------
+    "openet": dict(
+        coll="projects/openet/assets/ensemble/conus/gridmet/monthly/v2_0",
+        band="et_ensemble_mad", kind="monthly_mosaic", scale=30,
+        span=("1999-10-01", "2024-12-01"), chunk=1500, referee=True,
+        var="et", out="et_obs/openet_gee_cell_monthly.npz",
+        to_mm=lambda v, nd: v),                       # mm/month; 25 tiles/month
     # --- SWE (mm monthly-mean state; terraclimate = end-of-month snapshot) ---
     "daymet_swe": dict(
         coll="NASA/ORNL/DAYMET_V4", band="swe", kind="daily_mean",
@@ -91,6 +102,7 @@ PRODUCTS: dict[str, dict] = {
 }
 #: existing 2074-cell stores for --verify (product -> path)
 VERIFY_AGAINST = {
+    "openet": r"D:\sacsma-data\et_processed\openet_gee_cell_monthly.npz",
     "terraclimate": r"D:\sacsma-data\et_processed\terraclimate_gee_cell_monthly.npz",
     "fldas": r"D:\sacsma-data\et_processed\fldas_gee_cell_monthly.npz",
     "era5land": r"D:\sacsma-data\et_processed\era5land_gee_cell_monthly.npz",
@@ -127,15 +139,17 @@ def _month_image(ee, spec: dict, d: pd.Timestamp):
     coll = ee.ImageCollection(spec["coll"]).filterDate(d0, d1).select(spec["band"])
     if spec["kind"] == "daily_mean":
         return coll.mean()
+    if spec["kind"] == "monthly_mosaic":
+        return coll.mosaic()
     return coll.first()
 
 
-def _reduce_month(ee, spec: dict, d: pd.Timestamp, fc, n: int,
-                  chunk: int = 4500) -> np.ndarray:
+def _reduce_month(ee, spec: dict, d: pd.Timestamp, fc, n: int) -> np.ndarray:
     """Per-cell mean of one month's image -> (n,) float array (row order)."""
     img = _month_image(ee, spec, d)
     out = np.full(n, np.nan)
     lst = fc.toList(fc.size())
+    chunk = spec.get("chunk", 4500)
     for lo in range(0, n, chunk):
         sub = ee.FeatureCollection(lst.slice(lo, min(lo + chunk, n)))
         red = img.reduceRegions(collection=sub, reducer=ee.Reducer.mean(),
@@ -150,26 +164,29 @@ def _reduce_month(ee, spec: dict, d: pd.Timestamp, fc, n: int,
 def run_product(ee, name: str, g: pd.DataFrame, out_root: Path,
                 verify: bool) -> None:
     spec = PRODUCTS[name]
+    dates = (pd.date_range(*spec["span"], freq="MS") if "span" in spec
+             else DATES)
     n = len(g)
     fc = _fc(ee, g)
-    val = np.full((n, len(DATES)), np.nan, dtype=np.float32)
-    print(f"{name}: {spec['coll']}  {len(DATES)} months  {n} cells @ "
+    val = np.full((n, len(dates)), np.nan, dtype=np.float32)
+    print(f"{name}: {spec['coll']}  {len(dates)} months  {n} cells @ "
           f"{spec['scale']} m", flush=True)
-    for j, d in enumerate(DATES):
+    for j, d in enumerate(dates):
         nd = calendar.monthrange(d.year, d.month)[1]
         raw = _reduce_month(ee, spec, d, fc, n)
         val[:, j] = spec["to_mm"](raw, nd)
         if d.month == 12:
-            print(f"  {name}: {j + 1}/{len(DATES)} months ({d.year}); "
+            print(f"  {name}: {j + 1}/{len(dates)} months ({d.year}); "
                   f"cell-mean {np.nanmean(val[:, max(0, j - 11):j + 1]):.1f} mm",
                   flush=True)
     if verify:
         ref = np.load(VERIFY_AGAINST[name], allow_pickle=True)
         order = {str(k): i for i, k in enumerate(ref["keys"])}
         idx = np.array([order[str(k)] for k in g["key"]])
-        rd = pd.to_datetime(ref["dates"])
-        cols = [list(rd).index(d) for d in DATES if d in set(rd)]
-        new = val[:, :len(cols)]
+        rd = list(pd.to_datetime(ref["dates"]))
+        keep = [j for j, d in enumerate(dates) if d in set(rd)]
+        cols = [rd.index(dates[j]) for j in keep]
+        new = val[:, keep]
         old = ref[spec["var"]].astype(np.float64)[idx][:, cols]
         m = np.isfinite(new) & np.isfinite(old)
         rel = float(np.sqrt(np.mean((new[m] - old[m]) ** 2))
@@ -183,7 +200,7 @@ def run_product(ee, name: str, g: pd.DataFrame, out_root: Path,
     meta = (f"exported {pd.Timestamp.today().date()} | {spec['coll']}:"
             f"{spec['band']} | cell-rectangle mean @ {spec['scale']} m")
     np.savez_compressed(out, keys=g["key"].astype(str).to_numpy(),
-                        dates=DATES.to_numpy(), lat=g["lat"].to_numpy(),
+                        dates=dates.to_numpy(), lat=g["lat"].to_numpy(),
                         lon=g["lon"].to_numpy(), meta=np.array(meta),
                         **{spec["var"]: val})
     nan_frac = float(np.isnan(val).mean())
@@ -211,7 +228,10 @@ def main() -> None:
         sys.exit(f"earthengine-api not ready ({e}); run `pip install "
                  "earthengine-api` + `earthengine authenticate`, and pass "
                  "--project <an-EE-registered-cloud-project>")
-    names = sorted(PRODUCTS) if args.products == ["all"] else args.products
+    if args.products == ["all"]:   # referees (openet) run explicitly only
+        names = sorted(p for p in PRODUCTS if not PRODUCTS[p].get("referee"))
+    else:
+        names = args.products
     g = _cells(args.verify)
     for name in names:
         run_product(ee, name, g, Path(args.out_root), args.verify)
