@@ -42,6 +42,17 @@ same precipitation basis as the VIC benchmark (`vic_routed_monthly.csv`,
 routed from the VIC `Historical_Unsplit` run), so the SAC-SMA-vs-VIC
 cross-compare is apples-to-apples on forcing.
 
+The per-cell source of this lineage survives locally as the **WGEN
+NonDetrend-Unsplit statewide ASCII store**
+(`C:\Users\warnold_la\Local\WGEN_NonDetrend_Unsplit_Statewide`, one
+`data_<lat>_<lon>` file per cell: `year month day prcp tmax tmin`, daily
+1915-01-01 → 2018-12-31, 13,786 cells): verified 2026-07-16, `prcp` matches
+every committed `historical_livneh_unsplit*` store to float32 rounding and the
+committed `tavg` is exactly `(tmax+tmin)/2` (the calsim stores match to their
+3-decimal write precision, ≤5e-3). `dataprep/wgen_forcing.py` packs the region
+cells into a local master and cuts new-basin forcing from it (see
+`data/region` below).
+
 The CalSim domains additionally carry the **WGEN Product A** forcing
 (`wgen_product_a_<domain>.nc`) — scenario 1 of the DWR gridded weather
 generator release ("Gridded Weather Generator Perturbations…", data.ca.gov),
@@ -142,3 +153,26 @@ diagnostics; `coverage_by_set.csv` reports each set's honest `cov_frac` and
   HRUs are modelled explicitly. Used by `run_calsim` and the coverage maps.
   The GIS-label alias `I_BRYSA` → `I_PTH070` maps Lake Berryessa to its Putah
   Creek series.
+
+## `data/region/` — auxiliary-data region store (dPL fine-tuning)
+
+The compact processed layers needed to (re)train/fine-tune the dPL models on
+any basin **within the cdec15 + CalSim areas** (built 2026-07-16;
+`dataprep/README.md` documents the living build tools and the verification
+gates — every ingest must reproduce its committed/legacy predecessor first).
+
+| File | Size | What / provenance | Consumed by |
+|------|------|-------------------|-------------|
+| `grid_cells.csv` | 0.1 MB | The 2480-cell region grid: union of the four domains' 1/16° cells (15cdec_grid ∪ 9unimp ∪ 11obs ∪ 12rim; only 406 cells are calsim-only), normalized 5-decimal keys + `in_<domain>` flags. `dataprep/build_region_grid.py` | every region ingest; new-basin setup |
+| `soilveg_continuous.csv` | 1.7 MB | Per-cell continuous soil/veg/terrain features, consolidated from the four committed per-domain sidecars — cdec15_grid rows (cell-footprint-mean convention, what dPL trained on) win; the 406 calsim-only cells are filled from the calsim rows (cell-center point-sample convention); the `src` column marks the seam. `dataprep/build_region_statics.py` | dPL features / Noah-lite canopy for new basins |
+| `lai_climatology.csv` | 2.0 MB | Per-cell 46-sample 8-day MODIS-LAI DOY climatology, same consolidation | Noah-lite canopy driver |
+| `et_obs/{gleam,fluxcom}_cell_monthly.npz` | 2.2 MB (LFS) | Per-cell monthly ET obs at the region cells, re-ingested from the local raw stores (GLEAM nearest-sample mm/month 1988–2018; FLUXCOM nearest-sample LE/2.45×days 1988–2016; both reproduce the legacy 2074-cell npz, rel RMS ≤1e-7). `dataprep/local_obs_region.py` | dPL ET-shape obs losses |
+| `et_obs/`, `swe_obs/` GEE products | pending | terraclimate/fldas/era5land ET + daymet/terraclimate/fldas/era5land SWE via `dataprep/gee_obs_region.py` (user-run; needs an EE-registered `--project`) | dPL ET/SWE obs losses (then `dpl/data.py` ET_DIR/SWE_DIR flip in-repo) |
+| `prcp_x10_artifacts.csv` | 8 KB | The raw lineage's misplaced-decimal precip spikes: 197 (cell, day) pairs over 168 cells, 7 isolated summer days, each exactly 10× too large. The calsim stores corrected them ÷10; the cdec15 stores kept them raw (146 shared cells — a pre-existing upstream inconsistency). Derived by `wgen_forcing.py --scan-x10` from the calsim-vs-master diff | `wgen_forcing.py --cut` (applies ÷10 by default) and `--verify` |
+
+The **daily forcing master** deliberately lives on local disk, NOT in the repo
+(`D:\sacsma-data\forcing\livneh_unsplit_nondetrend_daily_region.nc`; rebuild
+anytime with `dataprep/wgen_forcing.py --build-master`, provenance above).
+`wgen_forcing.py --cut <name> --cells <csv> --out-dir <dir>` emits a new
+basin's `historical_livneh_unsplit_<name>.nc` (prcp + tavg) and
+`tminmax_livneh_percell_<name>.nc` in the committed cdec15_grid schema.

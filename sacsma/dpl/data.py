@@ -165,10 +165,12 @@ def load_cal_obs(
 
 
 #: ET-observation products with 1988 coverage (enter the auxiliary loss).  Per-
-#: cell monthly ET npz produced by scratchpad/{et_ingest,gee_et_ingest}.py; the
-#: directory is external scratch (git-LFS candidate later) — override with
-#: SACSMA_ET_DIR.  Screening-only referees (openet/modis/gldas, 2000/2001+) are
-#: deliberately excluded — they don't cover the calibration window.
+#: cell monthly ET npz.  The in-repo REGION store (``data/region/et_obs``,
+#: dataprep/{local_obs_region,gee_obs_region}.py) is replacing the original
+#: 2074-cell ``D:\`` scratch store; the default flips once all 5 products land
+#: there — override with SACSMA_ET_DIR meanwhile.  Screening-only referees
+#: (openet/modis/gldas, 2000/2001+) are deliberately excluded — they don't
+#: cover the calibration window.
 #: max complete calendar months a fixed-length TBPTT chunk can hold (<=12 for a
 #: 366-day chunk; 13 for headroom).  The per-chunk ET target is padded to this.
 ET_MAXM = 13
@@ -195,6 +197,16 @@ SWE_FILES: dict[str, str] = {
 }
 SWE_SNAPSHOT_PRODUCTS = ("terraclimate",)   # end-of-month -> adjacent-mean fix
 SWE_SNOW_MIN = 10.0   # mm consensus peak below which a basin sits out the loss
+
+
+def _norm_obs_key(k: str) -> str:
+    """5-decimal ``<lat>_<lon>`` key normalization (``sacsma.io`` convention).
+
+    The calsim stores carry 6-decimal fixed-format keys; the region obs stores
+    (``data/region``) are written normalized — normalize both sides so any
+    domain's HRU keys match any obs store's cell keys."""
+    lat, lon = str(k).split("_")
+    return f"{round(float(lat), 5)}_{round(float(lon), 5)}"
 
 
 @dataclass
@@ -229,13 +241,14 @@ def _basin_monthly_series(dom: DomainTensors, path: str, name: str, var: str,
     if snapshot:   # mean over month m ~ (eom[m-1] + eom[m]) / 2; first month kept
         val = np.concatenate([val[:, :1],
                               0.5 * (val[:, 1:] + val[:, :-1])], axis=1)
-    cell_of = {k: i for i, k in enumerate(keys)}
+    cell_of = {_norm_obs_key(k): i for i, k in enumerate(keys)}
     hru_keys = dom.hrus["key"].astype(str).to_numpy()
-    idx = np.array([cell_of.get(k, -1) for k in hru_keys])
+    idx = np.array([cell_of.get(_norm_obs_key(k), -1) for k in hru_keys])
     if (idx < 0).any():
         raise ValueError(
             f"{int((idx < 0).sum())} HRU keys absent from product {name!r} "
-            "(the obs losses require the 15cdec_grid domain the products cover)")
+            "(the obs losses require a grid domain the products cover — "
+            "15cdec_grid, or any region-grid basin once data/region is complete)")
     W = dom.W.detach().double().cpu().numpy()                # (B, n_hru)
     return W @ np.nan_to_num(val[idx]), dates                # (B, n_months)
 
@@ -251,7 +264,7 @@ def _load_shape_obs(dom: DomainTensors, files: dict[str, str], obs_dir: str,
         if not os.path.exists(path):
             raise FileNotFoundError(
                 f"obs product {name!r} not found at {path} (set SACSMA_ET_DIR/"
-                "SACSMA_SWE_DIR or run the scratchpad ingest)")
+                "SACSMA_SWE_DIR or run the dataprep region ingests)")
         series, dates = _basin_monthly_series(dom, path, name, var,
                                               name in snapshot)
         cal = (dates >= c0) & (dates <= c1)

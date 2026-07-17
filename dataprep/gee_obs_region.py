@@ -1,11 +1,11 @@
-"""STATEWIDE ET/SWE observation ingest from Google Earth Engine.
+"""REGION ET/SWE observation ingest from Google Earth Engine.
 
-Re-exports the 7 GEE-derived obs products (3 ET + 4 SWE) over the full
-statewide 1/16-deg grid (``data/statewide/grid_cells.csv``, 13,786 cells) in
-the exact per-cell monthly form the dPL obs losses consume
-(``sacsma.dpl.data.ET_FILES``/``SWE_FILES`` npz: keys/dates/<var>/lat/lon).
-The two non-GEE products (GLEAM, FLUXCOM) have local raw sources and their own
-ingest (see dataprep/README.md).
+Re-exports the 7 GEE-derived obs products (3 ET + 4 SWE) over the region
+1/16-deg grid (``data/region/grid_cells.csv``, 4100 cells = 15cdec_grid +
+9unimp + 11obs + 12rim) in the exact per-cell monthly form the dPL obs losses
+consume (``sacsma.dpl.data.ET_FILES``/``SWE_FILES`` npz:
+keys/dates/<var>/lat/lon).  The two non-GEE products (GLEAM, FLUXCOM) have
+local raw sources and their own ingest (dataprep/local_obs_region.py).
 
 Monthly reductions mirror the original 2074-cell ingest (its parameters are
 recorded in ``D:\\sacsma-data\\et_processed\\_ingest_*.log``): per-cell mean
@@ -14,18 +14,19 @@ units converted to mm/month (ET) or mm mean monthly state (SWE; TerraClimate
 stays an end-of-month SNAPSHOT — the loss loader applies the adjacent-mean
 phase fix, so do NOT convert it here).
 
-RUN ORDER (needs an authenticated earthengine-api: ``earthengine authenticate``):
-  1. ``python dataprep/gee_obs_statewide.py --verify``
+RUN ORDER (needs an authenticated earthengine-api with a REGISTERED cloud
+project: ``earthengine authenticate`` + pass ``--project <your-ee-project>``):
+  1. ``python dataprep/gee_obs_region.py --verify --project <id>``
      re-ingests ONLY the 2074 15cdec_grid cells for every product and diffs
      against the existing D:\\sacsma-data npz — every product must match
-     (rel RMS < 1e-3) before any statewide run.  Catches band/unit drift in
+     (rel RMS < 1e-3) before the region run.  Catches band/unit drift in
      GEE assets since the original ingest.
-  2. ``python dataprep/gee_obs_statewide.py --products all``
-     the statewide burn (13,786 cells x 372 months; hours — one-time).
-     Writes data/statewide/et_obs/<p>_cell_monthly.npz and
-     data/statewide/swe_obs/<p>_swe_cell_monthly.npz.
+  2. ``python dataprep/gee_obs_region.py --products all --project <id>``
+     the region burn (4100 cells x 372 months; ~1-2 h — one-time).
+     Writes data/region/et_obs/<p>_cell_monthly.npz and
+     data/region/swe_obs/<p>_swe_cell_monthly.npz.
 
-The dPL loaders then point at the statewide store via SACSMA_ET_DIR /
+The dPL loaders then point at the region store via SACSMA_ET_DIR /
 SACSMA_SWE_DIR (or the in-repo defaults once data.py is repointed).
 """
 
@@ -39,7 +40,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-GRID_CSV = "data/statewide/grid_cells.csv"
+GRID_CSV = "data/region/grid_cells.csv"
 SCALE_M = 11132                    # reduction scale of the original ingest
 DATES = pd.date_range("1988-01-01", "2018-12-01", freq="MS")
 CELL_DEG = 1.0 / 16.0
@@ -185,14 +186,18 @@ def main() -> None:
     ap.add_argument("--verify", action="store_true",
                     help="re-ingest ONLY the 2074 15cdec_grid cells and diff "
                          "against the existing npz (run FIRST, must PASS)")
-    ap.add_argument("--out-root", default="data/statewide")
+    ap.add_argument("--out-root", default="data/region")
+    ap.add_argument("--project", default=None,
+                    help="Earth-Engine-registered cloud project id (required "
+                         "unless your default credentials carry one)")
     args = ap.parse_args()
     try:
         import ee
-        ee.Initialize()
+        ee.Initialize(project=args.project)
     except Exception as e:                                    # noqa: BLE001
         sys.exit(f"earthengine-api not ready ({e}); run `pip install "
-                 "earthengine-api` + `earthengine authenticate` first")
+                 "earthengine-api` + `earthengine authenticate`, and pass "
+                 "--project <an-EE-registered-cloud-project>")
     names = sorted(PRODUCTS) if args.products == ["all"] else args.products
     g = _cells(args.verify)
     for name in names:
