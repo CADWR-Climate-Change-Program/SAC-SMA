@@ -152,6 +152,51 @@ SAC-SMA basin maps).
 > areas still appear inside the basin **footprint outline** but don't contribute to
 > a scored sum.
 
+## Differentiable parameter learning (dPL) + hybrid LSTM
+
+`sacsma.dpl` is a **PyTorch reimplementation of the full daily pipeline**
+(PET → Snow-17 → SAC-SMA → routing) that is differentiable end-to-end, so
+SAC-SMA parameters can be *learned* rather than GA-calibrated. A parameter
+network maps continuous basin attributes (soil / vegetation / terrain / LAI)
+to the per-HRU parameters, trained by backprop through the model, **pooled
+across the 15 CDEC basins** on the daily gage-FNF target (calibration
+WY1989–2003 / validation WY2004–2018 — the same basis as `sacsma.cdec15`).
+
+A **fidelity gate** anchors the port: the archived GA parameters pushed
+through the torch forward reproduce the frozen NumPy/Numba reference to
+numerical tolerance (`sacsma dpl benchmark` → `artifacts/dpl/fidelity/`), so
+the differentiable model is the same model.
+
+Two rungs of results (pooled 15-basin mean KGE, cal / val):
+
+- **Learned physics** — the dPL parameter net alone. `hamon_dense` on the
+  native fine-HRU grid reaches **val KGE 0.84** (matching the GA study's
+  ceiling); coarse 1/16°-grid variants swap the evaporative physics —
+  `hamon`, `pt` (Priestley–Taylor energy-based PET), `noah` (Noah-lite canopy
+  ET with one learned DOF) — landing 0.80–0.83 val.
+- **Hybrid SAC×LSTM** — the frozen daily SAC-SMA simulation is coupled to an
+  LSTM as an input feature (the LSTM predicts flow directly on top of the
+  physics), run as an 8-seed ensemble: **val KGE ≈ 0.87**. The paired
+  `hybrid_pet_dt` variant adds a physics-shaped PET input channel and a
+  **temperature-consistency loss** that anchors the model's +2 °C response to
+  the physics model's — trading a hair of validation skill for a
+  physically-consistent warming response (the plain hybrid's unconstrained
+  response is unreliable), the version to use for climate projection.
+
+```bash
+sacsma dpl benchmark                    # fidelity vs the frozen reference
+sacsma dpl train physical --pet priestley_taylor   # train a dPL parameter net
+sacsma dpl hybrid --physics <params.csv> --statics # train a hybrid LSTM seed
+sacsma dpl evaluate artifacts/dpl/noah/checkpoints/best.pt
+sacsma dpl climatology                  # per-basin regime vs CalSim3 FNF
+```
+
+Canonical checkpoints, per-model metrics, the cross-model figures, and a
+chronological track record of every experiment live in
+[`artifacts/dpl/`](artifacts/dpl/) (see
+[`artifacts/dpl/RUNS.md`](artifacts/dpl/RUNS.md)). This variant is torch-only
+and GPU-oriented; the core `sacsma` package remains torch-free.
+
 ## License
 
 MIT (see [`LICENSE`](LICENSE)). SAC-SMA model and calibrations by Wi &
