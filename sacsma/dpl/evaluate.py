@@ -278,12 +278,15 @@ def _pipeline_storage(st) -> torch.Tensor:
 
 def _noah_stream(net: torch.nn.Module, x: torch.Tensor, dom: DomainTensors,
                  cfg: DplConfig, *, temp_delta: float | np.ndarray = 0.0,
-                 chunk_days: int = 4096) -> dict:
+                 precip_scale: float = 1.0, chunk_days: int = 4096) -> dict:
     """Stream the full record through the torch Noah pipeline -> the basin daily
     flow (``sim``, (B, T) ndarray mm/day) + per-HRU ET sums + water-balance
     closure.  ``temp_delta`` adds to tavg/tmin/tmax: a scalar degC (warming
     projection), or a per-forcing-row ``(rows, T)`` array (e.g. the WGEN
-    detrending field) gathered to HRU rows via ``dom.cell_idx``."""
+    detrending field) gathered to HRU rows via ``dom.cell_idx``.  ``precip_scale``
+    MULTIPLIES precip (e.g. 1.1 for +10%): the precipitation-perturbation knob
+    parallel to ``temp_delta``, applied before the model AND the closure sum so
+    the water balance stays consistent under the counterfactual."""
     net.eval()
     with torch.no_grad():
         o = net(x)
@@ -308,6 +311,8 @@ def _noah_stream(net: torch.nn.Module, x: torch.Tensor, dom: DomainTensors,
             t1 = min(t0 + chunk_days, tt)
             pr, ta, doy, leap = dom.chunk(t0, t1)
             tn, tx = dom.chunk_tmm(t0, t1)
+            if precip_scale != 1.0:             # multiplicative precip perturbation
+                pr = pr * precip_scale
             if dt_field is not None:            # per-cell temperature field
                 d = dt_field[:, t0:t1]
                 ta = ta + d
@@ -558,23 +563,59 @@ def load_net_from_checkpoint(
 
 def noah_torch_daily(ckpt_path: str | Path, *, data_dir: str = "data",
                      temp_delta: float | np.ndarray = 0.0,
+                     precip_scale: float = 1.0,
                      chunk_days: int = 4096,
                      device: torch.device | str | None = None) -> pd.DataFrame:
     """Daily basin flow (date x basin, mm/day) from a torch-scored Noah
-    checkpoint, optionally under a temperature perturbation: a scalar degC, or
-    a per-forcing-row ``(rows, T)`` field (e.g. the WGEN detrending delta).
-    Pure compute — writes nothing; the forcing-sensitivity counterfactual
-    runner for torch-side counterfactuals (e.g. the hybrid ensembles' detrended
-    noah sim channel)."""
+    checkpoint, optionally under a climate perturbation: ``temp_delta`` adds to
+    tavg/tmin/tmax (a scalar degC, or a per-forcing-row ``(rows, T)`` field e.g.
+    the WGEN detrending delta) and ``precip_scale`` multiplies precip (1.1 =
+    +10%).  Pure compute — writes nothing; the counterfactual runner for
+    torch-side (dp, dt) response surfaces and the forcing-sensitivity detrended
+    noah sim channel."""
     net, x, dom, cfg, ck = load_net_from_checkpoint(ckpt_path, data_dir,
                                                     device=device)
     if not ck.get("net_config", {}).get("canopy", False):
         raise ValueError("noah_torch_daily needs a Noah (canopy) checkpoint")
     res = _noah_stream(net, x, dom, cfg, temp_delta=temp_delta,
-                       chunk_days=chunk_days)
+                       precip_scale=precip_scale, chunk_days=chunk_days)
     df = pd.DataFrame(res["sim"].T, index=dom.dates, columns=list(dom.basins))
     df.index.name = "date"
     return df
+
+
+#: cache root for the (Δprecip, ΔT) noah physics teachers / response-surface runs.
+_DTDP_CACHE = "artifacts/dpl/testing/dtdp_cache"
+
+
+def teacher_cache_path(dp: float, dt: float,
+                       cache_dir: str | Path = _DTDP_CACHE) -> Path:
+    """Cache path for the noah daily sim under (Δprecip fraction dp, ΔT dt)."""
+    return Path(cache_dir) / f"noah_dp{dp:+.2f}_dt{dt:+.1f}.csv"
+
+
+def noah_teacher_daily(dp: float, dt: float, ckpt_path: str | Path, *,
+                       data_dir: str = "data", cache_dir: str | Path = _DTDP_CACHE,
+                       device: torch.device | str | None = None) -> pd.DataFrame:
+    """Cached noah daily sim (date x basin, mm/day) under (Δprecip fraction ``dp``,
+    ΔT ``dt`` degC).  The SINGLE source of truth for the dt/dp response teachers,
+    the physics response column, and the hybrids' perturbed sim channel — so the
+    numerics match on the training and evaluation sides.  ``dp=dt=0`` reproduces
+    ``daily_sim_noah_torch.csv`` (the physics parity anchor)."""
+    cache = teacher_cache_path(dp, dt, cache_dir)
+    if cache.exists():
+        return pd.read_csv(cache, parse_dates=["date"]).set_index("date")
+    df = noah_torch_daily(ckpt_path, data_dir=data_dir, temp_delta=float(dt),
+                          precip_scale=1.0 + float(dp), device=device)
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(cache)
+    return df
+
+
+def corner_anchors(dp: float, dt: float) -> list[tuple[float, float]]:
+    """The 5 non-origin corners of {−dp, 0, +dp} × {0, +dt}:
+    (−dp,0), (+dp,0), (0,dt), (−dp,dt), (+dp,dt)."""
+    return [(-dp, 0.0), (dp, 0.0), (0.0, dt), (-dp, dt), (dp, dt)]
 
 
 def evaluate_checkpoint(

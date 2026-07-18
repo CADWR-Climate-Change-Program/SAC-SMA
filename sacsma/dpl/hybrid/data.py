@@ -9,10 +9,12 @@ For each of the 15 CDEC basins, on the shared 1915->2018 daily record:
 * optional per-basin statics (elev, flowlen, cal precip mean, snow fraction);
 * the temporal split at :data:`sacsma.cdec15.CAL_END` and the 365-day-lookback
   sample index for training / evaluation;
-* optionally a TEMPERATURE-PERTURBED copy of the feature tensor (``feat_dt``)
-  for the temperature-consistency loss: tavg/tmin/tmax shifted by
-  ``temp_delta`` in normalized space and the sim channel re-fed from a
-  physics run under the same ``temp_delta`` (the teacher daily-sim CSV).
+* optionally one or more CLIMATE-PERTURBED copies of the feature tensor
+  (``feat_anchors``) for the response-consistency loss: each anchor shifts
+  tavg/tmin/tmax by ``dt`` and re-scales precip by ``×(1+dp)`` in normalized
+  space, recomputes PET under ``dt``, and re-feeds the sim channel from a
+  physics run under the same (dp, dt) (the teacher daily-sim CSVs).  The legacy
+  ``temp_delta``/``temp_sim_cache`` args map to a single ``dt`` anchor.
 
 The frozen physics comes from ``run_basin`` under a REQUIRED, explicitly chosen
 parameter table (a canonical dPL export e.g. ``hamon_dense``/``pt``/``noah``,
@@ -23,7 +25,7 @@ or GA) — cached to CSV so the ~15 basin runs happen once.  A torch-only export
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
@@ -142,6 +144,46 @@ def basin_pet_pt(dom, delta_t: float | np.ndarray = 0.0) -> np.ndarray:
     return dom.W.numpy() @ pet
 
 
+def apply_response_perturbation(feat: np.ndarray, names: tuple[str, ...], *,
+                                dp: float, dt: float, prcp_raw: np.ndarray,
+                                norm: dict[str, tuple[float, float]],
+                                pet_pert: np.ndarray | None,
+                                sim_pert: np.ndarray, scale: np.ndarray) -> np.ndarray:
+    """Return a (B, T, F) copy of ``feat`` under a climate anchor (Δprecip
+    fraction ``dp``, ΔT ``dt`` degC).
+
+    The single recipe shared by the training-time response-consistency loss and
+    the (dp, dt) response-surface evaluation, so the perturbation is identical
+    on both sides:
+
+    * temperatures: additive z-shift ``+= dt/σ`` on tavg/tmin/tmax (the
+      z-scored channels shift by the raw ΔT over their std);
+    * precip: RE-Z-SCORED at ``×(1+dp)`` — ``(prcp_raw*(1+dp) − μ)/σ`` — because
+      precip is multiplicative, not a level shift (dp=0 reproduces the channel
+      exactly);
+    * PET (if present): recomputed under ΔT (``pet_pert``) and re-z-scored (PET
+      is a deterministic function of T; dp is irrelevant to it);
+    * sim channel: re-fed from ``sim_pert`` (the physics run under the anchor),
+      per-basin ``÷scale`` as ``load_hybrid_data`` does.
+
+    ``norm[name] = (μ, σ)`` are the base pooled z-score stats; ``prcp_raw`` and
+    ``pet_pert`` are (B, T) mm/day; ``sim_pert`` is (B, T) mm/day.  At
+    ``dp=0, dt=0`` (with ``sim_pert`` = the baseline sim) this returns ``feat``
+    unchanged."""
+    idx = {n: i for i, n in enumerate(names)}
+    fa = feat.copy()
+    for n in ("tavg", "tmin", "tmax"):
+        fa[:, :, idx[n]] += dt / norm[n][1]
+    if "precip" in idx:
+        mu_p, sd_p = norm["precip"]
+        fa[:, :, idx["precip"]] = (prcp_raw * (1.0 + dp) - mu_p) / sd_p
+    if "pet" in idx and pet_pert is not None:
+        mu_e, sd_e = norm["pet"]
+        fa[:, :, idx["pet"]] = (pet_pert - mu_e) / sd_e
+    fa[:, :, idx["sac_sim"]] = sim_pert / scale[:, None]
+    return fa
+
+
 def _check_physics_domain(physics_csv: str | Path, domain_keys: set[str],
                           domain: str) -> None:
     """Fail loudly if a ``--physics`` table doesn't cover the domain's HRUs — the
@@ -172,11 +214,20 @@ class HybridData:
     train_bt: torch.Tensor          # (M, 2) [basin, day] training samples
     basins: tuple[str, ...]
     device: torch.device
-    #: temperature-perturbed copy of ``feat`` (tavg/tmin/tmax += dT/sigma, sim
-    #: channel = teacher sim / scale) and the teacher sim itself — present only
-    #: when the temperature-consistency loss is on (``temp_sim_cache``).
-    feat_dt: torch.Tensor | None = None
-    sim_dt: torch.Tensor | None = None
+    #: per-anchor perturbed copies of ``feat`` and the matching physics teacher
+    #: sim (mm/day), one per (Δprecip, ΔT) response anchor — empty unless a
+    #: response-consistency loss is on.  ``feat_anchors[i]`` shifts temps by
+    #: ΔT/σ, re-z-scores precip at ×(1+Δp), recomputes PET under ΔT, and re-feeds
+    #: the sim channel from ``sim_anchors[i]`` (the physics teacher under the
+    #: anchor).  Built by :func:`apply_response_perturbation`.
+    feat_anchors: list = field(default_factory=list)
+    sim_anchors: list = field(default_factory=list)
+    #: base pooled z-score stats ``{channel: (μ, σ)}`` and the raw basin precip
+    #: (B, T) mm/day — reused by the (dp, dt) response surfaces to rebuild
+    #: perturbed features with the exact trained normalization
+    #: (:func:`apply_response_perturbation`).
+    norm: dict = field(default_factory=dict)
+    prcp: "torch.Tensor | None" = None
 
     @property
     def n_feat(self) -> int:
@@ -228,9 +279,15 @@ def load_hybrid_data(
     canopy_csv: str | Path | None = None,
     temp_sim_cache: str | Path | None = None,
     temp_delta: float = 0.0,
+    response_anchors: list[dict] | None = None,
     device: torch.device | str = "cuda",
     dtype: torch.dtype = torch.float32,
 ) -> HybridData:
+    # legacy single ΔT anchor (temp_sim_cache/temp_delta) -> one response anchor
+    if response_anchors is None:
+        response_anchors = ([{"dp": 0.0, "dt": float(temp_delta),
+                              "sim_cache": str(temp_sim_cache)}]
+                            if temp_sim_cache is not None else [])
     device = torch.device(device)
     dom = load_domain_tensors(data_dir, domain=domain, device="cpu",
                               dtype=torch.float64)
@@ -336,33 +393,34 @@ def load_hybrid_data(
             feat_cols.append(np.broadcast_to(cos_doy, (B, T)))
     feat = np.stack(feat_cols, axis=-1)                    # (B, T, F)
 
-    # -- temperature-perturbed copy (temperature-consistency loss) ------------
-    # The exact recipe forcing_sensitivity._hybrid_flow uses for counterfactual
-    # inference, applied at load time: shift the z-scored temperature channels
-    # by temp_delta/sigma and re-feed the sim channel from the TEACHER sim (the
-    # same physics run under temp_delta, dumped by `sacsma dpl evaluate
-    # --temp-delta`).  Precip and statics are unchanged.
-    feat_dt = sim_dt = None
-    if temp_sim_cache is not None:
-        if not Path(temp_sim_cache).exists():
-            raise FileNotFoundError(f"temp_sim_cache {temp_sim_cache} not found "
-                                    "(dump it with `sacsma dpl evaluate "
-                                    "<physics ckpt> --temp-delta <dT>`)")
-        dt_df = pd.read_csv(temp_sim_cache, parse_dates=["date"]).set_index("date")
-        sim_dt = np.vstack([dt_df[b].reindex(dates).to_numpy(np.float64)
-                            for b in basins])
-        if not np.isfinite(sim_dt).all():
-            raise ValueError(f"temp_sim_cache {temp_sim_cache} does not cover "
-                             "the full daily record")
-        idx = {n: i for i, n in enumerate(names)}
-        feat_dt = feat.copy()
-        for n in ("tavg", "tmin", "tmax"):
-            feat_dt[:, :, idx[n]] += temp_delta / sd_pooled[n]
-        if use_pet:      # PET is a deterministic function of T — recompute exactly
-            pet_dt = basin_pet_pt(dom, delta_t=temp_delta)
-            feat_dt[:, :, idx["pet"]] = ((pet_dt - mu_pooled["pet"])
-                                         / sd_pooled["pet"])
-        feat_dt[:, :, idx["sac_sim"]] = sim_dt / scale[:, None]
+    # -- response-perturbed copies (response-consistency loss) ----------------
+    # One per (Δprecip, ΔT) anchor: the SAME recipe the (dp, dt) response-surface
+    # evaluation uses (apply_response_perturbation), applied at load time.  Each
+    # re-feeds the sim channel from the TEACHER sim — the physics run under the
+    # anchor's (dp, dt), dumped by `sacsma dpl evaluate --temp-delta/--precip-scale`
+    # (or the cached noah_teacher_daily).  Statics are unchanged.
+    norm = {n: (mu_pooled[n], sd_pooled[n]) for n in mu_pooled}
+    feat_anchors: list[np.ndarray] = []
+    sim_anchors: list[np.ndarray] = []
+    for anc in response_anchors:
+        sc = anc["sim_cache"]
+        if not sc or not Path(sc).exists():
+            raise FileNotFoundError(
+                f"response anchor teacher sim {sc!r} not found (dump it with "
+                "`sacsma dpl evaluate <physics ckpt> --temp-delta <dT> "
+                "--precip-scale <1+dp>` or noah_teacher_daily)")
+        sdf = pd.read_csv(sc, parse_dates=["date"]).set_index("date")
+        sim_a = np.vstack([sdf[b].reindex(dates).to_numpy(np.float64)
+                           for b in basins])
+        if not np.isfinite(sim_a).all():
+            raise ValueError(f"response anchor teacher {sc} does not cover the "
+                             "full daily record")
+        pet_a = basin_pet_pt(dom, delta_t=float(anc["dt"])) if use_pet else None
+        feat_a = apply_response_perturbation(
+            feat, names, dp=float(anc["dp"]), dt=float(anc["dt"]),
+            prcp_raw=prcp, norm=norm, pet_pert=pet_a, sim_pert=sim_a, scale=scale)
+        feat_anchors.append(feat_a)
+        sim_anchors.append(sim_a)
 
     # -- training sample index (finite obs, full lookback, cal window) --------
     finite = np.isfinite(obs)
@@ -395,6 +453,7 @@ def load_hybrid_data(
         is_cal=torch.as_tensor(is_cal).to(device),
         train_bt=torch.as_tensor(train_bt, dtype=torch.long).to(device),
         basins=basins, device=device,
-        feat_dt=_t(feat_dt) if feat_dt is not None else None,
-        sim_dt=_t(sim_dt) if sim_dt is not None else None,
+        feat_anchors=[_t(fa) for fa in feat_anchors],
+        sim_anchors=[_t(sa) for sa in sim_anchors],
+        norm=norm, prcp=_t(prcp),
     )

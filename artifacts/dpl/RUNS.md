@@ -561,6 +561,52 @@ multi-product basin means.
   so a 120-epoch run is the natural head-room experiment if the ensembles
   ever need another few thousandths.
 
+## dt/dp climate-response surfaces (2026-07-18, branch `dtdp-response`)
+
+Generalizes the +2 °C ΔT-consistency loss to PRECIPITATION and JOINT precip+temp
+response consistency, with a per-watershed (Δprecip, ΔT) response-surface
+diagnostic that scores whether the loss works.
+
+- **Multi-anchor response loss** (`hybrid/{data,train}.py`, CLI `--response-grid`):
+  the single ΔT term is now a list of (dp, dt) anchors. Each perturbs the feature
+  copy — temps `+dt/σ`, precip RE-Z-SCORED `×(1+dp)` (multiplicative, not a level
+  shift), PET recomputed under dt, sim channel = the physics run under the anchor —
+  and MSE-pulls the hybrid's daily response `Q(dp,dt)−Q` toward physics.
+  `apply_response_perturbation` is the one shared recipe (training + the sweep);
+  the legacy `temp_*` knobs are the n=1 dt anchor (byte-identical math, verified).
+  `--response-grid` = the 5 corners of {−10%,0,+10%}×{0,+3 °C}.
+- **Physics engine = FROZEN noah-lite, torch-anchored**
+  (`dtdp_response.physics_daily = base_torch + [frozen(dp,dt) − frozen(0,0)]`): the
+  numba noah-lite core is ~4 s/run (vs ~14 min for the torch stream) and its (dp,dt)
+  RESPONSE matches the torch noah to <0.3% on annual runoff (verified vs the torch
+  ±10% teachers); exact at (0,0) so the hybrids' present-climate baseline is
+  unperturbed. One source of truth for the teachers, the physics column, and the
+  hybrids' perturbed sim channel. Turns the 25-point sweep from ~6 h into ~2 min.
+- **`hybrid_pet_dtdp`** (`testing/`, gitignored scratch; 3 seeds matched to the raw
+  `hybrid_pet_noah` — h64/dropout.35/noise.2/pet/statics/no-doy — + response λ=0.1
+  on each of the 5 anchors): cal KGE **0.8994 / 0.9060 / 0.9035** (mean ~0.902 vs
+  the raw's ~0.910 — the small, expected response-loss cost; no collapse).
+- **Result** (`dtdp_response_metrics.csv` + `figures/dtdp_response/<BASIN>.png`;
+  5×5 grid dp∈[−20,20]% × dt∈[0,4] °C, 4 metrics — total annual runoff, Apr–Jul
+  freshet, max/min monthly — × 3 models, % change vs present climate, `×` = the
+  supervised anchors):
+  - PRECIP axis: both hybrids track physics (+10% precip annual: phys +20%, raw
+    +17%, dtdp +18%) — precip is a direct input, so even the raw responds.
+  - WARMING axis is the discriminator: the RAW hybrid is nearly flat and
+    WRONG-SIGNED at several basins (+3 °C annual: SHA +1.3, ORO +4.5, NHG +4.5,
+    SCC +4.3 — warming *raises* runoff), pooled **−0.9% vs physics −5.0%**; the
+    dt/dp hybrid recovers the physical signal (**−4.2%**, right-signed 14/15). The
+    same contrast reads off the annual/max-monthly contour TILT (raw vertical /
+    wrong-tilted; dtdp tilts like physics). Apr–Jul freshet is the metric warming
+    erodes most (all three capture it; dtdp closest to physics).
+  - Verdict: the multi-anchor loss extends the ΔT result — it makes the hybrid's
+    climate response trustworthy on BOTH the precip and warming axes, where the
+    unconstrained PET hybrid is a skill lever only (reconfirms "PET = skill lever,
+    not response lever"). Some southern-basin dtdp overshoot on warming
+    (MKM/TLG/MRC/MIL/PNF/TRM −6…−9% vs phys −4…−6%) — a λ screen is the lever if
+    tightening is wanted. Trained scratch ensembles stay local (like the raw);
+    only the figures + CSV + code are tracked.
+
 ## Open items
 - Canonical set (2026-07-17): `hamon_dense`, `hamon`, `pt`, `noah` (+ its
   torch daily dumps: the hybrid sim channel and the +2 °C teacher), and the
