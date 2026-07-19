@@ -401,6 +401,7 @@ def run_basin(
     pt_dewpoint_depression: float = 0.0,
     et_scheme: str = "sac",
     canopy_params: pd.DataFrame | None = None,
+    spinup_years: int | None = None,
 ) -> pd.DataFrame:
     """Forward-simulate one basin from the GA optimum.
 
@@ -434,8 +435,23 @@ def run_basin(
     ``canopy_params`` (a ``params_canopy.csv``-shaped table keyed by
     ``key``/``basin``).
 
+    ``spinup_years`` (opt-in, default ``None`` = today's cold start) prepends
+    that many years of a repeated climatological *average year* before the run
+    window, so the simulation starts from an equilibrated state (soil moisture,
+    snowpack, routing ramp) at any ``start`` instead of the reference cold start.
+    It is a pure forcing-level prepend (:mod:`sacsma.spinup`) run through this
+    same path with the lead-in dropped — the physics is untouched and the default
+    (``None``) path is byte-identical to before.
+
     Returns DataFrame[date, flow] of area-weighted gauge flow (mm/day).
     """
+    if spinup_years is not None:
+        return _run_basin_spunup(
+            basin, data_dir=data_dir, domain=domain, start=start, end=end,
+            progress=progress, forcing=forcing, parallel=parallel, product=product,
+            params=params, pet_source=pet_source, pt_snow_albedo=pt_snow_albedo,
+            pt_dewpoint_depression=pt_dewpoint_depression, et_scheme=et_scheme,
+            canopy_params=canopy_params, spinup_years=spinup_years)
     if forcing is None and (
         data_dir is None
         or not forcing_path(data_dir, domain, product).exists()
@@ -451,6 +467,38 @@ def run_basin(
         pt_dewpoint_depression=pt_dewpoint_depression,
         et_scheme=et_scheme, canopy_params=canopy_params,
     )
+
+
+def _run_basin_spunup(basin, *, data_dir, domain, start, end, progress, forcing,
+                      parallel, product, params, pet_source, pt_snow_albedo,
+                      pt_dewpoint_depression, et_scheme, canopy_params,
+                      spinup_years) -> pd.DataFrame:
+    """``run_basin`` with a climatological average-year spinup (opt-in).
+
+    Prepends ``spinup_years`` average-years to the base forcing, runs the combined
+    series through the normal native path, and drops the lead-in rows so only the
+    original window is returned — now started from an equilibrated state.  The
+    component cache is disabled (its key does not encode the extended time axis).
+    """
+    from . import spinup as _spinup
+
+    dd: str | Path = data_dir if data_dir is not None else "data"
+    base = forcing
+    if base is None:
+        base = load_domain_forcing(dd, domain=domain, start=start, end=end,
+                                   product=product)
+    # PT / Noah-lite need per-cell tmin/tmax on the base so the prepended block
+    # carries them too (then the native path's attach_tminmax no-ops).
+    if pet_source == "priestley_taylor" or et_scheme == "noah_lite":
+        attach_tminmax(dd, domain, base, product=product)
+    extended, n_spin = _spinup.prepend_spinup(base, years=spinup_years)
+    df = _run_basin_native(
+        basin, data_dir=dd, domain=domain, start=None, end=None, progress=progress,
+        forcing=extended, comp_cache=None, parallel=parallel, product=product,
+        params=params, pet_source=pet_source, pt_snow_albedo=pt_snow_albedo,
+        pt_dewpoint_depression=pt_dewpoint_depression, et_scheme=et_scheme,
+        canopy_params=canopy_params)
+    return df.iloc[n_spin:].reset_index(drop=True)
 
 
 @dataclass

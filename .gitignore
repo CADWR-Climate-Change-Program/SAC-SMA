@@ -51,11 +51,18 @@ artifacts/dpl/*
 !artifacts/dpl/hamon
 !artifacts/dpl/pt
 !artifacts/dpl/noah
+!artifacts/dpl/noah_ca
 !artifacts/dpl/hybrid
 !artifacts/dpl/hybrid_pet_dt
+!artifacts/dpl/hybrid_base
+!artifacts/dpl/hybrid_dtdp
+!artifacts/dpl/lstm
 !artifacts/dpl/hybrid_progression.png
 !artifacts/dpl/hybrid_progression.csv
-!artifacts/dpl/dtdp_response_metrics.csv
+!artifacts/dpl/dtdp_response_metrics*.csv
+!artifacts/dpl/dtdp_lambda_compare.csv
+!artifacts/dpl/adaptive_physics_metrics.csv
+!artifacts/dpl/noah_ca_hybrids_metrics.csv
 !artifacts/dpl/figures
 !artifacts/dpl/compare_val_kge.png
 
@@ -63,6 +70,10 @@ artifacts/dpl/*
 docs/_build/
 # regenerable dpl climatology/forcing sim cache (was under calsim/compare/)
 artifacts/dpl/_climatology_cache/
+# regenerable noah_ca adaptive-physics (dp,dt) daily sims (rebuilds from noah_ca ckpt)
+artifacts/dpl/_adaptive_cache/
+# regenerable per-(dp,dt) hybrid-ensemble daily flows (lets metric tweaks skip the GPU sweep)
+artifacts/dpl/_hybrid_daily_cache/
 
 
 

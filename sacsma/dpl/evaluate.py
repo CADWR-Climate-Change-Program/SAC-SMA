@@ -534,11 +534,13 @@ def load_net_from_checkpoint(
                                   "calsim_footprint", False))
     stats = FeatureSet(x=_np.empty((0, 0), dtype=_np.float32), **ck["features"])
     fs = build_features(dom.hrus, variant=variant,
-                        forcing=dom.forcing if variant == "climate" else None,
+                        forcing=(dom.forcing if variant in ("climate",
+                                 "physical_climate") else None),
                         climate_window=stats.climate_window,
                         climate_product=stats.climate_product,
                         physical_path=(soilveg_path(data_dir, domain)
-                                       if variant == "physical" else None),
+                                       if variant in ("physical",
+                                       "physical_climate") else None),
                         stats=stats)
     x = torch.as_tensor(fs.x).to(dev, torch.float64)
     gnn_k = nc.get("gnn_k", 0)
@@ -616,6 +618,14 @@ def corner_anchors(dp: float, dt: float) -> list[tuple[float, float]]:
     """The 5 non-origin corners of {−dp, 0, +dp} × {0, +dt}:
     (−dp,0), (+dp,0), (0,dt), (−dp,dt), (+dp,dt)."""
     return [(-dp, 0.0), (dp, 0.0), (0.0, dt), (-dp, dt), (dp, dt)]
+
+
+def grid_anchors(dps, dts) -> list[tuple[float, float]]:
+    """The full (Δprecip, ΔT) grid ``dps × dts`` minus the (0, 0) origin — a wider
+    / interior anchor set for supervising the response over more of the plane
+    (not just the corners)."""
+    return [(float(dp), float(dt)) for dp in dps for dt in dts
+            if not (float(dp) == 0.0 and float(dt) == 0.0)]
 
 
 def evaluate_checkpoint(

@@ -48,6 +48,10 @@ class HybridConfig:
     #: noah energy demand, recomputed from forcing) as an input
     #: channel: a physics-shaped temperature pathway for the LSTM.
     use_pet: bool = False
+    #: feed the frozen-physics ``sac_sim`` channel.  False = a PURE LSTM (no
+    #: physics baseline input) on the meteorology + PET + statics — the
+    #: no-physics ablation baseline.  Incompatible with the response loss.
+    use_sim: bool = True
     physics_domain: str = "15cdec"   # HRU resolution of the frozen sim + forcing
     pet_source: str = "hamon"        # "hamon" | "priestley_taylor" (match --physics)
     pt_snow_albedo: float = 0.0      # PT snow-albedo refinement (pt = 0.6)
@@ -153,6 +157,7 @@ def train_hybrid(cfg: HybridConfig, *, data_dir: str = "data",
     data = load_hybrid_data(data_dir, physics_csv=physics_csv,
                             sim_cache=sim_cache, use_statics=cfg.use_statics,
                             use_doy=cfg.use_doy, use_pet=cfg.use_pet,
+                            use_sim=cfg.use_sim,
                             domain=cfg.physics_domain, pet_source=cfg.pet_source,
                             pt_snow_albedo=cfg.pt_snow_albedo,
                             pt_dewpoint_depression=cfg.pt_dewpoint_depression,
@@ -212,15 +217,17 @@ def train_hybrid(cfg: HybridConfig, *, data_dir: str = "data",
                 loss = loss + cfg.log_lambda * (
                     (torch.log(flow + cfg.log_eps)
                      - torch.log(o + cfg.log_eps)) ** 2).mean()
-            for fa_t, sa_t, lam in zip(data.feat_anchors, data.sim_anchors,
-                                       anchor_lambdas):
+            for i, (fa_t, sa_t, lam) in enumerate(
+                    zip(data.feat_anchors, data.sim_anchors, anchor_lambdas)):
                 # second forward on each perturbed copy, SAME noise (so the
                 # delta is not noise-dominated); anchor the hybrid's daily
-                # response to the physics response, per-basin normalized.
+                # response to the physics response, per-basin normalized.  The
+                # CLIMATE statics (pmean/snowf) also co-vary with the anchor.
                 x_a = data.gather_windows(b, t, feat=fa_t)
                 if noise is not None:
                     x_a = x_a + noise
-                pred_a = model(x_a, st)
+                st_a = data.static_anchors[i][b] if data.static_anchors else st
+                pred_a = model(x_a, st_a)
                 d_phys = (sa_t[b, t] - data.sim[b, t]) / data.scale[b]
                 loss = loss + lam * (((pred_a - pred) - d_phys) ** 2).mean()
             opt.zero_grad(set_to_none=True)

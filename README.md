@@ -60,6 +60,7 @@ sacsma run ALL --out flow.csv           # all 15, one column per basin
 sacsma run CacheCreek --domain 9unimp   # a CalLite watershed
 sacsma run ALL --domain 11obs --parallel                 # fan HRUs across cores
 sacsma run ALL --domain 11obs --forcing wgen_product_a   # alternate forcing
+sacsma run BND --start 2010-10-01 --spinup-years 20      # warm start at any year
 sacsma plots --domain 15cdec            # diagnostics -> artifacts/cdec15/
 sacsma calsim                           # CalSim cross-compare -> artifacts/calsim/compare/
 ```
@@ -69,6 +70,12 @@ from sacsma.model import run_basin
 df = run_basin("BND")                          # 15cdec (default)
 df = run_basin("CacheCreek", domain="9unimp")  # DataFrame[date, flow] in mm/day
 ```
+
+`--spinup-years N` (or `run_basin(..., spinup_years=N)`) prepends an N-year
+climatological *average year* before the run window, so a run started at any
+`--start` begins from an equilibrated state (soil moisture, snowpack, routing)
+instead of the reference cold start. It is opt-in; leaving it off runs exactly as
+before.
 
 ## Results
 
@@ -98,29 +105,49 @@ parameter network maps basin attributes (soil, vegetation, terrain, LAI) to the
 per-HRU parameters, trained end-to-end and pooled across the 15 CDEC basins on the
 daily FNF target. A fidelity gate anchors the port: the archived GA parameters
 pushed through the torch model reproduce the frozen NumPy reference to numerical
-tolerance, so it is demonstrably the same model.
+tolerance, so it is demonstrably the same model. The skill numbers below are all
+pooled validation KGE.
 
-Two rungs of results (pooled validation KGE):
+**Learned physics.** The parameter net alone reaches val KGE 0.84 on the fine-HRU
+grid, matching the GA study's ceiling. Coarse-grid variants that swap the
+evaporative physics (`hamon`, `pt`, `noah`) land 0.80–0.83. A climate-adaptive
+variant, `noah_ca`, adds four climate indices to the attribute set so the learned
+parameters co-vary with the forcing climate; it costs no present-day skill
+(val ≈ 0.80) and is the physics the current hybrids build on.
 
-- **Learned physics** — the parameter net alone reaches val KGE 0.84 on the
-  fine-HRU grid, matching the GA study's ceiling. Coarse-grid variants that swap
-  the evaporative physics (`hamon`, `pt`, `noah`) land 0.80–0.83.
-- **Hybrid SAC×LSTM** — an LSTM ingesting the frozen simulation as a feature, run
-  as an 8-seed ensemble, reaches val KGE ≈ 0.87. The paired `hybrid_pet_dt` adds a
-  temperature-consistency loss that ties the warming response to the physics; the
-  plain hybrid's response is unreliable, so `hybrid_pet_dt` is the one to use for
-  climate work.
+**Hybrid SAC×LSTM.** An LSTM that reads the frozen simulation as one of its
+features, run as a seed ensemble, lifts skill to val KGE ≈ 0.88 (`hybrid_base`).
+Skill alone is misleading under a changing climate, though. The plain hybrid
+over-responds to warming, and a pure `lstm` control with no physics channel comes
+out wrong-signed: it learns that warm days mean high flow (the seasonal melt) and
+then reads sustained warming as more runoff.
+
+**A trustworthy warming response.** `hybrid_dtdp` adds a multi-anchor (Δp, ΔT)
+response-consistency loss that pulls the hybrid's warming and precip response back
+toward the physics. It follows the physics on both axes (warming ratio 1.14 and
+right-signed at all 15 basins, versus 1.50 for `hybrid_base` and −0.94 for the pure
+`lstm`) and gives up only a little skill (val 0.85). This is the one to use for
+climate work. It replaces the earlier `hybrid_pet_dt`, which carried a single
++2 °C anchor on the frozen `noah`; `hybrid_dtdp` generalizes that to the full
+(Δp, ΔT) surface on the climate-adaptive `noah_ca`.
+
+The diagnostic behind these claims is a per-watershed (Δp, ΔT) response surface
+(`sacsma.dpl.dtdp_response`), scored outside the calibration window. Warming
+shrinks the April–July snowmelt freshet but intensifies the flood peaks
+(daily Q99.9). `hybrid_dtdp` reproduces that crossover on a tail it was never
+trained on; the pure LSTM roughly doubles it.
 
 Checkpoints, per-model metrics, and a chronological log of every experiment live
-in [`artifacts/dpl/`](artifacts/dpl/) — see
-[`RUNS.md`](artifacts/dpl/RUNS.md). This variant is torch-only and GPU-oriented;
-the core `sacsma` package stays torch-free.
+in [`artifacts/dpl/`](artifacts/dpl/); see [`RUNS.md`](artifacts/dpl/RUNS.md).
+This variant is torch-only and GPU-oriented; the core `sacsma` package stays
+torch-free.
 
 ```bash
 sacsma dpl benchmark                                   # fidelity vs the frozen reference
 sacsma dpl train physical --pet priestley_taylor       # train a parameter net
 sacsma dpl hybrid --physics <params.csv> --statics     # train a hybrid LSTM seed
 sacsma dpl evaluate artifacts/dpl/noah/checkpoints/best.pt
+python -m sacsma.dpl.noah_ca_hybrids                   # noah_ca hybrids + (Δp, ΔT) response surfaces
 ```
 
 ## License
