@@ -49,17 +49,23 @@ def _check_feature(ck: dict) -> None:
                          "2026-07-16); only feature checkpoints can be scored")
 
 
-def _load_data(ck: dict, data_dir: str, dev: torch.device):
-    """Rebuild the HybridData for a checkpoint's physics config."""
+def _load_data(ck: dict, data_dir: str, dev: torch.device,
+               physics_csv: str | None = None, sim_cache: str | None = None):
+    """Rebuild the HybridData for a checkpoint's physics config.
+
+    ``physics_csv`` / ``sim_cache`` override the checkpoint-stored training-time
+    paths (used when an ensemble was canonicalized out of ``testing/`` and its
+    stored paths are now stale — the canonical caller passes the moved paths)."""
     _check_feature(ck)
     cfg = ck["cfg"]
     return load_hybrid_data(
         data_dir,
-        physics_csv=ck.get("physics_csv"),
-        sim_cache=ck.get("sim_cache"),
+        physics_csv=physics_csv if physics_csv is not None else ck.get("physics_csv"),
+        sim_cache=sim_cache if sim_cache is not None else ck.get("sim_cache"),
         use_statics=bool(ck["n_static"]),
         use_doy=cfg.get("use_doy", True),
         use_pet=cfg.get("use_pet", False),
+        use_sim=cfg.get("use_sim", True),
         domain=cfg.get("physics_domain", "15cdec"),
         pet_source=cfg.get("pet_source", "hamon"),
         pt_snow_albedo=cfg.get("pt_snow_albedo", 0.0),
@@ -127,14 +133,18 @@ def score_hybrid(ckpt_path: str | Path, *, data_dir: str = "data",
 
 
 def score_ensemble(ens_dir: str | Path, *, data_dir: str = "data",
-                   out_dir: str | Path | None = None) -> pd.DataFrame:
+                   out_dir: str | Path | None = None,
+                   physics_csv: str | None = None,
+                   sim_cache: str | None = None) -> pd.DataFrame:
     """Score the ENSEMBLE-MEAN daily flow across all trained seeds.
 
     Averages the per-seed reconstructed flow (mean of member flows — the
     canonical "keep full ensemble, use mean" convention) then scores it vs the
     gage exactly like :func:`score_hybrid` -> ``metrics_hybrid.csv`` at
     ``ens_dir``.  ``seed*/checkpoints/best.pt`` are the members; data is
-    loaded once (every seed shares the physics/domain config)."""
+    loaded once (every seed shares the physics/domain config).  ``physics_csv`` /
+    ``sim_cache`` override the checkpoint-stored paths (for canonicalized
+    ensembles whose training-time ``testing/`` paths are now stale)."""
     ens = Path(ens_dir)
     ckpts = sorted(ens.glob("seed*/checkpoints/best.pt"))
     if not ckpts:
@@ -142,7 +152,8 @@ def score_ensemble(ens_dir: str | Path, *, data_dir: str = "data",
     out = Path(out_dir if out_dir is not None else ens)
     dev = _device()
     ck0 = torch.load(ckpts[0], map_location="cpu", weights_only=False)
-    data = _load_data(ck0, data_dir, dev)
+    data = _load_data(ck0, data_dir, dev, physics_csv=physics_csv,
+                      sim_cache=sim_cache)
     preds = []
     for cp in ckpts:
         ck = torch.load(cp, map_location="cpu", weights_only=False)

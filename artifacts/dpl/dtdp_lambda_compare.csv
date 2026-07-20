@@ -1,0 +1,5 @@
+model,warm3_pooled,resp_ratio_vs_phys,sign_correct_15,mean_abs_err_vs_phys,mean_cal_kge
+Physics (noah),-5.01,1.0,15,0.0,
+Hybrid raw,-6.09,1.22,11,5.93,0.9171
+dt·dp 8-anchor +CS (lam0.18),-4.45,0.89,14,1.93,0.8898
+dt·dp 5-anchor no-CS (lam0.3),-4.6,0.92,15,2.67,0.8857

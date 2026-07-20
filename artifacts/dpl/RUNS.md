@@ -3,9 +3,10 @@
 ## Layout
 
 Canonical runs live directly under `artifacts/dpl/<label>`. The frozen-physics runs
-(`hamon_dense`, `hamon`, `pt`, `noah`) each carry `checkpoints/best.pt`,
-`train_log.csv`, `params_dpl.csv`, and `metrics_<label>.csv` (plus
-`params_canopy.csv` for `noah`).
+(`hamon_dense`, `hamon`, `pt`, `noah`, and the climate-adaptive `noah_ca`) each
+carry `checkpoints/best.pt`, `train_log.csv`, `params_dpl.csv`, and
+`metrics_<label>.csv` (plus `params_canopy.csv` for `noah`/`noah_ca`, and the
+present-climate sim channel `frozen_sim_noah_ca.csv` for `noah_ca`).
 
 `noah` also carries two torch daily dumps (date × basin, mm/day):
 `daily_sim_noah_torch.csv`, the hybrids' sim channel, and
@@ -13,10 +14,14 @@ Canonical runs live directly under `artifacts/dpl/<label>`. The frozen-physics r
 the ΔT-consistency loss. Channel and teacher come from one pipeline (torch
 numerics), so the training-time response delta is numerics-consistent.
 
-The two canonical SAC×LSTM ensembles are `hybrid` (basic feature coupling on the
-`noah` torch channel, no day-of-year inputs) and `hybrid_pet_dt` (adds the raw
-PT-potential input and the ΔT-consistency loss). They are kept as a pair to show
-the climate-response improvement. Each holds `seed*/checkpoints/best.pt` and
+The `hybrid` (basic feature coupling on the `noah` torch channel, no day-of-year
+inputs) and `hybrid_pet_dt` (adds the raw PT-potential input and a single +2 °C
+ΔT-consistency loss) ensembles established the skill step and the +2 °C response
+result. They are now the +2 °C-only predecessors of the `noah_ca` hybrid family
+(`hybrid_base` / `hybrid_dtdp` / `lstm`; see the Phase-2 section below), which
+rebuilds them on climate-adaptive physics and generalizes the single ΔT anchor to
+the full (Δp, ΔT) response surface, so `hybrid_dtdp` supersedes `hybrid_pet_dt`
+for climate work. Each ensemble holds `seed*/checkpoints/best.pt` and
 per-seed `metrics_hybrid.csv`, plus a top-level `metrics_hybrid.csv` scoring the
 ensemble-mean flow (`hybrid.evaluate.score_ensemble`). The residual coupling and
 the first `noah`-based ensembles were retired 2026-07-16, and `noah_ft` (the
@@ -46,9 +51,13 @@ spinup from 1978-10-01.
 | `hamon` | 15cdec_grid (2074 cells) | native-grid retrain + CalSim3 footprint | 0.807/0.829 |
 | `pt` | 15cdec_grid | Priestley–Taylor PET (Bristow–Campbell Rn) + snow-cover albedo (0.6) + arid dewpoint depression (2 °C) | 0.799/0.826 |
 | `noah` | 15cdec_grid | Noah-lite canopy ET (1 learned DOF `soil_chi`) on PT potential | 0.767/0.799 |
+| `noah_ca` | 15cdec_grid | `noah` retrained on `physical_climate` features (physiographic + 4 climate indices) → climate-ADAPTIVE physics: parameters recompute under perturbed climate. The physics basis for the current hybrid family (2026-07-19) | 0.779/0.804 |
 | ~~`noah_ft`~~ | 15cdec_grid | DEMOTED 2026-07-17 — the seasonal-melt fine-tune of `noah` (0.765/0.799 torch): the new-basis head-to-head is a pooled wash vs `noah` with NHG + north-state-volume casualties, and its torch-only scoring taxed every consumer | — |
 | `hybrid` | 15cdec_grid | SAC×LSTM feature coupling on `noah` physics (torch daily sim-cache channel), no doy inputs — 8-seed ensemble mean. The BASIC hybrid: the skill step; its unconstrained +2 °C response is untrustworthy (see 2026-07-17) | 0.917/0.869 |
-| `hybrid_pet_dt` | 15cdec_grid | `hybrid` + the raw PT-potential input channel (`--pet-input`) + the temperature-consistency loss λ=0.3 (+2 °C `noah` torch teacher) — 8-seed ensemble mean. Same skill, physics-consistent climate response (+2 °C resp ratio 1.04, regime r 0.97) | **0.916/0.864** |
+| `hybrid_pet_dt` | 15cdec_grid | `hybrid` + the raw PT-potential input channel (`--pet-input`) + the temperature-consistency loss λ=0.3 (+2 °C `noah` torch teacher) — 8-seed ensemble mean. Same skill, physics-consistent climate response (+2 °C resp ratio 1.04, regime r 0.97). SUPERSEDED for climate work by `hybrid_dtdp` (2026-07-19) | 0.916/0.864 |
+| `hybrid_base` | 15cdec_grid | SAC×LSTM feature coupling on `noah_ca` physics (`--pet-input --statics`, no doy), NO response loss — 3-seed ensemble mean. Best skill; +2 °C response over-strong (ratio 1.50) | 0.922/0.877 |
+| `hybrid_dtdp` | 15cdec_grid | `hybrid_base` + the 14-anchor {−20,−10,0,+10,+20}%×{0,+2,+4 °C} (Δp, ΔT) response-consistency loss (λ0.18) vs the `noah_ca` adaptive teachers — 3-seed mean. THE climate-trustworthy model: tracks physics on both axes (+3 °C ratio 1.14, 15/15 signs); generalizes `hybrid_pet_dt` to the full surface | **0.873/0.849** |
+| `lstm` | 15cdec_grid | pure data-driven control (`use_sim=False` — no SAC-SMA sim channel), same climate-adaptive statics — 3-seed mean. Good skill but physically nonsensical projection (+3 °C ratio −0.94, wrong-signed) | 0.909/0.835 |
 | ~~`noah_lstm_feat`~~ | 15cdec_grid | RETIRED 2026-07-16 — feature hybrid on `noah` (5 seeds, 0.923/0.869); superseded by `hybrid` | — |
 | ~~`noah_lstm_resid`~~ | 15cdec_grid | RETIRED 2026-07-16 — residual hybrid on `noah` (8 seeds, 0.926/0.873); the residual COUPLING was dropped entirely (regime-conditional volume injection, B1–B3) | — |
 
@@ -561,15 +570,205 @@ multi-product basin means.
   so a 120-epoch run is the natural head-room experiment if the ensembles
   ever need another few thousandths.
 
+## dt/dp climate-response surfaces (2026-07-18, branch `dtdp-response`)
+
+Generalizes the +2 °C ΔT-consistency loss to PRECIPITATION and JOINT precip+temp
+response consistency, with a per-watershed (Δprecip, ΔT) response-surface
+diagnostic that scores whether the loss works.
+
+- **Multi-anchor response loss** (`hybrid/{data,train}.py`, CLI `--response-grid`):
+  the single ΔT term is now a list of (dp, dt) anchors. Each perturbs the feature
+  copy — temps `+dt/σ`, precip RE-Z-SCORED `×(1+dp)` (multiplicative, not a level
+  shift), PET recomputed under dt, sim channel = the physics run under the anchor —
+  and MSE-pulls the hybrid's daily response `Q(dp,dt)−Q` toward physics.
+  `apply_response_perturbation` is the one shared recipe (training + the sweep);
+  the legacy `temp_*` knobs are the n=1 dt anchor (byte-identical math, verified).
+  `--response-grid` = the 5 corners of {−10%,0,+10%}×{0,+3 °C}.
+- **Physics engine = FROZEN noah-lite, torch-anchored**
+  (`dtdp_response.physics_daily = base_torch + [frozen(dp,dt) − frozen(0,0)]`): the
+  numba noah-lite core is ~4 s/run (vs ~14 min for the torch stream) and its (dp,dt)
+  RESPONSE matches the torch noah to <0.3% on annual runoff (verified vs the torch
+  ±10% teachers); exact at (0,0) so the hybrids' present-climate baseline is
+  unperturbed. One source of truth for the teachers, the physics column, and the
+  hybrids' perturbed sim channel. Turns the 25-point sweep from ~6 h into ~2 min.
+- **`hybrid_pet_dtdp`** (`testing/`, gitignored scratch; 3 seeds matched to the raw
+  `hybrid_pet_noah` — h64/dropout.35/noise.2/pet/statics/no-doy — + response λ=0.1
+  on each of the 5 anchors): cal KGE **0.8994 / 0.9060 / 0.9035** (mean ~0.902 vs
+  the raw's ~0.910 — the small, expected response-loss cost; no collapse).
+- **Result** (`dtdp_response_metrics.csv` + `figures/dtdp_response/<BASIN>.png`;
+  5×5 grid dp∈[−20,20]% × dt∈[0,4] °C, 4 metrics — total annual runoff, Apr–Jul
+  freshet, max/min monthly — × 3 models, % change vs present climate, `×` = the
+  supervised anchors):
+  - PRECIP axis: both hybrids track physics (+10% precip annual: phys +20%, raw
+    +17%, dtdp +18%) — precip is a direct input, so even the raw responds.
+  - WARMING axis is the discriminator: the RAW hybrid is nearly flat and
+    WRONG-SIGNED at several basins (+3 °C annual: SHA +1.3, ORO +4.5, NHG +4.5,
+    SCC +4.3 — warming *raises* runoff), pooled **−0.9% vs physics −5.0%**; the
+    dt/dp hybrid recovers the physical signal (**−4.2%**, right-signed 14/15). The
+    same contrast reads off the annual/max-monthly contour TILT (raw vertical /
+    wrong-tilted; dtdp tilts like physics). Apr–Jul freshet is the metric warming
+    erodes most (all three capture it; dtdp closest to physics).
+  - Verdict: the multi-anchor loss extends the ΔT result — it makes the hybrid's
+    climate response trustworthy on BOTH the precip and warming axes, where the
+    unconstrained PET hybrid is a skill lever only (reconfirms "PET = skill lever,
+    not response lever"). Some southern-basin dtdp overshoot on warming
+    (MKM/TLG/MRC/MIL/PNF/TRM −6…−9% vs phys −4…−6%) — a λ screen is the lever if
+    tightening is wanted. Trained scratch ensembles stay local (like the raw);
+    only the figures + CSV + code are tracked.
+- **Denser grid + λ screen** (2026-07-18): the sweep grid was tightened to 9×9
+  (dp step 5% / dt step 0.5 °C, 81 points) for smooth `contourf`, and a
+  `hybrid_pet_dtdp_l0.3` variant (5 anchors, **λ=0.3**) trained to cal KGE
+  0.886. λ=0.3 tightens per-basin +3 °C fidelity vs λ=0.1 (mean |err| vs physics
+  2.67 pp, 15/15 signs, ratio 0.92) at ~0.016 more cal cost — southern overshoot
+  is a pooling limit λ dents but doesn't remove.
+- **Climate-static co-variation + 8-anchor grid** (`hybrid_pet_dtdp_cs8`,
+  2026-07-18 — the recommended dt·dp variant): two changes over the above.
+  (1) The hybrid's static net carries two CLIMATE statics (pmean, snowf) alongside
+  the physiographic elev/flowlen; these now **co-vary with the perturbation** at
+  both train and eval (`data.perturbed_static`: `pmean×(1+dp)`; `snowf` recomputed
+  with the freeze threshold shifted by dt — invariant to uniform precip scaling, so
+  it responds to dt only; both exact at (0,0), verified). (2) Anchors =
+  **{−10%,0,+10%}×{0,+2,+4 °C}** (8 non-origin), λ=0.18. Cal KGE
+  **0.8893 / 0.8931 / 0.8869** (~0.890; full skill, ~0.027 below the raw's 0.917 —
+  the multi-anchor response-loss cost, same order as l0.3). **Best per-basin
+  warming fidelity of any variant: +3 °C mean |err| vs physics 1.93 pp**
+  (vs l0.3 2.67, raw 5.93), ratio 0.89, 14/15 signs. `dtdp_response_metrics_cs8.csv`
+  + `figures/dtdp_response_cs8/<BASIN>.png` (8 anchors marked) +
+  `figures/dtdp_lambda_compare.png`.
+  - DECOMPOSITION (the raw column now also gets the co-varying statics at eval):
+    the climate-static signal ALONE lifts the raw's pooled +3 °C response from the
+    old flat/lottery (~−0.9%, ratio 0.24) to −6.1% (ratio 1.22) — directionally
+    right on average — but leaves the per-basin response CATASTROPHICALLY
+    miscalibrated: +24% over-response at TLG/MIL, wrong-signed at NHG/SCC, and an
+    NHG min-monthly-flow blowup to **+125%** (arid basins amplify min-monthly % —
+    the baseline min is ~0). The dt·dp response loss is what tames the per-basin
+    scatter to physics (NHG min-flow → ~0, mean |err| 5.93→1.93). So: statics
+    co-varying = necessary lever, response loss = the calibrator; neither alone.
+  - Physics is still FROZEN here (dPL noah uses the physiographic `physical`
+    variant, so its SAC params don't shift under climate — only its FORCING does).
+    Making the noah backbone itself climate-adaptive (a `physical_climate` feature
+    variant + noah retrain) is Phase 2 (below).
+
+## Climate-adaptive physics + noah_ca hybrid family (Phase 2, 2026-07-18, branch `dtdp-response`)
+
+Makes the dPL-noah backbone ITSELF climate-adaptive, adopts it as the physics
+basis, and rebuilds the hybrid family on it.
+
+- **`physical_climate` feature variant** (`features.py`, CLI `dpl train
+  physical_climate`): the 23 physiographic `physical` features PLUS the 4 climate
+  indices (p_mean/aridity/snow_frac/seasonality).  Retrained the noah on it
+  (canonicalized 2026-07-19 to **`noah_ca/`**, exact-reconstructed noah cfg — only
+  the variant differs): frozen cal/val **0.779/0.804 ≈ the canonical noah
+  0.767/0.799**, so the indices cost no present-climate skill (torch selection cal
+  0.745; killed early, annealed).
+- **`noah_ca` = the climate-ADAPTIVE physics** (`adaptive_physics.py`): under
+  (dp,dt) the params are RECOMPUTED by re-running the trained net on climate indices
+  built from the perturbed forcing (`adaptive_params`; physiographic features + z-
+  scoring frozen; exact at (0,0), verified max|d|=0).  Canonical labels: **`noah`** =
+  canonical (physical, params frozen — forcing-only response); **`noah_ca`** =
+  climate-adaptive (physical_climate, params co-vary).  Diagnostic (frozen vs
+  adaptive params, same model): param adaptation AMPLIFIES warming-drying by
+  **−1.3%/+2 °C → −2.3%/+4 °C** (Kpet +1→1.6%, lzsk −4→−8%), arid-concentrated
+  (ISB max), robust across precip — a real space-for-time effect (2nd-order vs the
+  forcing response).  Physics figure = 2 cols `[noah | noah_ca]` × 4 metrics, per
+  watershed (`figures/adaptive_physics/`) AND per freshet-tercile regime
+  (`figures/adaptive_physics_regimes/{snow,mix,rain}.png`, area-weighted); both
+  from `adaptive_physics_metrics.csv`.  (`REGIMES` / `_aggregate_regime` are shared
+  from `dtdp_response` by the physics + hybrid-family regime figures.)
+- **noah_ca hybrid family** (`noah_ca_hybrids.py`; 3 seeds each, all on the noah_ca
+  basis, `--pet-input --no-doy --statics` h64/drop.35/noise.2, 15cdec_grid;
+  canonical dirs **`hybrid_base` / `hybrid_dtdp` / `lstm`** — the `noah_ca` infix
+  is dropped since it is the family's default basis):
+  - `base hybrid` — noah_ca sim channel, NO response loss: cal **0.922** / val
+    **0.877**.
+  - `dt·dp hybrid` — + **14-anchor {−20,−10,0,+10,+20}×{0,+2,+4}** response loss
+    vs the noah_ca ADAPTIVE teachers, λ0.18: cal 0.873 / val 0.849.  The precip
+    axis was extended to ±20% (from ±10%) so the SURFACE EDGES are supervised, not
+    extrapolated — mean |err vs physics| on annual %Δ at the ±20% edge drops to
+    **3.7 (dt·dp) vs 10.1 (base)**, and the dt·dp edge is only ~1.9× its interior
+    (1.9→3.7) instead of running away.  Cost: ~0.018 cal / ~0.008 val vs the
+    8-anchor, and the dp=0 interior warming ratio loosened 0.98→1.14 (mild
+    over-response) — the interior↔edge trade of spreading 14 anchors.
+  - `pure LSTM` (dir `lstm/`) — NO physics sim channel (`use_sim=False`, new toggle
+    threaded through `feature_names`/`data`/`train`/`evaluate`); the pure data-driven
+    control (no SAC-SMA connection at all), keeping only the SAME climate-adaptive
+    statics: cal 0.909 / val **0.835**.
+- **Surface metrics (revised 2026-07-19)**: the 4 rows are total annual runoff,
+  Apr–Jul freshet, daily **Q99.9 (flood peak)**, daily **Q30 (low flow)** — the
+  daily percentiles replace the old mean-monthly max/min.  The high-flow row is
+  deliberately the extreme tail (Q99.9 ≈ top 37 days of 1915-2018), NOT Q98: in
+  the noah_ca physics the snow-basin percentile response to +4 °C warming *crosses
+  over* — Q95/Q98 fall (−12 %, the snowmelt-freshet shoulder, already carried by
+  the freshet row) but the flood tail rises (Q99 −5.7 % → Q99.5 +4 % → **Q99.9
+  +36 %, all 5 snow basins positive**; the whole top tail thickens, not one day).
+  Mix basins rise even at Q98 (+8 %); rain basins are flat (no snow→rain
+  amplification).  So Q99.9 is the *complement* of the freshet row: warming shrinks
+  the snowmelt freshet but intensifies flood peaks.  The dt·dp `×` anchor grid is
+  drawn on **every** column (all figure sets) for eye cross-comparison.
+- **Evaluation window (2026-07-19)**: the response metrics reduce over **WY1951-1988
+  + WY2004-2018** (`dtdp_response._eval_mask`), which (1) EXCLUDES the WY1989-2003 CAL
+  window the hybrids + dt·dp loss trained on → the reported response is OUT-OF-SAMPLE,
+  and (2) drops the 1915-1950 cold-start lead-in (the physics `run_basin` cold-starts
+  1915 with SMA [0,0,100,100,100,0] / Snow-17 zeros; ~35 yr equilibrates every store
+  incl. slow lztwc, and baseline/perturbed share the spin-up so it cancels in the %Δ
+  regardless).  The ANNUAL response is period-insensitive (physics snow +4 °C −8.7 vs
+  −9.0 full-record); Q99.9 is period-sensitive (physics snow +4 °C **+47** on this
+  window vs +36 full-record — the pre-1950 record damped it), but the model RANKINGS
+  hold in every period (dt·dp closest to physics, base over-, LSTM worst — and dt·dp
+  tracks the flood peak even tighter on-window, 45.5 vs 47.2).
+- **RESULT** (`noah_ca_hybrids_metrics.csv` + `figures/noah_ca_hybrids/<BASIN>.png`
+  4-col physics/base/dtdp/lstm, `figures/noah_ca_regimes/{snow,mix,rain}.png`
+  [freshet-tercile regime aggregates, area-weighted], + the 3-panel
+  `figures/noah_ca_summary.png` = skill bars + warming-response and precip-response
+  CURVES (line per model, physics the black reference; annual %Δ vs ΔT at Δp=0, and
+  vs Δp held at +2 °C — dt·dp hugs physics on both axes, LSTM inverts/flattens):
+  - **Physics sim channel buys GENERALIZATION**: pure LSTM ties base on cal
+    (0.909 vs 0.922) but trails **~0.04 on val** (0.835 vs 0.877).  Val order:
+    physics 0.804 < LSTM 0.835 < dtdp 0.857 < base 0.877.
+  - **Only physics + the dt·dp loss gives a trustworthy warming response**:
+    pure LSTM is **WRONG-SIGNED** (+5.6%, ratio **−0.94**, 5/15 signs) — a data-
+    driven model, even with the climate-adaptive statics, learns warm⇒high-flow
+    (seasonal melt) and extrapolates warming to MORE runoff.  Base over-responds
+    (−9.0%, 1.50×, 13/15).  dt·dp tracks physics closely (−6.8%, **1.14×,
+    15/15, err 1.9** at dp=0; full-grid annual err **2.6 vs base 7.6, LSTM 24.6**).
+  - **Flood-peak (Q99.9) reproduction** — the extreme tail, NOT trained on (the
+    dt·dp loss matches only the *bulk* daily response): +4 °C snow-basin flood peaks
+    rise physics +36 % → dt·dp **+41 %** (closest) → base +48 % → pure LSTM **+67 %**
+    (~2× physics).  Rain basins are the tell — physics ≈ 0 (−1 %), dt·dp tracks it
+    (**−0.1 %**), but base (+10 %) and LSTM (**+23 %**) INVENT a warming-driven rain
+    flood increase where there is none.  The dt·dp physics-consistency generalizes to
+    the tail it never saw; the LSTM over-responds worst exactly where flood risk lives.
+  - **Precip response held at +2 °C** (summary panel 3, pooled annual %Δ vs the
+    +2 °C state): physics −35.5 % (−20 % precip) / +38.7 % (+20 %); dt·dp tracks it
+    (−33.4 / +37.1), base under-responds (−26.4 / +31.1), and **pure LSTM is flat &
+    inverted (+0.3 / −3.8)** — drying nudges flow UP, wetting DOWN.  Same failure
+    mode as the warming axis: no physics channel ⇒ no trustworthy precip sensitivity.
+    Verdict: base = best skill / over-strong response; **dt·dp = the
+    climate-trustworthy model** (small skill cost); pure LSTM = good skill,
+    physically nonsensical projection on BOTH axes = the case FOR physics.
+- **Canonicalized 2026-07-19** out of gitignored `testing/` into tracked `noah_ca`
+  (physics ckpt + params + `metrics_noah_ca.csv` + present sim channel
+  `frozen_sim_noah_ca.csv`) / `hybrid_base` / `hybrid_dtdp` / `lstm` (3-seed
+  ensembles, checkpoints tracked like `noah`/`hybrid`).  The two eval loaders
+  (`hybrid.evaluate._load_data`, `dtdp_response._load_ensemble`) gained
+  `physics_csv`/`sim_cache` overrides so the moved checkpoints' stale training-time
+  paths don't bite; the regenerable adaptive (dp,dt) physics cache stays gitignored
+  at `_adaptive_cache`.  Annual/response numbers verified BIT-IDENTICAL pre/post move.
+
 ## Open items
-- Canonical set (2026-07-17): `hamon_dense`, `hamon`, `pt`, `noah` (+ its
-  torch daily dumps: the hybrid sim channel and the +2 °C teacher), and the
-  two SAC×LSTM ensembles `hybrid` (basic: 0.917/0.869, +2 °C response
-  −0.57 = untrustworthy) and `hybrid_pet_dt` (PET input + ΔT-consistency
-  λ0.3: 0.916/0.864, response 1.04) — kept as a PAIR to show the
-  climate-response improvement. `noah_ft` demoted 2026-07-17; its
-  refinement candidates (SWE-participation-weighted melt harmonics, tighter
-  anchor band) are moot unless the seasonal-melt line is revived.
+- Canonical set (2026-07-19): the physics ladder `hamon_dense`, `hamon`, `pt`,
+  `noah`, and the climate-adaptive `noah_ca` (`physical_climate` features — the
+  physics basis for the current hybrids); plus the `noah_ca` SAC×LSTM family
+  `hybrid_base` (best skill 0.922/0.877), `hybrid_dtdp` (0.873/0.849, the
+  climate-trustworthy model: full (Δp, ΔT) response loss, +3 °C ratio 1.14,
+  15/15 signs) and the pure `lstm` control (0.909/0.835, +3 °C ratio −0.94
+  wrong-signed = the case for physics). `hybrid_dtdp` SUPERSEDES `hybrid_pet_dt`
+  for climate work; `hybrid`/`hybrid_pet_dt` (frozen-`noah` basis, +2 °C-only:
+  0.917/0.869 and 0.916/0.864) are retained as the predecessors the (Δp, ΔT)
+  loss generalizes, and `noah`'s torch daily dumps (the older hybrid sim channel
+  + the +2 °C teacher) stay. `noah_ft` demoted 2026-07-17; its refinement
+  candidates (SWE-participation-weighted melt harmonics, tighter anchor band) are
+  moot unless the seasonal-melt line is revived.
 - Hybrid val volume bias at NML/MRC/ORO remains intrinsic to cal-only
   training (B1–B3 + D2 all refute fixes); at those basins `noah` is the
   trustworthy out-of-sample answer.

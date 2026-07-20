@@ -54,6 +54,7 @@ def _run(args: argparse.Namespace) -> int:
             forcing=forcing,
             parallel=args.parallel,
             product=product,
+            spinup_years=args.spinup_years,
         )
         if args.out:
             out = Path(args.out)
@@ -165,6 +166,26 @@ def _dpl_hybrid(args: argparse.Namespace) -> int:
     out = args.out or "artifacts/dpl/testing/hybrid"
     physics = (None if str(args.physics).lower() in ("", "none", "ga")
                else args.physics)
+    # --response-grid: build the 5 corner (Δprecip, ΔT) anchors and ensure the
+    # cached physics teacher sim under each (fast frozen noah-lite response on the
+    # torch baseline; the SAME physics the response-surface sweep uses).
+    response_anchors: tuple = ()
+    if args.response_grid:
+        from .dpl.dtdp_response import physics_daily
+        from .dpl.evaluate import (corner_anchors, grid_anchors,
+                                   teacher_cache_path)
+        if args.response_dps and args.response_dts:
+            anchor_pts = grid_anchors(
+                [float(x) for x in args.response_dps.split(",")],
+                [float(x) for x in args.response_dts.split(",")])
+        else:
+            anchor_pts = corner_anchors(args.response_dp, args.response_dt)
+        ancs = []
+        for dp, dt in anchor_pts:
+            physics_daily(dp, dt, data_dir=args.data_dir)   # ensure cached teacher
+            ancs.append({"dp": dp, "dt": dt, "lambda": args.response_lambda,
+                         "sim_cache": str(teacher_cache_path(dp, dt))})
+        response_anchors = tuple(ancs)
     cfg = HybridConfig(
         use_statics=args.statics, n_epochs=args.epochs,
         hidden=args.hidden, dropout=args.dropout, lr=args.lr,
@@ -172,7 +193,7 @@ def _dpl_hybrid(args: argparse.Namespace) -> int:
         input_noise=args.input_noise,
         use_doy=not args.no_doy, use_pet=args.pet_input,
         temp_lambda=args.temp_lambda, temp_delta=args.temp_delta,
-        temp_sim_cache=args.temp_sim_cache,
+        temp_sim_cache=args.temp_sim_cache, response_anchors=response_anchors,
         physics_domain=args.physics_domain, pet_source=args.sac_pet,
         pt_snow_albedo=args.pt_snow_albedo,
         pt_dewpoint_depression=args.pt_dewpoint_depression,
@@ -220,6 +241,10 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--parallel", action="store_true",
                      help="fan HRUs across cores (Numba prange); ~8x faster, matches "
                           "the serial result to floating tolerance")
+    run.add_argument("--spinup-years", type=int, default=None, metavar="N",
+                     help="prepend an N-year climatological average-year burn-in "
+                          "so the run starts from an equilibrated state at any "
+                          "--start (default: none = reference cold start)")
     run.set_defaults(func=_run)
 
     pl = sub.add_parser("plots", help="per-watershed cal/val diagnostic figures for a domain")
@@ -283,9 +308,12 @@ def main(argv: list[str] | None = None) -> int:
         help="train a feature variant (spinup + water-year TBPTT; GPU asserted) "
              "-> artifacts/dpl/<variant>/",
     )
-    tr.add_argument("variant", choices=["static", "climate", "physical"],
+    tr.add_argument("variant",
+                    choices=["static", "climate", "physical", "physical_climate"],
                     help="feature ablation arm (physical = continuous "
-                         "soil/veg/terrain/LAI in place of one-hot soil/veg)")
+                         "soil/veg/terrain/LAI in place of one-hot soil/veg; "
+                         "physical_climate = physical + the 4 climate indices, "
+                         "so the learned params ADAPT under a perturbed climate)")
     tr.add_argument("--data-dir", default="data", help="organized data/ store")
     tr.add_argument("--domain", default="15cdec",
                     choices=["15cdec", "15cdec_grid"],
@@ -538,6 +566,27 @@ def main(argv: list[str] | None = None) -> int:
                     help="teacher daily-sim CSV: the SAME physics as --sim-cache "
                          "re-run under +temp_delta (`sacsma dpl evaluate <physics "
                          "ckpt> --temp-delta <dT>`)")
+    hy.add_argument("--response-grid", action="store_true",
+                    help="multi-anchor dp/dt response-consistency loss: anchor the "
+                         "hybrid's response to physics at the 5 corners of "
+                         "{−dp,0,+dp}×{0,+dt} (precip + warming + joint). Ensures "
+                         "the cached noah teacher sim under each corner via "
+                         "--noah-ckpt")
+    hy.add_argument("--response-lambda", type=float, default=0.1,
+                    help="per-anchor weight for --response-grid (total = 5×; "
+                         "start ~0.1, screen if pooled cal-KGE drops)")
+    hy.add_argument("--response-dp", type=float, default=0.10,
+                    help="precip perturbation fraction for --response-grid "
+                         "(0.10 = ±10%%)")
+    hy.add_argument("--response-dt", type=float, default=3.0,
+                    help="warming perturbation (degC) for --response-grid (+3)")
+    hy.add_argument("--response-dps", default="",
+                    help="comma-separated Δprecip fractions for a full anchor GRID "
+                         "(with --response-dts) — a wider/interior anchor set that "
+                         "overrides the 5-corner default, e.g. '-0.2,-0.1,0,0.1,0.2'")
+    hy.add_argument("--response-dts", default="",
+                    help="comma-separated ΔT (degC) for the full anchor grid "
+                         "(with --response-dps), e.g. '0,2,4' (origin dropped)")
     hy.add_argument("--data-dir", default="data", help="organized data/ store")
     hy.add_argument("--out", default=None,
                     help="output dir (default: artifacts/dpl/testing/hybrid)")

@@ -177,7 +177,7 @@ def build_features(
     """Assemble the (N, F) matrix.  Pass a previous :class:`FeatureSet` as
     ``stats`` to reuse its categories, z-scoring, and Fourier extent
     (checkpoint evaluation)."""
-    if variant not in ("static", "climate", "physical"):
+    if variant not in ("static", "climate", "physical", "physical_climate"):
         raise ValueError(f"variant {variant!r}")
 
     cols: list[np.ndarray] = []
@@ -185,16 +185,16 @@ def build_features(
     for c in CONTINUOUS_STATICS:
         cols.append(hrus[c].to_numpy(np.float64))
         names.append(c)
-    if variant == "climate":
+    if variant in ("climate", "physical_climate"):
         if forcing is None:
-            raise ValueError("climate variant needs the DomainForcing")
+            raise ValueError(f"{variant} variant needs the DomainForcing")
         ci = climate_indices(hrus, forcing, window=climate_window)
         for c in CLIMATE_INDICES:
             cols.append(ci[c].to_numpy(np.float64))
             names.append(c)
-    if variant == "physical":
+    if variant in ("physical", "physical_climate"):
         if physical_path is None:
-            raise ValueError("physical variant needs physical_path "
+            raise ValueError(f"{variant} variant needs physical_path "
                              "(sacsma.io.soilveg_path)")
         phys = physical_features(load_physical(hrus, physical_path))
         for c in PHYSICAL_FEATURES:
@@ -221,9 +221,9 @@ def build_features(
                 cols.append(np.cos(2.0 * np.pi * f * w))
                 names.append(f"cos{f}_{tag}")
 
-    # one-hot soil/veg — the static/climate zonal encoding; the physical variant
-    # REPLACES these with continuous soil/veg/terrain columns (added above).
-    if variant == "physical":
+    # one-hot soil/veg — the static/climate zonal encoding; the physical variants
+    # REPLACE these with continuous soil/veg/terrain columns (added above).
+    if variant in ("physical", "physical_climate"):
         soil_cats: list[int] = []
         veg_cats: list[int] = []
     else:

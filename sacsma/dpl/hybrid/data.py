@@ -9,10 +9,12 @@ For each of the 15 CDEC basins, on the shared 1915->2018 daily record:
 * optional per-basin statics (elev, flowlen, cal precip mean, snow fraction);
 * the temporal split at :data:`sacsma.cdec15.CAL_END` and the 365-day-lookback
   sample index for training / evaluation;
-* optionally a TEMPERATURE-PERTURBED copy of the feature tensor (``feat_dt``)
-  for the temperature-consistency loss: tavg/tmin/tmax shifted by
-  ``temp_delta`` in normalized space and the sim channel re-fed from a
-  physics run under the same ``temp_delta`` (the teacher daily-sim CSV).
+* optionally one or more CLIMATE-PERTURBED copies of the feature tensor
+  (``feat_anchors``) for the response-consistency loss: each anchor shifts
+  tavg/tmin/tmax by ``dt`` and re-scales precip by ``×(1+dp)`` in normalized
+  space, recomputes PET under ``dt``, and re-feeds the sim channel from a
+  physics run under the same (dp, dt) (the teacher daily-sim CSVs).  The legacy
+  ``temp_delta``/``temp_sim_cache`` args map to a single ``dt`` anchor.
 
 The frozen physics comes from ``run_basin`` under a REQUIRED, explicitly chosen
 parameter table (a canonical dPL export e.g. ``hamon_dense``/``pt``/``noah``,
@@ -23,7 +25,7 @@ or GA) — cached to CSV so the ~15 basin runs happen once.  A torch-only export
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
@@ -44,17 +46,24 @@ DYNAMIC_FEATURES: tuple[str, ...] = (
     "precip", "tavg", "tmin", "tmax", "pet", "sac_sim", "sin_doy", "cos_doy")
 
 
-def feature_names(use_doy: bool, use_pet: bool) -> tuple[str, ...]:
+def feature_names(use_doy: bool, use_pet: bool,
+                  use_sim: bool = True) -> tuple[str, ...]:
     """The active dynamic-channel names, in DYNAMIC_FEATURES order.
 
     Every consumer that needs channel indices (training, evaluation, the
     forcing-sensitivity counterfactuals) derives them from THIS filter so old
-    checkpoints (no pet, doy on) keep their layout."""
+    checkpoints (no pet, doy on) keep their layout.
+
+    ``use_sim=False`` drops the ``sac_sim`` physics channel entirely — a PURE
+    LSTM on the meteorology (+ optional PET + statics), the no-physics baseline
+    for the hybrid ablation."""
     drop = set()
     if not use_doy:
         drop |= {"sin_doy", "cos_doy"}
     if not use_pet:
         drop.add("pet")
+    if not use_sim:
+        drop.add("sac_sim")
     return tuple(n for n in DYNAMIC_FEATURES if n not in drop)
 #: basin-average daily Tmin/Tmax (pre-ingested from the WGEN 1/16-deg grid;
 #: see scratchpad/ingest_tminmax.py).  Adds the diurnal-range signal a single
@@ -142,6 +151,66 @@ def basin_pet_pt(dom, delta_t: float | np.ndarray = 0.0) -> np.ndarray:
     return dom.W.numpy() @ pet
 
 
+def apply_response_perturbation(feat: np.ndarray, names: tuple[str, ...], *,
+                                dp: float, dt: float, prcp_raw: np.ndarray,
+                                norm: dict[str, tuple[float, float]],
+                                pet_pert: np.ndarray | None,
+                                sim_pert: np.ndarray, scale: np.ndarray) -> np.ndarray:
+    """Return a (B, T, F) copy of ``feat`` under a climate anchor (Δprecip
+    fraction ``dp``, ΔT ``dt`` degC).
+
+    The single recipe shared by the training-time response-consistency loss and
+    the (dp, dt) response-surface evaluation, so the perturbation is identical
+    on both sides:
+
+    * temperatures: additive z-shift ``+= dt/σ`` on tavg/tmin/tmax (the
+      z-scored channels shift by the raw ΔT over their std);
+    * precip: RE-Z-SCORED at ``×(1+dp)`` — ``(prcp_raw*(1+dp) − μ)/σ`` — because
+      precip is multiplicative, not a level shift (dp=0 reproduces the channel
+      exactly);
+    * PET (if present): recomputed under ΔT (``pet_pert``) and re-z-scored (PET
+      is a deterministic function of T; dp is irrelevant to it);
+    * sim channel: re-fed from ``sim_pert`` (the physics run under the anchor),
+      per-basin ``÷scale`` as ``load_hybrid_data`` does.
+
+    ``norm[name] = (μ, σ)`` are the base pooled z-score stats; ``prcp_raw`` and
+    ``pet_pert`` are (B, T) mm/day; ``sim_pert`` is (B, T) mm/day.  At
+    ``dp=0, dt=0`` (with ``sim_pert`` = the baseline sim) this returns ``feat``
+    unchanged."""
+    idx = {n: i for i, n in enumerate(names)}
+    fa = feat.copy()
+    for n in ("tavg", "tmin", "tmax"):
+        fa[:, :, idx[n]] += dt / norm[n][1]
+    if "precip" in idx:
+        mu_p, sd_p = norm["precip"]
+        fa[:, :, idx["precip"]] = (prcp_raw * (1.0 + dp) - mu_p) / sd_p
+    if "pet" in idx and pet_pert is not None:
+        mu_e, sd_e = norm["pet"]
+        fa[:, :, idx["pet"]] = (pet_pert - mu_e) / sd_e
+    if "sac_sim" in idx:                         # absent for a pure LSTM
+        fa[:, :, idx["sac_sim"]] = sim_pert / scale[:, None]
+    return fa
+
+
+#: hybrid static columns, in build order (see load_hybrid_data use_statics).
+STATIC_COLS = ("elev", "flowlen", "pmean", "snowf")
+
+
+def perturbed_static(ing: dict, dp: float, dt: float) -> np.ndarray:
+    """Climate-perturbed z-scored statics (B, 4) under (Δp, ΔT): the two CLIMATE
+    statics co-vary — ``pmean → pmean×(1+dp)`` and ``snowf`` is recomputed with the
+    (tavg+ΔT) freezing mask (snowf is invariant to uniform precip scaling — the
+    (1+dp) cancels); ``elev``/``flowlen`` stay fixed.  Normalized with the
+    present-climate stats in ``ing`` so the trained scaling is reused.  ``ing`` =
+    ``{elev, flen, pcal, tcal, s_mean, s_std}`` from :func:`load_hybrid_data`."""
+    pcal, tcal = ing["pcal"], ing["tcal"]
+    pmean_p = pcal.mean(axis=1) * (1.0 + dp)
+    snowf_p = ((pcal * ((tcal + dt) <= 0.0)).sum(axis=1)
+               / np.maximum(pcal.sum(axis=1), 1e-9))
+    s_p = np.stack([ing["elev"], ing["flen"], pmean_p, snowf_p], axis=1)
+    return (s_p - ing["s_mean"]) / ing["s_std"]
+
+
 def _check_physics_domain(physics_csv: str | Path, domain_keys: set[str],
                           domain: str) -> None:
     """Fail loudly if a ``--physics`` table doesn't cover the domain's HRUs — the
@@ -172,11 +241,25 @@ class HybridData:
     train_bt: torch.Tensor          # (M, 2) [basin, day] training samples
     basins: tuple[str, ...]
     device: torch.device
-    #: temperature-perturbed copy of ``feat`` (tavg/tmin/tmax += dT/sigma, sim
-    #: channel = teacher sim / scale) and the teacher sim itself — present only
-    #: when the temperature-consistency loss is on (``temp_sim_cache``).
-    feat_dt: torch.Tensor | None = None
-    sim_dt: torch.Tensor | None = None
+    #: per-anchor perturbed copies of ``feat`` and the matching physics teacher
+    #: sim (mm/day), one per (Δprecip, ΔT) response anchor — empty unless a
+    #: response-consistency loss is on.  ``feat_anchors[i]`` shifts temps by
+    #: ΔT/σ, re-z-scores precip at ×(1+Δp), recomputes PET under ΔT, and re-feeds
+    #: the sim channel from ``sim_anchors[i]`` (the physics teacher under the
+    #: anchor).  Built by :func:`apply_response_perturbation`.
+    feat_anchors: list = field(default_factory=list)
+    sim_anchors: list = field(default_factory=list)
+    #: base pooled z-score stats ``{channel: (μ, σ)}`` and the raw basin precip
+    #: (B, T) mm/day — reused by the (dp, dt) response surfaces to rebuild
+    #: perturbed features with the exact trained normalization
+    #: (:func:`apply_response_perturbation`).
+    norm: dict = field(default_factory=dict)
+    prcp: "torch.Tensor | None" = None
+    #: per-anchor climate-perturbed statics (parallel to feat_anchors), and the
+    #: raw ingredients ({elev,flen,pcal,tcal,s_mean,s_std}) to rebuild perturbed
+    #: statics at (Δp,ΔT) eval time via :func:`perturbed_static`.
+    static_anchors: list = field(default_factory=list)
+    static_ing: dict = field(default_factory=dict)
 
     @property
     def n_feat(self) -> int:
@@ -220,6 +303,7 @@ def load_hybrid_data(
     use_statics: bool = False,
     use_doy: bool = True,
     use_pet: bool = False,
+    use_sim: bool = True,
     domain: str = "15cdec",
     pet_source: str = "hamon",
     pt_snow_albedo: float = 0.0,
@@ -228,9 +312,19 @@ def load_hybrid_data(
     canopy_csv: str | Path | None = None,
     temp_sim_cache: str | Path | None = None,
     temp_delta: float = 0.0,
+    response_anchors: list[dict] | None = None,
     device: torch.device | str = "cuda",
     dtype: torch.dtype = torch.float32,
 ) -> HybridData:
+    # legacy single ΔT anchor (temp_sim_cache/temp_delta) -> one response anchor
+    if response_anchors is None:
+        response_anchors = ([{"dp": 0.0, "dt": float(temp_delta),
+                              "sim_cache": str(temp_sim_cache)}]
+                            if temp_sim_cache is not None else [])
+    if not use_sim and response_anchors:
+        raise ValueError("use_sim=False (pure LSTM) is incompatible with response "
+                         "anchors — the response-consistency loss needs the "
+                         "physics sim channel")
     device = torch.device(device)
     dom = load_domain_tensors(data_dir, domain=domain, device="cpu",
                               dtype=torch.float64)
@@ -257,13 +351,17 @@ def load_hybrid_data(
     if physics_csv is not None:
         _check_physics_domain(physics_csv, set(dom.hrus["key"].astype(str)), domain)
 
-    # -- frozen SAC-SMA sim ---------------------------------------------------
-    sim_df = build_frozen_sim(data_dir, physics_csv, cache=sim_cache,
-                              domain=domain, pet_source=pet_source,
-                              pt_snow_albedo=pt_snow_albedo,
-                              pt_dewpoint_depression=pt_dewpoint_depression,
-                              et_scheme=et_scheme, canopy_csv=canopy_csv)
-    sim = np.vstack([sim_df[b].reindex(dates).to_numpy(np.float64) for b in basins])
+    # -- frozen SAC-SMA sim (skipped for a pure LSTM: no physics channel) -----
+    if use_sim:
+        sim_df = build_frozen_sim(data_dir, physics_csv, cache=sim_cache,
+                                  domain=domain, pet_source=pet_source,
+                                  pt_snow_albedo=pt_snow_albedo,
+                                  pt_dewpoint_depression=pt_dewpoint_depression,
+                                  et_scheme=et_scheme, canopy_csv=canopy_csv)
+        sim = np.vstack([sim_df[b].reindex(dates).to_numpy(np.float64)
+                         for b in basins])
+    else:
+        sim = np.zeros((B, T))   # placeholder: no sac_sim channel, no anchors
 
     # -- observed gage FNF ----------------------------------------------------
     gage = load_gage(data_dir)
@@ -316,7 +414,7 @@ def load_hybrid_data(
     # already carries the calendar (Snow-17 melt sinusoid, seasonal LAI, PT
     # radiation), and an explicit doy input is what lets the net learn a
     # calendar-keyed mean correction that carries unchecked into validation.
-    names = feature_names(use_doy, use_pet)
+    names = feature_names(use_doy, use_pet, use_sim)
     feat_cols = []
     mu_pooled: dict[str, float] = {}                       # cal-window pooled stats
     sd_pooled: dict[str, float] = {}
@@ -336,33 +434,34 @@ def load_hybrid_data(
             feat_cols.append(np.broadcast_to(cos_doy, (B, T)))
     feat = np.stack(feat_cols, axis=-1)                    # (B, T, F)
 
-    # -- temperature-perturbed copy (temperature-consistency loss) ------------
-    # The exact recipe forcing_sensitivity._hybrid_flow uses for counterfactual
-    # inference, applied at load time: shift the z-scored temperature channels
-    # by temp_delta/sigma and re-feed the sim channel from the TEACHER sim (the
-    # same physics run under temp_delta, dumped by `sacsma dpl evaluate
-    # --temp-delta`).  Precip and statics are unchanged.
-    feat_dt = sim_dt = None
-    if temp_sim_cache is not None:
-        if not Path(temp_sim_cache).exists():
-            raise FileNotFoundError(f"temp_sim_cache {temp_sim_cache} not found "
-                                    "(dump it with `sacsma dpl evaluate "
-                                    "<physics ckpt> --temp-delta <dT>`)")
-        dt_df = pd.read_csv(temp_sim_cache, parse_dates=["date"]).set_index("date")
-        sim_dt = np.vstack([dt_df[b].reindex(dates).to_numpy(np.float64)
-                            for b in basins])
-        if not np.isfinite(sim_dt).all():
-            raise ValueError(f"temp_sim_cache {temp_sim_cache} does not cover "
-                             "the full daily record")
-        idx = {n: i for i, n in enumerate(names)}
-        feat_dt = feat.copy()
-        for n in ("tavg", "tmin", "tmax"):
-            feat_dt[:, :, idx[n]] += temp_delta / sd_pooled[n]
-        if use_pet:      # PET is a deterministic function of T — recompute exactly
-            pet_dt = basin_pet_pt(dom, delta_t=temp_delta)
-            feat_dt[:, :, idx["pet"]] = ((pet_dt - mu_pooled["pet"])
-                                         / sd_pooled["pet"])
-        feat_dt[:, :, idx["sac_sim"]] = sim_dt / scale[:, None]
+    # -- response-perturbed copies (response-consistency loss) ----------------
+    # One per (Δprecip, ΔT) anchor: the SAME recipe the (dp, dt) response-surface
+    # evaluation uses (apply_response_perturbation), applied at load time.  Each
+    # re-feeds the sim channel from the TEACHER sim — the physics run under the
+    # anchor's (dp, dt), dumped by `sacsma dpl evaluate --temp-delta/--precip-scale`
+    # (or the cached noah_teacher_daily).  Statics are unchanged.
+    norm = {n: (mu_pooled[n], sd_pooled[n]) for n in mu_pooled}
+    feat_anchors: list[np.ndarray] = []
+    sim_anchors: list[np.ndarray] = []
+    for anc in response_anchors:
+        sc = anc["sim_cache"]
+        if not sc or not Path(sc).exists():
+            raise FileNotFoundError(
+                f"response anchor teacher sim {sc!r} not found (dump it with "
+                "`sacsma dpl evaluate <physics ckpt> --temp-delta <dT> "
+                "--precip-scale <1+dp>` or noah_teacher_daily)")
+        sdf = pd.read_csv(sc, parse_dates=["date"]).set_index("date")
+        sim_a = np.vstack([sdf[b].reindex(dates).to_numpy(np.float64)
+                           for b in basins])
+        if not np.isfinite(sim_a).all():
+            raise ValueError(f"response anchor teacher {sc} does not cover the "
+                             "full daily record")
+        pet_a = basin_pet_pt(dom, delta_t=float(anc["dt"])) if use_pet else None
+        feat_a = apply_response_perturbation(
+            feat, names, dp=float(anc["dp"]), dt=float(anc["dt"]),
+            prcp_raw=prcp, norm=norm, pet_pert=pet_a, sim_pert=sim_a, scale=scale)
+        feat_anchors.append(feat_a)
+        sim_anchors.append(sim_a)
 
     # -- training sample index (finite obs, full lookback, cal window) --------
     finite = np.isfinite(obs)
@@ -374,16 +473,28 @@ def load_hybrid_data(
     train_bt = np.stack([b_ix, t_ix], axis=1)
 
     # -- optional per-basin statics (z-scored across basins) ------------------
+    # elev/flowlen are physiographic (fixed); pmean/snowf are CLIMATE statics
+    # that co-vary with a response anchor's (Δp,ΔT) (see perturbed_static).
     static = None
+    static_np_anchors: list[np.ndarray] = []
+    static_ing: dict = {}
     if use_statics:
         elev = W @ dom.elev.numpy()                        # area-wt mean elev (m)
         flen = W @ dom.flowlen.numpy()                     # area-wt mean flowlen
-        pmean = prcp[:, cal_slc].mean(axis=1)              # cal mean daily precip
-        snowf = ((prcp[:, cal_slc] * (tavg[:, cal_slc] <= 0.0)).sum(axis=1)
-                 / prcp[:, cal_slc].sum(axis=1))           # snow fraction
+        pcal = prcp[:, cal_slc]                            # (B, n_cal) mm/day
+        tcal = tavg[:, cal_slc]                            # (B, n_cal) degC
+        pmean = pcal.mean(axis=1)                          # cal mean daily precip
+        snowf = ((pcal * (tcal <= 0.0)).sum(axis=1)
+                 / np.maximum(pcal.sum(axis=1), 1e-9))     # snow fraction
         s = np.stack([elev, flen, pmean, snowf], axis=1)   # (B, 4)
-        s = (s - s.mean(axis=0)) / (s.std(axis=0) + 1e-8)
-        static = torch.as_tensor(s).to(device, dtype)
+        s_mean = s.mean(axis=0)
+        s_std = s.std(axis=0) + 1e-8
+        static = torch.as_tensor((s - s_mean) / s_std).to(device, dtype)
+        static_ing = dict(elev=elev, flen=flen, pcal=pcal, tcal=tcal,
+                          s_mean=s_mean, s_std=s_std)
+        for anc in response_anchors:                       # parallel to feat_anchors
+            static_np_anchors.append(perturbed_static(
+                static_ing, float(anc["dp"]), float(anc["dt"])))
 
     def _t(a):
         return torch.as_tensor(a).to(device, dtype)
@@ -395,6 +506,9 @@ def load_hybrid_data(
         is_cal=torch.as_tensor(is_cal).to(device),
         train_bt=torch.as_tensor(train_bt, dtype=torch.long).to(device),
         basins=basins, device=device,
-        feat_dt=_t(feat_dt) if feat_dt is not None else None,
-        sim_dt=_t(sim_dt) if sim_dt is not None else None,
+        feat_anchors=[_t(fa) for fa in feat_anchors],
+        sim_anchors=[_t(sa) for sa in sim_anchors],
+        norm=norm, prcp=_t(prcp),
+        static_anchors=[_t(sa) for sa in static_np_anchors],
+        static_ing=static_ing,
     )

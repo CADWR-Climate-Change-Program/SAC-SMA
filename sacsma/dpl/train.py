@@ -214,13 +214,15 @@ def train(
               f"melt-cycle pull over {sweobs.products}; {n_snow}/{len(dom.basins)}"
               " snow basins (no SWE level term); cal-window only, NOT a "
               "selection metric", flush=True)
+    _needs_climate = variant in ("climate", "physical_climate")
+    _needs_physical = variant in ("physical", "physical_climate")
     fs = build_features(
         dom.hrus, variant=variant,
-        forcing=dom.forcing if variant == "climate" else None,
-        climate_product="historical_livneh_unsplit" if variant == "climate" else None,
+        forcing=dom.forcing if _needs_climate else None,
+        climate_product="historical_livneh_unsplit" if _needs_climate else None,
         fourier_k=cfg.fourier_k,
         physical_path=(soilveg_path(data_dir, domain)
-                       if variant == "physical" else None),
+                       if _needs_physical else None),
     )
     x = torch.as_tensor(fs.x).to(dev, dtype)
 

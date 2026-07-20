@@ -7,14 +7,15 @@ no-grad selection metric, pooled over the CAL window (WY1989-2003); validation
 (WY2004-2018) is never read during training or selection.  Denormalization
 back to mm/day happens here.
 
-Temperature-consistency loss (``temp_lambda``): every batch is forwarded a
-second time on the temperature-perturbed feature copy (``HybridData.feat_dt``:
-tavg/tmin/tmax + temp_delta, sim channel from the physics run under the same
-delta) and the hybrid's daily response ``pred_dt - pred`` is pulled toward the
-physics response ``(sim_dt - sim)/scale`` by MSE.  The LSTM keeps its
-within-climate skill but inherits the physics' climate sensitivity — the
-counter to the regime-conditional volume bias cal-only training injects under
-a shifted validation climate.
+Response-consistency loss: for each (Δprecip, ΔT) anchor, every batch is
+forwarded a second time on the perturbed feature copy (``HybridData.feat_anchors``:
+temps + ΔT, precip × (1+Δp), sim channel from the physics run under the same
+anchor) and the hybrid's daily response ``pred_a - pred`` is pulled toward the
+physics response ``(sim_a - sim)/scale`` by MSE × the anchor weight.  The LSTM
+keeps its within-climate skill but inherits the physics' climate sensitivity —
+the counter to the regime-conditional volume bias cal-only training injects
+under a shifted validation climate.  The legacy ``temp_lambda``/``temp_delta``/
+``temp_sim_cache`` knobs are the single-ΔT special case (one anchor, dp=0).
 """
 
 from __future__ import annotations
@@ -47,6 +48,10 @@ class HybridConfig:
     #: noah energy demand, recomputed from forcing) as an input
     #: channel: a physics-shaped temperature pathway for the LSTM.
     use_pet: bool = False
+    #: feed the frozen-physics ``sac_sim`` channel.  False = a PURE LSTM (no
+    #: physics baseline input) on the meteorology + PET + statics — the
+    #: no-physics ablation baseline.  Incompatible with the response loss.
+    use_sim: bool = True
     physics_domain: str = "15cdec"   # HRU resolution of the frozen sim + forcing
     pet_source: str = "hamon"        # "hamon" | "priestley_taylor" (match --physics)
     pt_snow_albedo: float = 0.0      # PT snow-albedo refinement (pt = 0.6)
@@ -61,6 +66,11 @@ class HybridConfig:
     #: teacher daily-sim CSV: the SAME physics as the sim channel, re-run with
     #: tavg/tmin/tmax + temp_delta (`sacsma dpl evaluate <ckpt> --temp-delta`).
     temp_sim_cache: str = ""
+    #: explicit (Δprecip, ΔT) response anchors for the multi-anchor
+    #: response-consistency loss.  Each = {"dp": frac, "dt": degC, "lambda": w,
+    #: "sim_cache": teacher daily-sim CSV under (dp, dt)}.  Composes with the
+    #: legacy temp_* single-ΔT anchor (which is prepended when temp_lambda > 0).
+    response_anchors: tuple = ()
     lr: float = 4e-4
     weight_decay: float = 1e-4
     grad_clip: float = 1.0
@@ -80,6 +90,10 @@ class HybridConfig:
         if self.temp_lambda > 0 and not self.temp_sim_cache:
             raise ValueError("temp_lambda > 0 requires temp_sim_cache "
                              "(the physics daily sim under temp_delta)")
+        for a in self.response_anchors:
+            if not a.get("sim_cache") or "lambda" not in a:
+                raise ValueError("each response anchor needs 'sim_cache', "
+                                 "'lambda' (and 'dp', 'dt'): got " + repr(a))
 
 
 def _denorm_flow(pred_norm, data, bb):
@@ -130,17 +144,28 @@ def train_hybrid(cfg: HybridConfig, *, data_dir: str = "data",
             tag += f"_{cfg.physics_et_scheme}"
         sim_cache = out.parent / f"{tag}.csv"
 
+    # unified response anchors: the legacy ΔT term (temp_*) first, then any
+    # explicit (dp, dt) anchors.  Same math for the n=1 ΔT case as before.
+    anchors: list[dict] = []
+    if cfg.temp_lambda > 0:
+        anchors.append({"dp": 0.0, "dt": cfg.temp_delta,
+                        "lambda": cfg.temp_lambda,
+                        "sim_cache": cfg.temp_sim_cache})
+    anchors.extend(dict(a) for a in cfg.response_anchors)
+    anchor_lambdas = [float(a["lambda"]) for a in anchors]
+
     data = load_hybrid_data(data_dir, physics_csv=physics_csv,
                             sim_cache=sim_cache, use_statics=cfg.use_statics,
                             use_doy=cfg.use_doy, use_pet=cfg.use_pet,
+                            use_sim=cfg.use_sim,
                             domain=cfg.physics_domain, pet_source=cfg.pet_source,
                             pt_snow_albedo=cfg.pt_snow_albedo,
                             pt_dewpoint_depression=cfg.pt_dewpoint_depression,
                             et_scheme=cfg.physics_et_scheme,
                             canopy_csv=cfg.canopy_csv or None,
-                            temp_sim_cache=(cfg.temp_sim_cache or None)
-                            if cfg.temp_lambda > 0 else None,
-                            temp_delta=cfg.temp_delta,
+                            response_anchors=[{k: a[k] for k in
+                                               ("dp", "dt", "sim_cache")}
+                                              for a in anchors],
                             device=dev)
     model = HybridLSTM(data.n_feat, data.n_static,
                        hidden=cfg.hidden, static_embed=cfg.static_embed,
@@ -158,8 +183,10 @@ def train_hybrid(cfg: HybridConfig, *, data_dir: str = "data",
     m = len(bt)
     print(f"hybrid: {len(data.basins)} basins, {data.n_feat} dyn "
           f"+ {data.n_static} static feats, {m} cal samples on {dev}"
-          + (f", temp loss dT={cfg.temp_delta:+.1f} lambda={cfg.temp_lambda}"
-             if cfg.temp_lambda > 0 else ""), flush=True)
+          + (f", response loss {len(anchors)} anchor(s): "
+             + " ".join(f"(dp{a['dp']:+.2f},dt{a['dt']:+.1f},lam{a['lambda']:g})"
+                        for a in anchors)
+             if anchors else ""), flush=True)
 
     best = -1e9
     best_state = None
@@ -190,17 +217,19 @@ def train_hybrid(cfg: HybridConfig, *, data_dir: str = "data",
                 loss = loss + cfg.log_lambda * (
                     (torch.log(flow + cfg.log_eps)
                      - torch.log(o + cfg.log_eps)) ** 2).mean()
-            if cfg.temp_lambda > 0:
-                # second forward on the perturbed copy, SAME noise (so the
+            for i, (fa_t, sa_t, lam) in enumerate(
+                    zip(data.feat_anchors, data.sim_anchors, anchor_lambdas)):
+                # second forward on each perturbed copy, SAME noise (so the
                 # delta is not noise-dominated); anchor the hybrid's daily
-                # response to the physics response, per-basin normalized.
-                x_dt = data.gather_windows(b, t, feat=data.feat_dt)
+                # response to the physics response, per-basin normalized.  The
+                # CLIMATE statics (pmean/snowf) also co-vary with the anchor.
+                x_a = data.gather_windows(b, t, feat=fa_t)
                 if noise is not None:
-                    x_dt = x_dt + noise
-                pred_dt = model(x_dt, st)
-                d_phys = (data.sim_dt[b, t] - data.sim[b, t]) / data.scale[b]
-                loss = loss + cfg.temp_lambda * (
-                    ((pred_dt - pred) - d_phys) ** 2).mean()
+                    x_a = x_a + noise
+                st_a = data.static_anchors[i][b] if data.static_anchors else st
+                pred_a = model(x_a, st_a)
+                d_phys = (sa_t[b, t] - data.sim[b, t]) / data.scale[b]
+                loss = loss + lam * (((pred_a - pred) - d_phys) ** 2).mean()
             opt.zero_grad(set_to_none=True)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
