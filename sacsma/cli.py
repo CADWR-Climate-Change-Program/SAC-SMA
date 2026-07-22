@@ -290,10 +290,10 @@ def main(argv: list[str] | None = None) -> int:
     bm = dpl_sub.add_parser(
         "benchmark",
         help="fidelity benchmark: archived GA params through the torch forward "
-             "vs the frozen reference -> artifacts/dpl/fidelity/",
+             "vs the frozen reference -> artifacts/dpl/noah/fidelity/",
     )
     bm.add_argument("--data-dir", default="data", help="organized data/ store")
-    bm.add_argument("--out", default="artifacts/dpl/fidelity", help="output dir")
+    bm.add_argument("--out", default="artifacts/dpl/noah/fidelity", help="output dir")
     bm.add_argument("--configs", nargs="+", default=None,
                     help="subset of named numerics configs (default: all; see "
                          "dpl.evaluate.FIDELITY_CONFIGS)")
@@ -600,14 +600,14 @@ def main(argv: list[str] | None = None) -> int:
     hy.add_argument("--device", default="cuda", help="cuda | cpu")
     hy.add_argument("--seed", type=int, default=0)
     hy.add_argument("--compare", action="store_true",
-                    help="also write the GA/dPL/hybrid comparison + dumbbell")
+                    help="also write the GA/dPL/hybrid comparison table")
     hy.set_defaults(func=_dpl_hybrid)
 
     cl = dpl_sub.add_parser(
         "climatology",
         help="per-watershed mean-monthly TAF regime (GA + dPL + hybrids) vs the "
              "observed CalSim3 FNF, as a 5-step ablation + all-series metric bars "
-             "-> artifacts/dpl/figures/cdec15_climatology_*.png",
+             "-> artifacts/dpl/figures/climatology_*.png",
     )
     cl.add_argument("--data-dir", default="data", help="organized data/ store")
     cl.add_argument("--out", default="artifacts/dpl",

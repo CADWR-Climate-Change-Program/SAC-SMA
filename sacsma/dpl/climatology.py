@@ -13,20 +13,20 @@ Mokelumne/Calaveras vs summed CalSim3 inflow arcs).  The 4 Tulare basins
 
 Five figures, each an 11-basin (north->south) grid contrasting one ablation
 step against CalSim3 FNF:
-  a  GA SAC-SMA            vs  dPL hamon_dense            (learned parameters)
-  b  dPL hamon_dense       vs  dPL hamon                  (fine HRU -> grid+footprint)
-  c  dPL hamon             vs  dPL pt                     (Hamon -> Priestley-Taylor)
-  d  dPL pt                vs  dPL noah                   (PT cascade -> Noah-lite ET)
-  e  dPL noah -> Hybrid -> Hybrid PET+dT   (the LSTM step on the noah physics)
+  a  GA SAC-SMA      vs  Hamon (dense)   (learned parameters)
+  b  Hamon (dense)   vs  Hamon           (fine HRU -> grid+footprint)
+  c  Hamon           vs  PT              (Hamon -> Priestley-Taylor)
+  d  PT              vs  Noah            (PT cascade -> Noah-lite ET)
+  e  Noah -> Hybrid -> Hybrid DT          (the LSTM step on the noah physics)
 
-``Hybrid`` / ``Hybrid PET+dT`` are the CANONICAL seed ENSEMBLES (mean of member
+``Hybrid`` / ``Hybrid DT`` are the CANONICAL seed ENSEMBLES (mean of member
 daily flows) on the noah physics baseline — the sim channel is noah's TORCH
 daily dump (``artifacts/dpl/noah/daily_sim_noah_torch.csv``), numerics-matched
 to the +2 °C torch teacher.  (``noah_ft``, the obs-steered seasonal-melt
 fine-tune, was DEMOTED 2026-07-17: pooled val ties frozen noah, CalSim3 a
 wash, NHG + north-state volume worse — the head-to-head record lives in
 ``artifacts/dpl/RUNS.md``.)
-Output: ``artifacts/dpl/figures/cdec15_climatology_{a..e}.png``.
+Output: ``artifacts/dpl/figures/climatology_{a..e}.png``.
 
 A dPL-side artifact (needs torch for the hybrids) that reads the lightweight
 CalSim3-FNF loader from ``calsim.compare``; it never makes calsim depend on torch.
@@ -48,20 +48,27 @@ _WY = [10, 11, 12, 1, 2, 3, 4, 5, 6, 7, 8, 9]
 _WY_LABELS = ["O", "N", "D", "J", "F", "M", "A", "M", "J", "J", "A", "S"]
 
 #: frozen-model sims: label -> run_basin spec (csv=None => archived GA optimum).
-#: ``dPL pt`` IS the refined PT (snow-albedo 0.6 + dewpoint 2.0); ``dPL noah`` is
+#: ``PT`` IS the refined PT (snow-albedo 0.6 + dewpoint 2.0); ``Noah`` is
 #: the Noah-lite external-ET canopy on PT potential.
 FROZEN: dict[str, dict] = {
-    "GA SAC-SMA":        dict(csv=None, domain="15cdec", pet="hamon", alb=0.0, dew=0.0),
-    "dPL hamon_dense":   dict(csv="artifacts/dpl/hamon_dense/params_dpl.csv",
-                              domain="15cdec", pet="hamon", alb=0.0, dew=0.0),
-    "dPL hamon":         dict(csv="artifacts/dpl/hamon/params_dpl.csv",
-                              domain="15cdec_grid", pet="hamon", alb=0.0, dew=0.0),
-    "dPL pt":            dict(csv="artifacts/dpl/pt/params_dpl.csv",
-                              domain="15cdec_grid", pet="priestley_taylor", alb=0.6, dew=2.0),
-    "dPL noah":          dict(csv="artifacts/dpl/noah/params_dpl.csv",
-                              domain="15cdec_grid", pet="priestley_taylor", alb=0.0, dew=0.0,
-                              et_scheme="noah_lite",
-                              canopy_csv="artifacts/dpl/noah/params_canopy.csv"),
+    "GA SAC-SMA":     dict(csv=None, domain="15cdec", pet="hamon", alb=0.0, dew=0.0),
+    "Hamon (dense)":  dict(csv="artifacts/dpl/hamon_dense/params_dpl.csv",
+                           domain="15cdec", pet="hamon", alb=0.0, dew=0.0),
+    "Hamon":          dict(csv="artifacts/dpl/hamon/params_dpl.csv",
+                           domain="15cdec_grid", pet="hamon", alb=0.0, dew=0.0),
+    "PT":             dict(csv="artifacts/dpl/pt/params_dpl.csv",
+                           domain="15cdec_grid", pet="priestley_taylor", alb=0.6, dew=2.0),
+    "Noah":           dict(csv="artifacts/dpl/noah/params_dpl.csv",
+                           domain="15cdec_grid", pet="priestley_taylor", alb=0.0, dew=0.0,
+                           et_scheme="noah_lite",
+                           canopy_csv="artifacts/dpl/noah/params_canopy.csv"),
+}
+#: explicit cache tag per FROZEN label -- the label is a chart legend (renamed
+#: 2026-07-21 to the canonical bare model names), the tag is a stable cache
+#: filename key independent of that text.
+_FROZEN_TAG: dict[str, str] = {
+    "GA SAC-SMA": "sac-sma", "Hamon (dense)": "hamon_dense", "Hamon": "hamon",
+    "PT": "pt", "Noah": "noah",
 }
 #: torch-only sims: label -> canonical daily-sim CSV (for models the frozen
 #: run_basin cannot reconstruct).  Empty since the noah_ft demotion (2026-07-17);
@@ -71,38 +78,38 @@ TORCH_SIM: dict[str, str] = {}
 #: averaged; physics settings read from the member ckpt cfg).  Both sit on the
 #: noah physics baseline (sim channel = its torch daily dump): ``Hybrid`` is the
 #: plain feature ensemble (no PET channel, no dT loss — the skill step),
-#: ``Hybrid PET+dT`` adds the PT-potential input + the temperature-consistency
+#: ``Hybrid DT`` adds the PT-potential input + the temperature-consistency
 #: loss (the physics-consistent climate response, same skill).
 HYBRID: dict[str, str] = {
     "Hybrid": "artifacts/dpl/hybrid",
-    "Hybrid PET+dT": "artifacts/dpl/hybrid_pet_dt",
+    "Hybrid DT": "artifacts/dpl/hybrid_dt",
 }
 
 #: per-series line style (identity by hue; CalSim3 FNF emphasized in black).
 STYLE: dict[str, dict] = {
-    "CalSim3 FNF":        dict(color="#000000", lw=2.4, ls="--", marker="o", ms=4.5,
-                               zorder=10),
-    "GA SAC-SMA":         dict(color="#9e9e9e", lw=1.9),
-    "dPL hamon_dense":    dict(color="#8c564b", lw=1.9),
-    "dPL hamon":          dict(color="#1f77b4", lw=1.9),
-    "dPL pt":             dict(color="#ff7f0e", lw=1.9),
-    "dPL noah":           dict(color="#bcbd22", lw=2.0),
-    "Hybrid":             dict(color="#9467bd", lw=2.1),
-    "Hybrid PET+dT":      dict(color="#17becf", lw=2.1),
+    "CalSim3 FNF":    dict(color="#000000", lw=2.4, ls="--", marker="o", ms=4.5,
+                          zorder=10),
+    "GA SAC-SMA":     dict(color="#9e9e9e", lw=1.9),
+    "Hamon (dense)":  dict(color="#8c564b", lw=1.9),
+    "Hamon":          dict(color="#1f77b4", lw=1.9),
+    "PT":             dict(color="#ff7f0e", lw=1.9),
+    "Noah":           dict(color="#bcbd22", lw=2.0),
+    "Hybrid":         dict(color="#9467bd", lw=2.1),
+    "Hybrid DT":      dict(color="#17becf", lw=2.1),
 }
 
 #: (tag, subtitle, [model labels]) -- each renders one 11-basin figure.
 COMPARISONS: list[tuple[str, str, list[str]]] = [
     ("a", "learned parameters: GA SAC-SMA → dPL (same Hamon physics, fine HRUs)",
-        ["GA SAC-SMA", "dPL hamon_dense"]),
+        ["GA SAC-SMA", "Hamon (dense)"]),
     ("b", "resolution + footprint: fine 7891-HRU → 1/16° grid + CalSim3 footprint",
-        ["dPL hamon_dense", "dPL hamon"]),
+        ["Hamon (dense)", "Hamon"]),
     ("c", "energy PET: Hamon → Priestley–Taylor (snow-albedo + dewpoint)",
-        ["dPL hamon", "dPL pt"]),
+        ["Hamon", "PT"]),
     ("d", "canopy ET: PT cascade → Noah-lite external ET",
-        ["dPL pt", "dPL noah"]),
-    ("e", "the LSTM step: noah → Hybrid → +PET+dT",
-        ["dPL noah", "Hybrid", "Hybrid PET+dT"]),
+        ["PT", "Noah"]),
+    ("e", "the LSTM step: Noah → Hybrid → Hybrid DT",
+        ["Noah", "Hybrid", "Hybrid DT"]),
 ]
 
 
@@ -260,7 +267,7 @@ def assemble(data_dir: str = "data", *, device: str = "cuda") -> dict:
     monthly: dict[str, pd.DataFrame] = {}
     clim: dict[str, pd.DataFrame] = {}
     for label, spec in FROZEN.items():
-        tag = label.split()[-1].lower()
+        tag = _FROZEN_TAG[label]
         daily = _daily_frozen(spec, data_dir, cachedir / f"sim_{tag}.csv")
         monthly[label] = _monthly_taf(daily, areas)
         clim[label] = _climatology(monthly[label])
@@ -274,7 +281,7 @@ def assemble(data_dir: str = "data", *, device: str = "cuda") -> dict:
 
     dev = pick_device(device)
     for label, ens_dir in HYBRID.items():
-        tag = Path(ens_dir).name                # sim_hybrid / sim_hybrid_pet_dt
+        tag = Path(ens_dir).name                # sim_hybrid / sim_hybrid_dt
         daily = _daily_ensemble(ens_dir, data_dir, dev,
                                 cachedir / f"sim_{tag}.csv")
         monthly[label] = _monthly_taf(daily, areas)
@@ -492,9 +499,9 @@ def make_cdec15_climatology(data_dir: str = "data",
     figdir = Path(out_dir) / "figures"
     for tag, subtitle, models in COMPARISONS:
         _plot_comparison(data, models, tag, subtitle,
-                         figdir / f"cdec15_climatology_{tag}.png")
-    _plot_metrics_bars(data, figdir / "cdec15_climatology_summary.png")
-    _plot_metrics_bars_agg(data, figdir / "cdec15_climatology_summary_agg.png")
+                         figdir / f"climatology_{tag}.png")
+    _plot_metrics_bars(data, figdir / "climatology_summary.png")
+    _plot_metrics_bars_agg(data, figdir / "climatology_summary_agg.png")
     return data
 
 

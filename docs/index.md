@@ -1,21 +1,22 @@
-# SAC-SMA Hydrologic Modeling for CalSim Stochastic Hydrology
+# SAC-SMA for California Water Systems
 
-*Current Implementation, Evaluation, and Differentiable Reimplementation*
+*Model description, evaluation, and a differentiable, entity-blind reimplementation*
 
 **California Department of Water Resources — July 2026 (DRAFT)**
 
 ## Executive summary
 
-The CalSim stochastic hydrology effort requires a complete-domain, best-available
-hydrology, meaning daily-capable, monthly-deployable streamflow simulation for every
-inflow arc in the CalSim system, suitable for driving stochastic and climate-adjusted
-CalSim modeling. This document describes the hydrologic modeling program built around
-the Sacramento Soil Moisture Accounting model (SAC-SMA) in two parts.
+This document describes the hydrologic modeling program built around the Sacramento
+Soil Moisture Accounting model (SAC-SMA), a spatially distributed model that
+simulates streamflow from daily precipitation and temperature forcing across
+California watersheds. Two calibrated applications sit on that shared model: a
+general-purpose daily calibration to 15 CDEC reservoir watersheds, and a set of
+monthly calibrations purpose-built for the CalSim/CalLite inflow domain. Part I
+evaluates both. Part II reimplements the model under differentiable parameter
+learning (dPL), a further generalization that is not tied to CalSim either.
 
-Part I documents the current implementation, a spatially distributed SAC-SMA (Hamon
-PET, Snow-17 snow, Lohmann routing) developed by Wi and Steinschneider (Cornell
-University) for CA DWR watershed studies, and since ported to Python with exact
-numerical parity against the original MATLAB simulations. Four archived
+Part I details the current implementation, ported to Python with exact numerical
+parity against the original MATLAB simulations. Four archived
 genetic-algorithm (GA) calibrations cover the domain. One is a pooled daily calibration
 to 15 CDEC full-natural-flow watersheds; the others are per-watershed monthly
 calibrations to the CalLite/CalSim inflow sets (Rim12, Observed11, Unimpaired9).
@@ -35,16 +36,19 @@ differentiable framework so that a neural network mapping landscape attributes t
 full SAC-SMA parameter set can be trained end-to-end against streamflow by gradient
 descent. A chain of progressively more physical variants is developed, from fine-HRU
 Hamon (`hamon_dense`) to native-grid Hamon (`hamon`), Priestley–Taylor PET (`pt`), and
-Noah-style soil-moisture-limited ET (`noah`). The chain is capped
-by a pair of SAC×LSTM hybrid ensembles in which an LSTM ingests the physics simulation
-as a feature: `hybrid`, the basic coupling, and `hybrid_pet_dt`, which adds the PET
-input and a temperature-consistency loss that ties the network's warming response to
-the physics. On the 15-CDEC daily benchmark the dPL models match or exceed the GA
-optimum (pooled mean validation KGE of 0.767 for the GA versus 0.836–0.840 for dPL),
-and the hybrid ensembles reach 0.864–0.869. Under a +2 °C test the unconstrained
-hybrid's response is wrong-signed, adding annual flow where the physics remove it,
-while `hybrid_pet_dt` matches the physics response at the same skill, which is why the
-pair is kept. Part II closes with the proposed next
+a climate-adaptive, Noah-style soil-moisture-limited ET (`noah`), whose parameters
+recompute under a perturbed climate rather than staying fixed. The chain is capped by
+a family of SAC×LSTM ensembles that ingest the physics simulation as a feature:
+`hybrid`, the best-skill coupling; `hybrid_dt`, which adds a multi-anchor
+(Δprecip, ΔT) response-consistency loss tying the network's climate response to the
+physics; and a no-physics `lstm` control. On the 15-CDEC daily benchmark the dPL models
+match or exceed the GA optimum (pooled mean validation KGE of 0.767 for the GA versus
+0.826–0.840 for the physics ladder), and the hybrids reach 0.835–0.877. Scored on a
+per-watershed climate-response surface, `hybrid` over-responds to warming (ratio 1.50)
+and the no-physics `lstm` control is wrong-signed (ratio −0.94), while `hybrid_dt`
+tracks the physics (ratio 1.14) at a modest cost in skill, including reproducing a
+warming crossover, a shrinking snowmelt freshet alongside an intensifying flood peak,
+on tails it was never trained on. Part II closes with the proposed next
 phase, which combines multi-timescale calibration (daily where daily FNF exists
 post-1987, monthly elsewhere, with held-out WY1950–1987 monthly CalSim FNF validation)
 and a nested training architecture that brings the sub-arc watersheds inside each

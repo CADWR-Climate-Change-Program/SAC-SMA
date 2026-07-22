@@ -1,12 +1,12 @@
-"""Sphinx configuration for the SAC-SMA / CalSim Stochastic Hydrology docs.
+"""Sphinx configuration for the SAC-SMA documentation site.
 
-The narrative pages (``index``, ``part1``, ``part2``, ``appendix_*``) are MyST
-markdown ported from the pandoc report sources; figures resolve to the repo's
-``artifacts/`` tree one level up. Built to HTML and deployed to GitHub Pages by
-``.github/workflows/docs.yml``.
+The narrative pages (``index``, ``part1``, ``part2``, ``appendix_*``) are
+hand-maintained MyST markdown, edited directly in this repo; figures resolve
+to the repo's ``artifacts/`` tree one level up. Built to HTML and deployed to
+GitHub Pages by ``.github/workflows/docs.yml``.
 """
 
-project = "SAC-SMA for CalSim Stochastic Hydrology"
+project = "SAC-SMA for California Water Systems"
 author = "California Department of Water Resources"
 copyright = "2026, California Department of Water Resources"
 release = "July 2026 (DRAFT)"
@@ -34,8 +34,8 @@ root_doc = "index"
 exclude_patterns = ["_build", "Thumbs.db", ".DS_Store", "README.md"]
 
 html_theme = "furo"
-html_title = "SAC-SMA for CalSim Stochastic Hydrology"
-html_short_title = "SAC-SMA / CalSim hydrology"
+html_title = "SAC-SMA for California Water Systems"
+html_short_title = "SAC-SMA"
 
 # The report references figures via ../artifacts/...; images outside the source
 # dir are copied into _images at build time (relative paths resolve from each

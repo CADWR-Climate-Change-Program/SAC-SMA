@@ -39,12 +39,12 @@ from .climatology import _basin_order
 from .dtdp_response import (DOMAIN, DP, DT, METRICS, REGIMES, _REGIME_TITLE,
                             _aggregate_regime, _frozen_noah, _metrics_from_daily)
 
-CA_CKPT = "artifacts/dpl/noah_ca/checkpoints/best.pt"
+CA_CKPT = "artifacts/dpl/noah/checkpoints/best.pt"
 _CA_CACHE = Path("artifacts/dpl/_adaptive_cache")
 
 #: canonical physics model-type labels (left → right in the figure).
-NOAH = "noah"
-CA_ADAPTIVE = "noah_ca (adaptive)"
+NOAH = "Noah"
+CA_ADAPTIVE = "Noah (climate-adaptive)"
 COL_ORDER = [NOAH, CA_ADAPTIVE]
 
 #: the noah_ca dt·dp hybrid's 14 response-loss anchors (mirrors
@@ -215,7 +215,7 @@ def _plot_basin(basin: str, sub: pd.DataFrame, out: Path,
     fig.suptitle(
         title if title is not None else
         f"{basin} — physics climate-response surfaces (% change vs present)\n"
-        "○ present   ×  dt·dp anchors   noah = frozen   noah_ca = adaptive",
+        "○ present   ×  Δp·ΔT anchors   (right col: params co-vary with climate)",
         fontsize=8.5)
     out.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out, dpi=300)
@@ -229,12 +229,12 @@ def make_regime_physics_surfaces(tbl: pd.DataFrame, data_dir: str = "data",
     area-weighted % change."""
     areas = load_basin_area(data_dir, domain="15cdec").set_index(
         "basin")["area_mi2"].to_dict()
-    figdir = Path(out_dir) / "figures" / "adaptive_physics_regimes"
+    figdir = Path(out_dir) / "figures" / "noah_climate_adaptive_regimes"
     for reg, basins in REGIMES.items():
         agg = _aggregate_regime(tbl, basins, areas)
         title = (f"{_REGIME_TITLE[reg]} regime · {len(basins)} basins: "
                  f"{' '.join(basins)}\n"
-                 "area-weighted % change   ○ present   ×  dt·dp anchors")
+                 "area-weighted % change   ○ present   ×  Δp·ΔT anchors")
         _plot_basin(reg, agg, figdir / f"{reg}.png", title=title)
     print(f"wrote {len(REGIMES)} regime figures -> {figdir}", flush=True)
 
@@ -245,7 +245,7 @@ def make_adaptive_physics_surfaces(data_dir: str = "data",
     """Assemble (or reload) the noah / noah_ca metrics table + one 4×2 physics
     response-surface figure per watershed (north → south) and per regime."""
     out_dir = Path(out_dir)
-    csv = out_dir / "adaptive_physics_metrics.csv"
+    csv = out_dir / "figures" / "noah_climate_adaptive_metrics.csv"
     if csv.exists() and not regen:
         tbl = pd.read_csv(csv)
         print(f"loaded {csv}", flush=True)
@@ -256,7 +256,7 @@ def make_adaptive_physics_surfaces(data_dir: str = "data",
         print(f"wrote {csv}", flush=True)
 
     order = _basin_order(data_dir, sorted(tbl["basin"].unique()))
-    figdir = out_dir / "figures" / "adaptive_physics"
+    figdir = out_dir / "figures" / "noah_climate_adaptive"
     for b in order:
         _plot_basin(b, tbl[tbl.basin == b], figdir / f"{b}.png")
     print(f"wrote {len(order)} figures -> {figdir}", flush=True)

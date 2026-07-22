@@ -33,21 +33,27 @@ from .dtdp_response import (DOMAIN, DP, DT, METRICS, REGIMES, _REGIME_TITLE,
                             _aggregate_regime, _ensemble_perturbed_daily,
                             _load_ensemble, _metrics_from_daily)
 
-# canonical noah_ca family (promoted out of testing/ 2026-07-19).
-NOAH_CA_DIR = "artifacts/dpl/noah_ca"                 # the adaptive physics
-NOAH_CA_DPL = "artifacts/dpl/noah_ca/params_dpl.csv"  # present-climate SAC params
-NOAH_CA_SIM = "artifacts/dpl/noah_ca/frozen_sim_noah_ca.csv"  # present sim channel
+# canonical noah_ca family (promoted out of testing/ 2026-07-19; noah_ca ->
+# noah/hybrid_base -> hybrid/hybrid_dtdp -> hybrid_dt renamed 2026-07-21, the
+# old frozen-noah-basis noah/hybrid/hybrid_pet_dt retained as
+# artifacts/dpl/superseded/{noah_noca,hybrid_noca,hybrid_dt_noca}).
+NOAH_CA_DIR = "artifacts/dpl/noah"                 # the adaptive physics
+NOAH_CA_DPL = "artifacts/dpl/noah/params_dpl.csv"  # present-climate SAC params
+NOAH_CA_SIM = "artifacts/dpl/noah/frozen_sim_noah.csv"  # present sim channel
 # noah_ca is the family's default basis, so the hybrid dirs carry no `_noah_ca`
 # infix; `lstm` has no physics channel at all (use_sim=False).
-BASE_DIR = "artifacts/dpl/hybrid_base"
-DTDP_DIR = "artifacts/dpl/hybrid_dtdp"
+BASE_DIR = "artifacts/dpl/hybrid"
+DTDP_DIR = "artifacts/dpl/hybrid_dt"
 LSTM_DIR = "artifacts/dpl/lstm"
 N_SEEDS = 3
 
-PHYSICS = "noah_ca (physics)"
-BASE = "base hybrid"
-DTDP = "dt·dp hybrid"
-LSTM = "pure LSTM"
+#: figure-facing labels (2026-07-21 canonicalized to the plain model names --
+#: PHYSICS/BASE/DTDP/LSTM stay the internal identifiers used as dict keys
+#: throughout this module).
+PHYSICS = "Noah"
+BASE = "Hybrid"
+DTDP = "Hybrid DT"
+LSTM = "LSTM"
 COL_ORDER = [PHYSICS, BASE, DTDP, LSTM]
 ENSEMBLES = {BASE: BASE_DIR, DTDP: DTDP_DIR, LSTM: LSTM_DIR}
 # REGIMES / _REGIME_TITLE / _aggregate_regime are shared from dtdp_response.
@@ -208,10 +214,10 @@ def _plot_basin(basin: str, sub: pd.DataFrame, out: Path,
         cb.ax.tick_params(labelsize=6)
     fig.suptitle(
         title if title is not None else
-        f"{basin} — noah_ca hybrid family: climate-response surfaces  "
+        f"{basin} — Noah / Hybrid / Hybrid DT / LSTM: climate-response surfaces  "
         "(% change vs present climate)\n"
-        "○ present climate    ×  dt·dp response-loss anchors (every panel)    "
-        "all four on the climate-adaptive noah_ca basis",
+        "○ present climate    ×  Δp·ΔT response-loss anchors (every panel)    "
+        "all four on the climate-adaptive Noah physics basis",
         fontsize=8.5)
     out.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out, dpi=300)
@@ -229,7 +235,7 @@ def _mean_calval(csv: str | Path) -> tuple[float, float]:
 
 def _skill_pairs() -> dict[str, tuple[float, float]]:
     """Ensemble-mean cal/val KGE per model, from the tracked metrics CSVs."""
-    return {PHYSICS: _mean_calval(f"{NOAH_CA_DIR}/metrics_noah_ca.csv"),
+    return {PHYSICS: _mean_calval(f"{NOAH_CA_DIR}/metrics_noah.csv"),
             **{lab: _mean_calval(f"{d}/metrics_hybrid.csv")
                for lab, d in ENSEMBLES.items()}}
 
@@ -248,10 +254,8 @@ def make_noah_ca_summary(tbl: pd.DataFrame, out_dir: str | Path = "artifacts/dpl
     state).  One line per model, physics the black reference.  Skill from the
     metrics CSVs; responses pooled (15-basin mean) from the response table."""
     MODELS = [PHYSICS, BASE, DTDP, LSTM]
-    SHORT = {PHYSICS: "noah_ca\nphysics", BASE: "base\nhybrid",
-             DTDP: "dt·dp\nhybrid", LSTM: "pure\nLSTM"}
-    LEG = {PHYSICS: "noah_ca physics", BASE: "base hybrid",
-           DTDP: "dt·dp hybrid", LSTM: "pure LSTM"}
+    SHORT = {PHYSICS: PHYSICS, BASE: BASE, DTDP: "Hybrid\nDT", LSTM: LSTM}
+    LEG = {PHYSICS: PHYSICS, BASE: BASE, DTDP: DTDP, LSTM: LSTM}
     STY = {PHYSICS: dict(color="k", lw=2.4, marker="o", ms=4.5, zorder=5),
            BASE: dict(color="#2ca02c", lw=1.8, marker="s", ms=3.5),
            DTDP: dict(color="#1f77b4", lw=1.9, marker="^", ms=4.0),
@@ -303,10 +307,10 @@ def make_noah_ca_summary(tbl: pd.DataFrame, out_dir: str | Path = "artifacts/dpl
     axp.set_title("Precip response  (held at +2 °C)")
     axp.legend(fontsize=7.5, loc="upper left"); axp.grid(alpha=0.3, lw=0.4)
 
-    fig.suptitle("noah_ca hybrid family — skill vs climate-response fidelity  "
-                 "(physics sim channel + dt·dp response loss)", fontsize=11,
-                 fontweight="bold")
-    out = Path(out_dir) / "figures" / "noah_ca_summary.png"
+    fig.suptitle("Noah / Hybrid / Hybrid DT / LSTM — skill vs climate-response "
+                 "fidelity  (physics sim channel + Δp·ΔT response loss)",
+                 fontsize=11, fontweight="bold")
+    out = Path(out_dir) / "figures" / "hybrid_summary.png"
     out.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out, dpi=300)
     plt.close(fig)
@@ -320,15 +324,82 @@ def make_regime_surfaces(tbl: pd.DataFrame, data_dir: str = "data",
     the group's basins pooled by area-weighted % change."""
     areas = load_basin_area(data_dir, domain="15cdec").set_index(
         "basin")["area_mi2"].to_dict()
-    figdir = Path(out_dir) / "figures" / "noah_ca_regimes"
+    figdir = Path(out_dir) / "figures" / "hybrid_regimes"
     for reg, basins in REGIMES.items():
         agg = _aggregate_regime(tbl, basins, areas)
         title = (f"{_REGIME_TITLE[reg]} regime  ({len(basins)} basins: "
-                 f"{' '.join(basins)})  — noah_ca hybrid family response surfaces\n"
+                 f"{' '.join(basins)})  — Noah / Hybrid / Hybrid DT / LSTM "
+                 "response surfaces\n"
                  "area-weighted % change vs present climate    "
-                 "○ present climate    ×  dt·dp response-loss anchors (every panel)")
+                 "○ present climate    ×  Δp·ΔT response-loss anchors (every panel)")
         _plot_basin(reg, agg, figdir / f"{reg}.png", title=title)
     print(f"wrote {len(REGIMES)} regime figures -> {figdir}", flush=True)
+
+
+def make_hybrid_progression(tbl: pd.DataFrame, data_dir: str = "data",
+                            out_dir: str | Path = "artifacts/dpl") -> Path:
+    """Two-panel progression exhibit for the CURRENT canonical chain
+    Noah (physics) -> Hybrid -> Hybrid DT: (a) per-basin validation skill,
+    (b) the pooled warming-response curve.  Replaces the superseded frozen-
+    noah-basis ``hybrid_progression`` figure, whose PET-input-only middle rung
+    has no counterpart in the current family (see the main text / RUNS.md for
+    the pooled response-ratio numbers -- this exhibit is the visual companion,
+    not a re-derivation of those figures)."""
+    MODELS = [PHYSICS, BASE, DTDP]
+    STY = {PHYSICS: dict(color="k", marker="o", mfc="none", mec="k", mew=1.4),
+           BASE: dict(color="#2ca02c", marker="s", mfc="#2ca02c", mec="#2ca02c"),
+           DTDP: dict(color="#1f77b4", marker="^", mfc="#1f77b4", mec="#1f77b4")}
+
+    order = _basin_order(data_dir, sorted(tbl["basin"].unique()))
+    val = {PHYSICS: pd.read_csv(f"{NOAH_CA_DIR}/metrics_noah.csv"
+                                ).set_index("basin")["val_kge"],
+           BASE: pd.read_csv(f"{BASE_DIR}/metrics_hybrid.csv"
+                             ).set_index("basin")["val_kge"],
+           DTDP: pd.read_csv(f"{DTDP_DIR}/metrics_hybrid.csv"
+                             ).set_index("basin")["val_kge"]}
+    temp_curve = {m: [float(_pooled(tbl, m, "pct_annual", 0.0, float(dt)).mean())
+                      for dt in DT] for m in MODELS}
+
+    fig, (axa, axb) = plt.subplots(1, 2, figsize=(11.0, 6.2),
+                                   constrained_layout=True)
+    y = np.arange(len(order))
+    for m in MODELS:
+        v = val[m].reindex(order)
+        axa.plot(v.to_numpy(), y, ls="none", ms=6.5, label=m, **STY[m])
+    axa.invert_yaxis()
+    axa.set_yticks(y); axa.set_yticklabels(order, fontsize=9)
+    axa.set_xlim(0, 1)
+    axa.set_xlabel("validation KGE (WY2004-2018)")
+    axa.set_title("a)  skill", fontsize=11, fontweight="bold")
+    axa.legend(loc="lower left", fontsize=8.5, frameon=False)
+    axa.grid(axis="x", alpha=0.3, lw=0.5)
+
+    axb.axhline(0, color="0.6", lw=0.7)
+    for m in MODELS:
+        axb.plot(DT, temp_curve[m], lw=2.2, ms=6, label=m, **STY[m])
+    axb.set_xlabel("ΔT (°C)   (Δprecip = 0)")
+    axb.set_ylabel("annual runoff %Δ vs present  (pooled, 15 basins)")
+    axb.set_title("b)  warming response", fontsize=11, fontweight="bold")
+    axb.legend(loc="lower left", fontsize=8.5, frameon=False)
+    axb.grid(alpha=0.3, lw=0.5)
+
+    fig.suptitle("Noah → Hybrid → Hybrid DT: skill vs a trustworthy warming "
+                "response", fontsize=12.5, fontweight="bold")
+    out = Path(out_dir) / "figures" / "hybrid_progression.png"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out, dpi=300)
+    plt.close(fig)
+
+    rows = []
+    for m in MODELS:
+        row = {"model": m, "val_kge_mean": round(float(val[m].reindex(order).mean()), 4)}
+        for dt, v in zip(DT.tolist(), temp_curve[m]):
+            row[f"pct_annual_dt{dt:g}"] = round(v, 4)
+        rows.append(row)
+    csv = Path(out_dir) / "figures" / "hybrid_progression.csv"
+    pd.DataFrame(rows).to_csv(csv, index=False)
+    print(f"wrote {out}", flush=True)
+    return out
 
 
 def make_noah_ca_hybrids(data_dir: str = "data",
@@ -339,7 +410,7 @@ def make_noah_ca_hybrids(data_dir: str = "data",
     surface per watershed, one per hydroclimate regime, and the 3-panel skill /
     response summary."""
     out_dir = Path(out_dir)
-    csv = out_dir / "noah_ca_hybrids_metrics.csv"
+    csv = out_dir / "figures" / "hybrids_metrics.csv"
     if csv.exists() and not regen:
         tbl = pd.read_csv(csv)
         print(f"loaded {csv}", flush=True)
@@ -350,12 +421,13 @@ def make_noah_ca_hybrids(data_dir: str = "data",
         print(f"wrote {csv}", flush=True)
 
     order = _basin_order(data_dir, sorted(tbl["basin"].unique()))
-    figdir = out_dir / "figures" / "noah_ca_hybrids"
+    figdir = out_dir / "figures" / "hybrid"
     for b in order:
         _plot_basin(b, tbl[tbl.basin == b], figdir / f"{b}.png")
     print(f"wrote {len(order)} figures -> {figdir}", flush=True)
     make_regime_surfaces(tbl, data_dir, out_dir)
     make_noah_ca_summary(tbl, out_dir)
+    make_hybrid_progression(tbl, data_dir, out_dir)
     return tbl
 
 

@@ -6,7 +6,7 @@ The ensembles' sac_sim channel is noah's TORCH daily run (their training
 channel), so the detrended channel is rebuilt by streaming the torch pipeline
 under the per-cell dT field (``evaluate.noah_torch_daily`` on the noah ckpt) —
 numerics-matched to the channel the LSTMs were trained on (the displayed
-``dPL noah`` series stays the frozen run_basin pair).  Because the WGEN
+``Noah`` series stays the frozen run_basin pair).  Because the WGEN
 detrending never enters the hybrid's TRAINING (the temperature-consistency
 loss trains on a scalar +2degC teacher), the Hybrid series here is an
 INDEPENDENT check of its temperature response.
@@ -28,7 +28,7 @@ Two figures on the basin-aggregated flow change dQ = detrended - historical:
     toward zero as the record approaches the 1991-2020 baseline);
   * the monthly dQ regime over the pre-1950 period (largest detrending effect).
 
-Output: artifacts/dpl/figures/cdec15_forcing_sensitivity_*.png.
+Output: artifacts/dpl/figures/forcing_sensitivity_*.png.
 """
 
 from __future__ import annotations
@@ -46,17 +46,20 @@ from .climatology import _WY, _WY_LABELS, _monthly_taf
 
 DOMAIN = "15cdec_grid"
 _PRE1950 = "1950-01-01"
-#: pure-physics frozen sims (run_basin).  ``dPL pt`` is the refined PT cascade;
-#: ``dPL noah`` is the frozen Noah-lite external-ET core (bit-exact vs torch).
+#: pure-physics frozen sims (run_basin).  ``PT`` is the refined PT cascade;
+#: ``Noah`` is the frozen Noah-lite external-ET core (bit-exact vs torch).
 MODELS: dict[str, dict] = {
-    "dPL hamon": dict(csv="artifacts/dpl/hamon/params_dpl.csv",
-                      pet="hamon", alb=0.0, dew=0.0),
-    "dPL pt":    dict(csv="artifacts/dpl/pt/params_dpl.csv",
-                      pet="priestley_taylor", alb=0.6, dew=2.0),
-    "dPL noah":  dict(csv="artifacts/dpl/noah/params_dpl.csv",
-                      pet="priestley_taylor", alb=0.0, dew=0.0, et_scheme="noah_lite",
-                      canopy_csv="artifacts/dpl/noah/params_canopy.csv"),
+    "Hamon": dict(csv="artifacts/dpl/hamon/params_dpl.csv",
+                 pet="hamon", alb=0.0, dew=0.0),
+    "PT":    dict(csv="artifacts/dpl/pt/params_dpl.csv",
+                 pet="priestley_taylor", alb=0.6, dew=2.0),
+    "Noah":  dict(csv="artifacts/dpl/noah/params_dpl.csv",
+                 pet="priestley_taylor", alb=0.0, dew=0.0, et_scheme="noah_lite",
+                 canopy_csv="artifacts/dpl/noah/params_canopy.csv"),
 }
+#: explicit cache tag per MODELS label -- stable cache filenames independent
+#: of the (2026-07-21 renamed) legend text.
+_MODEL_TAG: dict[str, str] = {"Hamon": "hamon", "PT": "pt", "Noah": "noah"}
 #: the noah checkpoint: the ensembles' sac_sim channel is its TORCH daily run
 #: (``daily_sim_noah_torch.csv`` baked into the seed ckpts), so the detrended
 #: channel streams the torch pipeline under the dT field.
@@ -65,22 +68,22 @@ NOAH_CKPT = "artifacts/dpl/noah/checkpoints/best.pt"
 #: channels are the noah physics, whose detrended torch run is re-fed as the
 #: ensembles' detrended baseline.  ``Hybrid`` (plain: no PET, no dT loss) is
 #: the improvement BASELINE — its near-flat/wrong-signed response against
-#: ``Hybrid PET+dT`` (PT-potential input + temperature-consistency loss) is
+#: ``Hybrid DT`` (PT-potential input + temperature-consistency loss) is
 #: the point of this figure.
 ENSEMBLES: dict[str, str] = {
-    "Hybrid":        "artifacts/dpl/hybrid",
-    "Hybrid PET+dT": "artifacts/dpl/hybrid_pet_dt",
+    "Hybrid":    "artifacts/dpl/hybrid",
+    "Hybrid DT": "artifacts/dpl/hybrid_dt",
 }
 #: 2-D encoding so the series separate cleanly: COLOR = physics lineage (blue =
 #: Hamon, red = PT cascade, green = Noah-lite); LINESTYLE = role (solid = pure
 #: physics, dashed/dash-dot = LSTM ensembles).  Read the ET-scheme effect
 #: across colours, physics-vs-LSTM within green.
 STYLE: dict[str, dict] = {
-    "dPL hamon":     dict(color="#1f77b4", lw=2.3, ls="-"),
-    "dPL pt":        dict(color="#d62728", lw=2.3, ls="-"),
-    "dPL noah":      dict(color="#2ca02c", lw=2.3, ls="-"),
-    "Hybrid":        dict(color="#2ca02c", lw=2.0, ls="--"),
-    "Hybrid PET+dT": dict(color="#2ca02c", lw=2.0, ls="-."),
+    "Hamon":     dict(color="#1f77b4", lw=2.3, ls="-"),
+    "PT":        dict(color="#d62728", lw=2.3, ls="-"),
+    "Noah":      dict(color="#2ca02c", lw=2.3, ls="-"),
+    "Hybrid":    dict(color="#2ca02c", lw=2.0, ls="--"),
+    "Hybrid DT": dict(color="#2ca02c", lw=2.0, ls="-."),
 }
 #: marker by role (reinforces the linestyle on the monthly plot only; the rolling
 #: time series stays marker-free).
@@ -268,7 +271,7 @@ def assemble(data_dir: str = "data", *, device: str = "cuda") -> dict:
     # detrended==historical), cached; dQ subsets to the covered basins.
     dq: dict[str, pd.DataFrame] = {}
     for label, spec in MODELS.items():
-        tag = label.split()[-1]
+        tag = _MODEL_TAG[label]
         h = _frozen_sim(f_hist, spec, BASINS, cd / f"fs_{tag}_hist.csv")
         d = _frozen_sim(f_detr, spec, BASINS, cd / f"fs_{tag}_detr.csv")
         dq[label] = (d - h)[basins]
@@ -276,7 +279,7 @@ def assemble(data_dir: str = "data", *, device: str = "cuda") -> dict:
 
     # the ensembles' detrended sac_sim channel: noah's TORCH run under the dT
     # field (numerics-matched to the training channel; cached).  Not displayed —
-    # the dPL noah series above is the frozen run_basin pair.
+    # the Noah series above is the frozen run_basin pair.
     nt_detr_csv = cd / "fs_noah_torch_detr.csv"
     if nt_detr_csv.exists():
         nt_detr = pd.read_csv(nt_detr_csv, parse_dates=["date"]).set_index("date")
@@ -371,8 +374,8 @@ def make_forcing_sensitivity(data_dir: str = "data",
                              *, device: str = "cuda") -> dict:
     data = assemble(data_dir, device=device)
     figdir = Path(out_dir) / "figures"
-    _plot_rolling(data, figdir / "cdec15_forcing_sensitivity_rolling.png")
-    _plot_monthly(data, figdir / "cdec15_forcing_sensitivity_monthly_pre1950.png")
+    _plot_rolling(data, figdir / "forcing_sensitivity_rolling.png")
+    _plot_monthly(data, figdir / "forcing_sensitivity_monthly_pre1950.png")
     return data
 
 

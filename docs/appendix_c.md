@@ -10,7 +10,7 @@ the authoritative source behind every number and figure in this document.
 | Baseline forcing (unsplit) | `data/cdec15/forcing/historical_livneh_unsplit.nc` (fine off-grid HRUs); `data/region/forcing/historical_livneh_unsplit.nc` (unified 1/16° region store read by every grid domain) | daily 1915–2018, grid-cell keyed |
 | WGEN Product A forcing | `data/region/forcing/wgen_product_a.nc` | precip identical to unsplit; temperature detrended to 1991–2020 |
 | Historical LTO forcing | `data/region/forcing/historical_lto.nc` | split-lineage Livneh precip, daily 1915–2021 |
-| Satellite ET/SWE observations | `data/region/et_obs/`, `data/region/swe_obs/` | product ensembles at the 4,410-cell region grid; the Part II §9 observation losses |
+| Satellite ET/SWE observations | `data/region/et_obs/`, `data/region/swe_obs/` | product ensembles at the 4,410-cell region grid; the Part II Architecture-section observation losses |
 | Region grid + precip audit | `data/region/grid_cells.csv`, `data/region/prcp_x10_artifacts.csv` | the unified-store cell index and the misplaced-decimal correction table |
 | HRU tables | `data/cdec15/hruinfo.csv`, `data/calsim/hruinfo_<domain>.csv` | basin, cell key, area weight, elevation, flow length, soil/veg class |
 | Archived GA optima | `data/cdec15/ga_optimum.csv` (pooled), `data/calsim/ga_optimum_<domain>.csv` (per-watershed) | 31 parameters per HRU row |
@@ -40,24 +40,25 @@ the authoritative source behind every number and figure in this document.
 
 *Table C.2. Part I result artifacts.*
 
-Note: the per-basin WGEN/LTO volume-difference percentages of Part I §6–7 are computed
-inside the forcing-comparison figures; `split_unsplit_anchor_skill.csv` is the one
-standalone quantitative table.
+Note: the per-basin WGEN/LTO volume-difference percentages of Part I's Warming
+sensitivity and Split versus unsplit precipitation sections are computed inside the
+forcing-comparison figures; `split_unsplit_anchor_skill.csv` is the one standalone
+quantitative table.
 
 ## C.3 Part II (dPL) artifacts
 
 | Item | Path |
 |---|---|
 | Run log / track record | `artifacts/dpl/RUNS.md` |
-| Canonical physics runs | `artifacts/dpl/{hamon_dense, hamon, pt, noah}/`, each with `metrics_<run>.csv`, `params_dpl.csv`, `figures/` (Noah also `params_canopy.csv`) |
-| Hybrid physics channel + teacher | `artifacts/dpl/noah/daily_sim_noah_torch.csv` (the ensembles' physics input channel, exported from the differentiable pipeline) + `daily_sim_noah_plus2C.csv` / `metrics_noah_plus2C.csv` (the +2 °C teacher) |
-| Hybrid ensembles | `artifacts/dpl/hybrid/`, `artifacts/dpl/hybrid_pet_dt/` (ensemble-mean `metrics_hybrid.csv` + per-seed checkpoints) |
-| Seasonal-timing scoreboard | `artifacts/dpl/hybrid_pet_dt/seasonal_compare_hybrid_pet_dt.csv` (per-basin val KGE, seasonal mismatch, CalSim3 KGE for `noah`/hybrids) |
-| GA → dPL → hybrid comparison | `artifacts/dpl/compare_ga_dpl_hybrid.csv` + `compare_val_kge.png` |
-| Hybrid progression exhibit | `artifacts/dpl/hybrid_progression.csv` + `.png` (three-arm skill vs +2 °C response) |
-| Fidelity benchmark | `artifacts/dpl/fidelity/fidelity_benchmark.csv` + figure |
-| Out-of-calibration climatology + dPL climate response | `artifacts/dpl/figures/cdec15_climatology_*.png`, `cdec15_forcing_sensitivity_*.png` |
-| dPL implementation | `sacsma/dpl/` (training system, incl. `hybrid/` and `seasonal_compare.py`); frozen scoring mirrors `sacsma/pet_pt.py`, `sacsma/sma_noah_lite.py` |
+| Canonical physics runs | `artifacts/dpl/{hamon, pt, noah}/`, each with `metrics_<run>.csv`, `params_dpl.csv`, `figures/` (`noah` also `params_canopy.csv`; `noah` is the climate-adaptive variant) |
+| Hybrid physics channel | `artifacts/dpl/noah/frozen_sim_noah.csv` (the current ensembles' physics input channel, exported from the differentiable pipeline) |
+| Hybrid ensembles (current) | `artifacts/dpl/hybrid/`, `artifacts/dpl/hybrid_dt/`, `artifacts/dpl/lstm/` (ensemble-mean `metrics_hybrid.csv` + per-seed checkpoints) |
+| (Δp, ΔT) response surfaces | `sacsma.dpl.noah_ca_hybrids` (family) / `sacsma.dpl.adaptive_physics` (physics-only `Noah` vs `Noah (climate-adaptive)`) / `sacsma.dpl.dtdp_response` (shared response-window + regime-aggregation engine; its own frozen-noah-predecessor comparison output was retired, `hybrid`/`hybrid_regimes` cover the current family); `artifacts/dpl/figures/{hybrid,hybrid_regimes,hybrid_summary.png,hybrids_metrics.csv,hybrid_progression.{csv,png},noah_climate_adaptive*}` |
+| GA → dPL → hybrid comparison | `artifacts/dpl/figures/compare_ga_dpl_hybrid.csv` |
+| Fidelity benchmark | `artifacts/dpl/noah/fidelity/fidelity_benchmark.csv` + figure |
+| Out-of-calibration climatology + dPL climate response | `artifacts/dpl/figures/climatology_*.png`, `forcing_sensitivity_*.png` |
+| Superseded (frozen-noah-basis) generation, retained for lineage | `artifacts/dpl/superseded/{hamon_dense, noah_noca, hybrid_noca, hybrid_dt_noca}/` and `hybrid_dt_noca/seasonal_compare_hybrid_dt_noca.{csv,png}` |
+| dPL implementation | `sacsma/dpl/` (training system, incl. `hybrid/`, `noah_ca_hybrids.py`, `adaptive_physics.py`, `dtdp_response.py`, `seasonal_compare.py`); frozen scoring mirrors `sacsma/pet_pt.py`, `sacsma/sma_noah_lite.py` |
 
 *Table C.3. Part II (dPL) artifacts.*
 
@@ -71,7 +72,8 @@ sacsma calsim                        # cross-compare -> artifacts/calsim/compare
 
 dPL training and evaluation run through `sacsma.dpl` (see `artifacts/dpl/RUNS.md` for
 the exact command line of every canonical run); `sacsma dpl evaluate <checkpoint>
---temp-delta 2.0` dumps the temperature-perturbed teacher simulation used by the
-hybrid's temperature-consistency loss. The cross-model climatology and
+--temp-delta 2.0` dumps a temperature-perturbed teacher simulation, one input to the
+hybrid's response-consistency loss. The cross-model climatology and
 temperature-sensitivity figures regenerate through `sacsma dpl climatology` and
-`sacsma.dpl.forcing_sensitivity` into `artifacts/dpl/figures/`.
+`sacsma.dpl.forcing_sensitivity` into `artifacts/dpl/figures/`; the (Δp, ΔT) response
+surfaces regenerate through `python -m sacsma.dpl.noah_ca_hybrids`.

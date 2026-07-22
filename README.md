@@ -110,31 +110,32 @@ pooled validation KGE.
 
 **Learned physics.** The parameter net alone reaches val KGE 0.84 on the fine-HRU
 grid, matching the GA study's ceiling. Coarse-grid variants that swap the
-evaporative physics (`hamon`, `pt`, `noah`) land 0.80–0.83. A climate-adaptive
-variant, `noah_ca`, adds four climate indices to the attribute set so the learned
-parameters co-vary with the forcing climate; it costs no present-day skill
-(val ≈ 0.80) and is the physics the current hybrids build on.
+evaporative physics (`hamon`, `pt`, `noah`) land 0.80–0.83. `noah` is
+climate-adaptive: four climate indices sit alongside the physiographic attributes so
+the learned parameters co-vary with the forcing climate; this costs no present-day
+skill (val ≈ 0.80) and is the physics the current hybrids build on. The
+climate-frozen predecessor is kept for lineage as `superseded/noah_noca`.
 
 **Hybrid SAC×LSTM.** An LSTM that reads the frozen simulation as one of its
-features, run as a seed ensemble, lifts skill to val KGE ≈ 0.88 (`hybrid_base`).
+features, run as a seed ensemble, lifts skill to val KGE ≈ 0.88 (`hybrid`).
 Skill alone is misleading under a changing climate, though. The plain hybrid
 over-responds to warming, and a pure `lstm` control with no physics channel comes
 out wrong-signed: it learns that warm days mean high flow (the seasonal melt) and
 then reads sustained warming as more runoff.
 
-**A trustworthy warming response.** `hybrid_dtdp` adds a multi-anchor (Δp, ΔT)
+**A trustworthy warming response.** `hybrid_dt` adds a multi-anchor (Δp, ΔT)
 response-consistency loss that pulls the hybrid's warming and precip response back
 toward the physics. It follows the physics on both axes (warming ratio 1.14 and
-right-signed at all 15 basins, versus 1.50 for `hybrid_base` and −0.94 for the pure
+right-signed at all 15 basins, versus 1.50 for `hybrid` and −0.94 for the pure
 `lstm`) and gives up only a little skill (val 0.85). This is the one to use for
-climate work. It replaces the earlier `hybrid_pet_dt`, which carried a single
-+2 °C anchor on the frozen `noah`; `hybrid_dtdp` generalizes that to the full
-(Δp, ΔT) surface on the climate-adaptive `noah_ca`.
+climate work. It generalizes an earlier pair built on the climate-frozen physics
+(a single +2 °C anchor, kept for lineage as `superseded/hybrid_noca` and
+`superseded/hybrid_dt_noca`) to the full (Δp, ΔT) surface.
 
 The diagnostic behind these claims is a per-watershed (Δp, ΔT) response surface
 (`sacsma.dpl.dtdp_response`), scored outside the calibration window. Warming
 shrinks the April–July snowmelt freshet but intensifies the flood peaks
-(daily Q99.9). `hybrid_dtdp` reproduces that crossover on a tail it was never
+(daily Q99.9). `hybrid_dt` reproduces that crossover on a tail it was never
 trained on; the pure LSTM roughly doubles it.
 
 Checkpoints, per-model metrics, and a chronological log of every experiment live
@@ -147,7 +148,7 @@ sacsma dpl benchmark                                   # fidelity vs the frozen 
 sacsma dpl train physical --pet priestley_taylor       # train a parameter net
 sacsma dpl hybrid --physics <params.csv> --statics     # train a hybrid LSTM seed
 sacsma dpl evaluate artifacts/dpl/noah/checkpoints/best.pt
-python -m sacsma.dpl.noah_ca_hybrids                   # noah_ca hybrids + (Δp, ΔT) response surfaces
+python -m sacsma.dpl.noah_ca_hybrids                   # noah/hybrid family + (Δp, ΔT) response surfaces
 ```
 
 ## License

@@ -603,7 +603,7 @@ def noah_teacher_daily(dp: float, dt: float, ckpt_path: str | Path, *,
     ΔT ``dt`` degC).  The SINGLE source of truth for the dt/dp response teachers,
     the physics response column, and the hybrids' perturbed sim channel — so the
     numerics match on the training and evaluation sides.  ``dp=dt=0`` reproduces
-    ``daily_sim_noah_torch.csv`` (the physics parity anchor)."""
+    the noah checkpoint's full torch daily sim (the physics parity anchor)."""
     cache = teacher_cache_path(dp, dt, cache_dir)
     if cache.exists():
         return pd.read_csv(cache, parse_dates=["date"]).set_index("date")
@@ -747,7 +747,7 @@ def evaluate_checkpoint(
 
 def fidelity_benchmark(
     data_dir: str = "data",
-    out_dir: str = "artifacts/dpl/fidelity",
+    out_dir: str = "artifacts/dpl/noah/fidelity",
     *,
     configs: tuple[str, ...] | None = None,
     device: str = "cuda",

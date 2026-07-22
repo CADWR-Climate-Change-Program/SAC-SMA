@@ -1,0 +1,4 @@
+model,val_kge_mean,pct_annual_dt0,pct_annual_dt0.5,pct_annual_dt1,pct_annual_dt1.5,pct_annual_dt2,pct_annual_dt2.5,pct_annual_dt3,pct_annual_dt3.5,pct_annual_dt4
+Noah,0.8043,0.0,-0.9871,-1.9655,-2.9306,-3.8828,-4.8157,-5.7304,-6.6283,-7.5095
+Hybrid,0.8765,0.0,-1.7096,-3.4542,-5.0711,-6.5609,-7.6783,-8.4817,-9.2209,-9.8934
+Hybrid DT,0.8489,0.0,-1.6951,-2.8577,-3.6443,-4.6036,-5.5672,-6.4559,-7.3124,-8.1792

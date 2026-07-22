@@ -2,32 +2,32 @@
 
 ## Introduction and purpose
 
-The goal of the CalSim stochastic hydrology effort is a complete-domain,
-best-available hydrology, meaning simulated natural streamflow for all CalSim inflow
-arcs (roughly 200 sub-arc catchments), suitable for driving stochastic and
-climate-perturbed CalSim simulations. Two process-based modeling lineages currently
-cover this domain. The first is the VIC model used in CalSim3 development. The second
-is the set of distributed SAC-SMA models developed by Wi and Steinschneider (Cornell
-University) for DWR's watershed climate studies {cite:p}`wi2022,wimemo`.
+SAC-SMA is a spatially distributed hydrologic model, developed by Wi and
+Steinschneider (Cornell University) for DWR's watershed climate studies
+{cite:p}`wi2022,wimemo`. This repository reproduces those simulations in Python with
+exact numerical parity against the original MATLAB code; Model description, directly
+below, gives the full model chain and its per-HRU discretization.
 
-Prior comparison of the two lineages against CalSim3's own historical inflows
-motivated the present program. Across all ~200 arcs the VIC benchmark attains a median
-monthly NSE near 0.72, while at the major "anchor" basins (Shasta through Millerton)
-SAC-SMA attains mean monthly KGE of 0.87–0.92 versus 0.62–0.77 for VIC, with lower
-volume bias and better seasonality (§5.2). On the other hand, VIC carries a more physically
-informed potential evapotranspiration formulation (derived from Penman–Monteith),
-whereas the current SAC-SMA uses Hamon PET, which is driven by temperature alone and
-has no radiation term. SAC-SMA offers stronger calibrated skill; VIC offers ET physics
-that are easier to defend under a changing climate. Closing that gap from the SAC-SMA
-side is the agenda for both parts of this document.
+Two applications sit on that generic core. The first, CDEC15, is a single pooled
+genetic-algorithm calibration across 15 CDEC reservoir watersheds against their
+observed daily full-natural-flow, a general-purpose calibration that is not built for
+any particular downstream use. The second is a family of per-watershed monthly
+calibrations (Rim12, Observed11, Unimpaired9) purpose-built to cover the
+CalSim/CalLite inflow domain, roughly 200 sub-arc catchments, so the model can drive
+stochastic and climate-perturbed CalSim simulations. Part I covers both applications:
+model structure, parameterization and GA calibration, the four calibration domains,
+and a performance review that includes a benchmark against the VIC model used in
+CalSim3 development (the full comparison is in Appendix B.2), plus two
+forcing-sensitivity analyses relevant to stochastic work, temperature detrending and
+the split-versus-unsplit precipitation lineage.
 
-Part I documents the current SAC-SMA implementation, covering model structure (§2),
-parameterization and genetic-algorithm calibration (§3), the four calibration domains
-(§4), a performance review including the cross-comparison against VIC and CalSim3
-(§5), and two forcing-sensitivity analyses relevant to stochastic applications, namely
-temperature detrending (§6) and the split-versus-unsplit precipitation lineage (§7).
-Part II then describes the differentiable reimplementation and the path toward a
-retrained, ET-upgraded, hybrid model for the full CalSim domain.
+Part II takes the model a step further. Its differentiable reimplementation (dPL)
+replaces the genetic-algorithm search with a neural network that maps landscape
+attributes directly to SAC-SMA parameters, trained end-to-end by gradient descent.
+That mapping is entity-blind: no basin identity enters the fit, so it generalizes past
+both the GA's class-based regionalization and the CalSim/CDEC split above. The same
+dPL machinery can be retrained for the CalSim domain, the path this document develops,
+or applied to any other watershed with the same landscape-attribute inputs.
 
 ## Model description
 
@@ -94,7 +94,7 @@ keeps its own dense product at the original off-grid HRU points.
 
 Two alternate products exist for the CalSim calibration domains (not for the 15-CDEC
 HRU cloud, whose points are off the 1/16° grid). They are the levers for the
-sensitivity analyses of §6 and §7.
+warming-sensitivity and split-precipitation analyses below.
 
 - **WGEN Product A** (`wgen_product_a`) carries precipitation identical to the unsplit
   baseline, with temperature detrended to a 1991–2020 reference. This is the
@@ -156,15 +156,15 @@ sacrifices some per-basin fit in exchange for robustness and regionalization, si
 same parameter-to-landscape mapping must work everywhere at once.
 
 **Per-watershed monthly calibration (CalLite sets).** Each of the 32 CalLite watersheds
-(§4) gets its own GA calibration, with daily simulation aggregated to monthly before
+(Calibration domains, below) gets its own GA calibration, with daily simulation aggregated to monthly before
 comparison to the monthly target. Calibration uses WY1952 onward (through 2010 for
 Unimpaired9, 2013 for Observed11, and 2003 for Rim12), and validation uses the earlier
 record, roughly WY1922–1951 {cite:p}`wimemo`. Per-watershed calibration fits each basin
 closely in-sample, at the cost of losing cross-basin parameter coherence.
 
 The archived optima from these MATLAB-era calibrations are the parameter sets the
-Python port runs today. They are the "current implementation" evaluated in §5 and the
-GA baseline for Part II.
+Python port runs today. They are the "current implementation" evaluated in Performance
+review, below, and the GA baseline for Part II.
 
 ### Regionalization evidence
 
@@ -207,8 +207,8 @@ Cosumnes, Fresno, Mokelumne, Putah, Stony) that Rim12 does not account for.
 
 A hand-maintained crosswalk maps each of the ~203 CalSim3 inflow arcs to its rim
 system, its VIC benchmark basin, and the corresponding basin in each SAC-SMA set. The
-cross-comparison of §5 scores each calibration set against CalSim3's own historical
-inflows under a **basin-anchor** convention.
+cross-comparison in Performance review, below, scores each calibration set against
+CalSim3's own historical inflows under a **basin-anchor** convention.
 
 - For rim systems, the reference is the single whole-watershed **FLOW-UNIMPAIRED**
   series rather than a sum of INFLOW sub-arcs, because the sub-arc sum misses
@@ -229,17 +229,17 @@ inflows under a **basin-anchor** convention.
 
 ## Performance review
 
-This section reports skill on three distinct bases, in order. §5.1 scores each set
-against its own calibration target on its own calibration and validation windows.
-§5.2 scores every set against CalSim3 on the shared WY1950–2019 anchor basis,
-alongside VIC. §5.3 scores every set on a single validation window common to all of
-them, the pre-1950 months. §5.4 closes with the consistency of the calibration targets
-themselves.
+This section reports skill on three distinct bases, in order. First, each set is
+scored against its own calibration target on its own calibration and validation
+windows. Then every set is scored against CalSim3 on the shared WY1950–2019 anchor
+basis, alongside VIC. Then every set is scored on a single validation window common to
+all of them, the pre-1950 months. It closes with the consistency of the calibration
+targets themselves.
 
 ### Skill against each set's own calibration target
 
 Table 2 gives mean performance against each set's own target, on the windows defined
-in §3.3. Means are used throughout the summary tables so that outlier basins register
+in Genetic-algorithm calibration, above. Means are used throughout the summary tables so that outlier basins register
 in the set-level numbers. CDEC15 is scored on daily flows; the CalLite sets are scored
 on monthly flows. Note that the two designs put their held-out years on opposite ends
 of the record. CDEC15 validates on the later record (WY2004–2018), while the CalLite
@@ -276,81 +276,29 @@ Standout basins, consistent with the original study {cite:p}`wimemo`:
   targets in the pooled set (a structural rim-system bias explored further below).
 - **TNL (Trinity)** is the Observed11 outlier (val KGE 0.42, +35% bias), and **TRINI**
   its Rim12 counterpart (val 0.50, +31%). Trinity reappears throughout this document
-  as the one basin where precipitation-lineage choices matter materially (§7).
+  as the one basin where precipitation-lineage choices matter materially (Split versus unsplit precipitation, below).
 - **StonyCreek** (val 0.62, +28%) and **FresnoRiver** (val 0.66, +16%) are the
   Unimpaired9 weak spots.
 
-### Cross-comparison: SAC-SMA vs VIC against CalSim3
+### SAC-SMA vs VIC against CalSim3
 
-The cross-comparison scores every set on one shared basis, monthly flows against the
-CalSim3 anchor references over WY1950–2019 (Table 3; Figures 1 and 2). CDEC15's daily
-output is aggregated to monthly here, so all three sets and VIC are directly
-comparable.
-
-| Set | KGE | VIC KGE | \|pbias\| | VIC \|pbias\| | Seas. mism. | VIC seas. mism. |
-|---|---|---|---|---|---|---|
-| Observed11 | 0.91 | 0.77 | 4.2% | 8.5% | 3.3% | 7.6% |
-| Unimpaired9 | 0.92 | 0.62 | 4.9% | 27.3% | 5.6% | 7.7% |
-| CDEC15 | 0.87 | 0.77 | 7.6% | 10.0% | 8.2% | 7.1% |
-
-*Table 3. Mean basin-level skill against the CalSim3 anchor references, WY1950–2019, monthly. VIC columns are means over the same basins as each set; \|pbias\| is the mean absolute per-basin volume bias, and seasonal mismatch is the percentage of annual volume placed in the wrong month.*
-
-The seasonal-mismatch metric is the percentage of annual volume placed in the wrong
-month (the total-variation distance between normalized mean-monthly regimes; Appendix
-A.5). It separates timing errors from volume errors in a way KGE alone does not. The
-anchor sets misplace 3–6% of annual volume seasonally against VIC's 8%; on the CDEC15
-basins the pooled set misplaces 8%, slightly more than VIC on the same basins (7%),
-which reflects its reservoir-oriented pooled calibration.
-
-```{figure} ../artifacts/calsim/compare/figures/anchor_skill_kge.png
-:width: 6.2in
-
-Figure 1. Basin-level monthly KGE versus the CalSim3 anchor (FLOW-UNIMPAIRED for rim systems, INFLOW sub-arc sum otherwise), WY1950–2019. SAC-SMA (circles, by calibration set) versus VIC (diamonds); the dashed divider separates the officially scored Observed11/Unimpaired9 anchor sets from the CDEC15 parallel.
-```
-
-SAC-SMA outperforms VIC at nearly every basin, by +0.15 mean KGE on the rim set and
-+0.30 on the creeks. The creek-set gap is wide because the margin is largest where a
-complete CalSim hydrology is hardest, in the small southern creeks, where VIC runs
-wet. At Fresno River VIC carries a +95% volume bias (KGE −0.18) against SAC-SMA's +11%
-(0.87); Cosumnes is +35% versus +1.5%, Chowchilla +41% versus −4%, and Calaveras +31%
-versus +5%. Rim basins are closer (at Shasta, SAC-SMA 0.94 and VIC 0.78). The hardest
-rim basin for both models is Trinity (SAC-SMA 0.77, VIC 0.57).
-
-```{figure} ../artifacts/calsim/compare/figures/calsim_sacsma_minus_vic_kge.png
-:width: 5.4in
-
-Figure 2. SAC-SMA minus VIC basin-level KGE against the CalSim3 anchor (blue = SAC-SMA better). Every sub-area polygon is colored by its parent basin's anchor score.
-```
-
-Four method-level findings follow.
-
-- **Basin-level aggregation stabilizes the comparison.** At individual CalSim3 nodes
-  the per-catchment median KGE is about 0.67 for the SAC sets (VIC 0.66), because
-  sub-arc-scale noise (delineation mismatches, extrapolated small nodes) dominates;
-  aggregation to basin anchors cancels most of it. A per-arc quantile-mapping
-  correction with mass-balance rescaling (trained WY1922–1971, scored on held-out
-  WY1972–2018) lifts the sub-arc median KGE to 0.76–0.86 depending on set, with volume
-  bias magnitudes of 4–11%. That correction is the working route from basin-credible
-  models to arc-level hydrology.
-- **The footprint screening affects only the four screened basins.** Screening moves
-  Shasta's anchor bias from −8.9% to +0.1% (the Goose Lake cut) and Chowchilla's from
-  −14.3% to −4.3%; every other basin is unchanged.
-- **CDEC15's rim bias is real but specific.** Scored against CalSim3, the pooled set
-  under-runs the two big Sacramento rim systems by −24% (SHA) and −22% (BND). This is
-  the reservoir-calibrated pooled optimum's known weakness, and the reason CDEC15 is
-  kept off the official anchor basis. Its Tulare-basin coverage (PNF, TRM, SCC, ISB),
-  which no CalLite set provides, is unaffected.
-- **Skill is stable in time.** In every 30-year rolling window since 1922, SAC-SMA's
-  anchor-set KGE stays within 0.86–0.96 (volume bias within ±8%) and exceeds VIC in
-  the same window throughout.
+Scored against CalSim3's own historical inflows over WY1950–2019, monthly, SAC-SMA
+attains mean basin-level KGE of 0.87–0.92 across the anchor sets, against 0.62–0.77 for
+the VIC benchmark used in CalSim3 development, and outperforms VIC at nearly every
+basin, by +0.15 mean KGE on the rim set and +0.30 on the creeks. The margin is largest
+where a complete CalSim hydrology is hardest, in the small, dry southern creeks, where
+VIC runs wet (at Fresno River VIC carries a +95% volume bias against SAC-SMA's +11%).
+The full comparison, including the per-basin tables and figures and four method-level
+findings on aggregation, footprint screening, CDEC15's rim bias, and time stability, is
+in Appendix B.2.
 
 ### A common validation window: pre-1950 monthly skill
 
-The per-set numbers of §5.1 are not comparable across sets, because each set defines
+The per-set numbers above are not comparable across sets, because each set defines
 its own windows, target, and timestep. The pre-1950 months provide a common basis.
 They lie outside every calibration window (CDEC15 calibrates on WY1989–2003; the
 CalLite sets calibrate on WY1952 onward), and all sets are scored monthly against the
-same CalSim3 anchor references. Table 4 gives the anchor skill re-scored on the
+same CalSim3 anchor references. Table 3 gives the anchor skill re-scored on the
 pre-/post-WY1950 split.
 
 | Set / model | KGE (pre) | \|pbias\| (pre) | Seas. (pre) | KGE (post) | \|pbias\| (post) | Seas. (post) |
@@ -362,12 +310,13 @@ pre-/post-WY1950 split.
 | CDEC15 | 0.82 | 12.9% | 9.8% | 0.88 | 7.0% | 7.7% |
 | VIC, same basins | 0.75 | 15.8% | 7.3% | 0.77 | 10.3% | 7.2% |
 
-*Table 4. Mean basin-level skill against the CalSim3 anchors, split at WY1950. All values are means over each set's basins (\|pbias\| is the mean absolute per-basin volume bias; Seas. is the seasonally misplaced percentage of annual volume); pre-1950 months lie outside every set's calibration window.*
+*Table 3. Mean basin-level skill against the CalSim3 anchors, split at WY1950. All values are means over each set's basins (\|pbias\| is the mean absolute per-basin volume bias; Seas. is the seasonally misplaced percentage of annual volume); pre-1950 months lie outside every set's calibration window.*
 
 Read as a common out-of-sample test, all three SAC-SMA sets hold up before 1950 (mean
 KGE 0.82–0.84, mean absolute volume bias of 11–13%), and all three degrade somewhat
 relative to their post-1950 skill. Part of that pre-1950 degradation is a forcing
-signal rather than a model signal, as §7 shows. VIC degrades further on the same
+signal rather than a model signal, as Split versus unsplit precipitation, below,
+shows. VIC degrades further on the same
 months, with pre-1950 mean absolute volume biases of 16–31%. This pre-1950 monthly
 window is also the ancestor of the validation design proposed for the retrained model
 in Part II, which holds out WY1950–1987 monthly CalSim FNF entirely.
@@ -390,8 +339,9 @@ mi²) does not, and dividing the same FNF volume by the two different areas prod
 the apparent +12%. Placed on the CalSim area, the SHA target agrees with CalSim3 to
 −1.1% and BND to +2.1%. The handling follows from that diagnosis. The calibration
 targets were never adjusted; the model's over-reaching HRU footprint (which was
-calibrated against the published-area target) is screened at scoring time (§4.1); and
-the basin volume is placed on the canonical CalSim3 area.
+calibrated against the published-area target) is screened at scoring time (Mapping to
+CalSim3 and the anchor convention, above); and the basin volume is placed on the
+canonical CalSim3 area.
 
 A few genuine residuals remain and are documented rather than corrected. Three basins
 carry the same area artifact in the opposite direction (Chowchilla −10.2%, SNS −9.3%,
@@ -402,69 +352,31 @@ perfectly fitted model would inherit from its target. They are left visible in t
 anchor scores because re-normalizing the target depths would corrupt the per-basin
 calibration diagnostics that share the same tables.
 
-## Warming sensitivity versus VIC (WGEN Product A)
+## Warming sensitivity (temperature detrending)
 
-Because the stochastic pipeline runs on detrended temperature, the response of each
-hydrologic model to temperature detrending is itself a model property worth measuring.
-The WGEN Product A forcing isolates it, since precipitation is identical to
-the baseline and temperature is detrended to 1991–2020 (the early record warmed by up
-to about 0.4 °C). Both models were re-run under both forcings with parameters
-unchanged, and differences are reported as Detrended − Baseline on the shared
-1915–2018 record, split at WY1950.
-
-**SAC-SMA responds with a volume loss.** Warming the early record raises Hamon PET and
-snow-season ET, and the model loses 2–4% of long-term runoff volume (median near −3%
-per domain), concentrated where the detrending is largest. Per-basin losses run −9 to
-−2.7% before 1950, tapering to about −2% after. Daily flow correlation stays at or
-above 0.999, so the response is almost entirely in volume rather than timing.
-
-**VIC responds with a timing shift.** VIC's aggregate volume response is only −2.5 to
-+0.7% pre-1950; it mostly shifts snowmelt earlier instead (Figure 3).
-
-```{figure} ../artifacts/calsim/forcing_compare/figures/agg_wgen_annual_diff.png
-:width: 6.2in
-
-Figure 3. Aggregate water-year runoff volume difference (Detrended − Baseline, 5-year rolling) for SAC-SMA and VIC over the disjoint CalLite watersheds. SAC-SMA loses volume where the detrending warms most; VIC's volume response is much smaller.
-```
-
-The contrast quantifies the liability of a temperature-only PET. Any temperature
-adjustment feeds directly into ET and volume, whereas an energy-budget model mostly
-re-times the season. This is a first-order consideration for stochastic and
-climate-perturbed applications, and it motivates the PET and ET upgrades of Part II.
-Per-watershed and per-period breakdowns, and the monthly regime versions, are in
-Appendix B.4.
+Because the stochastic pipeline runs on detrended temperature, the response of the
+model to temperature detrending is itself a model property worth measuring. Under the
+WGEN Product A forcing (precipitation identical to the baseline, temperature detrended
+to a 1991–2020 reference, the early record warmed by up to about 0.4 °C), SAC-SMA
+loses 2–4% of long-term runoff volume as warming raises Hamon PET and snow-season ET,
+concentrated where the detrending is largest; daily flow correlation stays at or above
+0.999, so the response is almost entirely in volume rather than timing. The contrast
+with VIC, an energy-budget model that mostly re-times the season instead of losing
+volume, quantifies the liability of a temperature-only PET and motivates the PET and ET
+upgrades of Part II. The full breakdown, benchmarked against VIC, is in Appendix B.4.
 
 ## Split versus unsplit precipitation (Historical LTO)
 
 The CalSim3 LTO study's observed climate carries the pre-correction "split" Livneh
-precipitation lineage, whereas the baseline here (and the VIC benchmark's historical
-run) uses the {cite:t}`pierce2021` unsplit product. Re-running SAC-SMA under the LTO forcing
-(and comparing the VIC parallels) measures how much this lineage choice matters.
-
-**The difference is concentrated before 1950.** The median absolute water-year volume
-difference is about 11% in 1915–1949 versus 1.5–3.2% in 1950–2018. Directionally, the
-unsplit product is wetter in the southern and Sierra basins and drier in the northern
-Sacramento systems before 1950 (spread up to ±21%), collapsing to within ±2% after
-1950 everywhere except **Trinity (+8%)**. Trinity is the one basin where the lineage
-choice remains consequential in the modern era, and it is also the weakest anchor
-basin in §5.
-
-**On the full record, anchor skill differs little between the two forcings** (median
-anchor KGE 0.934 unsplit versus 0.926 split), but the split forcing redistributes
-skill. It recovers the weakest pre-1950 cases (Trinity pre-1950 KGE 0.40 → 0.83; Cache
-0.63 → 0.78; Stony 0.73 → 0.87) while degrading several basins that were already in
-good agreement (Cosumnes 0.97 → 0.87, Calaveras 0.92 → 0.81, Yuba 0.90 → 0.85). The
-practical reading is that pre-1950 disagreements with CalSim3 at a handful of basins
-owe as much to the precipitation lineage as to the model, and conclusions drawn from
-pre-1950 skill should carry that caveat (Figure 4). This also tempers the cross-set
-comparison of §5.3, since some of every set's pre-1950 degradation is inherited from
-the forcing.
-
-```{figure} ../artifacts/calsim/forcing_compare/figures/split_unsplit_skill_boxplot.png
-:width: 6.2in
-
-Figure 4. Anchor-basin skill under the unsplit baseline (grey) versus the split-lineage LTO forcing (orange), pooled over the 20 anchor basins, by period.
-```
-
-Volume-by-period, annual-difference, and monthly-regime figures for both models, plus
-the SAC/VIC aggregate comparison, are collected in Appendix B.5.
+precipitation lineage, whereas the baseline here uses the {cite:t}`pierce2021` unsplit
+product. Re-running SAC-SMA under the LTO forcing shows the difference is concentrated
+before 1950 (median absolute water-year volume difference of about 11% in 1915–1949
+versus 1.5–3.2% in 1950–2018), collapsing to within ±2% after 1950 everywhere except
+**Trinity (+8%)**, the one basin where the lineage choice remains consequential in the
+modern era. Anchor skill differs little on the full record between the two forcings
+(median KGE 0.934 unsplit versus 0.926 split), but the split forcing redistributes it:
+it recovers several of the weakest pre-1950 cases (Trinity KGE 0.40 → 0.83) while
+degrading a few basins that were already in good agreement (Cosumnes 0.97 → 0.87). The
+practical reading is that pre-1950 disagreements with CalSim3 at a handful of basins owe
+as much to the precipitation lineage as to the model. The full comparison, benchmarked
+against VIC, is in Appendix B.5.

@@ -4,7 +4,8 @@ Reconstruct the daily flow (net output, clipped >= 0), split at
 :data:`sacsma.cdec15.CAL_END`, and run the SAME ``_figures._period_stats``
 used for GA/dPL -> ``metrics_hybrid.csv`` (identical columns to
 ``metrics_15cdec.csv``).  ``compare_all`` merges the GA, dPL and hybrid tables
-into one cal/val KGE comparison + a dumbbell figure.
+into one cal/val KGE comparison table (the per-basin dumbbell view is now
+``figures/hybrid_progression.png``, :func:`sacsma.dpl.noah_ca_hybrids.make_hybrid_progression`).
 """
 
 from __future__ import annotations
@@ -172,14 +173,14 @@ def compare_all(out_dir: str | Path = "artifacts/dpl",
                 hybrid_csv: str | Path =
                 "artifacts/dpl/hybrid/metrics_hybrid.csv",
                 pet_dt_csv: str | Path =
-                "artifacts/dpl/hybrid_pet_dt/metrics_hybrid.csv",
+                "artifacts/dpl/hybrid_dt/metrics_hybrid.csv",
                 ) -> pd.DataFrame:
-    """Merge GA / dPL / hybrid-ensemble cal+val KGE + a dumbbell figure."""
+    """Merge GA / dPL / hybrid-ensemble cal+val KGE into one comparison table."""
     out = Path(out_dir)
     frames = {}
     for name, path in [("GA", ga_csv), ("dPL", dpl_csv),
                        ("hybrid", hybrid_csv),
-                       ("hybrid_pet_dt", pet_dt_csv)]:
+                       ("hybrid_dt", pet_dt_csv)]:
         p = Path(path)
         if p.exists():
             d = pd.read_csv(p)[["basin", "cal_kge", "val_kge"]]
@@ -194,31 +195,4 @@ def compare_all(out_dir: str | Path = "artifacts/dpl",
     csv = out / "compare_ga_dpl_hybrid.csv"
     merged.round(4).to_csv(csv, index=False)
     print(f"wrote {csv}", flush=True)
-    _dumbbell(merged, out / "compare_val_kge.png")
     return merged
-
-
-def _dumbbell(merged: pd.DataFrame, path: str | Path) -> None:
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
-    cols = [c for c in merged.columns if c.endswith("_val")]
-    labels = [c[:-4] for c in cols]
-    colors = {"GA": "#888888", "dPL": "#1f77b4", "hybrid": "#ff7f0e",
-              "hybrid_pet_dt": "#17becf"}
-    y = np.arange(len(merged))
-    fig, ax = plt.subplots(figsize=(6.5, 0.32 * len(merged) + 1))
-    for c, lab in zip(cols, labels, strict=True):
-        ax.scatter(merged[c].clip(lower=0), y, s=36,
-                   color=colors.get(lab, "k"), label=lab, zorder=3)
-    ax.set_yticks(y)
-    ax.set_yticklabels(merged["basin"])
-    ax.set_xlim(0, 1)
-    ax.set_xlabel("validation KGE (WY2004-2018)")
-    ax.legend(loc="lower left", fontsize=7, ncol=2)
-    ax.grid(axis="x", alpha=0.3)
-    fig.tight_layout()
-    fig.savefig(path, dpi=300)
-    plt.close(fig)
-    print(f"wrote {path}", flush=True)

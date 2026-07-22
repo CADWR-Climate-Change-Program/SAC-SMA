@@ -3,39 +3,53 @@
 ## Layout
 
 Canonical runs live directly under `artifacts/dpl/<label>`. The frozen-physics runs
-(`hamon_dense`, `hamon`, `pt`, `noah`, and the climate-adaptive `noah_ca`) each
-carry `checkpoints/best.pt`, `train_log.csv`, `params_dpl.csv`, and
-`metrics_<label>.csv` (plus `params_canopy.csv` for `noah`/`noah_ca`, and the
-present-climate sim channel `frozen_sim_noah_ca.csv` for `noah_ca`).
+(`hamon`, `pt`, and the climate-adaptive `noah`) each carry `checkpoints/best.pt`,
+`train_log.csv`, `params_dpl.csv`, and `metrics_<label>.csv` (plus
+`params_canopy.csv` for `noah`, and the present-climate sim channel
+`frozen_sim_noah.csv`).
 
-`noah` also carries two torch daily dumps (date × basin, mm/day):
-`daily_sim_noah_torch.csv`, the hybrids' sim channel, and
-`daily_sim_noah_plus2C.csv` (with `metrics_noah_plus2C.csv`), the +2 °C teacher for
-the ΔT-consistency loss. Channel and teacher come from one pipeline (torch
-numerics), so the training-time response delta is numerics-consistent.
+`noah` also carries a torch daily dump (date × basin, mm/day),
+`daily_sim_noah_torch.csv`, the frozen-noah-basis hybrids' sim channel.
+
+**2026-07-21 rename** (see Open items, below, for the full record): the
+climate-adaptive physics and its hybrid family, canonicalized 2026-07-19 under the
+`noah_ca`/`hybrid_base`/`hybrid_dtdp` names below, were promoted to the plain
+top-level names `noah` / `hybrid` / `hybrid_dt` — they are now THE canonical
+physics and hybrid family, not a parallel climate-adaptive track. The prior
+frozen-noah-basis generation (the original `noah`, `hybrid`, `hybrid_pet_dt`, and
+`hamon_dense`) moved to `superseded/{noah_noca, hybrid_noca, hybrid_dt_noca,
+hamon_dense}` for lineage. Everywhere below that predates 2026-07-21 uses the old
+names as originally written (this is a track record, not rewritten); read
+`noah_ca`→`noah`, `hybrid_base`→`hybrid`, `hybrid_dtdp`→`hybrid_dt`, and the old
+`noah`/`hybrid`/`hybrid_pet_dt`/`hamon_dense`→their `superseded/*_noca` (or
+unchanged-name, for `hamon_dense`) counterparts.
 
 The `hybrid` (basic feature coupling on the `noah` torch channel, no day-of-year
 inputs) and `hybrid_pet_dt` (adds the raw PT-potential input and a single +2 °C
-ΔT-consistency loss) ensembles established the skill step and the +2 °C response
-result. They are now the +2 °C-only predecessors of the `noah_ca` hybrid family
-(`hybrid_base` / `hybrid_dtdp` / `lstm`; see the Phase-2 section below), which
+ΔT-consistency loss) ensembles — now `superseded/hybrid_noca` and
+`superseded/hybrid_dt_noca` — established the skill step and the +2 °C response
+result. They were the +2 °C-only predecessors of the climate-adaptive hybrid
+family (now `hybrid` / `hybrid_dt` / `lstm`; see the Phase-2 section below), which
 rebuilds them on climate-adaptive physics and generalizes the single ΔT anchor to
-the full (Δp, ΔT) response surface, so `hybrid_dtdp` supersedes `hybrid_pet_dt`
-for climate work. Each ensemble holds `seed*/checkpoints/best.pt` and
-per-seed `metrics_hybrid.csv`, plus a top-level `metrics_hybrid.csv` scoring the
-ensemble-mean flow (`hybrid.evaluate.score_ensemble`). The residual coupling and
-the first `noah`-based ensembles were retired 2026-07-16, and `noah_ft` (the
-seasonal-melt fine-tune, canonical 2026-07-16→17) was demoted 2026-07-17 after a
-new-basis head-to-head — see the track record; git history and the gitignored
+the full (Δp, ΔT) response surface, so `hybrid_dt` supersedes
+`superseded/hybrid_dt_noca` for climate work. Each ensemble holds
+`seed*/checkpoints/best.pt` and per-seed `metrics_hybrid.csv`, plus a top-level
+`metrics_hybrid.csv` scoring the ensemble-mean flow
+(`hybrid.evaluate.score_ensemble`). The residual coupling and the first
+`noah`-based ensembles were retired 2026-07-16, and `noah_ft` (the seasonal-melt
+fine-tune, canonical 2026-07-16→17) was demoted 2026-07-17 after a new-basis
+head-to-head — see the track record; git history and the gitignored
 `testing/noah_ft_region` hold the record.
 
 Superseded run artifacts were pruned, but their findings stay in the track record
-below (the names there no longer resolve to on-disk runs). `--physics` is required
-with no default, so `testing/` holds only gitignored local scratch, and `fidelity/`
-is the numerics benchmark, not a run. All skill numbers are pooled 15-basin mean
-KGE under frozen-model scoring (numba; PT via `sacsma.pet_pt`, Noah-lite via
-`sacsma.sma_noah_lite`) unless marked *(torch)* — the seasonal-melt fine-tunes and
-the full 7-param Noah ET (`noah_grid*`) are torch-only, with no frozen core.
+below (the names there no longer resolve to on-disk runs, except the
+2026-07-21-renamed generation, which is retained on disk under `superseded/`).
+`--physics` is required with no default, so `testing/` holds only gitignored local
+scratch, and `noah/fidelity/` is the numerics benchmark, not a run. All skill
+numbers are pooled 15-basin mean KGE under frozen-model scoring (numba; PT via
+`sacsma.pet_pt`, Noah-lite via `sacsma.sma_noah_lite`) unless marked *(torch)* —
+the seasonal-melt fine-tunes and the full 7-param Noah ET (`noah_grid*`) are
+torch-only, with no frozen core.
 
 Standing methods shared by every canonical grid run: the `physical` feature
 variant; pooled 15cdec training (daily gage FNF, cal WY1989–2003 / val WY2004–2018);
@@ -45,18 +59,22 @@ spinup from 1978-10-01.
 
 ## Canonical lineage
 
+Labels below are the **current, post-2026-07-21-rename** names (see Open items for
+the rename record); descriptions still narrate each row's own history under the
+names used at the time.
+
 | label | domain | delta vs predecessor | cal/val KGE |
 |---|---|---|---|
-| `hamon_dense` | 15cdec (7891 HRU) | — (the original dPL) | **0.806/0.840** (retrained 2026-07-14) |
+| `superseded/hamon_dense` | 15cdec (7891 HRU) | — (the original dPL); superseded by `hamon`, retained for lineage | **0.806/0.840** (retrained 2026-07-14) |
 | `hamon` | 15cdec_grid (2074 cells) | native-grid retrain + CalSim3 footprint | 0.807/0.829 |
 | `pt` | 15cdec_grid | Priestley–Taylor PET (Bristow–Campbell Rn) + snow-cover albedo (0.6) + arid dewpoint depression (2 °C) | 0.799/0.826 |
-| `noah` | 15cdec_grid | Noah-lite canopy ET (1 learned DOF `soil_chi`) on PT potential | 0.767/0.799 |
-| `noah_ca` | 15cdec_grid | `noah` retrained on `physical_climate` features (physiographic + 4 climate indices) → climate-ADAPTIVE physics: parameters recompute under perturbed climate. The physics basis for the current hybrid family (2026-07-19) | 0.779/0.804 |
+| `superseded/noah_noca` | 15cdec_grid | Noah-lite canopy ET (1 learned DOF `soil_chi`) on PT potential; climate-frozen, superseded 2026-07-21 by the climate-adaptive `noah` below | 0.767/0.799 |
+| `noah` | 15cdec_grid | (was `noah_ca`) climate-frozen `noah` retrained on `physical_climate` features (physiographic + 4 climate indices) → climate-ADAPTIVE physics: parameters recompute under perturbed climate. Promoted to the plain `noah` name 2026-07-21; the physics basis for the current hybrid family (2026-07-19) | 0.779/0.804 |
 | ~~`noah_ft`~~ | 15cdec_grid | DEMOTED 2026-07-17 — the seasonal-melt fine-tune of `noah` (0.765/0.799 torch): the new-basis head-to-head is a pooled wash vs `noah` with NHG + north-state-volume casualties, and its torch-only scoring taxed every consumer | — |
-| `hybrid` | 15cdec_grid | SAC×LSTM feature coupling on `noah` physics (torch daily sim-cache channel), no doy inputs — 8-seed ensemble mean. The BASIC hybrid: the skill step; its unconstrained +2 °C response is untrustworthy (see 2026-07-17) | 0.917/0.869 |
-| `hybrid_pet_dt` | 15cdec_grid | `hybrid` + the raw PT-potential input channel (`--pet-input`) + the temperature-consistency loss λ=0.3 (+2 °C `noah` torch teacher) — 8-seed ensemble mean. Same skill, physics-consistent climate response (+2 °C resp ratio 1.04, regime r 0.97). SUPERSEDED for climate work by `hybrid_dtdp` (2026-07-19) | 0.916/0.864 |
-| `hybrid_base` | 15cdec_grid | SAC×LSTM feature coupling on `noah_ca` physics (`--pet-input --statics`, no doy), NO response loss — 3-seed ensemble mean. Best skill; +2 °C response over-strong (ratio 1.50) | 0.922/0.877 |
-| `hybrid_dtdp` | 15cdec_grid | `hybrid_base` + the 14-anchor {−20,−10,0,+10,+20}%×{0,+2,+4 °C} (Δp, ΔT) response-consistency loss (λ0.18) vs the `noah_ca` adaptive teachers — 3-seed mean. THE climate-trustworthy model: tracks physics on both axes (+3 °C ratio 1.14, 15/15 signs); generalizes `hybrid_pet_dt` to the full surface | **0.873/0.849** |
+| `superseded/hybrid_noca` | 15cdec_grid | SAC×LSTM feature coupling on the climate-frozen `superseded/noah_noca` physics (torch daily sim-cache channel), no doy inputs — 8-seed ensemble mean. The BASIC hybrid: the skill step; its unconstrained +2 °C response is untrustworthy (see 2026-07-17); superseded 2026-07-21 by `hybrid` below | 0.917/0.869 |
+| `superseded/hybrid_dt_noca` | 15cdec_grid | (was `hybrid_pet_dt`) `superseded/hybrid_noca` + the raw PT-potential input channel (`--pet-input`) + the temperature-consistency loss λ=0.3 (+2 °C `superseded/noah_noca` torch teacher) — 8-seed ensemble mean. Same skill, physics-consistent climate response (+2 °C resp ratio 1.04, regime r 0.97). SUPERSEDED for climate work by `hybrid_dt` below (2026-07-19), then renamed into `superseded/` 2026-07-21 | 0.916/0.864 |
+| `hybrid` | 15cdec_grid | (was `hybrid_base`) SAC×LSTM feature coupling on the climate-adaptive `noah` physics (`--pet-input --statics`, no doy), NO response loss — 3-seed ensemble mean. Promoted to the plain `hybrid` name 2026-07-21; best skill, +2 °C response over-strong (ratio 1.50) | 0.922/0.877 |
+| `hybrid_dt` | 15cdec_grid | (was `hybrid_dtdp`) `hybrid` + the 14-anchor {−20,−10,0,+10,+20}%×{0,+2,+4 °C} (Δp, ΔT) response-consistency loss (λ0.18) vs the `noah` adaptive teachers — 3-seed mean. Promoted to the plain `hybrid_dt` name 2026-07-21; THE climate-trustworthy model: tracks physics on both axes (+3 °C ratio 1.14, 15/15 signs); generalizes `superseded/hybrid_dt_noca` to the full surface | **0.873/0.849** |
 | `lstm` | 15cdec_grid | pure data-driven control (`use_sim=False` — no SAC-SMA sim channel), same climate-adaptive statics — 3-seed mean. Good skill but physically nonsensical projection (+3 °C ratio −0.94, wrong-signed) | 0.909/0.835 |
 | ~~`noah_lstm_feat`~~ | 15cdec_grid | RETIRED 2026-07-16 — feature hybrid on `noah` (5 seeds, 0.923/0.869); superseded by `hybrid` | — |
 | ~~`noah_lstm_resid`~~ | 15cdec_grid | RETIRED 2026-07-16 — residual hybrid on `noah` (8 seeds, 0.926/0.873); the residual COUPLING was dropped entirely (regime-conditional volume injection, B1–B3) | — |
@@ -756,7 +774,81 @@ basis, and rebuilds the hybrid family on it.
   at `_adaptive_cache`.  Annual/response numbers verified BIT-IDENTICAL pre/post move.
 
 ## Open items
-- Canonical set (2026-07-19): the physics ladder `hamon_dense`, `hamon`, `pt`,
+- **Rename (2026-07-21):** the climate-adaptive physics and hybrid family
+  canonicalized 2026-07-19 as `noah_ca` / `hybrid_base` / `hybrid_dtdp` are
+  promoted to the plain top-level names `noah` / `hybrid` / `hybrid_dt` — they are
+  now THE canonical noah physics and hybrid family, full stop, not a parallel
+  climate-adaptive track alongside a still-current frozen one. The prior
+  frozen-noah-basis generation (old `noah` 0.767/0.799, old `hybrid` 0.917/0.869,
+  `hybrid_pet_dt` 0.916/0.864) and `hamon_dense` move to
+  `superseded/{noah_noca, hybrid_noca, hybrid_dt_noca, hamon_dense}` to show the
+  chain of improvement. `lstm` is unchanged. Every hardcoded consumer path
+  (`sacsma/dpl/*.py`, `cli.py`) was repointed in the same pass; `fidelity/` moved
+  to `noah/fidelity/`; top-level comparison CSVs/PNGs consolidated into
+  `figures/` (dropping the `noah_ca`/`hybrid_pet_dt` infixes: `noah_ca_summary.png`
+  → `noah_summary.png`, etc.). The `hybrid`/`hybrid_dt` checkpoints' baked
+  `physics_csv`/`sim_cache` pointed at a since-deleted `testing/` scratch path
+  from before their 2026-07-19 promotion (a latent bug, not caused by this
+  rename) — patched to the canonical `noah/` files and verified reloadable.
+  README.md and the Sphinx docs (`docs/`) were updated to the new names in the
+  same pass; this file's history below keeps the names as originally written.
+- **Figure-label follow-up (2026-07-21):** the rename above moved paths and
+  file names but left several figure-internal legend/title strings on the old
+  labels (`climatology.py`/`forcing_sensitivity.py` still said "Hybrid PET+dT";
+  `noah_ca_hybrids.py`'s `hybrids/`/`noah_regimes/` column titles still said
+  "noah_ca (physics)"/"base hybrid"/"dt·dp hybrid"/"pure LSTM"). Canonicalized to
+  the plain model names throughout (`Noah`, `PT`, `Hamon`, `Hamon (dense)`,
+  `Hybrid`, `Hybrid DT`, `LSTM`); cache-filename derivation in `climatology.py`/
+  `forcing_sensitivity.py` was decoupled from the label text first (`_FROZEN_TAG`/
+  `_MODEL_TAG`) so the rename didn't orphan the on-disk caches. All three figure
+  sets (`cdec15_climatology_*`, `cdec15_forcing_sensitivity_*`, `hybrids/`/
+  `noah_regimes/`/`noah_summary.png`) regenerated fully from cache (no GPU
+  recompute — every (dp,dt) grid point and frozen/ensemble sim was already on
+  disk). Separately, `superseded/hybrid_progression.{png,csv}` (the frozen-noah
+  family's PET/λ ablation) was retired outright rather than kept, since its
+  PET-only middle rung has no counterpart in the current family; a new
+  `figures/hybrid_progression.{png,csv}` replaces it with the current chain's
+  own progression (per-basin validation skill + the pooled warming-response
+  curve for `noah` → `hybrid` → `hybrid_dt`).
+- **Figure cleanup, round 2 (2026-07-21):** retired the redundant/superseded
+  comparison exhibits and dropped stale naming prefixes now that `figures/`
+  carries the canonical set. Removed: `dtdp_response_{cs8,l0.3}` (the CSV pair +
+  per-basin folders; the λ-screening question that motivated them is answered,
+  and `hybrids/` covers the current family's response comparison) and
+  `dtdp_lambda_compare.{png,csv}` (the screening figure itself; the underlying
+  `dtdp_response.make_lambda_compare` stays as a reusable function, just
+  unwired); `compare_val_kge.png` (redundant with `hybrid_progression.png`'s
+  skill panel — `hybrid/evaluate.py`'s `_dumbbell` helper was dropped along with
+  it; `compare_ga_dpl_hybrid.csv` is kept, it still has independent value).
+  Renamed: `noah_regimes/` → `hybrid_regimes/`, `noah_summary.png` →
+  `hybrid_summary.png`, `adaptive_physics_metrics.csv`/`adaptive_physics/`/
+  `adaptive_physics_regimes/` → `noah_climate_adaptive_metrics.csv`/
+  `noah_climate_adaptive/`/`noah_climate_adaptive_regimes/` (the
+  `adaptive_physics.py` module and its function names are unchanged — only the
+  output paths moved), and every `cdec15_climatology_*`/`cdec15_forcing_sensitivity_*`
+  figure dropped the `cdec15` prefix (`climatology_*`/`forcing_sensitivity_*`).
+  All are pure renames/deletions — no recompute, no content change. Every
+  hardcoded consumer (`sacsma/dpl/*.py`, `cli.py`) and doc reference
+  (`appendix_b.md`'s B.6 figure list renumbered, `appendix_c.md`, `part2.md`
+  Figures 5-6) updated in the same pass.
+- **Figure cleanup, round 3 (2026-07-21):** `figures/hybrids/` (round 2 named it
+  that to avoid colliding with the new `hybrid_regimes/`) → `figures/hybrid/`,
+  parallel to `hybrid_regimes/`. Dropped the base (untagged) `dtdp_response/` +
+  `dtdp_response_metrics.csv` too — `hybrid`/`hybrid_regimes` already cover the
+  current family's response comparison, and the frozen-noah-basis 3-model
+  comparison this represented has no live use now that the `_cs8`/`_l0.3`
+  screening it supported (round 2) is gone; `dtdp_response.py` itself is
+  unchanged and still supplies the shared response-window/regime-aggregation
+  engine (`DP`/`DT`/`METRICS`/`REGIMES`/`_aggregate_regime`/`_eval_mask`) that
+  `noah_ca_hybrids.py` and `adaptive_physics.py` both import. Also caught a gap
+  the earlier label pass missed: `adaptive_physics.py`'s own 2-column
+  `[noah | noah_ca]` physics-only figures (`figures/noah_climate_adaptive{,_regimes}/`)
+  still had the old labels baked into the column titles and suptitle even after
+  the folder itself was renamed — canonicalized `NOAH`/`CA_ADAPTIVE` to
+  `"Noah"`/`"Noah (climate-adaptive)"` and regenerated (cache-hit, no recompute;
+  81/81 (dp,dt) points were already on disk in both `_adaptive_cache` and the
+  shared `testing/dtdp_cache`).
+- Canonical set (2026-07-19, names above updated 2026-07-21): the physics ladder `hamon_dense`, `hamon`, `pt`,
   `noah`, and the climate-adaptive `noah_ca` (`physical_climate` features — the
   physics basis for the current hybrids); plus the `noah_ca` SAC×LSTM family
   `hybrid_base` (best skill 0.922/0.877), `hybrid_dtdp` (0.873/0.849, the

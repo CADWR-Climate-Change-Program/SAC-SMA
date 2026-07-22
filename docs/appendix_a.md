@@ -1,7 +1,8 @@
 # Appendix A — Model equations
 
 The equations below are transcribed from the production Python implementation, which
-reproduces the original MATLAB codes exactly (Part I §2.4). Notation: $P$ precipitation
+reproduces the original MATLAB codes exactly (Part I, Python port and numerical
+parity). Notation: $P$ precipitation
 (mm/day), $T$ daily mean air temperature (°C), $d$ day of year, $\varphi$ latitude
 (radians), $z$ HRU elevation (m). Deliberately preserved idiosyncrasies of the original
 implementation are marked ★.
