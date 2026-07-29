@@ -156,6 +156,25 @@ multiple of the fill. Filled cells are now dropped from both the sum and a
 reported; an hour with no reporting cell becomes NaN. The same change fixes a
 second latent bug — a 404 spatial chunk used to mis-divide by the static count.
 
+**A third defect, found by the re-pull: absent chunks were silently zero.**
+Where the source has no chunk at all (HTTP 404, as opposed to a chunk full of
+fill), the old code skipped it but still divided by the static count, so the
+region cell recorded **0.0**. For precipitation that manufactures a dry day out
+of missing data, and — unlike the −78 640 mm fill — it is completely plausible,
+so nothing would ever have flagged it. The re-pulled 1979 shows the shape of it:
+**AORC's 1979 precipitation record stops on 30 November**, and the old store
+carried a bone-dry 1–31 December (29 days silently 0.0, 1–2 December fill-scaled
+negative). The per-hour divisor fixes this too — no reporting cell means NaN,
+not zero.
+
+Consequence: **the store legitimately contains NaN**, where the old one never
+did. 1979 is 91.51 % usable cell-days. The full NaN inventory is only knowable
+from the re-pull, because the earlier impossible-value audit cannot see a
+404-induced zero. Anything consuming `aorc.nc` — `io.load_forcing` and the model
+in particular — has to decide whether to drop the affected days or start the
+record at 1980-01-01; a NaN forcing day would otherwise propagate straight
+through SAC-SMA. That decision is **open**.
+
 **Convention for partly observed periods: renormalise, never inflate.** Daily
 reductions run over the valid hours only, so a day observed for 20 of 24 hours
 *under-reports* its precipitation rather than being scaled up to a full day —
