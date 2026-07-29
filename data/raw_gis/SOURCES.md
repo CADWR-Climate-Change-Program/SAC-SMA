@@ -9,13 +9,33 @@ is gitignored (`data/raw_gis/*`); only this provenance doc, the reusable HRU sam
 (`sample_gis.py`), and the small per-HRU derived CSVs
 (`data/<app>/soilveg_continuous*.csv`, `lai_climatology*.csv`) are committed.
 
-**California extent fetched:** lat 32–42 N, lon −125 to −114 W (1° tiles;
-ocean/out-of-CONUS tiles are skipped). Downloaders: `scratchpad/download_*.py`
-(git history). Sampler: `sample_gis.py` (runs in the `sacsma-gis` conda env —
-rasterio + pyhdf + pyproj; NOT importable by the core `sacsma` package).
+**California extent fetched:** lat 32–42 N, lon −125 to −114 W (110 1° tiles;
+POLARIS and 3DEP are CONUS-land products, so the ocean/out-of-CONUS tiles of
+that grid 404 and are skipped — 95 and 89 land tiles respectively).
+Downloader: [`../../dataprep/download_gis.py`](../../dataprep/download_gis.py)
+(needs only `requests`; runs in the plain `sacsma` env). Sampler:
+`sample_gis.py` (runs in the `sacsma-gis` conda env — rasterio + pyhdf + pyproj;
+NOT importable by the core `sacsma` package).
 
-**Staged (89 GB total):** POLARIS 2280 tiles / 55 GB · LANDFIRE 220 / 5.7 GB ·
-3DEP 89 / 3.8 GB · MODIS LAI 3672 granules / 25 GB.
+**Where it lives.** The tree is too large for the repo drive and is staged at
+`D:\sacsma-data\raw_gis`; set **`SACSMA_RAW_GIS`** to point the downloader at it
+(the same override precedent as `SACSMA_ET_DIR`/`SACSMA_SWE_DIR`). `sample_gis.py`
+still hard-codes the in-repo path, so sampling needs the tree there or a one-line
+edit. `python dataprep/download_gis.py --status` inventories the stage.
+
+**Staged (89 GB total, verified complete 2026-07-29):** POLARIS 2280 tiles /
+55 GB · LANDFIRE 220 / 5.7 GB · 3DEP 89 / 3.8 GB · MODIS LAI 3672 granules /
+25 GB.
+
+The downloader reproduces this stage **byte-identically** — spot-checked by
+SHA-256 on a re-fetched tile of each no-auth product (POLARIS `sand/mean/0_5`,
+LANDFIRE `EVC`, 3DEP), including the rendered LANDFIRE tile, so the recorded
+`exportImage` parameters are the ones that produced it.
+
+**Tile geometry** (read off the stage, not assumed): POLARIS and LANDFIRE are
+3600×3600, EPSG:4326, on exact 1° bounds with a 1/3600° pixel — POLARIS float32
+nodata −9999, LANDFIRE int16 with no nodata. 3DEP is kept as published:
+3604×3604, EPSG:4269, 1° plus a 2-px overlap per side, float32 nodata −999999.
 
 ---
 
@@ -43,6 +63,12 @@ rasterio + pyhdf + pyproj; NOT importable by the core `sacsma` package).
   is a valid code (no nodata) → cover 0.
 - **Source:** USGS ArcGIS ImageServer `exportImage` (bbox-clipped, no auth):
   `https://lfps.usgs.gov/arcgis/rest/services/Landfire_LF2024/LF2024_{EVC,EVH}_CONUS/ImageServer`
+- **Request (matters):** `bbox=<w>,<s>,<e>,<n>&bboxSR=4326&imageSR=4326&size=3600,3600`
+  `&format=tiff&pixelType=S16&interpolation=RSP_NearestNeighbor&f=image`. The
+  `size=3600,3600` over a 1° bbox is deliberate — it lands the render on the
+  **same 1/3600° grid as POLARIS**. All 110 tiles render (an ImageServer will
+  serve any bbox, ocean included). Note the service reports failures as a
+  *200 with a JSON body*, so a size check alone will not catch them.
 - **Layout:** `landfire/{EVC,EVH}/{EVC,EVH}_lat{S}{N}_lon{W}{E}.tif`
 
 ## LAI — MODIS MCD15A2H.061  ✅ staged
@@ -53,6 +79,15 @@ rasterio + pyhdf + pyproj; NOT importable by the core `sacsma` package).
 - **Access:** NASA CMR granule API (`cmr.earthdata.nasa.gov/search/granules.json`)
   → LP DAAC protected cloud bucket (`data.lpdaac.earthdatacloud.nasa.gov`) via
   Earthdata `.netrc` (URS OAuth). The classic e4ftl01 HTTPS archive is dead.
+  Granules are found per tile with `readable_granule_name[]=*.<tile>.*` +
+  `options[readable_granule_name][pattern]=true`, paged on `CMR-Search-After`.
+  Name each file from the **URL basename**: this collection's
+  `producer_granule_id` omits the `.hdf` extension, which would hide the file
+  from the sampler's `*.hdf` glob and defeat resume.
+- **Count:** 918 granules/tile (verified against CMR 2026-07-29). The window
+  `2003-01-01 … 2022-12-31` holds 920 8-day steps; CMR returns granules
+  *overlapping* it, adding the composite starting 2002-12-27 (`A2002361`), and
+  three are absent upstream — `A2016049`, `A2022097`, `A2022289`. 920 − 3 + 1 = 918.
 - **Georef (analytic sinusoidal):** R=6371007.181 m; tile 1111950.5197 m;
   x₀=−20015109.354, y₀=10007554.677; 2400²/tile, pixel 463.3127 m. Valid LAI
   0–100 (×0.1); values >100 are fill (cloud/water/unfilled). Read with **pyhdf**

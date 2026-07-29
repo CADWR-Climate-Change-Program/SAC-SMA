@@ -184,6 +184,56 @@ CacheCreek, SHA, SHAST; KGE > 0.9999).
 | `wgen_product_a.nc` | 1.03 GB (LFS) | 4410 cells × 1915–2018, verbatim from the OneDrive release (already ×10-corrected upstream). Verified bit-exact vs all retired per-domain stores |
 | `historical_lto.nc` | 1.00 GB (LFS) | 4058 cells × 1915–2021 (352 region cells are outside the LTO release: Kern/Tule + Goose Lake — those basins cannot run LTO, unchanged from before); Mt Shasta cell neighbor-filled per the documented recipe. Verified bit-exact vs all retired per-domain stores |
 
+### `data/region/bcm/` — BCM v8 monthly hydrology, two WGEN scenarios (2026-07-28)
+
+The USGS **Basin Characterization Model v8** run on the CalSim3 Weather Generator
+scenarios (USGS ScienceBase, *California 270-m BCM using Weather Generator
+Scenarios, Part I*, parent `68029987d4be0210cdcc98d1`), aggregated from 270-m
+monthly grids to the region grid and to the CalSim3 catchments. An independent
+model of the same watersheds over the same period as the SAC-SMA calibration
+targets — a benchmark and a +3 °C response reference, **not** a forcing product.
+
+Two of the release's 24 scenarios are ingested, the pair that isolates warming
+at unchanged precipitation: `s01` = Scenario 1 Baseline
+(`69e7d5c9b66b0164d0f72e91`), `s13` = Scenario 13, 0 % ave ppt **+3 °C**
+(`69e91d03b66b0183fe17a443`). Both carry all six BCM variables — `aet`, `cwd`,
+`pck`, `rch`, `run`, `str` — **all in mm** per the release FGDC metadata.
+
+| File | Size | What / provenance |
+|------|------|-------------------|
+| `bcm_s01_monthly.nc`, `bcm_s13_monthly.nc` | 77 + 75 MB (LFS) | 4410 region cells × 1236 months (WY1916–2018, 1915-10…2018-09) × 6 variables, float32 zlib, plus `n_bcm_cells` per cell. Mean of the *valid* 270-m cells whose centre falls in each 1/16° cell (median 519 cells; 2,289,972 in total) |
+| `bcm_s01_catchments_monthly.csv`, `bcm_s13_catchments_monthly.csv` | 25 MB each (LFS) | The same aggregation onto the 386 `calsim3.gpkg` `CalSim3_And_GooseLake` polygons (median 1506 cells each; 2,111,973 in total), long by `cid`/`month` |
+| `bcm_catchments.csv` | 14 KB | The static catchment identity — `cid, node, ct_name, type, sq_mi, n_bcm_cells` — kept out of the series so it is not repeated 1236× per catchment |
+
+Built by `dataprep/bcm_region.py`, which **streams** the source: 112 GB of zipped
+ASCII (~2.3 TB inflated) is range-fetched from the ScienceBase S3 bucket,
+decoded in memory and discarded, so no raw BCM data is ever written to disk. The
+grid was read from the files and confirmed against the release metadata —
+3486 × 4477 @ 270 m, **California Teale Albers / EPSG:3310**, NODATA −9999.
+
+**Two things to know before using these.**
+
+- **Goose Lake is a hole.** BCM masks open water, so five region cells
+  (41.84–42.03 N / −120.41…−120.47 W) are `NaN` in every month, ringed by
+  partially masked neighbours. Region-wide 98.6 % of mapped cells carry data and
+  3673 of 4410 are fully valid; the rest clip a lake or reservoir. Weight by
+  `n_bcm_cells`, or renormalise over valid cells, when averaging a footprint —
+  a plain `nansum` of weighted cells silently under-counts any basin touching
+  the mask (SHA 0.95 % of weight, BND 0.71 %).
+- **Two catchment polygons are sub-pixel** (`EMD007` 0.015 mi², `EBP030`
+  0.038 mi²) and contain no 270-m cell centre; each is assigned its nearest
+  cell, visible as `n_bcm_cells = 1` in the lookup.
+
+Verification (agreement, not identity — a different model): `pck` vs the four
+region SWE products correlates at r 0.90–0.92 on the regional monthly series at
+**lag 0**, the convention having been scanned rather than assumed (Daymet is not
+a usable referee — its climatology peaks in April and never melts out).
+`run + rch` against the `11obs` FNF targets gives median monthly r 0.882, annual
+r 0.959, median pbias +6.4 %; the most negative basins are SHA and BND, the
+known Goose Lake over-reach that `catchments.SCREENED_BASINS` exists to correct.
+Numbers and the S13−S1 warming signature (`pck` −63.9 %) are in
+`dataprep/README.md`.
+
 The daily forcing master (raw lineage) lives on local disk, not in the repo
 (`D:\sacsma-data\forcing\livneh_unsplit_nondetrend_daily_region.nc`). Rebuild it
 anytime with `dataprep/wgen_forcing.py --build-master`; `--verify` proves the region

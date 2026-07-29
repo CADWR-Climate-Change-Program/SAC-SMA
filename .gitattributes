@@ -1,2 +1,4 @@
 data/**/*.nc filter=lfs diff=lfs merge=lfs -text
 data/**/*.npz filter=lfs diff=lfs merge=lfs -text
+# the BCM catchment series are ~25 MB each -- 60x any other tracked CSV
+data/region/bcm/*_catchments_monthly.csv filter=lfs diff=lfs merge=lfs -text
