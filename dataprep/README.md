@@ -24,7 +24,7 @@ Keys are normalized 5-decimal `<lat>_<lon>`; per-cell flags `in_<domain>` and `i
 | raw GIS rasters (soil/veg/terrain/LAI staging) | `download_gis.py` | local only (~89 GB, `D:\sacsma-data\raw_gis`) | staged + verified complete (2026-07-29); re-fetch is resumable |
 | ×10 precip-artifact table | `wgen_forcing.py --scan-x10` | `prcp_x10_artifacts.csv` (frozen) | done |
 | **unified region forcing** | `build_region_forcing.py` | `forcing/{historical_livneh_unsplit,wgen_product_a,historical_lto}.nc` (~3.1 GB LFS) | done; replaced the per-domain stores (2026-07-16) |
-| **AORC forcing (1979–2025)** | `aorc_region.py` | `forcing/aorc.nc` | ⚠ **store held, not committed** — full pull finished 2026-07-29, but source fill values are unmasked and contaminate 5 of 47 years (see the open defect below) |
+| **AORC forcing (1979–2025)** | `aorc_region.py` | `forcing/aorc.nc` | ⚠ **store held, not committed** — fill-masking bug fixed 2026-07-29; the 2026-07-28 pull is contaminated across 31 of 47 years and needs re-running (see below) |
 | **BCM monthly hydrology (WY1916–2018)** | `bcm_region.py` | `bcm/bcm_<scenario>_monthly.nc` + `bcm/bcm_<scenario>_catchments_monthly.csv` + `bcm/bcm_catchments.csv` (~200 MB) | done — Scenario 1 + Scenario 13, all six variables (2026-07-28) |
 
 ## AORC (`aorc_region.py`)
@@ -122,33 +122,48 @@ AORC, which is what a 1-km hourly analysis should show against a
 daily-disaggregated product. Wet-day fraction (>1 mm) 0.131 vs 0.143: AORC
 concentrates precipitation into fewer, more intense days.
 
-### ⚠ Open defect: source fill values are not masked (found 2026-07-29)
+### Source fill values: the 2026-07-28 pull was contaminated (fixed 2026-07-29)
 
-**The assembled `aorc.nc` is wrong and is deliberately not committed.** The
-source arrays declare `missing_value: -32767` alongside the `scale_factor` that
-`scale_factors()` reads, but nothing masks it, so fill is treated as data:
-scaled, spatially averaged, and summed into the daily fields. A filled hour
-becomes −3276.7, and a fully filled precipitation day −78 640 mm.
+The first full pull produced a **wrong** `aorc.nc`, which was never committed.
+The source arrays declare `missing_value: -32767` alongside the `scale_factor`
+that `scale_factors()` reads, but nothing masked it, so fill was treated as
+data: scaled, spatially averaged, and summed into the daily fields. A filled
+hour became −3276.7, and a fully filled precipitation day −78 640 mm — dragging
+the 1979–81 mean `prcp` to −13.2 mm/day against a clean 1.955.
 
-Only 0.019–0.034 % of values are affected, but the magnitude is such that the
-domain-mean `prcp` over 1979–81 comes out at **−13.2 mm/day** instead of the
-1.955 mm/day the clean values give. It is concentrated in whole-domain outages
-in **5 of 47 years — 1979, 2000, 2001, 2009, 2024** (1979 = 2 full days ×
-4410 cells, 2024 = 1 full day). The 2015 verification above never sampled one,
-which is why it passed: it was clean, not representative.
+**Scope, and a warning about how it was measured.** Screening on `prcp < 0`
+alone implicates only 5 years, which is misleading — precipitation happens to
+have the narrowest fill footprint of the eight variables. Screening every
+variable on physically impossible values (`spfh`/`dswrf` < 0, `dlwrf` < 50 W/m²,
+`pres` < 500 hPa, `tmin`/`tmax` < −60 °C, |wind| > 120 m/s) gives the real
+picture: **193 252 cell-days, 0.2553 %, spread over 31 of the 47 years**, on 240
+distinct days — of which only 32 are whole-domain outages and **208 are
+spatially partial**, i.e. a fraction of the 1-km cells inside a region cell are
+filled and get blended into the box mean. 1979 is by far the worst (138 277
+cell-days); `dlwrf`, `pres`, `tmin` and `tmax` each run near 0.2 %.
 
-The fix belongs in `fetch_hourly`, **not** in `daily_from_hourly` — the 1-km box
-average (`acc /= counts`, a *static* per-cell count) runs on raw `int16` before
-scaling, so filled and valid 1-km cells are blended and the contamination is not
-even an integer multiple of the fill. Masking must drop filled cells from both
-the sum and a *per-hour* count, which then raises the question the fix has to
-answer: what a partly-observed hour, and a day with any missing hour, should
-become (renormalise over valid cells, or NaN the day).
+Those detectors are **lower bounds**: a small blend that happens to land inside
+physical bounds is undetectable in the output, so no year can be certified clean
+from the assembled store. That is why recovery is a **full re-pull**, not a
+patch of the implicated years — and why the 2015 verification above passed
+without catching any of this.
 
-Recovery does not need another full pull. All 376 `(variable, year)` partials
-survive in `tmp/aorc_parts` (1.88 GB), so only the 5 affected years × 8
-variables — 40 partials, ~11 % of the transfer — need re-streaming, then
-`--assemble`.
+**The fix** (in `fetch_hourly`, not `daily_from_hourly`): the 1-km box average
+runs on raw `int16` *before* scaling, and divided by a **static** per-region-cell
+count, so filled cells were blended in and the result was not even an integer
+multiple of the fill. Filled cells are now dropped from both the sum and a
+**per-hour** divisor, so each hour is the mean over the 1-km cells that actually
+reported; an hour with no reporting cell becomes NaN. The same change fixes a
+second latent bug — a 404 spatial chunk used to mis-divide by the static count.
+
+**Convention for partly observed periods: renormalise, never inflate.** Daily
+reductions run over the valid hours only, so a day observed for 20 of 24 hours
+*under-reports* its precipitation rather than being scaled up to a full day —
+inventing precipitation for unobserved hours is the worse failure. A day is NaN
+only if no hour reported at all (note `np.nansum` returns 0.0 for an all-NaN
+day, which is explicitly masked). Verified: on fill-free input the new
+aggregation is **bit-identical** to the old, so the change is inert except where
+fill actually occurs.
 
 ## BCM (`bcm_region.py`)
 

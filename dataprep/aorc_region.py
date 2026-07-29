@@ -45,6 +45,7 @@ import concurrent.futures as cf
 import shutil
 import sys
 import time
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -58,6 +59,11 @@ LAT0, LON0, DD = 20.0, -130.0, 0.0083330
 NLAT, NLON = 4201, 8401
 CT, CI, CJ = 144, 128, 256
 YEAR_MIN, YEAR_MAX = 1979, 2025
+#: every AORC array declares ``missing_value``/``fill_value`` -32767 (int16),
+#: right beside the ``scale_factor`` that ``scale_factors`` reads.  Scaling it
+#: as data is what contaminated the 2026-07-28 pull: a filled hour became
+#: -3276.7 and a fully filled precipitation day -78 640 mm, in 5 of 47 years.
+FILL = np.int16(-32767)
 
 REPO = Path(__file__).resolve().parents[1]
 GRID_CSV = REPO / "data" / "region" / "grid_cells.csv"
@@ -176,7 +182,6 @@ def fetch_hourly(sess, var: str, year: int, idx: dict, workers: int,
     out = np.zeros((nh, ncells), np.float32)
     raw_bytes = CT * CI * CJ * 2
     ckpt = PARTS / "_hourly" / f"{var}_{year}"
-    counts = idx["counts"].astype(np.float32)
 
     def one(job):
         t, ci, cj = job
@@ -214,19 +219,32 @@ def fetch_hourly(sess, var: str, year: int, idx: dict, workers: int,
                 except Exception:
                     cp.unlink(missing_ok=True)      # truncated by a hard kill
             acc = np.zeros((n, ncells), np.float32)
+            nval = np.zeros((n, ncells), np.float32)
             jobs = [(t, ci, cj) for (ci, cj) in spatial]
             for (ci, cj), block in zip(spatial, ex.map(one, jobs)):
                 if block is None:
                     continue
                 src, dst = idx["chunks"][(ci, cj)]
-                vals = block[:n][:, src].astype(np.float32)
+                raw = block[:n][:, src]
+                # AORC marks missing as int16 FILL.  Averaging it as if it were
+                # data is what poisoned the first pull, so drop it from BOTH the
+                # sum and the divisor: each hour becomes the mean over the 1-km
+                # cells that actually reported.  The divisor must be counted per
+                # hour -- a static per-cell count also mis-divides whenever a
+                # spatial chunk 404s.
+                good = raw != FILL
+                vals = np.where(good, raw, 0).astype(np.float32)
                 # one bincount over (hour, region-cell) instead of n scattered adds
                 offs = (np.arange(n, dtype=np.int64)[:, None] * ncells
                         + dst[None, :].astype(np.int64)).ravel()
                 acc += np.bincount(
                     offs, weights=vals.ravel(), minlength=n * ncells
                 ).reshape(n, ncells).astype(np.float32)
-            acc /= counts
+                nval += np.bincount(
+                    offs, weights=good.ravel(), minlength=n * ncells
+                ).reshape(n, ncells).astype(np.float32)
+            with np.errstate(invalid="ignore", divide="ignore"):
+                acc = np.where(nval > 0, acc / nval, np.nan).astype(np.float32)
             out[h0:h0 + n] = acc
             _atomic_npy(cp, acc)
     return out
@@ -242,16 +260,25 @@ def daily_from_hourly(hourly: np.ndarray, tail: np.ndarray | None,
     if ndays == 0:
         raise RuntimeError("not enough hours for a single local day")
     block = usable[: ndays * 24].reshape(ndays, 24, -1) * np.float32(scale)
+    # An hour whose 1-km box reported nothing is NaN (see fetch_hourly).  Reduce
+    # over the hours that did report, and surrender a day only when none did.
+    # A daily SUM therefore under-reports a partly observed day rather than
+    # inflating it to a full 24 h -- the deliberate convention, since inventing
+    # precipitation for unobserved hours is the worse failure.
+    dead = np.all(np.isnan(block), axis=1)
     fields = {}
     for name, how in VARIABLES[var]:
-        if how == "sum":
-            v = block.sum(1)
-        elif how == "min":
-            v = block.min(1)
-        elif how == "max":
-            v = block.max(1)
-        else:
-            v = block.mean(1)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)  # all-NaN slices
+            if how == "sum":
+                v = np.nansum(block, 1)      # 0.0 for an all-NaN day -> masked below
+            elif how == "min":
+                v = np.nanmin(block, 1)
+            elif how == "max":
+                v = np.nanmax(block, 1)
+            else:
+                v = np.nanmean(block, 1)
+        v = np.where(dead, np.nan, v)
         if name in KELVIN:
             v = v - np.float32(273.15)
         fields[name] = v.astype(np.float32)
