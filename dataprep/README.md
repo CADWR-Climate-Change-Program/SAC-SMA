@@ -22,6 +22,7 @@ Keys are normalized 5-decimal `<lat>_<lon>`; per-cell flags `in_<domain>` and `i
 | ET referees: openet, modis | `gee_obs_region.py --products openet modis` | `et_obs/{openet,modis}_*.npz` | done (benchmark-only, 2026-07-17) |
 | daily forcing master (raw) | `wgen_forcing.py` | local only (not in repo) | done |
 | raw GIS rasters (soil/veg/terrain/LAI staging) | `download_gis.py` | local only (~89 GB, `D:\sacsma-data\raw_gis`) | staged + verified complete (2026-07-29); re-fetch is resumable |
+| USGS gauge flows inside CalSim3 | `usgs_flows.py` | `data/usgs/` (`flow_daily.nc` 3.2 MB LFS + `gauges.csv` + `gis/usgs_watersheds.gpkg`) | done — 69 gauges, daily 1950–2018 (2026-07-29) |
 | ×10 precip-artifact table | `wgen_forcing.py --scan-x10` | `prcp_x10_artifacts.csv` (frozen) | done |
 | **unified region forcing** | `build_region_forcing.py` | `forcing/{historical_livneh_unsplit,wgen_product_a,historical_lto}.nc` (~3.1 GB LFS) | done; replaced the per-domain stores (2026-07-16) |
 | **AORC forcing (1979–2025)** | `aorc_region.py` | `forcing/aorc.nc` | ⚠ **store held, not committed** — fill-masking bug fixed 2026-07-29; the 2026-07-28 pull is contaminated across 31 of 47 years and needs re-running (see below) |
@@ -330,9 +331,64 @@ runoff *increases* slightly because rain that once fell as snow runs off in
 winter instead of infiltrating as spring melt (`run` +7.1 % against `rch`
 −1.1 %; total discharge +2.5 %).
 
+## USGS gauge flows (`usgs_flows.py`)
+
+Cleaned USGS daily discharge for the gauges that sit inside the CalSim3 domain —
+an *observational* target set independent of the FNF/CDEC series the model is
+calibrated on. The source is the training store of the sibling **neuralhyd-ca**
+repo, whose QA/QC pipeline retrieves NWIS parameter `00060` and screens it; this
+script re-publishes a subset and does not re-clean anything.
+
+**Selection.** 69 gauges: at least 90 % of the delineated watershed area inside
+the union of `data/calsim/gis/calsim3.gpkg` layer `CalSim3_And_GooseLake`,
+measured in EPSG:3310. The threshold matters — 42 gauges are *fully* inside,
+69 clear 90 %, 95 merely touch — and nothing in this dataset falls between 50 %
+and 90 %, so 90 % and 50 % pick the same set. 14 synthetic `99xxxxxxx` ids in
+the source are SAC-SMA/CDEC footprints that `build_sacsma_basins.py` injected
+there; they are excluded, since those basins are already in this repo.
+
+**Two traps in the source.** `tier` is a hydrologic *regime* (1 rain, 2 mixed,
+3 snow), **not** a data-quality grade — do not filter on it as if it ranked
+record quality. And the flows are **cfs**, despite a `flow_mm` name appearing
+downstream in that repo: mean flow over the largest basins is 143–965 mm/yr read
+as cfs, versus millions of mm/yr read as mm/day.
+
+| File | Size | What |
+|------|------|------|
+| `flow_daily.nc` | 3.2 MB (LFS) | `flow_cfs` + `flow_mm`, (69 gauge × 25202 day) float32, daily 1950-01-01…2018-12-31 |
+| `gauges.csv` | 12 KB | id, NWIS station name, lat/lon, delineated **and** USGS drainage area + their ratio, regime tier, record coverage, first/last obs, % inside CalSim3 |
+| `gis/usgs_watersheds.gpkg` | 3.2 MB | the 69 delineations, EPSG:4326 to match `calsim3.gpkg` |
+
+**cfs is canonical**; `flow_mm` is derived as `cfs × 2.4465755 / area_km2` using
+the *delineated* polygon area — the basin the record is attributed to here — not
+the USGS-reported area. Both areas are in `gauges.csv` (they agree to within
+±5 %: ratio 0.952–1.016 across all 69) so any consumer can re-derive. The area
+column is published at 6 dp deliberately: the smallest basin is 4.9 km², where
+3 dp already costs 1e-4 relative and makes the published mm/day irreproducible.
+
+**Records are sparse** — median coverage 44 % of the 1950–2018 window (min 9 %,
+max 95 %). Treat these as intermittent series, not a continuous panel.
+
+Runs in the **`neuralhyd`** conda env (it needs `zarr`, which `sacsma` lacks);
+everything downstream just reads the `.nc`.
+
+    conda run -n neuralhyd python dataprep/usgs_flows.py
+    conda run -n neuralhyd python dataprep/usgs_flows.py --verify
+
 ## Verification
 
 Every local ingest reproduces its committed or legacy predecessor before it lands. `local_obs_region.py --verify` reproduces the legacy 2074-cell npz (rel RMS < 1e-3, achieved 1e-7); `wgen_forcing.py --verify` reproduces the committed forcing stores from the master; `build_region_forcing.py` re-passes the SAC-SMA parity gate for every domain with a simflow reference (KGE > 0.9999).
+
+`usgs_flows.py --verify` has no predecessor to reproduce, so it gates on
+internal consistency and physics instead: the `mm → cfs` round-trip through the
+published area (max rel err 1.65e-07, i.e. float32), no negative discharge, and
+mean annual runoff depth inside the California band. That last one is the real
+check on units and areas — a wrong factor throws it orders of magnitude out.
+Observed 10–1386 mm/yr: the driest are Coast Range and Tehachapi dry creeks
+(Caliente, Cantua, Avenal), the wettest high-Sierra snow basins (S Yuba nr
+Cisco, Duncan Cyn nr French Meadows), and the snow-regime median (806 mm/yr)
+sits at roughly twice rain and mixed (~425), which independently corroborates
+the inherited `tier` labels.
 
 **The GEE products are the exception.** The reproduce-the-snapshot gate failed: ERA5-Land shows genuine asset drift (GEE reprocesses its assets and the original pipeline is lost), so the snapshot is irreproducible in principle. The region GEE store is therefore **its own spec**: a cell-rectangle mean at each asset's native scale, with the asset versions recorded in each npz's `meta`. `gee_obs_region.py --verify` stays on as a drift *report* against the legacy snapshot, not a gate. At the level training consumes (15-basin monthly climatologies) the drift is small (ET rel RMS 1.1%, SWE 4.1%, snowy-basin mask unchanged), so anything built on the old snapshot re-runs cleanly on this basis. The frozen legacy npz stay as the record of what the pre-region models trained on.
 

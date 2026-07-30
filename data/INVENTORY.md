@@ -3,8 +3,12 @@
 A complete manifest of the tracked data store — what each file is, where it came
 from, and what consumes it. The store is split by application: `cdec15/` (the
 15-CDEC domain) and `calsim/` (the CalSim/CalLite domains `9unimp`, `11obs`,
-`12rim`, plus the CalSim3 and VIC references). Every file is referenced by package
-code; there are no orphans. Sizes are approximate.
+`12rim`, plus the CalSim3 and VIC references), with two cross-cutting stores
+alongside them — `region/` (the auxiliary-data region store the dPL models draw
+on) and `usgs/` (cleaned gauge observations inside the CalSim3 domain). Every
+file in the application stores is referenced by package code; the cross-cutting
+stores are built and consumed by `dataprep/` and the dPL work. Sizes are
+approximate.
 
 All tables are plain CSV (openable in Excel or a text editor); only the gridded
 forcing stores are NetCDF, tracked with git-LFS (`data/**/*.nc` in
@@ -239,3 +243,48 @@ The daily forcing master (raw lineage) lives on local disk, not in the repo
 anytime with `dataprep/wgen_forcing.py --build-master`; `--verify` proves the region
 store equals the master plus the ×10 table. `wgen_forcing.py --cut` emits custom
 out-of-repo cuts, e.g. for external tools.
+
+## `data/usgs/` — cleaned USGS gauge flows inside the CalSim3 domain (2026-07-29)
+
+Daily discharge at the **69 USGS gauges** whose watersheds lie inside the CalSim3
+domain — an observational target set *independent* of the FNF and CDEC series the
+model is calibrated against, and the natural evaluation set for a rainfall-runoff
+model at ungauged-adjacent scales. Ingested by `dataprep/usgs_flows.py` from the
+sibling **neuralhyd-ca** repo's training store (`data/training/flow.zarr`), whose
+QA/QC pipeline retrieves NWIS parameter `00060` and screens it; nothing is
+re-cleaned here.
+
+| File | Size | What / provenance |
+|------|------|-------------------|
+| `flow_daily.nc` | 3.2 MB (LFS) | `flow_cfs` + `flow_mm`, dims `(gauge, time)` = 69 × 25202, float32 zlib, daily **1950-01-01 → 2018-12-31** |
+| `gauges.csv` | 12 KB | Per gauge: NWIS `station_name`, `lat`/`lon`, `area_km2_delineated`, `area_km2_usgs` and their ratio, `tier`/`tier_label`, `n_obs`, `coverage_frac`, `first_obs`/`last_obs`, `frac_in_calsim` |
+| `gis/usgs_watersheds.gpkg` | 3.2 MB | The 69 delineations, layer `usgs_watersheds`, EPSG:4326 to match `calsim/gis/calsim3.gpkg` |
+
+**Selection.** ≥ 90 % of the delineated watershed area inside the union of
+`calsim/gis/calsim3.gpkg` layer `CalSim3_And_GooseLake`, in EPSG:3310. The rule
+is consequential — 42 gauges are fully inside, 69 clear 90 %, 95 merely touch —
+though nothing falls between 50 % and 90 %, so those two thresholds agree. The
+source's 14 synthetic `99xxxxxxx` ids are SAC-SMA/CDEC footprints injected into
+that training set and are excluded; those basins are already here under their
+own names.
+
+**Two properties of the source that are easy to get wrong.** `tier` is a
+hydrologic **regime** (1 rain, 2 mixed, 3 snow), not a data-quality grade. And
+the flows are **cfs**, notwithstanding a `flow_mm` name used downstream in
+neuralhyd-ca — as cfs the largest basins give 143–965 mm/yr, as mm/day they give
+millions.
+
+**Units.** `flow_cfs` is canonical (verbatim, reproducible against USGS);
+`flow_mm` = `cfs × 2.4465755 / area_km2` on the **delineated** area, not the
+USGS-reported one. Both are in `gauges.csv` and agree to ±5 % (ratio
+0.952–1.016). Note this store keeps cfs, unlike the rest of `data/`, which is
+mm/day-only — the raw gauge value is the thing being archived.
+
+**Sparse by nature:** median coverage 44 % of the window (min 9 %, max 95 %).
+These are intermittent records, not a continuous panel; any skill score has to
+be computed on each gauge's own observed days.
+
+Verified by `usgs_flows.py --verify`: `mm → cfs` round-trip to 1.65e-07, no
+negative discharge, and mean annual runoff depth 10–1386 mm/yr — dry Coast
+Range and Tehachapi creeks at the bottom, high-Sierra snow basins at the top,
+with the snow-regime median (806 mm/yr) about twice rain and mixed (~425).
