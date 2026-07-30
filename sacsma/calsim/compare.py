@@ -2014,7 +2014,7 @@ def _screened_basin_flow(basin, domain, fp_basin, forcing, hru_tbl, params_df, *
 
 
 def _anchor_set_taf(domain, data_dir, nodes, forcing=None, *, comp_cache=None,
-                    parallel=False, footprint=None):
+                    parallel=False, footprint=None, vic_product=None):
     """Per basin monthly TAF for one set: SAC-SMA basin run + CalSim3 reference + VIC.
 
     The CalSim3 **reference** is chosen per basin (``ref_kind``):
@@ -2029,6 +2029,11 @@ def _anchor_set_taf(domain, data_dir, nodes, forcing=None, *, comp_cache=None,
 
     The SAC-SMA volume uses the canonical CalSim catchment area (``basin_areas`` prefers
     ``basin_area_<domain>_calsim.csv``).
+
+    ``vic_product`` selects the matching alternate VIC routed table (e.g.
+    ``wgen_product_a``); the default ``None`` keeps the historical baseline run, so the
+    official anchor is unchanged.  Pass it whenever ``forcing`` is an alternate product
+    and the VIC column has to be on the *same* climate (:mod:`~sacsma.calsim.sacsma_vic_bcm`).
     """
     from ..io import mmday_to_cfs
     from ..model import run_basin
@@ -2036,7 +2041,7 @@ def _anchor_set_taf(domain, data_dir, nodes, forcing=None, *, comp_cache=None,
 
     areas = basin_areas(data_dir, domain=domain)
     c3 = load_calsim3_monthly(data_dir)
-    vic = load_vic_monthly(data_dir)
+    vic = load_vic_monthly(data_dir, product=vic_product)
     arc2vic = load_name_map(data_dir)   # arc -> VIC major-basin series (crosswalk vic_basin)
     bsys = BASIN_RIM_SYSTEM.get(domain, {})
     unimp_by_sys = {s: g for s, g in load_unimpaired_monthly(data_dir).groupby("system")}
@@ -2094,7 +2099,8 @@ def _anchor_set_taf(domain, data_dir, nodes, forcing=None, *, comp_cache=None,
 
 def build_anchor_long(data_dir: str | Path = "data", sets=DEFAULT_CALSETS,
                       *, comp_cache=None, parallel=False, footprint=None,
-                      product: str | None = None) -> pd.DataFrame:
+                      product: str | None = None,
+                      vic_product: str | None = None) -> pd.DataFrame:
     """Long [date, set, basin, source, flow_taf, ref_kind] for the basin-level anchor.
 
     The SAC volume is on the canonical CalSim catchment area.  Pass a shared
@@ -2109,7 +2115,10 @@ def build_anchor_long(data_dir: str | Path = "data", sets=DEFAULT_CALSETS,
     ``product`` selects an
     alternate forcing (e.g. ``historical_lto``; default = the Livneh-unsplit baseline)
     — the CalSim3/VIC reference columns are unaffected
-    (:mod:`~sacsma.calsim.forcing_compare` uses this for the forcing-effect skill)."""
+    (:mod:`~sacsma.calsim.forcing_compare` uses this for the forcing-effect skill).
+    ``vic_product`` additionally moves the VIC column onto that product's routed table,
+    which is what you want when comparing models *on one climate* rather than measuring
+    a forcing effect (:mod:`~sacsma.calsim.sacsma_vic_bcm`)."""
     from ..model import load_domain_forcing
 
     parts = []
@@ -2119,7 +2128,8 @@ def build_anchor_long(data_dir: str | Path = "data", sets=DEFAULT_CALSETS,
         forcing = load_domain_forcing(data_dir, domain=dom, **kw)
         fp = footprint.get(dom) if footprint else None
         parts.append(_anchor_set_taf(dom, data_dir, nodes, forcing,
-                                     comp_cache=comp_cache, parallel=parallel, footprint=fp))
+                                     comp_cache=comp_cache, parallel=parallel, footprint=fp,
+                                     vic_product=vic_product))
     return pd.concat([p for p in parts if len(p)], ignore_index=True)
 
 

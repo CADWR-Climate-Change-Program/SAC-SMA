@@ -89,6 +89,10 @@ def _plots(args: argparse.Namespace) -> int:
 def _calsim(args: argparse.Namespace) -> int:
     from .calsim.compare import DEFAULT_CALSETS, make_all
 
+    if getattr(args, "sacsma_vic_bcm", False):
+        from .calsim.sacsma_vic_bcm import make_all as svb_all
+        svb_all(args.data_dir, args.artifacts_dir, parallel=args.parallel)
+        return 0
     sets = tuple(args.sets) if args.sets else DEFAULT_CALSETS
     make_all(args.data_dir, args.artifacts_dir, args.run, sets,
              covered_frac=getattr(args, "covered_frac", None), parallel=args.parallel)
@@ -280,6 +284,10 @@ def main(argv: list[str] | None = None) -> int:
     cs.add_argument("--parallel", action="store_true",
                     help="fan the SAC-SMA model runs across cores (Numba prange); "
                          "results unchanged, ~8x faster on the model-run phase")
+    cs.add_argument("--sacsma-vic-bcm", action="store_true",
+                    help="instead of the standard cross-compare, build the SAC-SMA vs VIC "
+                         "vs BCM comparison on WGEN Product A over WY1989-2018, "
+                         "9unimp+11obs pooled -> artifacts/calsim/compare/sacsma_vic_bcm_*")
     cs.set_defaults(func=_calsim)
 
     dpl = sub.add_parser(

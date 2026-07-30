@@ -53,3 +53,22 @@ Maps and figures show skill at the **main-basin level**: every sub-area polygon 
 Footprint screening (`catchments.SCREENED_BASINS` = SHA, BND, SNS, ChowchillaRiver) trims the four basins whose HRU footprint materially over-reaches its CalSim3 catchment; every other basin keeps its full calibrated footprint. The everything-unscreened parallel and its delta are in `anchor_*_full.csv` and `anchor_screened_vs_full.csv`. The footprint-method maps (`figures/{shasta,sns,chowchilla,tnl,fresno}_footprint_panels.png`) and the HRU attribute maps (`figures/hru_{veg,soil,kpet}_*.png`) are single-basin and input illustrations, not part of the basin-level scoring.
 
 The engine is `sacsma.calsim.catchments`. The full method (anchor reference, screening, QMAP, figure style) is documented in the [report](https://cadwr-climate-change-program.github.io/SAC-SMA/) and `CLAUDE.md`.
+
+## SAC-SMA vs VIC vs BCM (`calsim/compare/sacsma_vic_bcm_*`)
+
+`sacsma calsim --sacsma-vic-bcm` (engine `sacsma.calsim.sacsma_vic_bcm`) scores three independent models on one climate against one target: SAC-SMA, VIC and USGS **BCM v8**, all on the CalSim3 Weather Generator's historical-parallel sequence — `wgen_product_a` for SAC-SMA and VIC, Scenario 1 (Baseline) for BCM — against the same CalSim3 unimpaired FNF anchor used above.
+
+Period **WY1989–2018**, the most recent 30 water years all three cover (BCM ends 2018-09 and binds). `11obs` and `9unimp` are **pooled into one 19-basin set**; `BLB` (11obs) and `StonyCreek` (9unimp) are the same watershed on the same three arcs, so the 11obs copy is dropped. BCM enters on **the CalSim3 catchments themselves** (`run + rch` from `bcm_<scenario>_catchments_monthly.csv`, area-weighted over the catchments each basin owns, which sum to exactly the canonical area). All three therefore sit on the same watershed and area; only the depth estimate is each model's own.
+
+**BCM joins to the basins geometrically, not by name.** BCM was aggregated to `CalSim3_And_GooseLake` (386 polygons, `cid` = row order); the canonical areas use `CalSim3_Merged` (200). Merged is the dissolve of And_GooseLake's rim part — verified exact, all 200 nodes reconstructed, totals agreeing at 30,365.2 mi² — but they are **not joinable on `Connect_No`**, because Merged renames each dissolved catchment for its CalSim INFLOW arc (`MCD021…MCD128` → `MCLRE`, `TUO017/054/105` → Tuolumne's, `PTH021+PTH024` → `PTH070`, the Bend Bridge valley polygons → `SRBB_VAL`); name-matching silently drops those four basins. So each sub-polygon is assigned to the merged polygon containing its **representative point** — not its largest overlap, which routes through boundary slivers and puts the 14,452 mi² Tulare Lake Basin inside Millerton. This is also why no Goose Lake screening is needed: the endorheic block is its own polygon with a blank `Connect_No`, inside no rim catchment. Per-basin areas are asserted against the canonical ones, so a GIS or crosswalk edit that broke the correspondence raises.
+
+| File | What |
+|------|------|
+| `sacsma_vic_bcm_monthly.csv` | Long `[date, set, basin, source, flow_taf, ref_kind]`, **all years**, so the window can be re-cut without re-simulating. |
+| `sacsma_vic_bcm_metrics.csv` | Per basin per model, on identical months (all four series intersected). |
+| `sacsma_vic_bcm_summary.csv` | Pooled medians, `mean_abs_pbias`, `n_kge_best`. |
+| `figures/sacsma_vic_bcm_skill.png` | Per-basin KGE and % bias dumbbells, north→south. |
+| `figures/sacsma_vic_bcm_regime.png` | Mean-monthly regime per basin over the CalSim3 reference. |
+| `figures/sacsma_vic_bcm_summary.png` | Pooled KGE / NSE / % bias distributions. |
+
+Result: SAC-SMA median KGE **0.870**, VIC **0.767**, BCM **0.656**, SAC-SMA best in all 19 basins. That ordering is expected, not a finding — SAC-SMA is calibrated to these basins' FNF and the other two are not. The content is in the residuals: all three run high in volume (+4.8 / +8.5 / +4.5 %), so the FNF target is low relative to every independent model of it; the small foothill creeks are where the uncalibrated models lose (BCM +32 to +71 %, VIC +26 to +90 % on Cache, Calaveras, Chowchilla, Cosumnes, Fresno — Fresno being a known `area_artifact` basin); and BCM's summer limb collapses toward zero in the snow basins, the signature of a water-balance model with **no baseflow routing**, which is also why its month-to-month timing should be read more loosely than the two routed models'.
