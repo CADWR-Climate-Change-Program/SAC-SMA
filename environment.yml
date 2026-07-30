@@ -28,6 +28,7 @@ dependencies:
   - shapely>=2.0
   - pyproj>=3.6
   - scipy>=1.10       # Voronoi spacing + gamma-tail QMAP
+  - pypdf>=4.0        # dataprep/dwr_unimpaired.py: DWR Appendix B table transcription
   # dev
   - ruff>=0.4
   - pip

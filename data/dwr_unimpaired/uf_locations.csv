@@ -1,0 +1,25 @@
+uf,table,name,cdec_id,basin_11obs,basin_9unimp,n_arcs,arcs,area_mi2_calsim,has_swat,swat_scale_appendix_d,swat_partial,note
+1,B-1,Sacramento Valley Floor,,,,0,,,False,,,
+2,B-2,Putah Creek near Winters,,,PutahCreek,1,I_PTH070,567.46,True,1.0,,
+3,B-3,Cache Creek above Rumsey,,,CacheCreek,4,I_BRC003;I_CCH053;I_CLRLK;I_INDVL,953.37,True,1.0,,
+4,B-4,Stony Creek at Black Butte,,BLB,StonyCreek,3,I_BLKBT;I_EPARK;I_SGRGE,744.94,True,1.0647,,"11obs BLB is a gauged Black Butte reservoir-inflow record, NOT this table; the 9unimp StonyCreek target IS this table"
+5,B-5,Sacramento Valley West Side Minor Streams,,,,0,,,True,,Thomes and Elder Creeks only (per the C-4 caption); does not reconcile with Appendix D at any constant factor,SWAT table covers Thomes and Elder Creeks only - not comparable to the full-subbasin unimpaired series
+6,B-6,Sacramento River near Red Bluff,SBB,BND,,9,I_BCN010;I_BTL006;I_CLR011;I_COW014;I_CWD018;I_SCW008;I_SHSTA;I_SRBB_VAL;I_WKYTN,9083.72,False,,,"includes Shasta (I_SHSTA) and the series-less valley-accretion node I_SRBB_VAL; no SWAT table (that model is Sacramento R. at Shasta, a smaller watershed)"
+7,B-7,Sacramento Valley East Side Minor Streams,,,,0,,,True,1.0,"a different aggregation of the east-side creek models than the report's own Table 5-1 for UF 7 (1169 vs 1410 TAF/yr); consistent with Appendix D, but short of the subbasin",SWAT table is a smaller aggregation of the east-side creek models than the report's own Table 5-1 for UF 7 - not comparable to the unimpaired series
+8,B-8,Feather River near Oroville,FTO,FTO,,21,I_ALMNR;I_ANTLP;I_BTVLY;I_BUCKS;I_DAVIS;I_EBF001;I_FRMAN;I_GZL009;I_LGRSV;I_MFF019;I_MFF087;I_MTMDW;I_NFF029;I_OROVL;I_RVPHB;I_SFF008;I_SFF011;I_SLYCK;I_WBF006;I_WBF015;I_WBF030,3601.62,True,1.0,,
+9,B-9,Yuba River at Smartville,YRS,YRS,,18,I_BOWMN;I_DER001;I_DER004;I_ENGLB;I_FRDYC;I_FRNCH;I_JKSMD;I_LCBRF;I_MFY013;I_NBLDB;I_NFY029;I_OGN005;I_SCOTF;I_SFD003;I_SFY007;I_SFY048;I_SLT009;I_SPLDG,1193.43,True,0.9107,,
+10,B-10,Bear River near Wheatland,,,BearRiver,5,I_BRR023;I_CMBIE;I_CMPFW;I_RLLNS;I_WLF013,281.96,True,1.0228,,
+11,B-11,American River at Fair Oaks,AMF,AMF,,46,I_ALD002;I_ALD004;I_ALOHA;I_BSH003;I_CAPLS;I_CYN009;I_DCC010;I_ECHOL;I_FOLSM;I_FRMDW;I_GERLE;I_HHOLE;I_ICEHS;I_LKVLY;I_LNG012;I_LOONL;I_LRB004;I_MFA001;I_MFA023;I_MFA025;I_MFA036;I_NFA016;I_NFA022;I_NFA054;I_NLC003;I_NMA003;I_NNA013;I_PLC007;I_PLM001;I_PYR001;I_RCK001;I_RUB002;I_RUB047;I_SFA030;I_SFA040;I_SFA066;I_SFA076;I_SFR006;I_SILVR;I_SLC003;I_SLF009;I_SLV006;I_SLV015;I_STMPY;I_UNVLY;I_WBR001,1863.78,True,1.0,,
+12,B-12,San Joaquin Valley East Side Minor Streams,,,,0,,,False,,,
+13,B-13,Cosumnes River at Michigan Bar,CSN,,CosumnesRiver,4,I_CMP001;I_CMP014;I_CSM035;I_JNKSN,539.11,True,1.0,,
+14,B-14,Mokelumne River at Pardee Reservoir,PAR,,MokelumneRiver,8,I_COL003;I_MFM008;I_MOK079;I_NFM010;I_SFM005;I_SLTSP;I_TGC003;I_UBEAR,543.9,True,1.0,,
+15,B-15,Calaveras River at Jenny Lind,,,CalaverasRiver,1,I_NHGAN,361.61,True,0.9199,,
+16,B-16,Stanislaus River at Melones Reservoir,SNS,SNS,,19,I_ANG017;I_BEARD;I_BVC007;I_CFS001;I_DONLL;I_LYONS;I_MFS013;I_MFS022;I_MFS047;I_MIL003;I_NFS005;I_NFS009;I_NFS033;I_PCRST;I_RLIEF;I_SFS030;I_SFS033;I_SPICE;I_STS072,903.74,True,1.0,,
+17,B-17,San Joaquin Valley Floor,,,,0,,,False,,,
+18,B-18,Tuolumne River at Don Pedro Reservoir,TLG,TLG,,4,I_ELENR;I_HTCHY;I_LLOYD;I_PEDRO,1531.57,True,1.0,,
+19,B-19,Merced River at Exchequer Reservoir,MRC,MRC,,1,I_MCLRE,1036.08,True,1.0,,
+20,B-20,Chowchilla River at Buchanan Reservoir,,,ChowchillaRiver,1,I_ESTMN,234.81,True,1.0,,
+21,B-21,Fresno River near Daulton,,,FresnoRiver,1,I_HNSLY,235.59,True,1.0,,
+22,B-22,San Joaquin River at Millerton Reservoir,SJF,SJF,,1,I_MLRTN,1637.8,True,0.946,,
+23,B-23,Tulare Lake Basin Outflow,,,,0,,,False,,,
+24,B-24,San Joaquin Valley West Side Minor Streams,,,,0,,,False,,,

@@ -435,9 +435,110 @@ everything downstream just reads the `.nc`.
     conda run -n neuralhyd python dataprep/usgs_flows.py
     conda run -n neuralhyd python dataprep/usgs_flows.py --verify
 
+## DWR unimpaired + SWAT natural flows (`dwr_unimpaired.py`)
+
+DWR Bay-Delta Office, *Estimates of Natural and Unimpaired Flows for the Central
+Valley of California: WY 1922-2014* (DRAFT, March 2016). Monthly TAF, 93 water years,
+from three appendices — there is no machine-readable release, so this parses the PDF
+text layer. The PDF is not redistributed with the repo — pass `--pdf`.
+
+- **Appendix B** — DWR's **unimpaired** flow (measured flow adjusted to remove upstream
+  storage, diversion, import, export): 24 subbasins + 6 valley/Delta totals.
+- **Appendix C** — the **SWAT-simulated** rim outflow the report labels "natural":
+  18 of those subbasins.
+- **Appendix D** — the published *simulated minus unimpaired* difference, used as an
+  independent check on both extractions and then discarded (exactly derivable).
+
+**At the rim, natural and unimpaired are the same quantity** — Appendix C is not a
+different physical variable from Appendix B. The natural-flow estimate departs from
+unimpaired only on the **valley floor**, where C2VSim adds riparian/wetland ET,
+stream–groundwater interaction and bank overflow (natural Delta inflow 21,533 vs
+unimpaired 29,003 TAF/yr). Ch. 5: *"Upper rim watersheds … are relatively undeveloped.
+… simulated natural outflows from these watersheds should be similar to estimates of
+unimpaired flows. … the SWAT models … were **calibrated to match unimpaired flows**."*
+So `swat_monthly.csv` is an independent **model** estimate of the same quantity
+`uf_monthly.csv` measures, and the spread between them is calibration residual.
+
+**These 24 subbasins are the `9unimp`/`11obs` calibration targets**, and `--verify`
+proves it rather than assuming it: each extracted series is scored against
+`data/calsim/fnf_<domain>_monthly.csv`, giving **r = 1.000000 on 16 of the 18 mapped
+basins**. The residual is pure area-normalisation, and the mean ratio recovers the
+area DWR used — UF 6/BND → 8900 mi² (Sacramento R. above Bend Bridge), UF 8/FTO →
+3607 mi² (Feather R. at Oroville), UF 11/AMF → 1885 mi² (American R. at Fair Oaks).
+Those are the official gauge drainage areas, so the identification is independent of
+the name match.
+
+**`UF 4` is not `BLB`.** The `11obs` BLB target runs 1994–2014 and correlates only
+loosely (annual r 0.07–0.997, ratio 0.63–6.2) — a gauged Black Butte *reservoir-inflow*
+record, not DWR's unimpaired estimate. UF 4 transcribes to `StonyCreek` (`9unimp`)
+exactly: same watershed, same arcs, different record. `UF 3`/`CacheCreek` matches
+exactly in 88 of 89 water years, departing only in WY2010, the repo record's last year.
+
+**Mapping** comes from `calsim_crosswalk.csv` via `catchments.derive_basin_nodes`
+(so UF 6/Bend Bridge picks up Shasta's `I_SHSTA`), plus the series-less
+valley-accretion node `I_SRBB_VAL`. 17 subbasins resolve to a calibration basin and
+its arcs (18 assignments — UF 4 carries both `BLB` and `StonyCreek`), 147 arcs total.
+The remaining 7 — two valley floors, four minor-stream groups, Tulare Lake Basin
+outflow — get **no** arcs: they cover real CalSim3 catchments, but this repo holds no
+authoritative subbasin→arc assignment for them and guessing one would be fabrication.
+
+**The SWAT runs.** 23 SWAT2009 models, daily, on a 30 m DEM with 2001 USGS land use and
+STATSGO soils, driven by Hamlet & Lettenmaier (2005) 1/8° extended with 4 km PRISM,
+calibrated and judged at **monthly** level against the unimpaired series — model *fits*
+to Appendix B, not an independent observation of it. Reported skill (report Tables
+A-1/A-2) NSE 0.67–0.91 / R² 0.68–0.91, weakest on the minor streams and the Tulare basin.
+
+**Appendix C is verified against Appendix D.** 17 of 18 tables reconcile to ±1.04 TAF,
+the rounding floor: 13 exactly, 5 after a single constant — UF 4 ×1.0647, UF 9 ×0.9107,
+UF 10 ×1.0228, UF 15 ×0.9199, UF 22 ×0.9460. The report's stated mechanism is an *"area
+ratio factor … applied to consider rainfall-runoff from small local drainage areas
+located between a SWAT watershed outlet and its corresponding C2VSim stream inflow
+node"* (ch. 4). Table 5-1 independently reproduces the **scaled** value for UF 9, 10, 15
+and 22 but the **raw** one for UF 4, so the basis is not uniform across the report.
+C is stored as published, with the factor in `uf_locations.csv.swat_scale_appendix_d`.
+
+**Two tables are not full-subbasin** (flagged `swat_partial`; don't compare their level
+to `uf_monthly.csv`): **UF 5**, captioned *"Thomes and Elder Creeks only"* and the one
+table that reconciles at no constant factor (volume ratio 0.64); and **UF 7**, which
+averages 1169 TAF/yr against 1410 in the report's own Table 5-1 for the same subbasin —
+different aggregations of the east-side creek models, mutually consistent between C and
+D but both short of the subbasin. Six subbasins have no SWAT table: UF 1, 12, 17, 23, 24,
+and **UF 6** — the model there is Sacramento R. at Shasta, not the larger Red Bluff
+subbasin. Over the 16 full-basis subbasins the fit runs 0.97–1.38× unimpaired (monthly
+r 0.84–0.96), the widest gaps on the weakest-calibrated models (Chowchilla 1.38× at NSE
+0.76, Fresno 1.37× at NSE 0.71) rather than the most developed watersheds.
+
+**Published defects, stored verbatim.** Months and the printed annual total are rounded
+independently, so months need not sum to the total (in Appendix B, 1085 of 2790 rows
+differ by ≤ 3 TAF); only months are stored. **C-5 (UF 7) and C-17 (UF 21) have a broken
+Total column** (each row repeats its October value), and **D-8 (UF 10) WY1922 drops a
+minus sign** (`119` where its months sum to −120). In all three the monthly values are
+sound — Appendix D confirms them — and the gate whitelists the rows rather than
+loosening its tolerance. **B-29 (Delta Unimpaired Total Outflow) WY2014 is corrupt**:
+all 12 months print as `396`, summing to 4752 against a printed total of 10879. Do not
+use that row.
+
+| File | Size | What |
+|------|------|------|
+| `uf_monthly.csv` | 0.5 MB | `[date, uf, flow_taf]`, unimpaired, 24 subbasins × 1116 month-end dates (1921-10-31…2014-09-30) |
+| `swat_monthly.csv` | 0.4 MB | `[date, uf, flow_taf]`, SWAT natural flow, 18 subbasins |
+| `delta_monthly.csv` | 0.2 MB | `[date, series, flow_taf]`, the 6 derived totals |
+| `uf_locations.csv` | 4 KB | `uf` → name, CDEC id, calibration basin, CalSim3 arcs, CalSim area, SWAT flags |
+
+Needs `pypdf` (added to `environment.yml`).
+
+    python dataprep/dwr_unimpaired.py --pdf <report.pdf>
+    python dataprep/dwr_unimpaired.py --verify
+
 ## Verification
 
 Every local ingest reproduces its committed or legacy predecessor before it lands. `local_obs_region.py --verify` reproduces the legacy 2074-cell npz (rel RMS < 1e-3, achieved 1e-7); `wgen_forcing.py --verify` reproduces the committed forcing stores from the master; `build_region_forcing.py` re-passes the SAC-SMA parity gate for every domain with a simflow reference (KGE > 0.9999).
+
+`dwr_unimpaired.py` gates on the report's own internal identities (30+18+18 tables ×
+93 water years complete; B-25 = ΣUF 1–11, B-26 = ΣUF 12–15, B-27 = ΣUF 16–24,
+B-28 = B-25+B-26+B-27, all within rounding), then on the Appendix D reconciliation of
+every SWAT table (`D == k·C − B` to ≤ 1.5 TAF, with `k` asserted against its expected
+value), and finally on the FNF correlation above.
 
 `usgs_flows.py --verify` has no predecessor to reproduce, so it gates on
 internal consistency and physics instead: the `mm → cfs` round-trip through the

@@ -3,12 +3,14 @@
 A complete manifest of the tracked data store — what each file is, where it came
 from, and what consumes it. The store is split by application: `cdec15/` (the
 15-CDEC domain) and `calsim/` (the CalSim/CalLite domains `9unimp`, `11obs`,
-`12rim`, plus the CalSim3 and VIC references), with two cross-cutting stores
+`12rim`, plus the CalSim3 and VIC references), with three cross-cutting stores
 alongside them — `region/` (the auxiliary-data region store the dPL models draw
-on) and `usgs/` (cleaned gauge observations inside the CalSim3 domain). Every
-file in the application stores is referenced by package code; the cross-cutting
-stores are built and consumed by `dataprep/` and the dPL work. Sizes are
-approximate.
+on), `usgs/` (cleaned gauge observations inside the CalSim3 domain) and
+`dwr_unimpaired/` (DWR's published Central Valley unimpaired flows — the source of the
+`9unimp`/`11obs` calibration targets — plus the SWAT rim simulation of the same
+quantity). Every file in the application stores is
+referenced by package code; the cross-cutting stores are built and consumed by
+`dataprep/` and the dPL work. Sizes are approximate.
 
 All tables are plain CSV (openable in Excel or a text editor); only the gridded
 forcing stores are NetCDF, tracked with git-LFS (`data/**/*.nc` in
@@ -245,6 +247,133 @@ The daily forcing master (raw lineage) lives on local disk, not in the repo
 anytime with `dataprep/wgen_forcing.py --build-master`; `--verify` proves the region
 store equals the master plus the ×10 table. `wgen_forcing.py --cut` emits custom
 out-of-repo cuts, e.g. for external tools.
+
+## `data/dwr_unimpaired/` — DWR's published Central Valley unimpaired + SWAT natural flows (2026-07-30)
+
+Monthly flow (TAF) for the **24 Central Valley subbasins**, WY1922–2014, transcribed
+from DWR Bay-Delta Office, *Estimates of Natural and Unimpaired Flows for the Central
+Valley of California: WY 1922-2014* (DRAFT, March 2016) — the fifth edition of the
+series that began as *Central Valley Natural Flow Data* (1980). The report has no
+machine-readable release; `dataprep/dwr_unimpaired.py` parses the PDF text layer (the
+PDF itself is **not** redistributed here — pass `--pdf`). Three appendices are ingested:
+
+- **Appendix B** — DWR's **unimpaired** flow: measured flow adjusted to remove upstream
+  storage, diversion, import and export. 24 subbasins + 6 valley/Delta totals.
+- **Appendix C** — the **SWAT-simulated** rim outflow the report labels "natural".
+  18 of those subbasins.
+- **Appendix D** — the published *simulated minus unimpaired* difference, used here as
+  an independent check on both extractions and then discarded (it is exactly derivable).
+
+**At the rim, natural and unimpaired are the same quantity** — Appendix C is not a
+different physical variable from Appendix B. The report's natural-flow estimate departs
+from unimpaired only on the **valley floor**, where C2VSim adds riparian/wetland ET,
+stream–groundwater interaction and bank overflow (natural Delta inflow 21,533 vs
+unimpaired 29,003 TAF/yr, Table 5-2). Upstream, ch. 5 is explicit: *"Upper rim
+watersheds … are relatively undeveloped. Precipitation-runoff processes are assumed to
+be unchanged from natural condition for a given climate. Therefore, simulated natural
+outflows from these watersheds should be similar to estimates of unimpaired flows. … the
+SWAT models used to simulate the upper rim watersheds were **calibrated to match
+unimpaired flows**."*
+
+So `swat_monthly.csv` is an independent **model** estimate of the same quantity
+`uf_monthly.csv` measures — a fourth rainfall-runoff model over the rim watersheds this
+repo calibrates against — and the spread between the two is SWAT calibration residual,
+not a natural-vs-unimpaired signal. The executive summary agrees: the differences *"were
+found to be small and therefore do not bias conclusions regarding differences between
+natural and unimpaired flows."*
+
+| File | Size | What |
+|------|------|------|
+| `uf_monthly.csv` | 0.5 MB | `[date, uf, flow_taf]`, unimpaired, 24 subbasins × 1116 month-end dates (1921-10-31 → 2014-09-30) = 26784 rows |
+| `swat_monthly.csv` | 0.4 MB | `[date, uf, flow_taf]`, the SWAT rim simulation, the 18 subbasins that have one = 20088 rows |
+| `delta_monthly.csv` | 0.2 MB | `[date, series, flow_taf]`, the 6 derived totals B-25…B-30: `SAC_VALLEY_OUTFLOW`, `EASTSIDE_OUTFLOW`, `SJ_VALLEY_OUTFLOW`, `DELTA_INFLOW`, `DELTA_OUTFLOW`, `DELTA_NET_USE` |
+| `uf_locations.csv` | 0.004 MB | `[uf, table, name, cdec_id, basin_11obs, basin_9unimp, n_arcs, arcs, area_mi2_calsim, has_swat, swat_scale_appendix_d, swat_partial, note]` |
+
+**These 24 subbasins are the `9unimp`/`11obs` calibration targets.** Established, not
+assumed: `--verify` scores every unimpaired series against `calsim/fnf_<domain>_monthly.csv`
+and gets **r = 1.000000 on 16 of the 18 mapped basins**, the residual being pure
+area-normalisation — the mean ratio recovers the drainage area DWR normalised by
+(UF 6/BND → 8900 mi², the official Sacramento R. above Bend Bridge area; UF 8/FTO →
+3607 mi², Feather R. at Oroville; UF 11/AMF → 1885 mi², American R. at Fair Oaks).
+
+**Mapping to CalSim3** comes from `calsim_crosswalk.csv` via
+`catchments.derive_basin_nodes`, so basin nesting applies (UF 6/Bend Bridge picks up
+Shasta's `I_SHSTA`), plus the series-less valley-accretion node `I_SRBB_VAL`.
+**17 of the 24** subbasins resolve to a calibration basin and its arcs (18 basin
+assignments — UF 4 carries both `BLB` and `StonyCreek`), 147 arcs in total. The other
+7 — the two valley floors, the four minor-stream groups, and Tulare Lake Basin
+outflow — get **no arcs**: they cover real CalSim3 catchments, but no authoritative
+subbasin→arc assignment exists in this repo and inventing one would be fabrication.
+Neither Shasta (`SHA`) nor Trinity (`TNL`) has a table of its own — Shasta is inside
+UF 6, and the Trinity is not a Central Valley subbasin.
+
+**`UF 4` ≠ `BLB`.** The `11obs` BLB target spans 1994–2014 and correlates only
+loosely with UF 4 (annual r 0.07–0.997, ratio 0.63–6.2), i.e. it is a gauged Black
+Butte **reservoir-inflow** record, not DWR's unimpaired estimate. UF 4 transcribes
+to `StonyCreek` (`9unimp`) exactly — same watershed, same arcs, different record.
+`UF 3`/`CacheCreek` matches exactly in 88 of 89 water years; only WY2010, the last
+year of this repo's record, departs.
+
+### The SWAT rim simulation (`swat_monthly.csv`)
+
+23 SWAT2009 models, daily, delineated on a 30 m DEM with 2001 USGS land use and
+STATSGO soils, driven by Hamlet & Lettenmaier (2005) 1/8° data extended with 4 km
+PRISM, calibrated and judged at **monthly** level against the unimpaired series — so
+these are model *fits* to Appendix B, not an independent observation of it. Reported
+skill (report Tables A-1/A-2) spans NSE 0.67–0.91 / R² 0.68–0.91, weakest on the minor
+streams and the Tulare basin.
+
+**Appendix C is verified against Appendix D**, which independently publishes
+simulated − unimpaired. 17 of the 18 tables reconcile to ±1.04 TAF, the rounding floor
+(D is integer, C carries one decimal): 13 exactly, and 5 after a single constant factor
+— UF 4 ×1.0647, UF 9 ×0.9107, UF 10 ×1.0228, UF 15 ×0.9199, UF 22 ×0.9460. The report's
+stated mechanism is an *"area ratio factor … applied to consider rainfall-runoff from
+small local drainage areas located between a SWAT watershed outlet and its corresponding
+C2VSim stream inflow node"* (ch. 4). Table 5-1 independently reproduces the **scaled**
+value for UF 9, 10, 15 and 22 — but the **raw** Appendix C value for UF 4 — so which
+basis a given table uses is not uniform across the report. `swat_monthly.csv` stores
+Appendix C as published; `uf_locations.csv.swat_scale_appendix_d` carries the factor so
+either basis is recoverable.
+
+**Two tables are not on the full-subbasin basis** and are flagged `swat_partial`; do not
+compare their level with `uf_monthly.csv`:
+
+- **UF 5** — C-4 is captioned *"Sacramento Valley West Side Minor Streams (Thomes and
+  Elder Creeks only)"*, and it is the one table that reconciles with Appendix D at no
+  constant factor (implied ratio 1.22–2.00, volume ratio 0.64).
+- **UF 7** — C-5 averages 1169 TAF/yr against 1410 in the report's own Table 5-1 for the
+  same subbasin, a 17 % gap: the two are different aggregations of the east-side creek
+  models (Table 5-1 sums Mill, Deer, Big Chico and a "Butte and Chico" node). Appendix D
+  differences the Appendix C aggregation, so C and D are mutually consistent; both fall
+  short of the subbasin.
+
+**Six subbasins have no SWAT table**: the two valley floors (UF 1, 17), the San Joaquin
+east-side minor streams (UF 12), Tulare Lake Basin outflow and the San Joaquin west-side
+minor streams (UF 23, 24), and **UF 6** — the SWAT model there is Sacramento R. at
+Shasta, not the larger Red Bluff subbasin.
+
+Over the 16 full-basis subbasins the SWAT fit runs **0.97–1.38× the unimpaired** series
+(monthly r 0.84–0.96). The widest gaps sit on the weakest-calibrated models — Chowchilla
+1.38× at NSE 0.76, Fresno 1.37× at NSE 0.71 — rather than on the most developed
+watersheds, which is what makes these calibration residual rather than signal.
+
+### Published defects, stored verbatim
+
+- Monthly values and the printed annual total are **rounded independently**, so months
+  need not sum to the total (in Appendix B, 1085 of 2790 rows differ by ≤ 3 TAF). Only
+  the months are stored.
+- **Tables C-5 (UF 7) and C-17 (UF 21) have a broken Total column** — every row repeats
+  that row's October value instead of the annual sum.
+- **Table D-8 (UF 10) WY1922 drops a minus sign** — the total prints `119` where its
+  months sum to −120 (neighbouring rows print negative totals correctly).
+- In all three the *monthly* values are sound (the Appendix D reconciliation confirms
+  them), and only months are stored, so nothing propagates. The ingest gate whitelists
+  these rows rather than relaxing its tolerance.
+- **Table B-29 (Delta Unimpaired Total Outflow), WY2014 is corrupt**: all 12 months
+  print as `396`, summing to 4752 against a printed total of 10879. Do not use that row.
+
+Internal identities asserted at ingest: B-25 = ΣUF 1–11, B-26 = ΣUF 12–15,
+B-27 = ΣUF 16–24, B-28 = B-25 + B-26 + B-27 (all within rounding).
 
 ## `data/usgs/` — cleaned USGS gauge flows inside the CalSim3 domain (2026-07-29)
 
