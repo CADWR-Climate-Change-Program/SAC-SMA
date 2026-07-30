@@ -25,7 +25,7 @@ Keys are normalized 5-decimal `<lat>_<lon>`; per-cell flags `in_<domain>` and `i
 | USGS gauge flows inside CalSim3 | `usgs_flows.py` | `data/usgs/` (`flow_daily.nc` 3.2 MB LFS + `gauges.csv` + `gis/usgs_watersheds.gpkg`) | done — 69 gauges, daily 1950–2018 (2026-07-29) |
 | ×10 precip-artifact table | `wgen_forcing.py --scan-x10` | `prcp_x10_artifacts.csv` (frozen) | done |
 | **unified region forcing** | `build_region_forcing.py` | `forcing/{historical_livneh_unsplit,wgen_product_a,historical_lto}.nc` (~3.1 GB LFS) | done; replaced the per-domain stores (2026-07-16) |
-| **AORC forcing (1979–2025)** | `aorc_region.py` | `forcing/aorc.nc` | ⚠ **store held, not committed** — fill-masking bug fixed 2026-07-29; the 2026-07-28 pull is contaminated across 31 of 47 years and needs re-running (see below) |
+| **AORC forcing (1979–2025)** | `aorc_region.py` | `forcing/aorc.nc` (1.79 GB LFS) | done — re-pulled clean and verified 2026-07-30 after the fill-masking fix; ⚠ **run from WY1982** and note the store contains NaN (see below) |
 | **BCM monthly hydrology (WY1916–2018)** | `bcm_region.py` | `bcm/bcm_<scenario>_monthly.nc` + `bcm/bcm_<scenario>_catchments_monthly.csv` + `bcm/bcm_catchments.csv` (~200 MB) | done — Scenario 1 + Scenario 13, all six variables (2026-07-28) |
 
 ## AORC (`aorc_region.py`)
@@ -169,12 +169,72 @@ negative). The per-hour divisor fixes this too — no reporting cell means NaN,
 not zero.
 
 Consequence: **the store legitimately contains NaN**, where the old one never
-did. 1979 is 91.51 % usable cell-days. The full NaN inventory is only knowable
-from the re-pull, because the earlier impossible-value audit cannot see a
-404-induced zero. Anything consuming `aorc.nc` — `io.load_forcing` and the model
-in particular — has to decide whether to drop the affected days or start the
-record at 1980-01-01; a NaN forcing day would otherwise propagate straight
-through SAC-SMA. That decision is **open**.
+did. See the inventory below.
+
+### The re-pull: verified clean (2026-07-30)
+
+The full 8-variable re-pull ran 2026-07-29 17:10 → 2026-07-30 04:00, both phases
+on the first attempt. **10.8 hours, not the 3.5–4 days estimated** — the pull
+sustained ~110 s per variable-year (~26 MB/s), where the 2026-07-28 profile
+measured 3.6 MB/s. Treat that profile as a congested-link sample rather than the
+machine's ceiling.
+
+Three checks on the assembled store, all passed:
+
+1. **Physical bounds: zero violations** in all nine variables. `prcp` means
+   1.9582 mm/day (the broken store: −13.2), min 0.0, max 393.9; `pres` spans
+   61.9–103.7 kPa, `dlwrf` 111–450 W/m², `tmin`/`tmax` −34.4/+47.1 °C.
+2. **NaN inventory**: 186 551 cell-days over all nine variables (**0.2464 %**),
+   on 214 distinct days, of which only **32 are whole-domain**. Thirty-one of
+   those 32 are **all of December 1979** — AORC's 1979 record ends 30 November
+   for *every* variable, not only precipitation as first found. The 32nd is
+   **2024-06-18**, a genuine single-day source outage. Everything else is
+   partial: 1–6 day runs touching 15–575 of the 4410 region cells, in recurring
+   chunk-shaped footprints. Gaps are concentrated pre-2010; 1983, 2002,
+   2010–2023 and 2025 are entirely clean.
+3. **Diff against the parked contaminated partials** (423 arrays, 681 M
+   cell-days): **99.8045 % bit-identical**, 0.1944 % newly NaN, 0.1017 %
+   impossible-in-old — and **42 cell-days that changed without being detectable
+   in the old store at all**, confined to `dlwrf` (23), `pres` (14) and `dswrf`
+   (5), with |Δ| up to 33.6 kPa and 298 W/m². Those three are exactly the
+   variables whose partial-fill blend lands *inside* physical bounds (61.9 kPa is
+   a legitimate Sierra-crest pressure), so the screen is blind there. **This is
+   the concrete justification for the full re-pull**: a patch of the implicated
+   years would have left all 42 in place. `prcp`, `tmin`, `tmax`, `spfh`, `ugrd`
+   and `vgrd` have **zero** unexplained changes, and since 2015 carries no NaN it
+   is bit-identical — so the 2015 validation above holds unchanged.
+
+Two traps if you ever rewrite that diff, both of which silently *under*-test:
+the partials store temperature in **°C, not Kelvin** (a Kelvin detector flags all
+76 M `TMP` cell-days and masks the whole variable out of the comparison), and
+`TMP_*.npz` holds **two** 2-D arrays, `tmin` *and* `tmax` — taking only the first
+skips `tmax` entirely.
+
+### Run AORC from WY1982
+
+**Runs on this product start 1981-10-01** (decision 2026-07-30), which keeps the
+1979–81 artifact-prone head of the record out of every simulation and leaves
+1979-01-01..1981-09-30 as spin-up. The payoff is an order of magnitude on the
+model-facing fields:
+
+| window | `prcp`/`tmin`/`tmax` NaN | days affected | whole-domain days |
+|---|---|---|---|
+| full record, 1979-01-01 | 0.1996 % | 79 | **32** |
+| **WY1982+, 1981-10-01** | **0.0196 %** | 44 | **1** |
+
+One whole-domain gap survives inside the run window — **2024-06-18**, all 4410
+cells NaN in every variable — plus 43 partial days (15–429 of 4410 cells).
+
+**Gaps are persistence-filled at load**, by `io.fill_missing_days`: a missing
+day takes the **previous** day's value for that same cell, whole-domain or not
+(a leading gap, having no previous day, takes the first observed day instead).
+`tavg` is derived *after* the fill, so it stays consistent with the `tmin`/`tmax`
+the model is given. The fill happens at load and **the store keeps its NaN**, so
+the record of what was actually missing is never overwritten; `load_forcing`
+reports the count in the `nan_filled_cell_days` attribute. Gap-free products
+(Livneh / WGEN / LTO) are returned untouched, so the parity baseline is
+unaffected — re-verified after this change: BND 0.99999658, CacheCreek
+0.99998883, SHA 0.99995206, SHAST 0.99990781, all max |Δ| ≤ 0.063 mm/day.
 
 **Convention for partly observed periods: renormalise, never inflate.** Daily
 reductions run over the valid hours only, so a day observed for 20 of 24 hours

@@ -230,6 +230,57 @@ def load_basin_area(data_dir: str | Path = "data", domain: str = DEFAULT_DOMAIN)
     return read_table(domain_dir(data_dir, domain) / f"basin_area{_sfx(domain)}.csv")
 
 
+def _ffill_axis(a: np.ndarray, axis: int) -> np.ndarray:
+    """Forward-fill NaN along ``axis`` (leading NaN are left alone)."""
+    idx = np.where(~np.isnan(a), np.arange(a.shape[axis]).reshape(
+        [-1 if d == axis else 1 for d in range(a.ndim)]), 0)
+    np.maximum.accumulate(idx, axis=axis, out=idx)
+    return np.take_along_axis(a, idx, axis=axis)
+
+
+def fill_missing_days(ds):
+    """Persistence-fill missing forcing days from the **previous day**, per cell.
+
+    A NaN forcing day propagates straight through Snow-17/SAC-SMA, so gaps in
+    the source have to be closed before the model sees them.  The convention
+    (decision 2026-07-30) is persistence: a missing day takes the adjacent —
+    previous — day's value for that same cell, whether the gap is a handful of
+    cells or the whole domain.  A leading gap has no previous day, so it takes
+    the first observed day instead (back-fill).
+
+    Only ``aorc`` currently carries NaN (see ``dataprep/README.md``: an AORC
+    source outage, not an artifact of our aggregation — the fill-masking fix
+    turns unreported hours into NaN rather than fabricating 0.0).  The Livneh /
+    WGEN / LTO stores are gap-free, and for them this returns each variable
+    **untouched**, so the parity baseline is unaffected.
+
+    The stored file keeps its NaN — the fill happens at load, so the record of
+    what was actually missing is never overwritten.  The number of filled
+    cell-days is reported in the ``nan_filled_cell_days`` attribute.
+    """
+    filled, out = 0, {}
+    for v, da in ds.data_vars.items():
+        a = da.values
+        if ("time" not in da.dims or not np.issubdtype(a.dtype, np.floating)
+                or not np.isnan(a).any()):
+            out[v] = da
+            continue
+        filled += int(np.isnan(a).sum())
+        ax = da.dims.index("time")
+        a = _ffill_axis(a, ax)
+        if np.isnan(a).any():                       # leading gap: no previous day
+            a = np.flip(_ffill_axis(np.flip(a, ax), ax), ax)
+        out[v] = da.copy(data=a)
+    if not filled:
+        return ds
+    filled_ds = ds.copy()
+    for v, da in out.items():
+        filled_ds[v] = da
+    filled_ds.attrs = {**ds.attrs, "nan_filled_cell_days": filled,
+                       "nan_fill_method": "persistence (previous day), per cell"}
+    return filled_ds
+
+
 def load_forcing(
     data_dir: str | Path,
     name: str | None = None,
@@ -247,7 +298,8 @@ def load_forcing(
     relabelled to the domain's native key strings, and ``tavg`` is derived as
     ``(tmax+tmin)/2`` (the committed stores' exact convention) — so the
     returned dataset looks exactly like the retired per-domain files
-    (``prcp``/``tavg``), plus ``tmin``/``tmax``.
+    (``prcp``/``tavg``), plus ``tmin``/``tmax``.  Gaps in the region store are
+    persistence-filled at load — see :func:`fill_missing_days`.
     """
     import xarray as xr
 
@@ -256,6 +308,9 @@ def load_forcing(
     path = forcing_path(data_dir, domain, product)
     ds = xr.open_dataset(path)
     if domain not in REGION_DOMAINS:
+        # the dense 15cdec store is gap-free, and is left lazily-indexed on
+        # purpose: fill_missing_days reads .values, which for that product
+        # would pull ~2.7 GB into memory for nothing
         return ds
     hru_keys = load_hru_table(data_dir, domain)["key"].astype(str)
     uniq = list(dict.fromkeys(hru_keys))
@@ -266,13 +321,17 @@ def load_forcing(
         raise KeyError(
             f"{len(absent)} {domain} cells absent from {path.name} (first: "
             f"{absent[:3]}) — e.g. outside the historical_lto release coverage")
-    sub = ds.sel(key=want)
+    # persistence-fill before deriving tavg, so tavg is consistent with the
+    # tmin/tmax the model actually gets (no-op unless the product has gaps).
+    # Subset the variables first: aorc.nc carries nine, and filling the six
+    # this function discards would load ~3x the data for nothing.
+    sub = fill_missing_days(ds[["prcp", "tmin", "tmax"]].sel(key=want))
     tavg = ((sub["tmin"].astype("float64") + sub["tmax"].astype("float64"))
             / 2.0).astype("float32")
     out = xr.Dataset(
         {"prcp": sub["prcp"], "tavg": tavg,
          "tmin": sub["tmin"], "tmax": sub["tmax"]},
-        attrs=ds.attrs,
+        attrs=sub.attrs,          # carries fill_missing_days' nan_* provenance
     ).assign_coords(key=uniq)
     lat = np.array([float(k.split("_")[0]) for k in want])
     lon = np.array([float(k.split("_")[1]) for k in want])

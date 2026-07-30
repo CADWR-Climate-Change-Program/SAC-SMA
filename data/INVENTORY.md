@@ -172,7 +172,8 @@ its committed or legacy predecessor first.
 
 One file per product at the region grid, three variables each (`prcp`, `tmin`,
 `tmax` as float32, per-cell chunked, zlib; `tavg` is derived at load as
-`(tmax+tmin)/2`, the retired stores' exact convention). These replaced the
+`(tmax+tmin)/2`, the retired stores' exact convention) — except `aorc.nc`, which
+carries nine. These replaced the
 per-domain `data/calsim/forcing/*.nc`, the `data/cdec15_grid/` forcing, and the
 tminmax sidecar — the same cells had been stored up to 4× across domain files, with
 tmin/tmax in a separate file. Everything on the 1/16° grid (calsim SAC-SMA, dPL,
@@ -187,6 +188,7 @@ CacheCreek, SHA, SHAST; KGE > 0.9999).
 | `historical_livneh_unsplit.nc` | 1.06 GB (LFS) | 4410 cells × 1915–2018, from the local WGEN NonDetrend-Unsplit master, **×10 artifacts corrected ÷10** per `prcp_x10_artifacts.csv` (the calsim stores' convention; the retired cdec15_grid store was raw — its dPL consumers are retrained). Verified: == calsim stores to write precision incl. artifact days; vs the raw grid store exactly the 175 table pairs |
 | `wgen_product_a.nc` | 1.03 GB (LFS) | 4410 cells × 1915–2018, verbatim from the OneDrive release (already ×10-corrected upstream). Verified bit-exact vs all retired per-domain stores |
 | `historical_lto.nc` | 1.00 GB (LFS) | 4058 cells × 1915–2021 (352 region cells are outside the LTO release: Kern/Tule + Goose Lake — those basins cannot run LTO, unchanged from before); Mt Shasta cell neighbor-filled per the documented recipe. Verified bit-exact vs all retired per-domain stores |
+| `aorc.nc` | 1.79 GB (LFS) | 4410 cells × **1979–2025**, **nine** variables (`prcp`/`tmin`/`tmax` plus `dlwrf`/`dswrf`/`pres`/`spfh`/`ugrd`/`vgrd`) — NOAA AORC v1.1, 1-km hourly box-averaged to the region grid on a **UTC** day. An independent product, not a Livneh lineage: validated vs Livneh 2015 at prcp +1.13 %/yr, tmax r 0.9957. ⚠ **Run from WY1982 (1981-10-01)** — the 1979–81 head is artifact-prone, and all of Dec 1979 is missing at source. ⚠ **The only region store that contains NaN** (0.2464 % of cell-days, source outages; 0.0196 % of `prcp`/`tmin`/`tmax` inside the WY1982 window): these are persistence-filled from the previous day at load by `io.fill_missing_days`, and deliberately left in the file. Built + verified by `dataprep/aorc_region.py` (re-pulled 2026-07-30 after a fill-value defect; see `dataprep/README.md`) |
 
 ### `data/region/bcm/` — BCM v8 monthly hydrology, two WGEN scenarios (2026-07-28)
 
