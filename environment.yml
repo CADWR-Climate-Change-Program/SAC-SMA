@@ -18,7 +18,7 @@ dependencies:
   - pytorch=2.10.*=cuda130*   # sacsma.dpl differentiable model (GPU training)
   - numpy>=1.24
   - numba>=0.65
-  - pandas>=2.0
+  - pandas>=2.2       # "ME"/"MS" offset aliases (the old "M" is gone in 3.x)
   - matplotlib>=3.7   # cal/val diagnostics + cross-compare figures
   # gridded forcing store (NetCDF)
   - xarray>=2024.1
@@ -29,6 +29,7 @@ dependencies:
   - pyproj>=3.6
   - scipy>=1.10       # Voronoi spacing + gamma-tail QMAP
   - pypdf>=4.0        # dataprep/dwr_unimpaired.py: DWR Appendix B table transcription
+  - requests>=2.31    # dataprep downloads: cdec_fnf, download_gis, aorc_region, bcm_region
   # dev
   - ruff>=0.4
   - pip
