@@ -23,6 +23,7 @@ Keys are normalized 5-decimal `<lat>_<lon>`; per-cell flags `in_<domain>` and `i
 | daily forcing master (raw) | `wgen_forcing.py` | local only (not in repo) | done |
 | raw GIS rasters (soil/veg/terrain/LAI staging) | `download_gis.py` | local only (~89 GB, `D:\sacsma-data\raw_gis`) | staged + verified complete (2026-07-29); re-fetch is resumable |
 | USGS gauge flows inside CalSim3 | `usgs_flows.py` | `data/usgs/` (`flow_daily.nc` 3.2 MB LFS + `gauges.csv` + `gis/usgs_watersheds.gpkg`) | done — 69 gauges, daily 1950–2018 (2026-07-29) |
+| UF subbasin verification | `check_uf_locations.py` | `artifacts/uf_check/` + `data/dwr_unimpaired/uf_outlets.csv` | done — table verified clean (2026-08-04) |
 | ×10 precip-artifact table | `wgen_forcing.py --scan-x10` | `prcp_x10_artifacts.csv` (frozen) | done |
 | **unified region forcing** | `build_region_forcing.py` | `forcing/{historical_livneh_unsplit,wgen_product_a,historical_lto}.nc` (~3.1 GB LFS) | done; replaced the per-domain stores (2026-07-16) |
 | **AORC forcing (1979–2025)** | `aorc_region.py` | `forcing/aorc.nc` (1.79 GB LFS) | done — re-pulled clean and verified 2026-07-30 after the fill-masking fix; ⚠ **run from WY1982** and note the store contains NaN (see below) |

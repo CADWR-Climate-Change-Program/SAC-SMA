@@ -1,12 +1,13 @@
 # `artifacts/`: simulated outputs and diagnostic figures
 
-Generated outputs, organized by application: `cdec15/` (the 15-CDEC diagnostics) and `calsim/` (the CalLite domains `9unimp`/`11obs`/`12rim`, the cross-compare `compare/`, and the alternate-forcing runs `wgen_product_a/` + `historical_lto/` with their `forcing_compare/`). The committed copies are the published results of the current data and model. Regenerate with:
+Generated outputs, organized by application: `cdec15/` (the 15-CDEC diagnostics), `calsim/` (the CalLite domains `9unimp`/`11obs`/`12rim`, the cross-compare `compare/`, and the alternate-forcing runs `wgen_product_a/` + `historical_lto/` with their `forcing_compare/`), and `uf_check/` (the UF subbasin verification). The committed copies are the published results of the current data and model. Regenerate with:
 
 ```bash
 sacsma plots --domain 15cdec              # -> artifacts/cdec15/
 sacsma plots --domain 11obs               # -> artifacts/calsim/11obs/  (or 9unimp / 12rim)
 sacsma calsim                             # -> artifacts/calsim/compare/
 python -m sacsma.calsim.forcing_compare   # -> artifacts/calsim/forcing_compare/
+python dataprep/check_uf_locations.py     # -> artifacts/uf_check/ (+ data/dwr_unimpaired/uf_outlets.csv)
 ```
 
 Throughout, "simulated" is `sacsma.model.run_basin` from the archived GA optimum, "observed" is the daily CDEC gage (`cdec15`) or the domain's monthly FNF (`calsim`), and "reference" (parity) is the MATLAB `simflow` tables. The full method and conventions are in the [documentation report](https://cadwr-climate-change-program.github.io/SAC-SMA/) and `data/INVENTORY.md`; the model guardrails are in `CLAUDE.md`. The dPL outputs have their own manifest in [`dpl/RUNS.md`](dpl/RUNS.md).
@@ -53,6 +54,10 @@ Maps and figures show skill at the **main-basin level**: every sub-area polygon 
 Footprint screening (`catchments.SCREENED_BASINS` = SHA, BND, SNS, ChowchillaRiver) trims the four basins whose HRU footprint materially over-reaches its CalSim3 catchment; every other basin keeps its full calibrated footprint. The everything-unscreened parallel and its delta are in `anchor_*_full.csv` and `anchor_screened_vs_full.csv`. The footprint-method maps (`figures/{shasta,sns,chowchilla,tnl,fresno}_footprint_panels.png`) and the HRU attribute maps (`figures/hru_{veg,soil,kpet}_*.png`) are single-basin and input illustrations, not part of the basin-level scoring.
 
 The engine is `sacsma.calsim.catchments`. The full method (anchor reference, screening, QMAP, figure style) is documented in the [report](https://cadwr-climate-change-program.github.io/SAC-SMA/) and `CLAUDE.md`.
+
+## UF subbasin verification (`uf_check/`)
+
+`python dataprep/check_uf_locations.py` verifies `data/dwr_unimpaired/uf_locations.csv` against sources that did not produce it: the crosswalk (both directions), NWIS published drainage areas and station names at each outlet gauge, the DWR Appendix B volumes (WY1950–84), and geometric tiling of the dissolved arc sets. Outputs: `report_table.csv` (per-UF results), `findings.md` (flags + notes), `figures/uf_NN.png` (per-UF maps with outlet pins), `figures/uf_dissolved_overview.png` (the Figure-2-1 analogue), `figures/uf_all_grid.png` (contact sheet), `uf_dissolved.gpkg` (QGIS-ready dissolved polygons), and the verified outlet table `data/dwr_unimpaired/uf_outlets.csv`. Web responses are cached (`web_cache.json`, `nldi_bend_basin.json`) so reruns are offline and byte-reproducible. Findings and per-UF results in `findings.md` + `report_table.csv`.
 
 ## SAC-SMA vs VIC vs BCM (`calsim/compare/sacsma_vic_bcm_*`)
 

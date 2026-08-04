@@ -1,0 +1,25 @@
+uf,name,status,n_arcs,xwalk_fwd,xwalk_rev,area_csv,area_dpct,arcs_no_polygon,arcs_no_series,arcsum_tafyr,dwr_unimp_tafyr,vol_dpct,vol_r,usgs_site,usgs_da_mi2,nwis_da_dpct,unimp_sys,arcsum_vs_unimp_dpct,unimp_vs_dwr_dpct
+1,Sacramento Valley Floor,"SKIP: valley floor, n_arcs=0",,,,,,,,,,,,,,,,,
+2,Putah Creek near Winters,checked,1.0,ok,ok,567.46,-0.0,,,424.8,440.3,-3.5,0.9992,11454000,574.0,-1.1,,,
+3,Cache Creek above Rumsey,checked,4.0,ok,ok,953.37,-0.0,,,717.8,617.4,16.3,0.8766,11451760,955.0,-0.2,,,
+4,Stony Creek at Black Butte,checked,3.0,ok,ok,744.94,-0.0,,,504.6,490.9,2.8,0.9944,11388000,738.0,0.9,,,
+5,Sacramento Valley West Side Minor Streams,SKIP: no arc set by design (west-side minor streams),,,,,,,,,,,,,,,,,
+6,Sacramento River near Red Bluff,checked,9.0,I_SHSTA -> SHA in crosswalk [expected: SHA nests inside BND (BASIN_NESTS in catchments.py)]; I_SRBB_VAL absent from crosswalk [expected: series-less valley-accretion node; no crosswalk row or inflow series by design],ok,9083.72,-0.0,,I_SRBB_VAL,8172.7,9210.4,-11.3,0.998,11377100,8900.0,2.1,SRBB,-11.3,-0.0
+7,Sacramento Valley East Side Minor Streams,checked,8.0,ok,n/a (no basin key),1035.9,0.0,,,1327.8,1380.1,-3.8,0.9988,,,,,,
+8,Feather River near Oroville,checked,21.0,ok,ok,3601.62,0.0,,,4943.0,4941.5,0.0,0.9991,11407000,3624.0,-0.6,OROV,0.0,-0.0
+9,Yuba River at Smartville,checked,18.0,ok,ok,1193.43,0.0,,,2585.0,2546.4,1.5,0.9986,11419000,1200.0,-0.5,YUBA,1.5,-0.0
+10,Bear River near Wheatland,checked,5.0,ok,ok,281.96,0.0,,,383.6,342.0,12.2,0.9974,11424000,292.0,-3.4,,,
+11,American River at Fair Oaks,checked,46.0,ok,ok,1863.78,0.0,I_RUB002,,3028.8,2922.6,3.6,0.9974,11446500,1888.0,-1.3,FOLS,3.6,-0.0
+12,San Joaquin Valley East Side Minor Streams,"SKIP: valley floor, n_arcs=0",,,,,,,,,,,,,,,,,
+13,Cosumnes River at Michigan Bar,checked,4.0,ok,ok,539.11,0.0,,,421.4,422.7,-0.3,0.9985,11335000,536.0,0.6,,,
+14,Mokelumne River at Pardee Reservoir,checked,8.0,ok,ok,543.9,-0.0,,,811.3,799.8,1.4,0.9989,11319500,544.0,-0.0,,,
+15,Calaveras River at Jenny Lind,checked,1.0,ok,ok,361.61,0.0,,,178.5,184.1,-3.0,0.9987,11308900,363.0,-0.4,,,
+16,Stanislaus River at Melones Reservoir,checked,19.0,ok,ok,903.74,-0.0,,,1232.8,1230.6,0.2,0.9988,11299000,904.0,-0.0,ST,0.2,-0.0
+17,San Joaquin Valley Floor,"SKIP: valley floor, n_arcs=0",,,,,,,,,,,,,,,,,
+18,Tuolumne River at Don Pedro Reservoir,checked,4.0,ok,ok,1531.57,0.0,,,2000.1,2001.4,-0.1,0.9999,11288000,1532.0,-0.0,TU,-0.1,-0.0
+19,Merced River at Exchequer Reservoir,checked,1.0,ok,ok,1036.08,-0.0,,,1035.5,1025.8,1.0,0.9997,11270000,1037.0,-0.1,ME,1.0,-0.0
+20,Chowchilla River at Buchanan Reservoir,checked,1.0,ok,ok,234.81,0.0,,,78.2,80.9,-3.2,0.9996,11259000,236.0,-0.5,,,
+21,Fresno River near Daulton,checked,4.0,ok,ok,343.68,0.0,,,95.2,96.8,-1.7,0.9935,11258000,258.0,33.2,,,
+22,San Joaquin River at Millerton Reservoir,checked,1.0,ok,ok,1637.8,-0.0,,,1914.5,1879.3,1.9,0.9997,11250100,1638.0,-0.0,SJ,1.9,-0.0
+23,Tulare Lake Basin Outflow,"SKIP: valley floor, n_arcs=0",,,,,,,,,,,,,,,,,
+24,San Joaquin Valley West Side Minor Streams,"SKIP: valley floor, n_arcs=0",,,,,,,,,,,,,,,,,

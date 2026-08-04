@@ -287,7 +287,8 @@ natural and unimpaired flows."*
 | `uf_monthly.csv` | 0.5 MB | `[date, uf, flow_taf]`, unimpaired, 24 subbasins × 1116 month-end dates (1921-10-31 → 2014-09-30) = 26784 rows |
 | `swat_monthly.csv` | 0.4 MB | `[date, uf, flow_taf]`, the SWAT rim simulation, the 18 subbasins that have one = 20088 rows |
 | `delta_monthly.csv` | 0.2 MB | `[date, series, flow_taf]`, the 6 derived totals B-25…B-30: `SAC_VALLEY_OUTFLOW`, `EASTSIDE_OUTFLOW`, `SJ_VALLEY_OUTFLOW`, `DELTA_INFLOW`, `DELTA_OUTFLOW`, `DELTA_NET_USE` |
-| `uf_locations.csv` | 0.004 MB | `[uf, table, name, cdec_id, basin_11obs, basin_9unimp, n_arcs, arcs, area_mi2_calsim, has_swat, swat_scale_appendix_d, swat_partial, note]` |
+| `uf_locations.csv` | 0.004 MB | `[uf, table, name, cdec_id, basin_11obs, basin_9unimp, n_arcs, arcs, area_mi2_calsim, has_swat, swat_scale_appendix_d, swat_partial, note]` — verified against the crosswalk, NWIS drainage areas, and Appendix B volumes 2026-08-04 (`dataprep/check_uf_locations.py`; findings in `artifacts/uf_check/`) |
+| `uf_outlets.csv` | <0.01 MB | `[uf, name, cdec_id, usgs_site, usgs_name, usgs_lat, usgs_lon, usgs_da_mi2, cdec_lat, cdec_lon, usgs_cdec_km]` — the NWIS-verified outlet gauge per gauged subbasin (station names checked against NWIS's own records; CDEC staMeta coords where a `cdec_id` exists). Written by `dataprep/check_uf_locations.py` |
 
 **These 24 subbasins are the `9unimp`/`11obs` calibration targets.** Established, not
 assumed: `--verify` scores every unimpaired series against `calsim/fnf_<domain>_monthly.csv`

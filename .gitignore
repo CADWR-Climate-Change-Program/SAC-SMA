@@ -39,6 +39,7 @@ artifacts/*
 !artifacts/README.md
 !artifacts/cdec15
 !artifacts/calsim
+!artifacts/uf_check
 
 # dPL: CANONICAL runs + the fidelity numerics gate + the track-record log are
 # tracked (tiny nets — best.pt is ~60 KB); exploratory runs stay local under
