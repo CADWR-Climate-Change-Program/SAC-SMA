@@ -15,7 +15,7 @@ keywords = ["hydrology", "sac-sma", "snow17", "lohmann-routing", "streamflow"]
 dependencies = [
     "numpy>=1.24",
     "numba>=0.59",
-    "pandas>=2.0",
+    "pandas>=2.2",     # the "ME"/"MS" offset aliases (the old "M" is gone in 3.x)
     "matplotlib>=3.7",   # sacsma.plots calibration/validation diagnostics
 ]
 
