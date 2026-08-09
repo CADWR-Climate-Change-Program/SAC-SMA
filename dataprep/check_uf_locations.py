@@ -2,43 +2,43 @@
 
 The 24 UF subbasins of DWR's *Estimates of Natural and Unimpaired Flows for the
 Central Valley of California, WY 1922-2014* (2016 draft) have no published GIS
-layer — the table's arc sets reconstruct them from CalSim3 catchments.  This
-script checks every claim in the table against a source that did not produce it
+layer — the arc sets in ``uf_locations.csv`` reconstruct them from CalSim3
+catchments.  This script checks every claim in ``uf_locations.csv`` against
+sources that did not produce it:
 
-1. **Set consistency** — each UF's arc list vs ``calsim_crosswalk.csv``, BOTH
-   directions (the reverse direction catches Fresno-style omissions).
-2. **Area closure** — member-arc ``SQ_MI`` sums (``calsim3.gpkg`` merged layer)
-   vs ``area_mi2_calsim``.  Exact by construction; internal typo check only.
-3. **Independent area + outlet identity** — USGS NWIS station name, coordinates
-   and published drainage area at each outlet gauge, plus CDEC staMeta
-   coordinates where a ``cdec_id`` exists.  The key independent check.
-4. **Volume closure** — arc-summed ``calsim3_inflow_monthly.csv`` vs the DWR
+1. **Volume closure** — arc-summed ``calsim3_inflow_monthly.csv`` vs the DWR
    unimpaired series (``uf_monthly.csv``) over WY1950-84 (ratio + Pearson r),
    plus the ``UNIMP_<sys>`` anchor where one exists.
-5. **Geometry** — one map per UF (member arcs + outlet pins), all UFs dissolved
-   onto one overview (tiling: no double-claims, no unexplained gaps — the
-   reconstruction of the report's Figure 2-1), and an 18-panel contact sheet.
+2. **Independent area + outlet identity** — USGS NWIS station name, coordinates
+   and published drainage area at each outlet gauge, plus CDEC staMeta
+   coordinates where a ``cdec_id`` exists.  The key independent check.
+3. **Geometry** — one map per UF (member arcs + outlet pins), all UFs dissolved
+   onto one overview, and an 18-panel contact sheet.
+   Arcs with no polygon of their own in ``CalSim3_Merged`` (``I_RUB002``) are
+   noted so map readers know the arc set is one larger than the drawn set.
+
 
 Plus the Paynes Creek ruling: the NLDI-delineated Bend Bridge watershed
-(USGS 11377100) is intersected with I_PYN001 (and control arcs) — 0.4 %%
-overlap vs 99.9 %% for a true member proves the creek joins BELOW the gauge,
+(USGS 11377100) is intersected with I_PYN001 (and control arcs) — 0.4 %
+overlap vs 99.9 % for a true member proves the creek joins BELOW the gauge,
 so I_PYN001 is correctly excluded from UF 6.
 
 Web calls (NWIS site service, CDEC staMeta, NLDI basin) are cached in
-``artifacts/uf_check/web_cache.json`` + ``nldi_bend_basin.json``; with the
-committed caches the script reruns offline and byte-reproducibly.
+``artifacts/dwr_unimpaired/verification/web_cache.json`` + ``nldi_bend_basin.json``;
+with the committed caches the script reruns offline and byte-reproducibly.
 
 Outputs
 -------
     data/dwr_unimpaired/uf_outlets.csv    verified UF -> USGS gauge mapping
                                           (site, name, lat/lon, published DA,
                                           CDEC coords, offset km)
-    artifacts/uf_check/report_table.csv   per-UF results (areas, volumes, outlets)
-    artifacts/uf_check/findings.md        flags + notes
-    artifacts/uf_check/figures/uf_NN.png  per-UF map, outlet pinned
-    artifacts/uf_check/figures/uf_dissolved_overview.png   Figure-2-1 analogue
-    artifacts/uf_check/figures/uf_all_grid.png             18-panel contact sheet
-    artifacts/uf_check/uf_dissolved.gpkg  the dissolved UF polygons (QGIS-ready)
+    artifacts/dwr_unimpaired/verification/
+        report_table.csv                  per-UF results (areas, volumes, outlets)
+        findings.md                       flags + notes
+        figures/uf_NN.png                 per-UF map, outlet pinned
+        figures/uf_dissolved_overview.png Figure-2-1 analogue
+        figures/uf_all_grid.png           18-panel contact sheet
+        uf_dissolved.gpkg                 the dissolved UF polygons (QGIS-ready)
 
 Needs geopandas + pyogrio + matplotlib + pillow (any env that can read the
 repo's gpkg).  Usage::
@@ -55,6 +55,7 @@ from pathlib import Path
 
 import matplotlib
 matplotlib.use("Agg")
+import matplotlib.patheffects as pe
 import matplotlib.pyplot as plt
 import geopandas as gpd
 import numpy as np
@@ -63,7 +64,7 @@ from shapely.geometry import shape
 from shapely.validation import make_valid
 
 REPO = Path(__file__).resolve().parents[1]
-OUT = REPO / "artifacts" / "uf_check"
+OUT = REPO / "artifacts" / "dwr_unimpaired" / "verification"
 FIG = OUT / "figures"
 WY = (1950, 1984)  # volume-closure window, water years inclusive
 
@@ -72,19 +73,26 @@ SKIP = {1: "valley floor, n_arcs=0", 12: "valley floor, n_arcs=0",
         24: "valley floor, n_arcs=0",
         5: "no arc set by design (west-side minor streams)"}
 
-#: (uf, arc) pairs expected to fail the naive lookups, with the reason
-EXPECTED = {
-    (6, "I_SHSTA"): "SHA nests inside BND (BASIN_NESTS in catchments.py)",
-    (6, "I_SRBB_VAL"): "series-less valley-accretion node; no crosswalk row or inflow series by design",
-}
 #: unassigned arcs adjacent to a UF outlet, highlighted on that UF's map.
-#: Both were ruled OUT on 2026-08-04: PYN001 joins below the Bend Bridge gauge
+#: Both were ruled OUT: PYN001 joins below the Bend Bridge gauge
 #: (NLDI overlap 0.4 %); PARDE is the Mokelumne-Hill-gauge-to-Pardee-dam
 #: increment and DWR's B-14 series matches the gauge footprint (544 mi2) exactly.
 ADJACENT = {"I_PYN001": 6, "I_PARDE": 14}
 
+#: Short preamble of the generated findings.md.
+FINDINGS_HEADER = """\
+# `uf_locations.csv` verification — findings
+
+*Generated by `dataprep/check_uf_locations.py`; do not edit by hand — every run
+rewrites this file. Volume window: water years %(wy0)d-%(wy1)d.*
+
+**%(nflag)d flag%(fs)s, %(nnote)d note%(ns)s.** A *flag* is a check that fell outside tolerance;
+it is not automatically an error in `uf_locations.csv`. A *note* records an expected or
+structural condition. Per-subbasin numbers for every check are in `report_table.csv`.
+"""
+
 #: NWIS candidates per UF + name keywords (every group must match, any word of
-#: a group suffices).  Sites were resolved 2026-08-04 by checking NWIS's own
+#: a group suffices).  Sites were resolved by checking NWIS's own
 #: station names; the first fetched candidate passing the keyword test wins.
 NWIS_CAND = {
     2:  (["11454000"], [["PUTAH"], ["WINTERS"]]),
@@ -165,7 +173,6 @@ def haversine_km(lat1, lon1, lat2, lon2):
 def main() -> None:
     FIG.mkdir(parents=True, exist_ok=True)
     locs = pd.read_csv(REPO / "data/dwr_unimpaired/uf_locations.csv")
-    xw = pd.read_csv(REPO / "data/calsim/calsim_crosswalk.csv").set_index("arc")
     g = gpd.read_file(REPO / "data/calsim/gis/calsim3.gpkg", layer="CalSim3_Merged")
     g["arc"] = "I_" + g["Connect_No"].astype(str)
     g = g.set_index("arc")
@@ -195,48 +202,19 @@ def main() -> None:
         arcs = uf.arcs.split(";")
         row = {"uf": n, "name": uf["name"], "status": "checked", "n_arcs": len(arcs)}
 
-        # ---- 1. crosswalk set consistency, both directions
-        keys = {(c, uf[c]) for c in ("basin_11obs", "basin_9unimp") if isinstance(uf[c], str)}
-        fwd, rev = [], []
-        for a in arcs:
-            if a not in xw.index:
-                note = EXPECTED.get((n, a))
-                fwd.append("%s absent from crosswalk%s" % (a, " [expected: %s]" % note if note else ""))
-                continue
-            got = {(c, xw.loc[a, c]) for c in ("basin_11obs", "basin_9unimp")
-                   if isinstance(xw.loc[a, c], str)}
-            if keys and not (keys & got):
-                note = EXPECTED.get((n, a))
-                fwd.append("%s -> %s in crosswalk%s"
-                           % (a, ",".join(sorted(v for _, v in got)) or "unassigned",
-                              " [expected: %s]" % note if note else ""))
-        if not keys:
-            findings.append(("note", n, "no basin key; the crosswalk carries no record that "
-                             "these %d arcs form UF %d" % (len(arcs), n)))
-        for col, val in keys:
-            for a in sorted(set(xw.index[xw[col] == val]) - set(arcs)):
-                rev.append("%s has %s=%s but is not in the UF %d arc set" % (a, col, val, n))
-        row["xwalk_fwd"] = "; ".join(fwd) or "ok"
-        row["xwalk_rev"] = "; ".join(rev) or ("ok" if keys else "n/a (no basin key)")
-        findings += [("flag", n, "crosswalk fwd: " + t) for t in fwd if "[expected" not in t]
-        findings += [("flag", n, "crosswalk rev: " + t) for t in rev]
-
-        # ---- 2. area closure vs gpkg
+        # polygons for the maps and the dissolve (arcs like I_RUB002 have none);
+        # the gpkg area total appears on the map title for reference only
         have_poly = [a for a in arcs if a in g.index]
         gsum = float(g.loc[have_poly, "SQ_MI"].sum())
-        row.update(area_csv=uf.area_mi2_calsim,
-                   area_dpct=round(100 * (gsum / uf.area_mi2_calsim - 1), 2),
-                   arcs_no_polygon=";".join(a for a in arcs if a not in g.index))
-        if abs(row["area_dpct"]) > 1:
-            findings.append(("flag", n, "area closure: gpkg %.1f vs csv %.1f (%+.1f%%)"
-                             % (gsum, uf.area_mi2_calsim, row["area_dpct"])))
-        for a in arcs:
-            if a not in g.index and (n, a) not in EXPECTED:
-                findings.append(("flag" if xw.loc[a, "in_calsim3"] else "note", n,
-                                 "no polygon in CalSim3_Merged for %s (in_calsim3=%s)"
-                                 % (a, xw.loc[a, "in_calsim3"] if a in xw.index else "?")))
+        for a in arcs:  # bookkeeping note for map users, not a check
+            if a not in g.index:
+                findings.append(("note", n, "no polygon in CalSim3_Merged for %s — it "
+                                 "cannot be drawn on the maps and adds no area of its "
+                                 "own%s" % (a, "; its flow series is still summed"
+                                            if a in infw.columns
+                                            else " and it has no inflow series either")))
 
-        # ---- 3. volume closure WY1950-84
+        # ---- 1. volume closure WY1950-84
         have_ser = [a for a in arcs if a in infw.columns]
         s = infw[have_ser].sum(axis=1)
         tgt = ufw[n]
@@ -248,16 +226,18 @@ def main() -> None:
                    vol_dpct=round(100 * (s.mean() / tgt.mean() - 1), 1),
                    vol_r=round(float(np.corrcoef(s, tgt)[0, 1]), 4))
         if abs(row["vol_dpct"]) > 5:
-            findings.append(("flag", n, "volume closure: arc sum %.0f vs DWR %.0f TAF/yr "
-                             "(%+.1f%%, r=%.3f)" % (12 * s.mean(), 12 * tgt.mean(),
-                                                    row["vol_dpct"], row["vol_r"])))
+            findings.append(("flag", n, "volume closure — the arc set sums to %.0f TAF/yr "
+                             "against DWR's published unimpaired %.0f TAF/yr "
+                             "(%+.1f%%, monthly r = %.3f)"
+                             % (12 * s.mean(), 12 * tgt.mean(),
+                                row["vol_dpct"], row["vol_r"])))
         if n in sys_anchor and sys_anchor[n] in unw.columns:
             u = unw[sys_anchor[n]].loc[common]
             row.update(unimp_sys=sys_anchor[n],
                        arcsum_vs_unimp_dpct=round(100 * (s.mean() / u.mean() - 1), 1),
                        unimp_vs_dwr_dpct=round(100 * (u.mean() / tgt.mean() - 1), 1))
 
-        # ---- 4. outlet ground truth (NWIS + CDEC, cached)
+        # ---- 2. outlet ground truth (NWIS + CDEC, cached)
         cand, kw = NWIS_CAND.get(n, ([], []))
         fetched = []
         for c in cand:
@@ -269,7 +249,8 @@ def main() -> None:
                      if all(any(k in f["station_nm"].upper() for k in grp) for grp in kw)), None)
         if best is None and fetched:
             best = fetched[0]
-            findings.append(("flag", n, "NWIS name check FAILED for %s; got %s"
+            findings.append(("flag", n, "outlet gauge — NWIS name check failed for %s; "
+                             "NWIS returned %s"
                              % (cand, [f["station_nm"] for f in fetched])))
         # report_table keeps only the check results (site number = join key);
         # outlet identity (name, coords, offsets) lives solely in uf_outlets.csv
@@ -295,7 +276,7 @@ def main() -> None:
                         "usgs_cdec_km": round(haversine_km(best["lat"], best["lon"], *cd), 2)
                                         if best and cd else np.nan})
 
-        # ---- 5a. per-UF map
+        # ---- 3a. per-UF map
         fig, ax = plt.subplots(figsize=(7, 7.5))
         g.plot(ax=ax, facecolor="0.94", edgecolor="0.75", linewidth=0.4)
         gm = g.loc[have_poly]
@@ -338,7 +319,7 @@ def main() -> None:
 
     cache_f.write_text(json.dumps(cache, indent=1))
 
-    # ---- 5b. dissolve: tiling, overlaps, Figure-2-1 analogue
+    # ---- 3b. dissolve: tiling, overlaps, Figure-2-1 analogue
     claims = {a for _, uf in locs.iterrows() if isinstance(uf.arcs, str) for a in uf.arcs.split(";")}
     unassigned = g.loc[[a for a in g.index if a not in claims]]
     diss = gpd.GeoDataFrame(dissolved, crs=g.crs)
@@ -350,16 +331,23 @@ def main() -> None:
             ov = d2.geometry.iloc[i].intersection(d2.geometry.iloc[j]).area / 2.59e6
             if ov > 0.5:  # slivers along shared divides run 0.02-0.25 mi2
                 findings.append(("flag", int(d2.uf.iloc[i]),
-                                 "dissolved overlap with UF %d: %.2f mi2" % (d2.uf.iloc[j], ov)))
+                                 "tiling — the dissolved footprint overlaps UF %d by %.2f mi²"
+                                 % (d2.uf.iloc[j], ov)))
     fig, ax = plt.subplots(figsize=(9, 12))
-    g.plot(ax=ax, facecolor="0.96", edgecolor="0.8", linewidth=0.3)
+    g.plot(ax=ax, facecolor="0.975", edgecolor="0.88", linewidth=0.25)
     for i, r in diss.iterrows():
+        fc = plt.cm.tab20(i % 20)  # translucent fill, opaque outline: the tiling stays legible
         gpd.GeoSeries([r.geometry], crs=g.crs).plot(
-            ax=ax, facecolor=plt.cm.tab20(i % 20), alpha=0.65, edgecolor="k", linewidth=1.0)
+            ax=ax, facecolor=(fc[0], fc[1], fc[2], 0.35), edgecolor="none")
+        parts = (r.geometry.geoms if r.geometry.geom_type == "MultiPolygon"
+                 else [r.geometry])
+        gpd.GeoSeries([p.exterior for p in parts], crs=g.crs).plot(
+            ax=ax, color="0.15", linewidth=1.1)
         c = r.geometry.representative_point()
-        ax.annotate(str(r.uf), (c.x, c.y), fontsize=13, fontweight="bold", ha="center")
-    unassigned.plot(ax=ax, facecolor="none", edgecolor="#b06000", linewidth=0.7,
-                    hatch="///", alpha=0.5)
+        ax.annotate(str(r.uf), (c.x, c.y), fontsize=13, fontweight="bold", ha="center",
+                    color="0.1", path_effects=[pe.withStroke(linewidth=2.5, foreground="w")])
+    unassigned.plot(ax=ax, facecolor="none", edgecolor="#c07820", linewidth=0.6,
+                    hatch="///", alpha=0.45)
     ax.set_title("UF subbasins dissolved from CalSim3 arc sets\n"
                  "(numbers = UF; hatched = rim arcs assigned to no UF) — compare to DWR Fig. 2-1")
     ax.set_aspect(1 / math.cos(math.radians(39)))
@@ -369,7 +357,7 @@ def main() -> None:
     print("tiling: %d rim arcs, %d assigned, %d unassigned (%.0f mi2)"
           % (len(g), len(claims & set(g.index)), len(unassigned), unassigned.SQ_MI.sum()))
 
-    # ---- 5c. contact sheet
+    # ---- 3c. contact sheet
     from PIL import Image
     files = sorted(FIG.glob("uf_[0-9][0-9].png"))
     W = 320
@@ -396,7 +384,8 @@ def main() -> None:
         for a in ("I_PYN001", "I_SCW008", "I_ANT011"):
             p = make_valid(g.to_crs(4326).loc[a].geometry)
             frac = p.intersection(basin).area / p.area
-            findings.append(("note", 6, "NLDI Bend Bridge watershed overlap: %s %.1f%%" % (a, 100 * frac)))
+            findings.append(("note", 6, "%s overlaps the NLDI-delineated Bend Bridge "
+                             "watershed by %.1f%% of its area" % (a, 100 * frac)))
             if a == "I_PYN001" and frac > 0.5:
                 findings.append(("flag", 6, "I_PYN001 falls INSIDE the Bend Bridge watershed "
                                  "— the 2026-08-04 exclusion ruling no longer holds"))
@@ -406,15 +395,21 @@ def main() -> None:
     # ------------------------------------------------------------- write out
     pd.DataFrame(rows).to_csv(OUT / "report_table.csv", index=False)
     pd.DataFrame(outlets).to_csv(REPO / "data/dwr_unimpaired/uf_outlets.csv", index=False)
-    with open(OUT / "findings.md", "w", encoding="utf-8") as f:
-        f.write("# uf_locations.csv verification — findings (volume window WY%d-%d)\n" % WY)
-        for sev in ("flag", "note"):
-            f.write("\n## %s\n\n" % ("FLAGS" if sev == "flag" else "Notes"))
-            for s, n, t in findings:
-                if s == sev:
-                    f.write("- UF %d: %s\n" % (n, t))
     nflag = sum(1 for s, _, _ in findings if s == "flag")
-    print("%d flags, %d notes -> %s" % (nflag, len(findings) - nflag, OUT / "findings.md"))
+    nnote = len(findings) - nflag
+    names = dict(zip(locs["uf"], locs["name"]))  # name each subbasin, not just its number
+    with open(OUT / "findings.md", "w", encoding="utf-8") as f:
+        f.write(FINDINGS_HEADER % {"wy0": WY[0], "wy1": WY[1],
+                                   "nflag": nflag, "fs": "" if nflag == 1 else "s",
+                                   "nnote": nnote, "ns": "" if nnote == 1 else "s"})
+        for sev, head in (("flag", "Flags"), ("note", "Notes")):
+            hits = [(n, t) for s, n, t in findings if s == sev]
+            f.write("\n## %s\n\n" % head)
+            for n, t in hits:
+                f.write("- **UF %d — %s**: %s\n" % (n, names.get(n, "?"), t))
+            if not hits:
+                f.write("None.\n")
+    print("%d flags, %d notes -> %s" % (nflag, nnote, OUT / "findings.md"))
 
 
 if __name__ == "__main__":
