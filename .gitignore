@@ -16,6 +16,14 @@ data/raw_gis/*
 !data/raw_gis/SOURCES.md
 !data/raw_gis/sample_gis.py
 
+# Full-region-grid raster sample (sample_gis.py region): a build_region_statics.py
+# INPUT, fully folded into the committed data/region/{soilveg_continuous,
+# lai_climatology}.csv output, so keeping it around adds no new coverage — only
+# regenerate (needs the sacsma-gis env + the raw_gis stage above) if the region
+# grid changes and the consolidated store needs rebuilding from scratch.
+data/region/soilveg_continuous_raster.csv
+data/region/lai_climatology_raster.csv
+
 # --- Derived data ---
 # The forcing stores are tracked via git-LFS (see .gitattributes); any OTHER
 # forcing/* file stays out of git. Small organized tables and the GeoPackage

@@ -10,6 +10,17 @@ Outputs (per domain <d> in {15cdec, 9unimp, 11obs, 12rim}):
   data/<app>/soilveg_continuous_<d>.csv   one row per HRU (key), durable RAW values
   data/<app>/lai_climatology_<d>.csv      HRU x 46 8-day DOY LAI climatology (Noah-ET)
 
+A fifth pseudo-domain, ``region``, samples EVERY cell of the region grid
+(``data/region/grid_cells.csv``, all 4410 cells -- the full CalSim3-gpkg
+intersection with the 1/16-deg grid, not just the gap outside the four
+modeling domains) at its cell CENTER -- one homogeneous point-sample
+convention across the whole footprint, independent of which (if any) modeling
+domain a cell also belongs to:
+  data/region/soilveg_continuous_raster.csv
+  data/region/lai_climatology_raster.csv
+``dataprep/build_region_statics.py`` uses this as a full-coverage cross-check
+layer and as the final fill source for any cell the domain sidecars miss.
+
 Design notes
 ------------
 * Each HRU is a POINT (its lat/lon); rasters are sampled at that point.  Terrain
@@ -36,7 +47,10 @@ import numpy as np
 import pandas as pd
 
 REPO = Path("C:/Users/warnold_la/local/repos/SAC-SMA")
-RAW = REPO / "data" / "raw_gis"
+#: Staging root.  ``SACSMA_RAW_GIS`` overrides it -- the 89 GB stage lives on
+#: ``D:\sacsma-data\raw_gis``, off the repo drive.  Mirrors the precedent in
+#: dataprep/download_gis.py (same env var, same fallback).
+RAW = Path(os.environ.get("SACSMA_RAW_GIS") or REPO / "data" / "raw_gis")
 POLARIS = RAW / "polaris" / "PROPERTIES" / "v1.0"
 LANDFIRE = RAW / "landfire"
 DEM = RAW / "dem" / "3dep_1as"
@@ -52,10 +66,20 @@ DOMAINS = {
     "12rim": ("calsim", "hruinfo_12rim.csv"),
 }
 
+REGION_ROOT = REPO / "data" / "region"
+
 
 def _sfx(domain: str) -> str:
     """Match sacsma.io: 15cdec files are unsuffixed; calsim carry ``_<domain>``."""
     return "" if domain == "15cdec" else f"_{domain}"
+
+
+def load_region_cells() -> pd.DataFrame:
+    """Every cell of the region grid -- the full CalSim3-gpkg intersection with
+    the 1/16-deg grid (4410 cells), sampled at the cell CENTER (point-sample,
+    matching the calsim convention) regardless of modeling-domain membership."""
+    grid = pd.read_csv(REGION_ROOT / "grid_cells.csv")
+    return grid[["key", "lat", "lon"]].reset_index(drop=True)
 
 # ---- MODIS sinusoidal constants (analytic georef) ------------------------
 SIN_R = 6371007.181            # sphere radius (m)
@@ -382,9 +406,16 @@ def _fill_doy_gaps(clim: np.ndarray) -> np.ndarray:
 # Driver
 # ==========================================================================
 def run(domain: str, layers: set[str], out_dir: Path | None = None):
-    app, _ = DOMAINS[domain]
-    out_dir = out_dir or (REPO / "data" / app)
-    hrus = load_hrus(domain)
+    if domain == "region":
+        out_dir = out_dir or REGION_ROOT
+        hrus = load_region_cells()
+        sv_name, lai_name = "soilveg_continuous_raster.csv", "lai_climatology_raster.csv"
+    else:
+        app, _ = DOMAINS[domain]
+        out_dir = out_dir or (REPO / "data" / app)
+        hrus = load_hrus(domain)
+        sv_name = f"soilveg_continuous{_sfx(domain)}.csv"
+        lai_name = f"lai_climatology{_sfx(domain)}.csv"
     print(f"[{domain}] {len(hrus)} HRUs  layers={sorted(layers)}", flush=True)
     parts = [hrus[["key"]].copy()]
 
@@ -408,11 +439,11 @@ def run(domain: str, layers: set[str], out_dir: Path | None = None):
         print(f"  lai done ({time.time() - t:.0f}s)", flush=True)
 
     out = pd.concat(parts, axis=1)
-    dest = out_dir / f"soilveg_continuous{_sfx(domain)}.csv"
+    dest = out_dir / sv_name
     out.to_csv(dest, index=False)
     print(f"WROTE {dest}  ({out.shape[0]}x{out.shape[1]})", flush=True)
     if clim_df is not None:
-        cdest = out_dir / f"lai_climatology{_sfx(domain)}.csv"
+        cdest = out_dir / lai_name
         pd.concat([hrus[["key"]], clim_df], axis=1).to_csv(cdest, index=False)
         print(f"WROTE {cdest}  ({clim_df.shape[0]}x{clim_df.shape[1]})", flush=True)
 
@@ -445,7 +476,7 @@ def test(domain: str, nrows: int = 3):
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("domain", choices=list(DOMAINS))
+    ap.add_argument("domain", choices=list(DOMAINS) + ["region"])
     ap.add_argument("--test", action="store_true")
     ap.add_argument("--nrows", type=int, default=3)
     ap.add_argument("--layers", default="polaris,landfire,terrain,lai")

@@ -16,7 +16,7 @@ Keys are normalized 5-decimal `<lat>_<lon>`; per-cell flags `in_<domain>` and `i
 | layer | script | in-repo store | status |
 |---|---|---|---|
 | grid definition | `build_region_grid.py` | `grid_cells.csv` (0.1 MB) | done |
-| statics: soil/veg + LAI climatology | `build_region_statics.py` | `{soilveg_continuous,lai_climatology}.csv` (~4 MB) | **partial: 2480/4410 cells**; footprint-only cells need a raster ingest (see below) |
+| statics: soil/veg + LAI climatology | `build_region_statics.py` | `{soilveg_continuous,lai_climatology}.csv` (~3 MB each) | **done: 4410/4410 cells** (2026-08-10, see below) |
 | ET obs: gleam, fluxcom | `local_obs_region.py` | `et_obs/*.npz` | done (verified to 1e-7) |
 | ET/SWE obs: terraclimate/fldas/era5land/daymet | `gee_obs_region.py` | `et_obs/*.npz`, `swe_obs/*.npz` | done (GEE spec v2, 2026-07-16) |
 | ET referees: openet, modis | `gee_obs_region.py --products openet modis` | `et_obs/{openet,modis}_*.npz` | done (benchmark-only, 2026-07-17) |
@@ -570,11 +570,53 @@ A basin inside the region needs only a delineation and a gage/FNF target:
 
 1. **Cells.** Select from `grid_cells.csv`, or intersect the delineation with the 1/16° grid.
 2. **Forcing.** `python dataprep/wgen_forcing.py --cut <name> --cells <csv> --out-dir <dir>` writes `historical_livneh_unsplit_<name>.nc` (prcp + tavg) plus a per-cell tmin/tmax sidecar, with the ×10 artifact days corrected by default.
-3. **Statics.** Rows from `{soilveg_continuous,lai_climatology}.csv` (currently the 2480 modeling-domain cells; footprint-only cells await the raster ingest).
+3. **Statics.** Rows from `{soilveg_continuous,lai_climatology}.csv` — every region cell is covered (see below), so any delineation inside the CalSim3 footprint has statics without a raster re-run.
 4. **Obs losses.** The region npz cover the cells via the `data.py` defaults.
 
-## Known gap
+## Statics: full 4410-cell coverage (closed 2026-08-10)
 
-The statics stores cover only the 2480 modeling-domain cells. The 1930 footprint-only cells need a raster ingest (POLARIS / LANDFIRE / 3DEP / MODIS-LAI, see [`../data/raw_gis/SOURCES.md`](../data/raw_gis/SOURCES.md)), gated on reproducing the committed point-sample rows, before any full-region training.
+The statics stores used to cover only the 2480 modeling-domain cells (the 1930
+footprint-only cells were a documented gap). Closed by a full-coverage raster
+ingest:
 
-The rasters themselves are **staged and complete** — 6261 files / 89 GB at `D:\sacsma-data\raw_gis`, off the repo drive. Point `SACSMA_RAW_GIS` at it (`data/raw_gis/sample_gis.py` still hard-codes the in-repo path, so it needs the tree there or an edit). `python dataprep/download_gis.py --status` inventories the stage; `--all` re-fetches anything missing, resumably. So the remaining work is the raster→cell aggregation, not the download.
+* **`data/raw_gis/sample_gis.py region`** (the `sacsma-gis` env) point-samples
+  EVERY region cell — all 4410, not just the gap — at its center from the
+  staged POLARIS/LANDFIRE/3DEP/MODIS-LAI stack, in the same convention as the
+  calsim per-domain sidecars. Output: `data/region/{soilveg_continuous,
+  lai_climatology}_raster.csv` — a **local-only intermediate** (gitignored),
+  not a committed product: its content is fully folded into the committed
+  `data/region/{soilveg_continuous,lai_climatology}.csv` below, so nothing
+  downstream ever needs to read it directly. Regenerate it (needs the
+  `sacsma-gis` env + the raw_gis stage) only if the region grid changes and
+  the consolidated store needs a from-scratch rebuild.  Verified to reproduce
+  the committed calsim point-sample rows: 2021/2026 shared cells exact, 5
+  differ only in `lai_mean` — those are MODIS "always-fill"
+  (water/permanent-snow) cells whose gap-fill borrows the nearest valid cell,
+  and the full 4410-cell grid has a denser neighbor pool than a single
+  domain's HRU set, so the borrowed climatology legitimately differs. Not a
+  bug.
+* `sample_gis.py` now honors **`SACSMA_RAW_GIS`** (previously hard-coded to
+  the empty in-repo path — fixed alongside this ingest, mirroring
+  `download_gis.py`'s precedent).
+* `build_region_statics.py` folds the raster layer in as the **final** fill
+  source, after cdec15_grid (footprint-mean, wins where available — the
+  convention the dPL parameter net trained on) and the three calsim domains
+  (point-sample). It only fills cells the four sidecars don't already claim,
+  so nothing already-trained-on changes.
+* **One raster tile was genuinely missing**, not just unsampled: 42–43°N /
+  −121…−120°W (50 region cells, all `in_11obs`/`in_12rim` — the Goose Lake
+  extension of BND north of the originally-staged 32–42°N extent). Fetched
+  with `download_gis.py`'s existing machinery. That tile's absence had left
+  100 HRU rows in `soilveg_continuous_11obs.csv` and 50 in
+  `soilveg_continuous_12rim.csv` blank (polaris/landfire/terrain only — LAI's
+  own gap-fill already covered them); patched in place, byte-identical
+  elsewhere, once the tile landed.
+
+Result: `data/region/{soilveg_continuous,lai_climatology}.csv` — **4410/4410
+cells, zero blank fields** — `{cdec15_grid: 2074, region_raster: 1930,
+calsim_11obs: 203, calsim_9unimp: 199, calsim_12rim: 4}`.
+
+The rasters are **staged and complete** — 6288 files / 89 GB at
+`D:\sacsma-data\raw_gis`, off the repo drive (`SACSMA_RAW_GIS`).
+`python dataprep/download_gis.py --status` inventories the stage; `--all`
+re-fetches anything missing, resumably.

@@ -8,24 +8,35 @@ The preference is high-quality California/CONUS products over global ones. This 
 is gitignored (`data/raw_gis/*`); only this provenance doc, the reusable HRU sampler
 (`sample_gis.py`), and the small per-HRU derived CSVs
 (`data/<app>/soilveg_continuous*.csv`, `lai_climatology*.csv`) are committed.
+The sampler's fifth mode, `sample_gis.py region` (full-region-grid point-sample,
+see `../../dataprep/README.md`), writes `data/region/{soilveg_continuous,
+lai_climatology}_raster.csv` — also gitignored, since its content is fully
+folded into the committed `data/region/{soilveg_continuous,lai_climatology}.csv`
+by `dataprep/build_region_statics.py` and nothing reads it directly.
 
 **California extent fetched:** lat 32–42 N, lon −125 to −114 W (110 1° tiles;
 POLARIS and 3DEP are CONUS-land products, so the ocean/out-of-CONUS tiles of
-that grid 404 and are skipped — 95 and 89 land tiles respectively).
+that grid 404 and are skipped — 95 and 89 land tiles respectively), **plus one
+tile at 42–43 N / −121…−120 W** fetched 2026-08-10 — the region grid (built
+from the full CalSim3-gpkg footprint) reaches 42.4 N, half a degree past the
+original extent, at the Goose Lake extension of BND. Fetched with the same
+downloader, one tile, not a general extent widening (the rest of that row has
+no region cells).
 Downloader: [`../../dataprep/download_gis.py`](../../dataprep/download_gis.py)
 (needs only `requests`; runs in the plain `sacsma` env). Sampler:
 `sample_gis.py` (runs in the `sacsma-gis` conda env — rasterio + pyhdf + pyproj;
 NOT importable by the core `sacsma` package).
 
 **Where it lives.** The tree is too large for the repo drive and is staged at
-`D:\sacsma-data\raw_gis`; set **`SACSMA_RAW_GIS`** to point the downloader at it
-(the same override precedent as `SACSMA_ET_DIR`/`SACSMA_SWE_DIR`). `sample_gis.py`
-still hard-codes the in-repo path, so sampling needs the tree there or a one-line
-edit. `python dataprep/download_gis.py --status` inventories the stage.
+`D:\sacsma-data\raw_gis`; set **`SACSMA_RAW_GIS`** to point the downloader —
+and, since 2026-08-10, the sampler — at it (the same override precedent as
+`SACSMA_ET_DIR`/`SACSMA_SWE_DIR`; `sample_gis.py` previously hard-coded the
+in-repo path, which is why the earlier region-footprint gap existed at all).
+`python dataprep/download_gis.py --status` inventories the stage.
 
-**Staged (89 GB total, verified complete 2026-07-29):** POLARIS 2280 tiles /
-55 GB · LANDFIRE 220 / 5.7 GB · 3DEP 89 / 3.8 GB · MODIS LAI 3672 granules /
-25 GB.
+**Staged (89.5 GB total, verified complete 2026-07-29, +1 tile 2026-08-10):**
+POLARIS 2304 tiles / 55.1 GB · LANDFIRE 222 / 5.7 GB · 3DEP 90 / 3.8 GB ·
+MODIS LAI 3672 granules / 24.9 GB.
 
 The downloader reproduces this stage **byte-identically** — spot-checked by
 SHA-256 on a re-fetched tile of each no-auth product (POLARIS `sand/mean/0_5`,
@@ -147,3 +158,9 @@ CSV, so a different aggregation never requires re-sampling.
   `sacsma.dpl.features.build_features` uses them in place of the one-hot
   soil/veg columns. Path resolvers: `sacsma.io.soilveg_path` /
   `sacsma.io.lai_climatology_path`.
+- `data/region/{soilveg_continuous,lai_climatology}.csv` — the region-grid
+  consolidation of the sidecars above (`dataprep/build_region_statics.py`),
+  4410/4410 cells. `sample_gis.py region`'s full-4410-cell point-sample layer
+  (`data/region/{soilveg_continuous,lai_climatology}_raster.csv`, gitignored,
+  regenerate on demand) is its final fill source but is not itself committed
+  or read directly by the model — see `../../dataprep/README.md`.
