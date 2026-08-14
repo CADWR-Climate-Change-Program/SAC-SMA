@@ -2,20 +2,31 @@
 
 One row per training entity
 (site x timescale x family), carrying: delineation arcs, depth-conversion area,
-outlet coordinate, training window, observation count and lineage, and flags.
+outlet coordinate, true record start, training window, observation count and
+lineage, and flags.
+
+record_start — the source's true data-availability start (train_start/end
+stay the training-window cut); one source per family:
+  - UF entities: first non-null month in uf_monthly.csv (the published
+    record, WY1922-2014); the store's month-end stamps are normalized to
+    the month start to match the window columns' convention.
+  - USGS entities: gauges.csv first_obs (train window == record window).
+  - CDEC entities: the earlier of the station's advertised daily-FNF start
+    (cdec_fnf/stations.csv available_from) and the committed store's first
+    day - CADWR's gage.csv can predate CDEC's advertised entry and vice
+    versa.
 
 Families:
-  uf_monthly   18 arc-mapped UF subbasins   (uf_locations.csv / uf_monthly.csv)
-  usgs_daily    69 reference gauges          (gauges.csv / flow_daily.nc)
-  cdec_daily    15 committed basins + CLE + CSN  (cdec15/gage.csv, cdec_fnf/)
-  obs11_monthly SHA + TNL                    (fnf_11obs_monthly.csv)
+  uf_monthly    9 arc-mapped UF subbasins   (uf_locations.csv / uf_monthly.csv;
+                18 built, 9 dropped as monthly twins of long-record dailies)
+  usgs_daily   69 reference gauges          (gauges.csv / flow_daily.nc)
+  cdec_daily   17 = 15 committed + CLE + CSN  (cdec15/gage.csv, cdec_fnf/)
+  obs11_monthly SHA + TNL built for lineage, both dropped (SIS/CLE daily twins)
 
 Outlet coordinates, one source per family:
-  - UF entities: data/dwr_unimpaired/uf_gauges.csv — the hand-maintained UF
-    pour-point table (all 18 arc-mapped UFs, per-row source + note; UF 7 has
-    no gauge by construction). Rows sourced `cdec_stations:*` are copies of
-    cdec_fnf/stations.csv coordinates; this script asserts they still match
-    (drift gate). 
+  - UF entities: data/dwr_unimpaired/uf_gauges.csv 
+  `cdec_stations:*` are copies of
+    cdec_fnf/stations.csv coordinates; 
   - USGS entities: gauges.csv lat/lon.
   - CDEC and obs11 entities: the station row in cdec_fnf/stations.csv
     (obs11_TNL: USGS gauge 11525500).
@@ -59,7 +70,7 @@ TULARE = ("ISB", "PNF", "SCC", "TRM")
 # BASIN_NESTS (catchments.py): BND as a watershed includes SHA's arc.
 BASIN_NESTS = {"BND": ["SHA"]}
 # SWAT model areas live in uf_gauges.csv (area_mi2_swat + area_source per
-# row) — decision-5 alternate, indicative only; 16 of 18 UFs carry one.
+# row)
 UF_FLAGS = {
     3: "obs_routed_through_lakes", 7: "obs_includes_valley_floor;no_gauge_composite",
     10: "calsim_ref_wetter_summers",
@@ -73,16 +84,39 @@ BELOW_DAM = {"uf_08", "uf_10", "uf_11", "uf_14", "uf_15",
              "cdec_MRC"}
 MONTHLY_START, MONTHLY_END = "1984-10-01", "2014-09-30"
 FORCING_END = "2018-12-31"
+# De-dup rule: a watershed does NOT train at both daily and monthly unless
+# its daily record is short (starts ~2000 or later). Arc-match sweep +
+# record verification: each monthly entity below
+# shares its arc set with a CDEC daily whose record is contiguous back to
+# 1985-88 (advertised starts in cdec_fnf/stations.csv; completeness verified
+# against gage.csv / fnf_daily.csv: SHA 99.7%, TLG 90.7% scattered-gap,
+# NML 98.1%, MIL 98.3%, CLE 94.5% usable), so the monthly twin is dropped.
+# The short-daily pairs STAY: uf_13 (CSN 1999-04) and uf_06 (SBB 1999-05).
+# obs11_TNL is CLE's twin at 96% shared area (TNL adds I_LWSTN, whose cells
+# stay in the training basis via usgs_11525500).
+DEDUP_DROPS = {
+    "uf_08": "cdec_ORO",      # FTO 1985-04
+    "uf_09": "cdec_YRS",      # YRS 1987-05
+    "uf_11": "cdec_FOL",      # AMF 1987-06
+    "uf_14": "cdec_MKM",      # MKM 1986-04
+    "uf_15": "cdec_NHG",      # NHG 1987-05
+    "uf_16": "cdec_NML",      # NML 1987-06
+    "uf_18": "cdec_TLG",      # TLG 1986-04
+    "uf_19": "cdec_MRC",      # MRC 1988-01
+    "uf_22": "cdec_MIL",      # SBF 1987-05
+    "obs11_SHA": "cdec_SHA",  # SIS 1987-05
+    "obs11_TNL": "cdec_CLE",  # CLE 1986-04
+}
 
 
 def _entity(entity_id, family, timescale, site_id, name, delineation, arcs,
-            area, area_swat, olat, olon, osrc, t0, t1, n_obs, obs_store,
-            flags=""):
+            area, area_swat, olat, olon, osrc, rec0, t0, t1, n_obs,
+            obs_store, flags=""):
     return dict(entity_id=entity_id, family=family, timescale=timescale,
                 site_id=site_id, name=name, delineation=delineation,
                 arcs=arcs, area_mi2=area, area_mi2_swat=area_swat,
                 outlet_lat=olat, outlet_lon=olon, outlet_source=osrc,
-                train_start=t0, train_end=t1, n_obs=n_obs,
+                record_start=rec0, train_start=t0, train_end=t1, n_obs=n_obs,
                 obs_store=obs_store, flags=flags)
 
 
@@ -120,6 +154,13 @@ def build(data_dir: Path) -> pd.DataFrame:
 
     ufm_win = ufm[(ufm["date"] >= MONTHLY_START) & (ufm["date"] <= MONTHLY_END)]
     uf_nobs = ufm_win.dropna(subset=["flow_taf"]).groupby("uf").size()
+    def _month_start(ts: pd.Timestamp) -> str:
+        return ts.to_period("M").start_time.date().isoformat()
+
+    uf_rec = (ufm.dropna(subset=["flow_taf"]).groupby("uf")["date"].min()
+              .map(_month_start))
+    obs11_rec = (obs11.dropna(subset=["obs_mm"]).groupby("basin")["date"]
+                 .min().map(_month_start))
 
     rows = []
 
@@ -144,7 +185,8 @@ def build(data_dir: Path) -> pd.DataFrame:
         row = _entity(
             f"uf_{n:02d}", "uf_monthly", "monthly", f"UF {n}", r.name,
             "arcs", r.arcs, round(float(r.area_mi2_calsim), 2), swat,
-            olat, olon, osrc, MONTHLY_START, MONTHLY_END, int(uf_nobs[n]),
+            olat, olon, osrc, uf_rec[n],
+            MONTHLY_START, MONTHLY_END, int(uf_nobs[n]),
             "dwr_unimpaired/uf_monthly.csv:flow_taf", UF_FLAGS.get(n, ""))
         rows.append(row)
 
@@ -154,7 +196,8 @@ def build(data_dir: Path) -> pd.DataFrame:
             f"usgs_{r.gid}", "usgs_daily", "daily", r.gid, r.station_name,
             "usgs_gpkg", "", round(r.area_km2_delineated * SQMI_PER_KM2, 2),
             None, r.lat, r.lon, f"usgs_gauges:{r.gid}", r.first_obs,
-            r.last_obs, int(usgs_nobs[r.gid]), "usgs/flow_daily.nc:flow_mm"))
+            r.first_obs, r.last_obs, int(usgs_nobs[r.gid]),
+            "usgs/flow_daily.nc:flow_mm"))
 
     # --- cdec_daily: the 15 committed basins ------------------------------
     valid = gage.dropna(subset=["flow"])
@@ -169,21 +212,22 @@ def build(data_dir: Path) -> pd.DataFrame:
         t1 = min(spans.loc[basin, "max"].date().isoformat(), FORCING_END)
         n_obs = int(((valid["basin"] == basin) & (valid["date"] >= t0)
                      & (valid["date"] <= t1)).sum())
+        rec0 = min(str(stations.loc[st, "available_from"]), t0)
         row = _entity(
             f"cdec_{basin}", "cdec_daily", "daily", basin,
             f"CDEC {st} full natural flow",
-            "cdec15_grid_footprint" if basin in TULARE else "arcs",
+            "sacsma_15cdec_gis" if basin in TULARE else "arcs",
             ";".join(sorted(arcs)), float(barea.loc[basin, "area_mi2"]), None,
-            olat, olon, f"cdec_stations:{st}", t0, t1, n_obs,
+            olat, olon, f"cdec_stations:{st}", rec0, t0, t1, n_obs,
             "cdec15/gage.csv:flow",
-            "train_only;inherited_cadwr_footprint" if basin in TULARE else "")
-        if basin == "PNF":
-            # The CADWR and CalSim maps draw the Kings-San Joaquin divide in
-            # slightly different places, so ~2.5% of PNF's area also falls
-            # inside MIL's polygon and is counted in both basins. The true
-            # overlap is smaller (whole cells were counted whenever their
-            # center fell inside MIL). 
-            _add_flag(row, "footprint_overlaps_MIL_2.5pct")
+            "train_only" if basin in TULARE else "")
+        # The old inherited-footprint PNF flag (footprint_overlaps_MIL_2.5pct)
+        # is gone: on the real SACSMA_15CDEC polygons the PNF x MLRTN overlap
+        # measures 0.09% - the 2.5% was a whole-cell counting artifact.
+        if basin == "TRM":
+            # The SACSMA_15CDEC polygon measures 575.8 mi^2 vs the published
+            # 561; area_mi2 keeps the published value as the depth basis.
+            _add_flag(row, "polygon_2.6pct_above_published_area")
         rows.append(row)
 
     # --- cdec_daily: CLE + CSN --------------------------------------------
@@ -203,7 +247,8 @@ def build(data_dir: Path) -> pd.DataFrame:
             f"cdec_{st}", "cdec_daily", "daily", st,
             str(stations.loc[st, "name"]), "arcs", arcs, area, None,
             stations.loc[st, "lat"], stations.loc[st, "lon"],
-            f"cdec_stations:{st}", t0, t1, n_obs,
+            f"cdec_stations:{st}",
+            min(str(stations.loc[st, "available_from"]), t0), t0, t1, n_obs,
             "cdec_fnf/fnf_daily.csv:flow_cfs", flags))
 
     # --- obs11_monthly: SHA + TNL -----------------------------------------
@@ -219,13 +264,15 @@ def build(data_dir: Path) -> pd.DataFrame:
         "Sacramento R at Shasta (11obs FNF)", "arcs", "I_SHSTA",
         round(arc_area(["I_SHSTA"]), 2), None,
         stations.loc["SIS", "lat"], stations.loc["SIS", "lon"],
-        "cdec_stations:SIS", MONTHLY_START, MONTHLY_END, obs11_nobs("SHA", MONTHLY_END),
+        "cdec_stations:SIS", obs11_rec["SHA"],
+        MONTHLY_START, MONTHLY_END, obs11_nobs("SHA", MONTHLY_END),
         "calsim/fnf_11obs_monthly.csv:obs_mm", "obs_already_mm"))
     rows.append(_entity(
         "obs11_TNL", "obs11_monthly", "monthly", "TNL",
         "Trinity R (11obs FNF)", "arcs", "I_LWSTN;I_TRNTY",
         round(arc_area(["I_TRNTY", "I_LWSTN"]), 2), None,
         lew["lat"], lew["lon"], "usgs_gauges:11525500",
+        obs11_rec["TNL"],
         MONTHLY_START, "2013-09-30", obs11_nobs("TNL", "2013-09-30"),
         "calsim/fnf_11obs_monthly.csv:obs_mm",
         "obs_already_mm;obs_ends_2014-01"))
@@ -235,6 +282,12 @@ def build(data_dir: Path) -> pd.DataFrame:
         df.loc[df["entity_id"].isin(BELOW_DAM), "flags"]
         .map(lambda f: f"{f};outlet_below_delineation" if f
              else "outlet_below_delineation"))
+
+    # De-dup: every candidate row is built first (keeps the lineage and lets
+    # the twin assertions run), then the monthly twins are dropped.
+    ids = set(df["entity_id"])
+    assert set(DEDUP_DROPS) <= ids and set(DEDUP_DROPS.values()) <= ids
+    df = df[~df["entity_id"].isin(DEDUP_DROPS)]
 
     fam_rank = {"uf_monthly": 0, "usgs_daily": 1, "cdec_daily": 2,
                 "obs11_monthly": 3}
@@ -251,20 +304,22 @@ def main() -> None:
 
     df = build(args.data_dir)
     counts = df["family"].value_counts()
-    assert counts["uf_monthly"] == 18, counts
+    assert counts["uf_monthly"] == 9, counts
     assert counts["usgs_daily"] == 69, counts
     assert counts["cdec_daily"] == 17, counts
-    assert counts["obs11_monthly"] == 2, counts
+    assert "obs11_monthly" not in counts, counts  # both rows are DEDUP_DROPS
     assert df["entity_id"].is_unique
 
     by_fam = df.groupby("family")["n_obs"].sum()
-    # 6,480 DWR site-months;
+    # 3,240 DWR site-months (9 UFs x 360; 6,480 before the de-dup drops);
     # 821,412 USGS gauge-days over the reference windows.
-    assert by_fam["uf_monthly"] == 6480, by_fam
+    assert by_fam["uf_monthly"] == 3240, by_fam
     assert by_fam["usgs_daily"] == 821412, by_fam
 
-    tnl = df.loc[df["entity_id"] == "obs11_TNL", "area_mi2"].iloc[0]
-    assert abs(tnl - 719.0) < 0.1, tnl
+    cle = df.loc[df["entity_id"] == "cdec_CLE", "area_mi2"].iloc[0]
+    assert abs(cle - 692.86) < 0.1, cle
+    late = df[df["record_start"] > df["train_start"]]
+    assert late.empty, late["entity_id"].tolist()
     missing = df[df["outlet_lat"].isna()]["entity_id"].tolist()
     assert missing == ["uf_07"], missing  # composite, null by design
 
@@ -273,7 +328,7 @@ def main() -> None:
     print(f"wrote {args.out}: {len(df)} entities")
     print(counts.to_string())
     print("n_obs by family:", dict(by_fam))
-    print(f"gates ok: TNL {tnl} mi^2; outlets missing: {missing} (by design)")
+    print(f"gates ok: CLE {cle} mi^2; outlets missing: {missing} (by design)")
 
 
 if __name__ == "__main__":
