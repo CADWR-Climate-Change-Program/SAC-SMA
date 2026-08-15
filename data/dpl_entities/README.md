@@ -56,9 +56,8 @@ One row per (entity, region grid cell): 5,818 rows, 95 entities, 2,654
 distinct cells of `data/region/grid_cells.csv`. Replaces the per-domain
 `hruinfo` tables as the aggregation basis for entity training.
 
-Flow lengths are not in this table: they will be added once the per-entity
-method is settled (HydroSHEDS v2 path tracing, or a basin-size-adjusted
-sinuosity factor). Outlet coordinates live in the registry only.
+Flow lengths live in `flowlens.csv` (below), keyed identically; outlet
+coordinates live in the registry only.
 
 Generated file — do not edit. Regenerate (sacsma conda env):
 `python dataprep/build_entity_cells.py`.
@@ -93,5 +92,54 @@ that basis, less a 6-cell bookkeeping difference). Statics coverage is
 `data/region/soilveg_continuous.csv` and `lai_climatology.csv` to all
 4,410 region cells, closing what was a 256-cell gap in the training basis
 (447 full-rim).
+
+## flowlens.csv — per-entity traced flow lengths
+
+One row per (entity, region grid cell), covering exactly the
+`entity_cells.csv` pairs (5,818 rows). `flowlen_m` is the along-network
+distance (m) from the cell to the entity outlet, traced on the
+HydroSHEDS v2 1-arcsec flow-direction grid (TanDEM-X basis,
+hydrosheds.org; see `references.bib`).
+
+Generated file — do not edit. Regenerate (sacsma conda env + `pip
+install rasterio`): `python dataprep/build_flowlens.py` — auto-downloads
+the four DIR + ACC tiles to `tmp/hydrosheds/` (~6 GB, size-validated,
+not in git).
+
+| column | meaning |
+|---|---|
+| `entity_id`, `key` | as in `entity_cells.csv` |
+| `flowlen_m` | traced channel distance to the entity outlet (0 at the outlet cell ⇒ identity UH) |
+| `method` | `channel` / `center` / `fallback` — see below |
+
+Conventions. The start pixel per cell is its **main-channel pixel**: the
+highest-accumulation pixel in the cell square (capped at 1.3× the entity
+area — a pixel carrying more water than the basin cannot drain to its
+outlet) whose path reaches the outlet; `center` marks cell-center starts
+(157 rows). The outlet is snapped to the nearest pixel (≤ ~2 km) whose
+implied upstream area falls within [0.2×, 5×] of the registry
+`area_mi2` (snapped-ACC/area landed at 0.75–1.11, median ≈ 1.00).
+`uf_07` (multi-outlet composite) traces each cell to where its path
+exits the entity footprint. `fallback` (1,362 rows, **6.0% of total area
+weight**) = haversine × the entity's median traced sinuosity, for cells
+none of whose candidates drain through the outlet — below-outlet valley
+cells, square-overlap edge slivers, and sub-cell basins; per-entity
+shares are printed by the builder (worst: a few 2–10-cell USGS basins,
+and uf_21 at 29% with its outlet at 0.75× area).
+
+Method precedents (`docs/references.bib`): the per-cell channel-pixel
+convention follows the coarse-grid upscaling tradition — COTAT's
+outlet-pixel-with-area-threshold (`reed2003`) and Dominant River
+Tracing's accumulation-based channel selection (`wu2011drt`) — and the
+outlet snap uses the upstream-area agreement test the HydroSHEDS authors
+use to link GRDC gauges to the grid.
+
+Validation: the archived CADWR flowlens (`cdec15_grid`) reproduce at
+r = 0.977–0.992 with median ratio 0.97–1.06 across all 15 basins —
+except MKM (ratio 1.18), whose archive was measured to a legacy
+reference point ~13 km short of the dam. Per-basin median sinuosity
+(traced / straight line) runs 1.0–1.6 in small basins up to 2.0–2.3 for
+the large dendritic ones (SHA, BND, uf_06) — the basin-size dependence
+a flat factor cannot capture.
 
 
