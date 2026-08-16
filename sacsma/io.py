@@ -26,26 +26,33 @@ CDEC15_DOMAIN = "15cdec"
 CDEC15_GRID_DOMAIN = "15cdec_grid"
 #: the CalSim/CalLite application's domains.
 CALSIM_DOMAINS = ("9unimp", "11obs", "12rim")
+#: the multi-timescale training domain (``data/dpl_entities``): one
+#: "basin" per training entity, cells/weights from ``entity_cells.csv``,
+#: flow lengths from ``flowlens.csv``.
+MULTI_TIMESCALE_DOMAIN = "dpl_entities"
 #: 1/16-deg-grid-based domains — these read the UNIFIED region forcing stores
 #: (``data/region/forcing/<product>.nc``: one file per product at the region
 #: grid, prcp/tmin/tmax with tavg derived; built by
 #: dataprep/build_region_forcing.py).  The fine ``15cdec`` domain keeps its
 #: own dense off-grid store (special interpolation treatment upstream).
-REGION_DOMAINS = (CDEC15_GRID_DOMAIN, *CALSIM_DOMAINS)
+REGION_DOMAINS = (CDEC15_GRID_DOMAIN, *CALSIM_DOMAINS, MULTI_TIMESCALE_DOMAIN)
 
 
 def domain_dir(data_dir: str | Path = "data", domain: str = DEFAULT_DOMAIN) -> Path:
     """Application data directory: ``data/cdec15`` for 15cdec, ``data/cdec15_grid``
-    for its grid parallel, ``data/calsim`` for the CalSim domains."""
+    for its grid parallel, ``data/calsim`` for the CalSim domains,
+    ``data/dpl_entities`` for the multi-timescale domain."""
     if domain == CDEC15_DOMAIN:
         return Path(data_dir) / "cdec15"
     if domain == CDEC15_GRID_DOMAIN:
         return Path(data_dir) / "cdec15_grid"
     if domain in CALSIM_DOMAINS:
         return Path(data_dir) / "calsim"
+    if domain == MULTI_TIMESCALE_DOMAIN:
+        return Path(data_dir) / "dpl_entities"
     raise ValueError(
         f"unknown domain {domain!r} (expected {CDEC15_DOMAIN}, {CDEC15_GRID_DOMAIN}, "
-        f"or one of {CALSIM_DOMAINS})"
+        f"{MULTI_TIMESCALE_DOMAIN}, or one of {CALSIM_DOMAINS})"
     )
 
 
@@ -94,13 +101,20 @@ def norm_grid_key(k: str) -> str:
 def soilveg_path(data_dir: str | Path = "data", domain: str = DEFAULT_DOMAIN) -> Path:
     """Per-HRU continuous soil/veg/terrain feature table (POLARIS + LANDFIRE +
     3DEP + MODIS-LAI sampled at each HRU point; see ``data/raw_gis/SOURCES.md``).
-    One row per HRU in ``hruinfo`` order, keyed (non-uniquely) by ``key``."""
+    One row per HRU in ``hruinfo`` order, keyed (non-uniquely) by ``key``.
+    The multi-timescale domain reads the full-coverage REGION table (one row per grid
+    cell, all 4,410 cells)."""
+    if domain == MULTI_TIMESCALE_DOMAIN:
+        return Path(data_dir) / "region" / "soilveg_continuous.csv"
     return domain_dir(data_dir, domain) / f"soilveg_continuous{_sfx(domain)}.csv"
 
 
 def lai_climatology_path(data_dir: str | Path = "data", domain: str = DEFAULT_DOMAIN) -> Path:
     """Per-HRU 46-value 8-day MODIS-LAI day-of-year climatology (companion to
-    :func:`soilveg_path`; the Noah-ET canopy driver)."""
+    :func:`soilveg_path`; the Noah-ET canopy driver).  The multi-timescale domain reads
+    the full-coverage REGION table."""
+    if domain == MULTI_TIMESCALE_DOMAIN:
+        return Path(data_dir) / "region" / "lai_climatology.csv"
     return domain_dir(data_dir, domain) / f"lai_climatology{_sfx(domain)}.csv"
 
 
@@ -200,8 +214,35 @@ def write_table(df: pd.DataFrame, path: str | Path) -> Path:
 
 
 def load_hru_table(data_dir: str | Path = "data", domain: str = DEFAULT_DOMAIN) -> pd.DataFrame:
-    """Per-HRU attribute table (with basin code) for a modeling ``domain``."""
-    return read_table(domain_dir(data_dir, domain) / f"hruinfo{_sfx(domain)}.csv")
+    """Per-HRU attribute table (with basin code) for a modeling ``domain``.
+
+    The multi-timescale domain has no ``hruinfo`` file — its table is assembled on the
+    hruinfo contract from the entity store: one row per (entity, cell) with
+    ``basin`` = entity_id, ``area_weight`` = the square-overlap ``overlap_mi2``,
+    ``flowlen`` from ``flowlens.csv`` (traced, meters), and ``elev`` joined
+    per cell from the region statics (``dem_elev``)."""
+    if domain != MULTI_TIMESCALE_DOMAIN:
+        return read_table(domain_dir(data_dir, domain) / f"hruinfo{_sfx(domain)}.csv")
+    ddir = domain_dir(data_dir, domain)
+    cells = read_table(ddir / "entity_cells.csv")
+    fl = read_table(ddir / "flowlens.csv")
+    hrus = cells.merge(fl[["entity_id", "key", "flowlen_m"]],
+                       on=["entity_id", "key"], validate="one_to_one")
+    if len(hrus) != len(cells):
+        raise ValueError("flowlens.csv does not cover entity_cells.csv")
+    sv = pd.read_csv(soilveg_path(data_dir, domain),
+                     usecols=["key", "dem_elev"]).set_index("key")["dem_elev"]
+    out = pd.DataFrame({
+        "basin": hrus["entity_id"], "key": hrus["key"],
+        "lat": hrus["lat"], "lon": hrus["lon"],
+        "area_weight": hrus["overlap_mi2"],
+        "elev": hrus["key"].map(sv), "flowlen": hrus["flowlen_m"],
+    })
+    if out["elev"].isna().any():
+        n = int(out["elev"].isna().sum())
+        raise ValueError(f"{n} entity cells missing dem_elev in the region "
+                         "statics — rebuild data/region/soilveg_continuous.csv")
+    return out
 
 
 def load_params(data_dir: str | Path = "data", domain: str = DEFAULT_DOMAIN) -> pd.DataFrame:

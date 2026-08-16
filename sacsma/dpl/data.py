@@ -19,7 +19,7 @@ import pandas as pd
 import torch
 
 from ..cdec15 import BASINS, CAL_END, load_gage
-from ..io import domain_dir, load_hru_table, load_params
+from ..io import MULTI_TIMESCALE_DOMAIN, domain_dir, load_hru_table, load_params
 from ..model import DomainForcing, load_domain_forcing
 from .config import PARAM_ORDER, validate_ga_optimum
 
@@ -522,7 +522,17 @@ def load_domain_tensors(
     state_cells = (None if dynamic_window is None else
                    _compute_state_index(forcing, forcing.dates, dynamic_window, CAL_END))
     hrus = load_hru_table(data_dir, domain=domain)
-    basins = tuple(basins if basins is not None else BASINS)
+    if basins is None:
+        if domain == MULTI_TIMESCALE_DOMAIN:
+            # registry order — one "basin" per training entity
+            reg = pd.read_csv(
+                domain_dir(data_dir, domain) / "entities.csv",
+                usecols=["entity_id"])
+            basins = tuple(reg["entity_id"])
+        else:
+            basins = tuple(BASINS)
+    else:
+        basins = tuple(basins)
     hrus = hrus[hrus["basin"].isin(basins)].reset_index(drop=True)
 
     cell_idx = np.array([forcing.pos[k] for k in hrus["key"]], dtype=np.int64)
@@ -566,19 +576,22 @@ def _load_canopy_obs(data_dir: str, domain: str, forcing):
     * ``veg_frac`` = LANDFIRE EVC cover fraction (``EVC_cover_pct`` / 100), from
       ``<domain>/soilveg_continuous.csv``, clamped to CANOPY_BOUNDS.
     * ``lai_lut`` = the per-cell daily LAI climatology, linearly interpolated
-      from the 46 8-day samples (``lai_doy001..361``) in
-      ``<domain>/lai_climatology.csv`` onto day-of-year 1..366 (winter tail
-      flat-held past the last sample), clamped to CANOPY_BOUNDS.
+      from the 46 8-day samples (``lai_doy001..361``) onto day-of-year 1..366
+      (winter tail flat-held past the last sample), clamped to CANOPY_BOUNDS.
 
-    Both are PINNED inputs (never learned).  Only 15cdec_grid ships them.
+    Both are PINNED inputs (never learned).  Paths resolve through the
+    suffix-aware ``io.soilveg_path``/``io.lai_climatology_path`` helpers, so
+    suffixed calsim domains and the multi-timescale domain (region tables) find their
+    sidecars — previously the unsuffixed names were hard-coded here and the
+    suffixed domains silently lost their canopy inputs.
     """
     import re
 
+    from ..io import lai_climatology_path, soilveg_path
     from .config import CANOPY_BOUNDS
 
-    ddir = domain_dir(data_dir, domain)
-    sv_path = ddir / "soilveg_continuous.csv"
-    lai_path = ddir / "lai_climatology.csv"
+    sv_path = soilveg_path(data_dir, domain)
+    lai_path = lai_climatology_path(data_dir, domain)
     if not sv_path.exists() or not lai_path.exists():
         return None, None
 
