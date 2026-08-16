@@ -187,7 +187,7 @@ def build(data_dir: Path) -> pd.DataFrame:
             "arcs", r.arcs, round(float(r.area_mi2_calsim), 2), swat,
             olat, olon, osrc, uf_rec[n],
             MONTHLY_START, MONTHLY_END, int(uf_nobs[n]),
-            "dwr_unimpaired/uf_monthly.csv:flow_taf", UF_FLAGS.get(n, ""))
+            "dwr_unimpaired/uf_monthly_mm.csv:depth_mm", UF_FLAGS.get(n, ""))
         rows.append(row)
 
     # --- usgs_daily -------------------------------------------------------
@@ -249,7 +249,7 @@ def build(data_dir: Path) -> pd.DataFrame:
             stations.loc[st, "lat"], stations.loc[st, "lon"],
             f"cdec_stations:{st}",
             min(str(stations.loc[st, "available_from"]), t0), t0, t1, n_obs,
-            "cdec_fnf/fnf_daily.csv:flow_cfs", flags))
+            "cdec_fnf/fnf_daily_mm.csv:depth_mm", flags))
 
     # --- obs11_monthly: SHA + TNL -----------------------------------------
     lew = gauges.set_index("gid").loc["11525500"]

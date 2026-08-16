@@ -7,6 +7,7 @@ Built by `dataprep/cdec_fnf.py` (survey 2026-08-03). Re-run: bare = everything;
 |---|---|
 | `stations.csv` | Every CDEC station with daily FNF (sensor 8, daily): id, name, lat/lon, advertised period. Classification of each station: the table below |
 | `fnf_daily.csv` | `station, date, flow_cfs` — daily FNF for the 4 pulled stations, verbatim cfs, through 2018-12-31 (forcing end) |
+| `fnf_daily_mm.csv` | `station, date, depth_mm` — derived depth companion for the two approved daily targets (built by `dataprep/build_obs_depth.py`): CLE at 692.86 mi² (the `I_TRNTY` arc area) and CSN at the UF 13 arc-sum (539.1 mi²); negative-flow days dropped |
 
 ## Survey
 

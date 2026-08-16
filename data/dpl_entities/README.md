@@ -93,6 +93,21 @@ that basis, less a 6-cell bookkeeping difference). Statics coverage is
 4,410 region cells, closing what was a 256-cell gap in the training basis
 (447 full-rim).
 
+## Where the observation series live
+
+This store holds no observation series — the registry's `obs_store`
+column points at each entity's target in its source store: `usgs_daily`
+reads `usgs/flow_daily.nc:flow_mm` and the 15 committed `cdec_daily`
+basins read `cdec15/gage.csv:flow` (both already depth). The two stores
+that are not depth-native carry derived companions beside their raw
+tables, built by `dataprep/build_obs_depth.py`:
+`dwr_unimpaired/uf_monthly_mm.csv` (TAF → mm/month at the CalSim
+arc-sum areas, all 18 arc-mapped UFs, full WY1922–2014 record) and
+`cdec_fnf/fnf_daily_mm.csv` (CLE + CSN cfs → mm/day, negative days
+dropped). Training windows are never baked into a series —
+`record_start`/`train_start`/`train_end` own the windowing at load
+time.
+
 ## flowlens.csv — per-entity traced flow lengths
 
 One row per (entity, region grid cell), covering exactly the
