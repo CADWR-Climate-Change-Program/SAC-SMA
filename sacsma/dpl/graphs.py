@@ -35,6 +35,7 @@ from .data import ET_MAXM, DomainTensors
 from .et_noah import NoahCanopyState
 from .forward import PipelineState, routing_uh, run_window
 from .loss import level_hinge_loss, masked_basin_loss, shape_pull_loss
+from .multi_timescale import monthly_nnse_loss
 from .routing import N_TAPS
 from .sma import SacState
 from .snow17 import Snow17State
@@ -203,7 +204,10 @@ class TrainChunk(_WindowBase):
     def __init__(self, net: torch.nn.Module, dom: DomainTensors,
                  cfg: DplConfig, length: int, x: torch.Tensor,
                  obs_var: torch.Tensor, weight: torch.Tensor | None = None,
-                 swe_basin_w: torch.Tensor | None = None):
+                 swe_basin_w: torch.Tensor | None = None,
+                 mt_rows: torch.Tensor | None = None,
+                 mt_var: torch.Tensor | None = None,
+                 daily_scale: float = 1.0, monthly_scale: float = 1.0):
         super().__init__(dom, length, et_mode=cfg.et_mode,
                          need_tmm=cfg.sac_pet == "priestley_taylor")
         b = dom.W.shape[0]
@@ -240,6 +244,19 @@ class TrainChunk(_WindowBase):
             self.swe_sig = torch.ones(b, ET_MAXM, device=dev, dtype=dt)
             self.swe_mask = torch.zeros(ET_MAXM, device=dev, dtype=dt)
             self.swe_w = swe_basin_w.detach().clone()   # (B,) static snow mask
+        #: monthly-flow term (multi-timescale domain): static per-chunk target
+        #: buffers like the ET/SWE ones.  Init tgt=0/fin=0 -> the term is 0 at
+        #: capture while its backward path IS captured (mask-zero pattern).
+        self.mt = mt_rows is not None
+        self.daily_scale = daily_scale
+        self.monthly_scale = monthly_scale
+        if self.mt:
+            m = int(mt_rows.numel())
+            self.mt_rows = mt_rows.detach().clone()
+            self.mt_var = mt_var.detach().clone()
+            self.mt_bucket = torch.zeros(length, ET_MAXM, device=dev, dtype=dt)
+            self.mt_tgt = torch.zeros(m, ET_MAXM, device=dev, dtype=dt)
+            self.mt_fin = torch.zeros(m, ET_MAXM, device=dev, dtype=dt)
 
         def _step():
             out = net(self.x)
@@ -286,6 +303,13 @@ class TrainChunk(_WindowBase):
                 loss = loss + self.swe_lambda * shape_pull_loss(
                     swe_monthly, self.swe_mu, self.swe_sig, self.swe_mask,
                     basin_w=self.swe_w)
+            if self.mt:
+                # multi-timescale monthly NNSE on the same simulated flow; the
+                # scales only depart from 1.0 under family weighting
+                sim_m = basin[self.mt_rows] @ self.mt_bucket
+                loss = self.daily_scale * loss + self.monthly_scale * \
+                    monthly_nnse_loss(sim_m, self.mt_tgt, self.mt_fin,
+                                      self.mt_var)
             return loss, st
 
         net.train()
@@ -344,18 +368,30 @@ class TrainChunk(_WindowBase):
             self.swe_sig.copy_(sig)
             self.swe_mask.copy_(mask)
 
+    def set_mt_target(self, bucket, tgt, fin) -> None:
+        """Copy this chunk's monthly-flow target (day->month bucket, observed
+        mm/month 0-filled, finite-slot mask) into the static buffers."""
+        if self.mt:
+            self.mt_bucket.copy_(bucket)
+            self.mt_tgt.copy_(tgt)
+            self.mt_fin.copy_(fin)
+
     def run(self, pr, ta, doy, leap, obs, tmin=None, tmax=None,
-            lai=None, state_idx=None, et_target=None, swe_target=None) -> float:
+            lai=None, state_idx=None, et_target=None, swe_target=None,
+            mt_target=None) -> float:
         """One chunk: replay forward+backward, carry state, return the loss.
         Gradients are left in the net's static ``.grad`` tensors.  ``et_target``
-        (bucket, mu, sig, mask, lo, hi) and ``swe_target`` (bucket_mean, mu, sig,
-        mask) are copied in when the respective obs losses are active."""
+        (bucket, mu, sig, mask, lo, hi), ``swe_target`` (bucket_mean, mu, sig,
+        mask) and ``mt_target`` (bucket, tgt, fin) are copied in when the
+        respective loss terms are active."""
         self._copy_forcing(pr, ta, doy, leap, tmin, tmax, lai, state_idx)
         self.obs.copy_(obs)
         if et_target is not None:
             self.set_et_target(*et_target)
         if swe_target is not None:
             self.set_swe_target(*swe_target)
+        if mt_target is not None:
+            self.set_mt_target(*mt_target)
         self.graph.replay()
         self._pingpong()
         return float(self.loss.detach())

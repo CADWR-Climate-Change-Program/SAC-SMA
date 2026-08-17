@@ -36,7 +36,7 @@ import torch
 
 from ..cdec15 import load_gage
 from ..io import MULTI_TIMESCALE_DOMAIN, domain_dir
-from .data import DomainTensors
+from .data import DomainTensors, et_chunk_target
 
 #: global training envelope (plan: WY1950-2018; forcing ends 2018-12-31).
 ENVELOPE_START = "1949-10-01"
@@ -168,3 +168,56 @@ def load_entity_obs(
         obs_monthly=torch.as_tensor(obs_m).to(dom.device, dom.dtype),
         var_monthly=torch.as_tensor(var_m).to(dom.device, dom.dtype),
     )
+
+
+def monthly_chunk_target(
+    dates: pd.DatetimeIndex, c0: int, length: int,
+    cal_t0: int, cal_t1: int, month_code: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Day->month bucket for one TBPTT chunk plus each slot's COLUMN in the
+    envelope month grid (:attr:`EntityObs.month_code`).
+
+    Wraps :func:`sacsma.dpl.data.et_chunk_target` — a calendar month gets a
+    slot only when it lies completely inside both the chunk and the cal
+    window, so split/partial months never enter the loss — and recovers each
+    slot's absolute month, so the simulated monthly sum lands in the right
+    ``obs_monthly`` column regardless of where the chunk grid cuts.  Returns
+    numpy ``(bucket (length, maxm), cols (maxm,), mask (maxm,))``; masked
+    slots have ``cols`` 0 (gate on ``mask`` before comparing).
+    """
+    bucket, _, mask = et_chunk_target(dates, c0, length, cal_t0, cal_t1)
+    if mask.sum() >= bucket.shape[1]:
+        # all slots used ⇒ a further complete month may have been dropped
+        # silently (et_chunk_target caps at maxm without error); DplConfig
+        # bounds train_chunk_days <= 366 exactly to keep this unreachable
+        raise ValueError(f"monthly bucket slots exhausted for a {length}-day "
+                         "chunk — shorten the chunk")
+    cols = np.zeros(bucket.shape[1], np.int64)
+    for s in np.flatnonzero(mask > 0):
+        d = dates[c0 + int(np.flatnonzero(bucket[:, s])[0])]
+        col = d.year * 12 + (d.month - 1) - int(month_code[0])
+        if not 0 <= col < len(month_code):
+            raise ValueError(
+                f"chunk month {d.year}-{d.month:02d} outside the envelope")
+        cols[s] = col
+    return bucket, cols, mask
+
+
+def monthly_nnse_loss(
+    sim_monthly: torch.Tensor,   # (M, maxm) simulated complete-month sums
+    tgt: torch.Tensor,           # (M, maxm) observed mm/month, 0 where invalid
+    fin: torch.Tensor,           # (M, maxm) 1.0 on finite in-window slots
+    var_monthly: torch.Tensor,   # (M,) fixed envelope variances
+    min_months: int = 1,
+) -> torch.Tensor:
+    """Chunk-additive NNSE over the monthly entities — the monthly mirror of
+    :func:`sacsma.dpl.loss.masked_basin_loss`: per-entity mean squared error
+    over the chunk's valid month slots, normalized by the FIXED per-entity
+    variance (:attr:`EntityObs.var_monthly`, so summed chunk losses keep the
+    NSE numerator/denominator structure), averaged over entities with at
+    least ``min_months`` valid slots.  Branch-free (no host sync)."""
+    n = fin.sum(dim=1)
+    se = (sim_monthly - tgt) ** 2 * fin
+    per = se.sum(dim=1) / n.clamp_min(1.0) / var_monthly.clamp_min(1e-12)
+    valid = (n >= min_months).to(per.dtype)
+    return (per * valid).sum() / valid.sum().clamp_min(1.0)

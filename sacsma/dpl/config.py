@@ -278,6 +278,15 @@ class DplConfig:
     #: min-max level envelope is degenerate, so one product REQUIRES the P-Q
     #: anchor (``et_anchor_band`` > 0) as the level constraint.
     et_products: tuple[str, ...] = ()
+    #: multi-timescale family weighting (dpl_entities domain only): "none" =
+    #: every valid daily entity weighs equally in the chunk mean and the
+    #: monthly term adds with coefficient 1 (the baseline); "equal" = the
+    #: three families carry equal thirds of the loss — usgs_daily and
+    #: cdec_daily each get half the daily mean's mass (per-entity weight
+    #: 1/n_family) and the daily/monthly terms are scaled 2/3 and 1/3.
+    #: Guards against combining with adaptive_loss (both drive the same
+    #: per-basin weight vector).  Ignored outside the multi-timescale domain.
+    mt_family_weight: str = "none"
     #: warm-start checkpoint path: the net's weights are loaded strict=False
     #: BEFORE training (heads absent from the donor — e.g. a fresh seasonal
     #: head — keep their zero-init, so the run starts EXACTLY at the donor's
@@ -429,6 +438,15 @@ class DplConfig:
             raise ValueError(
                 "et_anchor_band re-targets the level hinge — it needs "
                 "et_level_lambda > 0 to have any effect")
+        if self.mt_family_weight not in ("none", "equal"):
+            raise ValueError(f"mt_family_weight {self.mt_family_weight!r}")
+        if not 30 <= self.train_chunk_days <= 366:
+            # > 366 days can hold a 14th complete calendar month, overflowing
+            # the fixed 13-slot monthly buckets (ET_MAXM) — months past the
+            # 13th would be dropped from the ET/SWE/monthly-flow targets
+            # SILENTLY (et_chunk_target caps at maxm without error)
+            raise ValueError(f"train_chunk_days {self.train_chunk_days} "
+                             "outside [30, 366]")
         if isinstance(self.et_products, str):   # tolerate a bare CLI string
             self.et_products = tuple(p for p in self.et_products.split(",") if p)
         if (len(self.et_products) == 1

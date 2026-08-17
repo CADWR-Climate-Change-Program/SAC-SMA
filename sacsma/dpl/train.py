@@ -25,6 +25,16 @@ Protocol (per epoch):
    one AdamW step per chunk on the chunk-additive NNSE loss (post-CAL_END
    days of the last chunk are NaN-masked).
 
+For the multi-timescale domain (``domain="dpl_entities"``) the same protocol
+runs over the training entities on the registry envelope (WY1950-2018): each
+daily entity joins the chunk NNSE window-masked (NaN outside its own
+``train_start``/``train_end``), the monthly entities add a chunk-additive
+monthly NNSE term (simulated daily flow bucketed to complete calendar
+months), and selection pools per-entity KGE at each entity's native
+timescale.  Train chunks run eager for this domain (the monthly term is not
+graph-captured); the last chunk is short — the envelope ends at the forcing
+record end.
+
 On CUDA the day-stepped pipeline runs as captured CUDA graphs
 (:mod:`sacsma.dpl.graphs`) — eager execution is dispatch-bound.  Graph
 capture failure (or ``--device cpu``) falls back to eager with identical
@@ -42,7 +52,7 @@ import numpy as np
 import pandas as pd
 import torch
 
-from ..io import load_params, soilveg_path
+from ..io import MULTI_TIMESCALE_DOMAIN, load_params, soilveg_path
 from .config import (
     CANOPY_LEARNED_PARAMS,
     CANOPY_LITE_LEARNED,
@@ -63,6 +73,11 @@ from .data import (
 from .features import FeatureSet, build_features
 from .forward import PipelineState, initial_state, routing_uh, run_window
 from .loss import kge_torch, level_hinge_loss, masked_basin_loss, shape_pull_loss
+from .multi_timescale import (
+    load_entity_obs,
+    monthly_chunk_target,
+    monthly_nnse_loss,
+)
 from .parameter_net import ParameterNet, ga_priors
 from .regularize import (
     adaptive_basin_weights,
@@ -164,7 +179,9 @@ def train(
     *,
     resume: bool = False,
     basins: tuple[str, ...] | None = None,   # debug subset (default: all 15)
-    domain: str = "15cdec",                  # 15cdec HRU cloud | 15cdec_grid native grid
+    domain: str = "15cdec",                  # 15cdec HRU cloud | 15cdec_grid
+                                             # native grid | dpl_entities
+                                             # multi-timescale entities
 ) -> Path:
     """Train one feature variant; returns the output directory."""
     cfg = cfg or DplConfig()
@@ -183,11 +200,90 @@ def train(
         data_dir, domain=domain, device=dev, dtype=dtype, basins=basins,
         dynamic_window=cfg.dynamic_window if cfg.dynamic_params else None,
         calsim_footprint=cfg.calsim_footprint)
-    calobs = load_cal_obs(dom, data_dir, cal_start=cfg.cal_start)
+    eobs = d_rows = m_rows = midx = None
+    if domain == MULTI_TIMESCALE_DOMAIN:
+        if (cfg.et_loss_lambda > 0.0 or cfg.et_level_lambda > 0.0
+                or cfg.swe_loss_lambda > 0.0):
+            raise ValueError("ET/SWE auxiliary losses are not wired for the "
+                             "multi-timescale domain")
+        if variant in ("static", "climate"):
+            raise ValueError(
+                "the multi-timescale domain has no zonal soil_class/"
+                "veg_class (they exist only where the original zonal "
+                "regionalization was drawn) — use the physical variants, "
+                "whose continuous statics cover the whole region grid")
+        eobs = load_entity_obs(dom, data_dir)
+        d_rows = torch.as_tensor(eobs.daily_rows, device=dev)
+        m_rows = torch.as_tensor(eobs.monthly_rows, device=dev)
+        # daily entities ride the existing chunk NNSE as a CalObs whose
+        # monthly rows are all-NaN (they self-exclude via min_days); the
+        # monthly rows train through the bucketed term below instead.
+        obs_full = torch.full((len(dom.basins), eobs.t1 - eobs.t0),
+                              float("nan"), device=dev, dtype=dtype)
+        obs_full[d_rows] = eobs.obs_daily
+        var_full = torch.ones(len(dom.basins), device=dev, dtype=dtype)
+        var_full[d_rows] = eobs.var_daily
+        calobs = CalObs(t0=eobs.t0, t1=eobs.t1, obs=obs_full, obs_var=var_full)
+        d0, dl = dom.dates[eobs.t0], dom.dates[eobs.t1 - 1]
+        if d0.day != 1 or (dl + pd.Timedelta(days=1)).day != 1:
+            raise ValueError("the multi-timescale cal window must span whole "
+                             "calendar months (monthly targets)")
+        win = dom.dates[eobs.t0:eobs.t1]
+        midx = torch.as_tensor(
+            (win.year * 12 + (win.month - 1)).to_numpy()
+            - int(eobs.month_code[0]), device=dev)
+        print(f"train: multi-timescale domain — {len(eobs.daily_rows)} daily "
+              f"+ {len(eobs.monthly_rows)} monthly entities, cal window "
+              f"{d0.date()}..{dl.date()} "
+              f"({int(torch.isfinite(eobs.obs_daily).sum())} daily + "
+              f"{int(torch.isfinite(eobs.obs_monthly).sum())} monthly obs); "
+              "chunk loss = daily NNSE + monthly NNSE (complete months)",
+              flush=True)
+    else:
+        calobs = load_cal_obs(dom, data_dir, cal_start=cfg.cal_start)
+    # family weighting (multi-timescale only): "equal" gives the three
+    # families equal thirds — usgs/cdec split the daily chunk mean's mass
+    # (per-entity weight 1/n_family, renormalized inside masked_basin_loss so
+    # a family with no valid entities in a chunk drops out cleanly) and the
+    # daily/monthly terms scale 2/3 / 1/3.  "none" = the unweighted baseline.
+    fam_w = None
+    daily_scale = monthly_scale = 1.0
+    if eobs is not None and cfg.adaptive_loss:
+        # adaptive weights would reach the daily term only — monthly_nnse_loss
+        # takes no per-entity weights — silently skewing the documented
+        # semantics for the 9 monthly entities
+        raise ValueError("adaptive_loss is not wired for the multi-timescale "
+                         "domain (the monthly term takes no per-entity "
+                         "weights)")
+    if eobs is not None and cfg.mt_family_weight == "equal":
+        fam = np.array(eobs.family)
+        w_np = np.zeros(len(fam))
+        for f in ("usgs_daily", "cdec_daily"):
+            msk = fam == f
+            if msk.any():
+                w_np[msk] = 1.0 / msk.sum()
+        # unit-MEAN scale over the daily entities (masked_basin_loss's
+        # documented weight contract): the weighted mean itself is scale-
+        # invariant, but tiny absolute weights would trip the loss's
+        # clamp_min(1.0) denominator guard in sparse early chunks and
+        # silently deflate the term (bound in 38/70 envelope chunks at raw
+        # 1/n_family scale)
+        w_np *= (w_np > 0).sum() / w_np.sum()
+        fam_w = torch.as_tensor(w_np, device=dev, dtype=dtype)
+        daily_scale, monthly_scale = 2.0 / 3.0, 1.0 / 3.0
+        print("train: family weighting EQUAL — usgs/cdec split the daily "
+              "mean's mass; daily x 2/3, monthly x 1/3", flush=True)
     # truncated spinup start (clamped to the record start; == 0 restores the
     # exact frozen full-prefix convention)
-    spin_t0 = min(int(dom.dates.searchsorted(pd.Timestamp(cfg.spinup_start))),
-                  calobs.t0)
+    spin_req = int(dom.dates.searchsorted(pd.Timestamp(cfg.spinup_start)))
+    if eobs is not None and spin_req >= calobs.t0:
+        # the (15cdec-era) default spinup_start sits inside this cal window —
+        # keep the ten-water-year spinup convention relative to the window
+        ts = dom.dates[calobs.t0] - pd.DateOffset(years=10)
+        spin_req = int(dom.dates.searchsorted(ts))
+        print(f"train: spinup_start {cfg.spinup_start} is inside the cal "
+              f"window — spinning up from {ts.date()}", flush=True)
+    spin_t0 = min(spin_req, calobs.t0)
     etobs = sweobs = anchor_monthly = None
     if cfg.et_loss_lambda > 0.0 or cfg.et_level_lambda > 0.0:
         etobs = load_et_obs(dom, cal_start=cfg.cal_start,
@@ -292,7 +388,19 @@ def train(
         print(f"train: learned spatial smoother on (gnn_k={cfg.gnn_k}, "
               f"attr_scale={cfg.gnn_attr_scale}; zero-init mixing = exact v1 "
               f"at init)", flush=True)
-    priors = ga_priors(load_params(data_dir, domain=domain), dom.hrus)
+    if eobs is not None:
+        # the multi-timescale store carries no GA table — the scalar init
+        # prior (area-weighted median per param) comes from the region-grid
+        # 15cdec GA params over the covered cells
+        pdf = load_params(data_dir, domain="15cdec_grid").drop_duplicates("key")
+        hrus_p = dom.hrus[dom.hrus["key"].isin(set(pdf["key"]))]
+        if hrus_p.empty:            # debug subsets entirely off the 15cdec grid
+            hrus_p = pdf[["key"]].assign(area_weight=1.0)
+        print(f"train: init priors = 15cdec_grid GA median over "
+              f"{len(hrus_p)}/{len(dom.hrus)} HRU rows", flush=True)
+        priors = ga_priors(pdf, hrus_p)
+    else:
+        priors = ga_priors(load_params(data_dir, domain=domain), dom.hrus)
     net.init_from_priors(priors)
     donor_kge = float("nan")
     if cfg.init_from:
@@ -336,6 +444,12 @@ def train(
         log_path.unlink()                        # fresh run, fresh log
     if resume and (ckdir / "last.pt").exists():
         ck = torch.load(ckdir / "last.pt", map_location=dev, weights_only=False)
+        if ck.get("basins") is not None \
+                and tuple(ck["basins"]) != tuple(dom.basins):
+            raise ValueError(
+                f"resume: checkpoint was trained on {len(ck['basins'])} "
+                f"basins but this run loads {len(dom.basins)} — repeat the "
+                "same --basins subset")
         net.load_state_dict(ck["net"])
         opt.load_state_dict(ck["opt"])
         sched.load_state_dict(ck["sched"])
@@ -366,11 +480,19 @@ def train(
             nograd_g = None
         if nograd_g is not None:
             # whole-chunk fwd+bwd capture is the VRAM peak: on OOM, halve the
-            # chunk once (TBPTT detaches mid-water-year) before giving up
+            # chunk once (TBPTT detaches mid-water-year) before giving up.
+            # The multi-timescale monthly term is captured too (static target
+            # buffers, mask-zero at capture); its short TAIL chunk — the
+            # envelope ends at the forcing record — replays eagerly below.
             for clen in (cfg.train_chunk_days, cfg.train_chunk_days // 2):
                 try:
-                    train_g = TrainChunk(net, dom, cfg, clen, x, calobs.obs_var,
-                                         weight=basin_w, swe_basin_w=swe_w)
+                    train_g = TrainChunk(
+                        net, dom, cfg, clen, x, calobs.obs_var,
+                        weight=fam_w if fam_w is not None else basin_w,
+                        swe_basin_w=swe_w,
+                        mt_rows=m_rows if eobs is not None else None,
+                        mt_var=eobs.var_monthly if eobs is not None else None,
+                        daily_scale=daily_scale, monthly_scale=monthly_scale)
                     break
                 except torch.cuda.OutOfMemoryError:
                     print(f"train: chunk capture OOM at {clen} days — "
@@ -383,6 +505,28 @@ def train(
         if train_g is None:
             for p in net.parameters():
                 p.grad = None
+
+    def _mt_kge(sim: torch.Tensor) -> tuple[torch.Tensor, float]:
+        """Pooled per-entity cal KGE at each entity's NATIVE timescale: daily
+        rows at daily stride, monthly rows on calendar-month sums of the same
+        simulated flow (>= 12 obs months to enter the pool).  Prints the
+        per-family means alongside the pooled selection scalar."""
+        k = kge_torch(sim.double(), calobs.obs.double())
+        sim_m = torch.zeros(len(eobs.monthly_rows), eobs.obs_monthly.shape[1],
+                            device=sim.device, dtype=torch.float64)
+        sim_m.index_add_(1, midx, sim[m_rows].double())
+        k[m_rows] = kge_torch(sim_m, eobs.obs_monthly.double())
+        valid = torch.isfinite(calobs.obs).sum(dim=1) >= 90
+        valid[m_rows] = torch.isfinite(eobs.obs_monthly).sum(dim=1) >= 12
+        fams = np.array(eobs.family)
+        k_np, v_np = k.cpu().numpy(), valid.cpu().numpy()
+        parts = "  ".join(
+            f"{f.split('_')[0]} {k_np[(fams == f) & v_np].mean():.4f}"
+            f" (n={int(((fams == f) & v_np).sum())})"
+            for f in ("usgs_daily", "cdec_daily", "uf_monthly")
+            if ((fams == f) & v_np).any())
+        print(f"    per-family cal KGE: {parts}", flush=True)
+        return k, float(k[valid].mean())
 
     def _spinup_and_maybe_eval(
         do_eval: bool,
@@ -403,7 +547,8 @@ def train(
         if do_eval:
             sim, _ = _stream_nograd(dom, cfg, pe, ue, calobs.t0, calobs.t1, st,
                                     graph=nograd_g, collect=True, canopy_params=cp_e)
-            per_basin, pooled = _cal_kge(sim, calobs.obs)
+            per_basin, pooled = (_mt_kge(sim) if eobs is not None
+                                 else _cal_kge(sim, calobs.obs))
         return pooled, per_basin, st
 
     def _save(path: Path, *, epoch: int, kge: float) -> None:
@@ -411,6 +556,7 @@ def train(
                     "sched": sched.state_dict(), "epoch": epoch,
                     "best_kge": best_kge, "stale": stale, "cal_kge": kge,
                     "cfg": asdict(cfg), "variant": variant, "domain": domain,
+                    "basins": list(dom.basins),
                     "net_config": {"hidden": cfg.hidden, "embed": cfg.embed,
                                    "dropout": cfg.dropout,
                                    "grouped_heads": cfg.grouped_heads,
@@ -482,10 +628,53 @@ def train(
               f"{n_chunks} chunks "
               f"(ET {'on' if etobs is not None else 'off'}, "
               f"SWE {'on' if sweobs is not None else 'off'})", flush=True)
+    # per-chunk MONTHLY-FLOW targets (multi-timescale domain): fixed given the
+    # chunk grid — the day->month bucket (trimmed to the last, short chunk),
+    # each entity's observed months gathered to the chunk's slots, and the
+    # finite-slot mask.  Simulated flow multiplies the bucket per chunk.
+    mt_targets: list | None = None
+    if eobs is not None:
+        mt_targets = []
+        n_ms = 0
+        for k in range(n_chunks):
+            c0 = calobs.t0 + k * chunk
+            bucket, cols, mask = monthly_chunk_target(
+                dom.dates, c0, chunk, calobs.t0, calobs.t1, eobs.month_code)
+            ce = min(c0 + chunk, dom.n_time)     # last chunk ends the record
+            tgt = eobs.obs_monthly[:, torch.as_tensor(cols, device=dev)]
+            fin = (torch.isfinite(tgt)
+                   & (torch.as_tensor(mask, device=dev) > 0).unsqueeze(0))
+            mt_targets.append((
+                torch.as_tensor(bucket[:ce - c0], device=dev, dtype=dtype),
+                torch.where(fin, tgt, torch.zeros_like(tgt)),
+                fin.to(dtype)))
+            n_ms += int(fin.sum())
+        print(f"train: monthly flow targets = {n_ms} entity-months over "
+              f"{n_chunks} chunks", flush=True)
+    # a chunk carrying NO scoreable observation must not step the optimizer:
+    # zero grads still move parameters through AdamW momentum + weight decay
+    # (the multi-timescale envelope's 40-day tail — every daily entity fails
+    # min_days there and no monthly entity reaches Dec 2018).  Existing
+    # domains never produce a dead chunk; their behavior is untouched.
+    if eobs is not None:
+        chunk_live = []
+        for k in range(n_chunks):
+            c0 = calobs.t0 + k * chunk
+            obs_c = _obs_chunk(calobs, c0, min(c0 + chunk, dom.n_time))
+            live = bool((torch.isfinite(obs_c).sum(dim=1) >= 90).any())
+            if mt_targets is not None:
+                live = live or bool(mt_targets[k][2].sum() > 0)
+            chunk_live.append(live)
+        if not all(chunk_live):
+            print(f"train: {chunk_live.count(False)} chunk(s) carry no "
+                  "scoreable obs — forward-only (no optimizer step)",
+                  flush=True)
+    else:
+        chunk_live = [True] * n_chunks
     print(f"train[{variant}]: {dom.n_hru} HRUs, {len(dom.basins)} basins, "
           f"{x.shape[1]} features | cal days {calobs.t0}..{calobs.t1} "
           f"(spinup from day {spin_t0}"
-          f"{' = record start' if spin_t0 == 0 else f' = {cfg.spinup_start}'}) "
+          f"{' = record start' if spin_t0 == 0 else f' = {dom.dates[spin_t0].date()}'}) "
           f"({n_chunks} x {chunk}-day chunks) | {cfg.loss} loss "
           f"(log lambda {cfg.log_loss_lambda}) | n_inc={cfg.n_inc} "
           f"perc={cfg.perc_mode} {cfg.dtype} on {dev.type}"
@@ -550,18 +739,34 @@ def train(
                 train_g.set_state(state_spin)
             for k in range(n_chunks):
                 c0 = calobs.t0 + k * chunk
-                pr, ta, doy, leap = dom.chunk(c0, c0 + chunk)
-                tn, tx = dom.chunk_tmm(c0, c0 + chunk)
-                lai_c = dom.chunk_lai(c0, c0 + chunk)
-                st_c = dom.chunk_state(c0, c0 + chunk)
-                obs_c = _obs_chunk(calobs, c0, c0 + chunk)
+                # the multi-timescale cal window ends AT the forcing record,
+                # so its LAST chunk is short; every other domain has forcing
+                # headroom past cal_end (ce == c0 + chunk, and the fixed-size
+                # graph path only runs for those domains)
+                ce = min(c0 + chunk, dom.n_time)
+                pr, ta, doy, leap = dom.chunk(c0, ce)
+                tn, tx = dom.chunk_tmm(c0, ce)
+                lai_c = dom.chunk_lai(c0, ce)
+                st_c = dom.chunk_state(c0, ce)
+                obs_c = _obs_chunk(calobs, c0, ce)
                 et_tgt = et_targets[k] if et_targets is not None else None
                 swe_tgt = swe_targets[k] if swe_targets is not None else None
-                if train_g is not None:
+                # the graph replays fixed-length chunks only; the multi-
+                # timescale tail chunk (ce < c0 + chunk) falls through to eager
+                if train_g is not None and ce - c0 == chunk:
                     loss = train_g.run(pr, ta, doy, leap, obs_c, tn, tx, lai_c,
-                                       st_c, et_target=et_tgt, swe_target=swe_tgt)
+                                       st_c, et_target=et_tgt, swe_target=swe_tgt,
+                                       mt_target=(mt_targets[k]
+                                                  if mt_targets is not None
+                                                  else None))
                 else:
-                    opt.zero_grad(set_to_none=True)
+                    # mixed mode (the multi-timescale tail chunk after graph
+                    # replays): grads must STAY allocated — set_to_none would
+                    # invalidate the captured graph — and the carried state
+                    # lives in the graph's ping-pong buffers, not `state`
+                    opt.zero_grad(set_to_none=train_g is None)
+                    if train_g is not None:
+                        state = train_g.get_state()
                     params, cp = _split_out(net(x), cfg.et_mode)
                     uh = routing_uh(params, dom.flowlen)
                     res = run_window(
@@ -576,11 +781,18 @@ def train(
                         state_idx=st_c, return_tet=et_tgt is not None,
                         return_swe=swe_tgt is not None)
                     flow, state = res[0], res[1]
-                    loss_t = masked_basin_loss(
-                        dom.W @ flow, obs_c, calobs.obs_var, kind=cfg.loss,
+                    basin_flow = dom.W @ flow
+                    loss_t = daily_scale * masked_basin_loss(
+                        basin_flow, obs_c, calobs.obs_var, kind=cfg.loss,
                         log_lambda=cfg.log_loss_lambda, log_eps=cfg.log_loss_eps,
                         var_lambda=cfg.var_loss_lambda,
-                        bias_lambda=cfg.bias_loss_lambda, weight=basin_w)
+                        bias_lambda=cfg.bias_loss_lambda,
+                        weight=fam_w if fam_w is not None else basin_w)
+                    if mt_targets is not None:
+                        mb, mtgt, mfin = mt_targets[k]
+                        loss_t = loss_t + monthly_scale * monthly_nnse_loss(
+                            basin_flow[m_rows] @ mb, mtgt, mfin,
+                            eobs.var_monthly)
                     ri = 2
                     if et_tgt is not None:
                         et_monthly = (dom.W @ res[ri]) @ et_tgt[0]
@@ -610,12 +822,15 @@ def train(
                     reg_losses.append(float(reg_t.detach()))
                 norm = torch.nn.utils.clip_grad_norm_(net.parameters(),
                                                       cfg.grad_clip)
-                if math.isfinite(loss) and bool(torch.isfinite(norm)):
+                if not chunk_live[k]:
+                    pass       # dead chunk: state advanced, no update
+                elif math.isfinite(loss) and bool(torch.isfinite(norm)):
                     opt.step()
                 else:
                     skipped += 1
                 opt.zero_grad(set_to_none=False)
-                losses.append(loss)
+                if chunk_live[k]:
+                    losses.append(loss)
             sched.step()
 
         vram = (torch.cuda.max_memory_allocated(dev) / 2**20
