@@ -75,8 +75,15 @@ def masked_basin_loss(
         ms = (sim_f.sum(dim=1) / n_safe).unsqueeze(1)
         vo = ((obs_f - mo) ** 2 * finite).sum(dim=1) / n_safe
         vs = ((sim_f - ms) ** 2 * finite).sum(dim=1) / n_safe
+        # a chunk of ~constant obs (an ephemeral gauge's zero-flow season)
+        # has no variance to match — the ratio would explode through the
+        # 1e-12 clamp (observed: 1e6+ chunk losses on the entity domain's
+        # west-side gauges), so such chunks sit out the alpha term (their
+        # NNSE/log terms still apply).  Branch-free; no basin of the
+        # committed domains ever trips the gate.
+        has_var = (vo > 1e-8).to(per_basin.dtype)
         alpha = vs.clamp_min(1e-12).sqrt() / vo.clamp_min(1e-12).sqrt()
-        per_basin = per_basin + var_lambda * (alpha - 1.0) ** 2
+        per_basin = per_basin + var_lambda * has_var * (alpha - 1.0) ** 2
 
     if bias_lambda > 0.0:
         # KGE beta term: per-basin chunk mean-ratio (sim/obs).  Penalizes volume
