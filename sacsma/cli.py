@@ -145,16 +145,33 @@ def _dpl_train(args: argparse.Namespace) -> int:
         dynamic_params=(tuple(args.dynamic_params.split(","))
                         if args.dynamic_params else ()),
         dynamic_amp=args.dynamic_amp, dynamic_window=args.dynamic_window,
+        mt_family_weight=args.mt_family_weight,
+        train_chunk_days=args.train_chunk_days,
         seed=args.seed, use_cuda_graphs=not args.no_graphs,
     )
     train(args.variant, data_dir=args.data_dir, out_dir=args.out, cfg=cfg,
-          resume=args.resume, domain=args.domain)
+          resume=args.resume, domain=args.domain,
+          basins=(tuple(args.basins.split(",")) if args.basins else None))
     return 0
 
 
 def _dpl_evaluate(args: argparse.Namespace) -> int:
+    import torch
+
     from .dpl.evaluate import evaluate_checkpoint
 
+    ck = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
+    if ck.get("domain") == "dpl_entities":
+        # multi-timescale checkpoints score per entity at native timescales
+        from .dpl.evaluate_multi_timescale import evaluate_checkpoint_mt
+
+        if args.temp_delta:
+            raise ValueError("--temp-delta is not wired for the "
+                             "multi-timescale domain")
+        evaluate_checkpoint_mt(args.checkpoint, data_dir=args.data_dir,
+                               out_dir=args.out,
+                               hydrographs=args.hydrographs)
+        return 0
     evaluate_checkpoint(args.checkpoint, data_dir=args.data_dir,
                         out_dir=args.out, parallel=not args.serial,
                         temp_delta=args.temp_delta)
@@ -324,10 +341,24 @@ def main(argv: list[str] | None = None) -> int:
                          "so the learned params ADAPT under a perturbed climate)")
     tr.add_argument("--data-dir", default="data", help="organized data/ store")
     tr.add_argument("--domain", default="15cdec",
-                    choices=["15cdec", "15cdec_grid"],
-                    help="training domain: 15cdec HRU cloud (7891) or the native "
-                         "1/16-deg Livneh grid (2074 cells); baked into the "
+                    choices=["15cdec", "15cdec_grid", "dpl_entities"],
+                    help="training domain: 15cdec HRU cloud (7891), the native "
+                         "1/16-deg Livneh grid (2074 cells), or the "
+                         "multi-timescale training entities (95 entities, "
+                         "daily + monthly targets on the registry envelope; "
+                         "physical variants only); baked into the "
                          "checkpoint so evaluate scores the same domain")
+    tr.add_argument("--basins", default="",
+                    help="comma list restricting training to these basin/"
+                         "entity ids (debug slices and cost pilots); "
+                         "'' = the full domain")
+    tr.add_argument("--mt-family-weight", default="none",
+                    choices=["none", "equal"],
+                    help="multi-timescale family weighting: none = every "
+                         "valid daily entity weighs equally and the monthly "
+                         "term adds with coefficient 1 (baseline); equal = "
+                         "usgs/cdec/uf families carry equal thirds of the "
+                         "loss (dpl_entities domain only)")
     tr.add_argument("--et", default="sac", choices=["sac", "noah"],
                     help="ET scheme: sac = frozen Hamon PET (scorable via "
                          "run_basin); noah = Noah canopy-resistance ET (NEW "
@@ -488,6 +519,10 @@ def main(argv: list[str] | None = None) -> int:
                          "full-prefix convention)")
     tr.add_argument("--lr", type=float, default=1e-3)
     tr.add_argument("--seed", type=int, default=0)
+    tr.add_argument("--train-chunk-days", type=int, default=366,
+                    help="TBPTT chunk length in days (366 = one water year; "
+                         "shorter chunks cut the backward's VRAM peak at the "
+                         "cost of a shorter gradient horizon)")
     tr.add_argument("--no-graphs", action="store_true",
                     help="disable CUDA-graph capture (eager; much slower)")
     tr.add_argument("--resume", action="store_true",
@@ -512,6 +547,11 @@ def main(argv: list[str] | None = None) -> int:
                          "the perturbed daily sim (torch path only; label gets a "
                          "_dT suffix, gage metrics/figures are skipped) — the "
                          "TEACHER for the hybrid temperature-consistency loss")
+    ev.add_argument("--hydrographs", default="review",
+                    choices=["review", "all", "none"],
+                    help="multi-timescale checkpoints only: which per-entity "
+                         "diagnostics figures to draw (review = the cdec_daily "
+                         "+ uf_monthly set; all adds the 69 USGS entities)")
     ev.set_defaults(func=_dpl_evaluate)
 
     hy = dpl_sub.add_parser(
