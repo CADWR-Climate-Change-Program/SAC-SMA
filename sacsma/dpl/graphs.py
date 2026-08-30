@@ -126,9 +126,15 @@ class _WindowBase:
 
     def _pingpong(self) -> None:
         assert self.state_out is not None
-        for i_buf, o_buf in zip(_state_tensors(self.state_in),
-                                _state_tensors(self.state_out), strict=True):
-            i_buf.copy_(o_buf)
+        # value copy only: TrainChunk's state_out carries autograd history from
+        # the capture pass; copying it WITH grad would attach that history to the
+        # static state_in buffers, and an eager chunk started from get_state()
+        # (the multi-timescale tail) would then backward into the freed capture
+        # graph ("Trying to backward through the graph a second time").
+        with torch.no_grad():
+            for i_buf, o_buf in zip(_state_tensors(self.state_in),
+                                    _state_tensors(self.state_out), strict=True):
+                i_buf.copy_(o_buf)
 
 
 class NoGradWindow(_WindowBase):
