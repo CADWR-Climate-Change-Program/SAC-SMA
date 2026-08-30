@@ -69,6 +69,12 @@ CDEC_STATION = {
 TULARE = ("ISB", "PNF", "SCC", "TRM")
 # BASIN_NESTS (catchments.py): BND as a watershed includes SHA's arc.
 BASIN_NESTS = {"BND": ["SHA"]}
+# Arcs the crosswalk cannot assign (no inflow series) that still belong in a
+# training footprint.  BND's FNF is naturalized at Bend Bridge, whose published
+# 8,900 mi^2 drainage includes the valley floor carried only by the series-less
+# I_SRBB_VAL node; sacsma/calsim/catchments.py (VALLEY_SYSTEMS) already adds
+# that node to BND's CalSim catchment -- this keeps the registry consistent.
+EXTRA_ARCS = {"BND": ["I_SRBB_VAL"]}
 # SWAT model areas live in uf_gauges.csv (area_mi2_swat + area_source per
 # row)
 UF_FLAGS = {
@@ -206,6 +212,7 @@ def build(data_dir: Path) -> pd.DataFrame:
         arcs = list(cw_arcs.get(basin, []))
         for nest in BASIN_NESTS.get(basin, []):
             arcs += cw_arcs.get(nest, [])
+        arcs += EXTRA_ARCS.get(basin, [])
         st = CDEC_STATION[basin]
         olat, olon = stations.loc[st, ["lat", "lon"]]
         t0 = spans.loc[basin, "min"].date().isoformat()
@@ -228,6 +235,8 @@ def build(data_dir: Path) -> pd.DataFrame:
             # The SACSMA_15CDEC polygon measures 575.8 mi^2 vs the published
             # 561; area_mi2 keeps the published value as the depth basis.
             _add_flag(row, "polygon_2.6pct_above_published_area")
+        if basin == "BND":
+            _add_flag(row, "footprint_includes_valley_node")
         rows.append(row)
 
     # --- cdec_daily: CLE + CSN --------------------------------------------

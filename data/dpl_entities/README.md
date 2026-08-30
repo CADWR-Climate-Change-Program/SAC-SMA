@@ -44,7 +44,11 @@ record completeness verified against `cdec15/gage.csv` and
 `obs_routed_through_lakes` (Cache — obs is the outflow below Clear
 Lake/Indian Valley) · `obs_includes_valley_floor` + `no_gauge_composite`
 (UF 7) · `calsim_ref_wetter_summers` (Bear) ·
-`daily_runs_6pct_below_monthly` (CSN) · `fnf_computed_at_trinity_dam` (CLE).
+`daily_runs_6pct_below_monthly` (CSN) · `fnf_computed_at_trinity_dam` (CLE) ·
+`footprint_includes_valley_node` (BND — the cell set includes the series-less
+`I_SRBB_VAL` valley node because the Bend Bridge FNF drainage covers the
+valley floor between the rim margin and the gauge; `area_mi2` keeps the
+published 8,900 as the depth basis).
 
 Note for consumers of `arcs`: `I_RUB002` (FOL's list) has no
 `CalSim3_Merged` polygon — its terrain was dissolved into `MFA025`, so
@@ -52,7 +56,7 @@ coverage is complete.
 
 ## entity_cells.csv — cell sets and weights
 
-One row per (entity, region grid cell): 5,818 rows, 95 entities, 2,654
+One row per (entity, region grid cell): 5,854 rows, 95 entities, 2,654
 distinct cells of `data/region/grid_cells.csv`. Replaces the per-domain
 `hruinfo` tables as the aggregation basis for entity training.
 
@@ -85,7 +89,8 @@ Cell-basis note: the training basis is 2,654 cells. The de-dup drops left
 the union unchanged (every dropped monthly twin's cells stay via its daily
 twin; TNL's extra `I_LWSTN` cells via `usgs_11525500`); the Tulare remap
 onto the real polygons then added 8 edge cells (the inherited cell sets
-were a strict subset of the new). The full-rim basis — every cell touching
+were a strict subset of the new); cdec_BND's `I_SRBB_VAL` valley cells
+add no new distinct cells — every one already serves uf_06. The full-rim basis — every cell touching
 any rim polygon + USGS + Tulare — is 2,847 (an earlier tally of 2,853 was
 that basis, less a 6-cell bookkeeping difference). Statics coverage is
 **complete**: the full-grid ingest on main (`a77e4a8`) extended
@@ -111,7 +116,7 @@ time.
 ## flowlens.csv — per-entity traced flow lengths
 
 One row per (entity, region grid cell), covering exactly the
-`entity_cells.csv` pairs (5,818 rows). `flowlen_m` is the along-network
+`entity_cells.csv` pairs (5,854 rows). `flowlen_m` is the along-network
 distance (m) from the cell to the entity outlet, traced on the
 HydroSHEDS v2 1-arcsec flow-direction grid (TanDEM-X basis,
 hydrosheds.org; see `references.bib`).

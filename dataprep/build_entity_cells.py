@@ -189,8 +189,11 @@ def gates(df: pd.DataFrame, checks: pd.DataFrame, grid_keys: set) -> None:
     # slivers (largest pairwise overlap 1.4% of the smaller arc;
     # entity-level effect <= 0.04%). Worst combined deviation: uf_10 +0.14%.
     named = checks.set_index("entity_id")["geom_ref"]
+    # cdec_BND: 9,083.72 = the 8,401.7 strip+SHSTA union + I_SRBB_VAL (682.0),
+    # added via EXTRA_ARCS in build_entities.py (the Bend Bridge FNF drainage
+    # includes the valley floor; depth basis stays the published 8,900).
     for eid, want in (("cdec_CLE", 692.86), ("cdec_SHA", 6588.45),
-                      ("cdec_FOL", 1863.78), ("cdec_BND", 8401.7)):
+                      ("cdec_FOL", 1863.78), ("cdec_BND", 9083.72)):
         assert abs(named[eid] - want) < 0.1, (eid, named[eid])
 
     tul = checks[checks["delineation"] == "sacsma_15cdec_gis"]
