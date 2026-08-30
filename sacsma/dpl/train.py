@@ -462,7 +462,7 @@ def train(
              if sweobs is not None else None)
 
     # -- CUDA-graph capture (falls back to eager) ---------------------------
-    nograd_g = train_g = None
+    nograd_g = train_g = seg_g = None
     if cfg.use_cuda_graphs and dev.type == "cuda":
         from .graphs import NoGradWindow, TrainChunk
         try:
@@ -478,7 +478,28 @@ def train(
             print(f"train: no-grad capture failed ({e!r}); running eager",
                   flush=True)
             nograd_g = None
-        if nograd_g is not None:
+        if nograd_g is not None and cfg.train_graph_segments > 1:
+            # segmented train-chunk graphs (drivers that fault on whole-year
+            # captures): graphed run_window with autograd across segments;
+            # net/routing/loss stay eager, so the chunk loop below takes its
+            # eager branch with run_window swapped (same TBPTT gradient)
+            from .graphs import SegmentedTrainWindow
+            if etobs is not None or sweobs is not None:
+                raise ValueError("train_graph_segments > 1 does not support "
+                                 "the ET/SWE auxiliary losses")
+            try:
+                seg_g = SegmentedTrainWindow(
+                    dom, cfg, cfg.train_chunk_days, cfg.train_graph_segments,
+                    params0, uh0, canopy_params=canopy0, sample_c0=calobs.t0)
+                print(f"train: segmented train-chunk graphs -- "
+                      f"{cfg.train_graph_segments} x {seg_g.lens} days "
+                      "(fwd+bwd captured per segment; net/routing/loss eager)",
+                      flush=True)
+            except Exception as e:  # noqa: BLE001
+                print(f"train: segmented capture failed ({e!r}); eager chunks",
+                      flush=True)
+                seg_g = None
+        elif nograd_g is not None:
             # whole-chunk fwd+bwd capture is the VRAM peak: on OOM, halve the
             # chunk once (TBPTT detaches mid-water-year) before giving up.
             # The multi-timescale monthly term is captured too (static target
@@ -678,7 +699,9 @@ def train(
           f"({n_chunks} x {chunk}-day chunks) | {cfg.loss} loss "
           f"(log lambda {cfg.log_loss_lambda}) | n_inc={cfg.n_inc} "
           f"perc={cfg.perc_mode} {cfg.dtype} on {dev.type}"
-          f"{' [cuda-graphs]' if train_g is not None else ' [eager]'}",
+          + (' [cuda-graphs]' if train_g is not None else
+             f' [cuda-graphs x{cfg.train_graph_segments} segments]' if seg_g is not None
+             else ' [eager]'),
           flush=True)
 
     state_spin: PipelineState | None = None
@@ -769,17 +792,22 @@ def train(
                         state = train_g.get_state()
                     params, cp = _split_out(net(x), cfg.et_mode)
                     uh = routing_uh(params, dom.flowlen)
-                    res = run_window(
-                        pr, ta, doy, leap, dom.lat_rad, dom.elev, params, uh,
-                        state, n_inc=cfg.n_inc, perc_mode=cfg.perc_mode,
-                        fracp_floor=cfg.fracp_floor, ninc_mode="fixed",
-                        et_mode=cfg.et_mode, canopy_params=cp, tmin=tn, tmax=tx,
-                        veg_frac=dom.veg_frac, lai=lai_c, noah_pet=cfg.noah_pet,
-                        sac_pet=cfg.sac_pet, pt_snow_albedo=cfg.pt_snow_albedo,
-                        pt_dewpoint_depression=cfg.pt_dewpoint_depression,
-                        canopy_lite=cfg.canopy_lite,
-                        state_idx=st_c, return_tet=et_tgt is not None,
-                        return_swe=swe_tgt is not None)
+                    if seg_g is not None and ce - c0 == chunk:
+                        # segmented CUDA graphs: graphed run_window, autograd
+                        # across the segments (graphs.SegmentedTrainWindow)
+                        res = seg_g.forward(c0, params, uh, cp, state)
+                    else:
+                        res = run_window(
+                            pr, ta, doy, leap, dom.lat_rad, dom.elev, params, uh,
+                            state, n_inc=cfg.n_inc, perc_mode=cfg.perc_mode,
+                            fracp_floor=cfg.fracp_floor, ninc_mode="fixed",
+                            et_mode=cfg.et_mode, canopy_params=cp, tmin=tn, tmax=tx,
+                            veg_frac=dom.veg_frac, lai=lai_c, noah_pet=cfg.noah_pet,
+                            sac_pet=cfg.sac_pet, pt_snow_albedo=cfg.pt_snow_albedo,
+                            pt_dewpoint_depression=cfg.pt_dewpoint_depression,
+                            canopy_lite=cfg.canopy_lite,
+                            state_idx=st_c, return_tet=et_tgt is not None,
+                            return_swe=swe_tgt is not None)
                     flow, state = res[0], res[1]
                     basin_flow = dom.W @ flow
                     loss_t = daily_scale * masked_basin_loss(

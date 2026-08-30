@@ -147,6 +147,8 @@ def _dpl_train(args: argparse.Namespace) -> int:
         dynamic_amp=args.dynamic_amp, dynamic_window=args.dynamic_window,
         mt_family_weight=args.mt_family_weight,
         train_chunk_days=args.train_chunk_days,
+        nograd_window=args.nograd_window,
+        train_graph_segments=args.train_graph_segments,
         seed=args.seed, use_cuda_graphs=not args.no_graphs,
     )
     train(args.variant, data_dir=args.data_dir, out_dir=args.out, cfg=cfg,
@@ -523,6 +525,16 @@ def main(argv: list[str] | None = None) -> int:
                     help="TBPTT chunk length in days (366 = one water year; "
                          "shorter chunks cut the backward's VRAM peak at the "
                          "cost of a shorter gradient horizon)")
+    tr.add_argument("--nograd-window", type=int, default=512,
+                    help="CUDA-graph replay window (days) for the no-grad "
+                         "spinup/selection streams; numerics-neutral (256 "
+                         "on drivers that fault on very large graphs)")
+    tr.add_argument("--train-graph-segments", type=int, default=1,
+                    help="split the train-chunk CUDA graph into N consecutive "
+                         "segment graphs with autograd across them (same TBPTT "
+                         "gradient as the single graph up to float32 summation "
+                         "order); 2 keeps 366-day chunks under the graph-size "
+                         "limit of drivers that fault on whole-year captures")
     tr.add_argument("--no-graphs", action="store_true",
                     help="disable CUDA-graph capture (eager; much slower)")
     tr.add_argument("--resume", action="store_true",

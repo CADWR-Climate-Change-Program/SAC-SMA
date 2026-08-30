@@ -411,6 +411,10 @@ class DplConfig:
     #: ~300 tiny kernels/day).  Falls back to eager on CPU or capture failure.
     use_cuda_graphs: bool = True
     nograd_window: int = 512        # replay window for spinup/selection streaming
+    #: >1 splits the train-chunk capture into this many consecutive segment
+    #: graphs (forward + backward each, autograd across them) -- for drivers
+    #: that fault on very large graphs; 1 = the single whole-chunk graph.
+    train_graph_segments: int = 1
     seed: int = 0
     extras: dict = field(default_factory=dict)
 
@@ -440,6 +444,10 @@ class DplConfig:
                 "et_level_lambda > 0 to have any effect")
         if self.mt_family_weight not in ("none", "equal"):
             raise ValueError(f"mt_family_weight {self.mt_family_weight!r}")
+        if self.train_graph_segments < 1:
+            raise ValueError(f"train_graph_segments {self.train_graph_segments} < 1")
+        if self.nograd_window < 1:
+            raise ValueError(f"nograd_window {self.nograd_window} < 1")
         if not 30 <= self.train_chunk_days <= 366:
             # > 366 days can hold a 14th complete calendar month, overflowing
             # the fixed 13-slot monthly buckets (ET_MAXM) — months past the
