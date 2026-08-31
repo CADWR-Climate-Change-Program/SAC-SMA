@@ -346,7 +346,7 @@ def main(argv: list[str] | None = None) -> int:
                     choices=["15cdec", "15cdec_grid", "dpl_entities"],
                     help="training domain: 15cdec HRU cloud (7891), the native "
                          "1/16-deg Livneh grid (2074 cells), or the "
-                         "multi-timescale training entities (95 entities, "
+                         "multi-timescale training entities (94 entities, "
                          "daily + monthly targets on the registry envelope; "
                          "physical variants only); baked into the "
                          "checkpoint so evaluate scores the same domain")

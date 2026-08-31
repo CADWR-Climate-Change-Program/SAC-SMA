@@ -152,7 +152,7 @@ def build(data_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
 
 def gates(df: pd.DataFrame, checks: pd.DataFrame, grid_keys: set) -> None:
     ent_ids = checks["entity_id"]
-    assert len(checks) == 95 and ent_ids.is_unique
+    assert len(checks) == 94 and ent_ids.is_unique
     assert set(df["entity_id"]) == set(ent_ids)
     assert not df.duplicated(["entity_id", "key"]).any()
     assert (df["overlap_mi2"] > 0).all()
@@ -208,8 +208,11 @@ def gates(df: pd.DataFrame, checks: pd.DataFrame, grid_keys: set) -> None:
     # Statics cover all 4,410 region cells (a77e4a8) — no gap from the
     # additions. An earlier full-rim tally logged 2,853 cells (all 200
     # Merged polygons; exact recompute 2,847).
+    # The uf_03 target drop then removed the 49 cells only Cache used
+    # (2,654 -> 2,605; the other 44 of its 93 stay via the three in-basin
+    # USGS gauges and the uf_02/uf_04 edge overlaps).
     union = df["key"].nunique()
-    assert union == 2654, union
+    assert union == 2605, union
 
     fam = checks.groupby("family").agg(
         entities=("entity_id", "size"), rows=("n_cells", "sum"),
