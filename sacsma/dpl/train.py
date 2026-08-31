@@ -31,9 +31,9 @@ daily entity joins the chunk NNSE window-masked (NaN outside its own
 ``train_start``/``train_end``), the monthly entities add a chunk-additive
 monthly NNSE term (simulated daily flow bucketed to complete calendar
 months), and selection pools per-entity KGE at each entity's native
-timescale.  Train chunks run eager for this domain (the monthly term is not
-graph-captured); the last chunk is short — the envelope ends at the forcing
-record end.
+timescale.  Train chunks are graph-captured for this domain too — the
+monthly term is captured with static target buffers — and only the short
+tail chunk (the envelope ends at the forcing record) replays eagerly.
 
 On CUDA the day-stepped pipeline runs as captured CUDA graphs
 (:mod:`sacsma.dpl.graphs`) — eager execution is dispatch-bound.  Graph

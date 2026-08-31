@@ -75,15 +75,23 @@ def masked_basin_loss(
         ms = (sim_f.sum(dim=1) / n_safe).unsqueeze(1)
         vo = ((obs_f - mo) ** 2 * finite).sum(dim=1) / n_safe
         vs = ((sim_f - ms) ** 2 * finite).sum(dim=1) / n_safe
-        # a chunk of ~constant obs (an ephemeral gauge's zero-flow season)
-        # has no variance to match — the ratio would explode through the
-        # 1e-12 clamp (observed: 1e6+ chunk losses on the entity domain's
-        # west-side gauges), so such chunks sit out the alpha term (their
-        # NNSE/log terms still apply).  Branch-free; no basin of the
-        # committed domains ever trips the gate.
-        has_var = (vo > 1e-8).to(per_basin.dtype)
+        # a chunk whose obs are ~flat FOR THIS BASIN (an ephemeral gauge's
+        # zero-flow season, a window-masked sliver) carries no variance
+        # signal to match — the ratio explodes through the 1e-12 clamp
+        # (observed: 1e6+ chunk losses on the entity domain's west-side
+        # gauges), and an absolute floor alone still passes near-flat
+        # chunks whose tiny denominator lets this one term hijack the
+        # gradient.  The gate is therefore RELATIVE — the chunk must carry
+        # >= 0.1% of the basin's full-record variance (absolute floor kept
+        # for ~flat records) — and the penalty is Huber-capped (quadratic
+        # to |alpha - 1| = 1, linear beyond) so no surviving chunk
+        # contributes unboundedly.  Skipped chunks keep their NNSE/log
+        # terms.  Branch-free.
+        has_var = (vo > torch.clamp(1e-3 * obs_var, min=1e-8)).to(per_basin.dtype)
         alpha = vs.clamp_min(1e-12).sqrt() / vo.clamp_min(1e-12).sqrt()
-        per_basin = per_basin + var_lambda * has_var * (alpha - 1.0) ** 2
+        d = alpha - 1.0
+        pen = torch.where(d.abs() <= 1.0, d * d, 2.0 * d.abs() - 1.0)
+        per_basin = per_basin + var_lambda * has_var * pen
 
     if bias_lambda > 0.0:
         # KGE beta term: per-basin chunk mean-ratio (sim/obs).  Penalizes volume
