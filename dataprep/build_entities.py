@@ -1,4 +1,4 @@
-"""Build data/dpl_entities/entities.csv — the multi-timescale training-entity registry.
+"""Build data/multifamily/entities.csv — the multi-timescale training-entity registry.
 
 One row per training entity
 (site x timescale x family), carrying: delineation arcs, depth-conversion area,
@@ -46,7 +46,7 @@ The uf_monthly family carries TWO area columns:
   - UF 7 is a composite of east-side creeks with no gauge by construction.
 
 Usage (sacsma conda env):
-    python dataprep/build_entities.py [--data-dir data] [--out data/dpl_entities/entities.csv]
+    python dataprep/build_entities.py [--data-dir data] [--out data/multifamily/entities.csv]
 """
 
 from __future__ import annotations
@@ -334,7 +334,7 @@ def build(data_dir: Path) -> pd.DataFrame:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--data-dir", default="data", type=Path)
-    ap.add_argument("--out", default=Path("data/dpl_entities/entities.csv"), type=Path)
+    ap.add_argument("--out", default=Path("data/multifamily/entities.csv"), type=Path)
     args = ap.parse_args()
 
     df = build(args.data_dir)

@@ -25,7 +25,7 @@ Protocol (per epoch):
    one AdamW step per chunk on the chunk-additive NNSE loss (post-CAL_END
    days of the last chunk are NaN-masked).
 
-For the multi-timescale domain (``domain="dpl_entities"``) the same protocol
+For the multi-timescale domain (``domain="multifamily"``) the same protocol
 runs over the training entities on the registry envelope (WY1950-2018): each
 daily entity joins the chunk NNSE window-masked (NaN outside its own
 ``train_start``/``train_end``), the monthly entities add a chunk-additive
@@ -180,7 +180,7 @@ def train(
     resume: bool = False,
     basins: tuple[str, ...] | None = None,   # debug subset (default: all 15)
     domain: str = "15cdec",                  # 15cdec HRU cloud | 15cdec_grid
-                                             # native grid | dpl_entities
+                                             # native grid | multifamily
                                              # multi-timescale entities
 ) -> Path:
     """Train one feature variant; returns the output directory."""

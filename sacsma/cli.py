@@ -163,7 +163,7 @@ def _dpl_evaluate(args: argparse.Namespace) -> int:
     from .dpl.evaluate import evaluate_checkpoint
 
     ck = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
-    if ck.get("domain") == "dpl_entities":
+    if ck.get("domain") in ("multifamily", "dpl_entities"):  # pre-rename ckpts
         # multi-timescale checkpoints score per entity at native timescales
         from .dpl.evaluate_multi_timescale import evaluate_checkpoint_mt
 
@@ -343,7 +343,7 @@ def main(argv: list[str] | None = None) -> int:
                          "so the learned params ADAPT under a perturbed climate)")
     tr.add_argument("--data-dir", default="data", help="organized data/ store")
     tr.add_argument("--domain", default="15cdec",
-                    choices=["15cdec", "15cdec_grid", "dpl_entities"],
+                    choices=["15cdec", "15cdec_grid", "multifamily"],
                     help="training domain: 15cdec HRU cloud (7891), the native "
                          "1/16-deg Livneh grid (2074 cells), or the "
                          "multi-timescale training entities (94 entities, "
@@ -360,7 +360,7 @@ def main(argv: list[str] | None = None) -> int:
                          "valid daily entity weighs equally and the monthly "
                          "term adds with coefficient 1 (baseline); equal = "
                          "usgs/cdec/uf families carry equal thirds of the "
-                         "loss (dpl_entities domain only)")
+                         "loss (multifamily domain only)")
     tr.add_argument("--et", default="sac", choices=["sac", "noah"],
                     help="ET scheme: sac = frozen Hamon PET (scorable via "
                          "run_basin); noah = Noah canopy-resistance ET (NEW "

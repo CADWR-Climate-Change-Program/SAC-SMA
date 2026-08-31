@@ -1,7 +1,7 @@
 """Per-entity observation bundle for the multi-timescale domain.
 
 Companion to :func:`sacsma.dpl.data.load_domain_tensors` with
-``domain="dpl_entities"``: loads every entity's target series from its
+``domain="multifamily"``: loads every entity's target series from its
 native store, masks it to the entity's OWN training window (the registry's
 ``train_start``/``train_end``) inside a single global envelope, and computes
 each entity's NNSE variance normalizer over its own record.

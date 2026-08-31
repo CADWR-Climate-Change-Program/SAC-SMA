@@ -26,10 +26,10 @@ CDEC15_DOMAIN = "15cdec"
 CDEC15_GRID_DOMAIN = "15cdec_grid"
 #: the CalSim/CalLite application's domains.
 CALSIM_DOMAINS = ("9unimp", "11obs", "12rim")
-#: the multi-timescale training domain (``data/dpl_entities``): one
+#: the multi-timescale training domain (``data/multifamily``): one
 #: "basin" per training entity, cells/weights from ``entity_cells.csv``,
 #: flow lengths from ``flowlens.csv``.
-MULTI_TIMESCALE_DOMAIN = "dpl_entities"
+MULTI_TIMESCALE_DOMAIN = "multifamily"
 #: 1/16-deg-grid-based domains — these read the UNIFIED region forcing stores
 #: (``data/region/forcing/<product>.nc``: one file per product at the region
 #: grid, prcp/tmin/tmax with tavg derived; built by
@@ -41,7 +41,7 @@ REGION_DOMAINS = (CDEC15_GRID_DOMAIN, *CALSIM_DOMAINS, MULTI_TIMESCALE_DOMAIN)
 def domain_dir(data_dir: str | Path = "data", domain: str = DEFAULT_DOMAIN) -> Path:
     """Application data directory: ``data/cdec15`` for 15cdec, ``data/cdec15_grid``
     for its grid parallel, ``data/calsim`` for the CalSim domains,
-    ``data/dpl_entities`` for the multi-timescale domain."""
+    ``data/multifamily`` for the multi-timescale domain."""
     if domain == CDEC15_DOMAIN:
         return Path(data_dir) / "cdec15"
     if domain == CDEC15_GRID_DOMAIN:
@@ -49,7 +49,7 @@ def domain_dir(data_dir: str | Path = "data", domain: str = DEFAULT_DOMAIN) -> P
     if domain in CALSIM_DOMAINS:
         return Path(data_dir) / "calsim"
     if domain == MULTI_TIMESCALE_DOMAIN:
-        return Path(data_dir) / "dpl_entities"
+        return Path(data_dir) / "multifamily"
     raise ValueError(
         f"unknown domain {domain!r} (expected {CDEC15_DOMAIN}, {CDEC15_GRID_DOMAIN}, "
         f"{MULTI_TIMESCALE_DOMAIN}, or one of {CALSIM_DOMAINS})"

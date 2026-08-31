@@ -1,4 +1,4 @@
-# data/dpl_entities — multi-timescale training-entity registry
+# data/multifamily — multi-timescale training-entity registry
 
 `entities.csv`: 94 training entities — 8 `uf_monthly` + 69 `usgs_daily` +
 17 `cdec_daily` (15 + CLE + CSN). One row per (site × timescale × family);

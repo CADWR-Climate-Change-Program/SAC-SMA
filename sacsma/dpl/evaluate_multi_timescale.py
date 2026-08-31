@@ -1,4 +1,4 @@
-"""Per-entity evaluation of a multi-timescale (``dpl_entities``) checkpoint.
+"""Per-entity evaluation of a multi-timescale (``multifamily``) checkpoint.
 
 The multi-timescale counterpart of :func:`sacsma.dpl.evaluate.evaluate_checkpoint`:
 rebuild the net, stream the full envelope once under ``torch.no_grad()`` (same
@@ -144,7 +144,7 @@ def evaluate_checkpoint_mt(
     hydrographs: str = "review",   # review (cdec+uf) | all | none
     device: str | None = None,     # None = cuda if available
 ) -> pd.DataFrame:
-    """Score a ``dpl_entities`` checkpoint per entity; returns the metrics."""
+    """Score a ``multifamily`` checkpoint per entity; returns the metrics."""
     if hydrographs not in ("review", "all", "none"):
         raise ValueError(f"hydrographs {hydrographs!r}")
     net, x, dom, cfg, ck = load_net_from_checkpoint(ckpt_path, data_dir,
@@ -155,7 +155,7 @@ def evaluate_checkpoint_mt(
     ckp = Path(ckpt_path).resolve()
     out = Path(out_dir) if out_dir is not None else (
         ckp.parent.parent if ckp.parent.name == "checkpoints"
-        else Path("artifacts/dpl_entities/eval"))
+        else Path("artifacts/multifamily/eval"))
     figdir = out / "figures" / "entities"
     figdir.mkdir(parents=True, exist_ok=True)
 

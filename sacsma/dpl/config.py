@@ -278,7 +278,7 @@ class DplConfig:
     #: min-max level envelope is degenerate, so one product REQUIRES the P-Q
     #: anchor (``et_anchor_band`` > 0) as the level constraint.
     et_products: tuple[str, ...] = ()
-    #: multi-timescale family weighting (dpl_entities domain only): "none" =
+    #: multi-timescale family weighting (multifamily domain only): "none" =
     #: every valid daily entity weighs equally in the chunk mean and the
     #: monthly term adds with coefficient 1 (the baseline); "equal" = the
     #: three families carry equal thirds of the loss — usgs_daily and

@@ -1,4 +1,4 @@
-"""Build data/dpl_entities/flowlens.csv — per-entity traced flow lengths.
+"""Build data/multifamily/flowlens.csv — per-entity traced flow lengths.
 
 Traces each entity cell downstream along the HydroSHEDS v2 1-arcsec flow
 directions (TanDEM-X basis) to the entity outlet; ``flowlen_m`` is the
@@ -26,7 +26,7 @@ Conventions:
   ``flowlen_m`` = haversine(cell center -> outlet) x the entity's
   median traced sinuosity; ``method = "fallback"``.
 
-Inputs: data/dpl_entities/{entities,entity_cells}.csv and the
+Inputs: data/multifamily/{entities,entity_cells}.csv and the
 HydroSHEDS v2 DIR + ACC tiles for the four 10-degree tiles covering the
 domain (~6 GB, auto-downloaded to ``tmp/hydrosheds/`` with size
 validation; not in git — re-fetched on demand).
@@ -38,7 +38,7 @@ processes.
 Usage (sacsma conda env, from the repo root):
     python dataprep/build_flowlens.py [--data-dir data]
         [--tiles-dir tmp/hydrosheds] [--only cdec_MKM,uf_07]
-        [--out data/dpl_entities/flowlens.csv]
+        [--out data/multifamily/flowlens.csv]
 """
 
 from __future__ import annotations
@@ -299,7 +299,7 @@ def main() -> None:
     ap.add_argument("--tiles-dir", default=Path("tmp/hydrosheds"), type=Path)
     ap.add_argument("--only", default="",
                     help="comma-separated entity_ids (testing)")
-    ap.add_argument("--out", default=Path("data/dpl_entities/flowlens.csv"),
+    ap.add_argument("--out", default=Path("data/multifamily/flowlens.csv"),
                     type=Path)
     ap.add_argument("--debug-out", default=None, type=Path,
                     help="also write flowlen_starts.csv (per-cell start "
@@ -309,9 +309,9 @@ def main() -> None:
 
     if not args.only:  # test runs may not have complete local tiles yet
         ensure_tiles(args.tiles_dir)
-    ent = pd.read_csv(args.data_dir / "dpl_entities" / "entities.csv",
+    ent = pd.read_csv(args.data_dir / "multifamily" / "entities.csv",
                       dtype={"site_id": str})
-    cells = pd.read_csv(args.data_dir / "dpl_entities" / "entity_cells.csv")
+    cells = pd.read_csv(args.data_dir / "multifamily" / "entity_cells.csv")
     if args.only:
         keep = args.only.split(",")
         ent = ent[ent.entity_id.isin(keep)]

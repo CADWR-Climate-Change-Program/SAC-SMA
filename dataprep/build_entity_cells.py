@@ -1,4 +1,4 @@
-"""Build data/dpl_entities/entity_cells.csv — per-entity cell sets and weights.
+"""Build data/multifamily/entity_cells.csv — per-entity cell sets and weights.
 
 One row per (entity, region grid cell) with the proportional square-overlap
 area weight (overlap_mi2). Outlet coordinates stay in the
@@ -24,7 +24,7 @@ one allowed skip.
 
 Usage (sacsma conda env, from the repo root):
     python dataprep/build_entity_cells.py [--data-dir data]
-        [--out data/dpl_entities/entity_cells.csv]
+        [--out data/multifamily/entity_cells.csv]
 """
 
 from __future__ import annotations
@@ -65,7 +65,7 @@ def _map_weights(catch: gpd.GeoDataFrame, cells: pd.DataFrame,
 
 def build(data_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Return (entity_cells, checks) — checks has one gate row per entity."""
-    ent = pd.read_csv(data_dir / "dpl_entities" / "entities.csv",
+    ent = pd.read_csv(data_dir / "multifamily" / "entities.csv",
                       dtype={"site_id": str})
     cells = pd.read_csv(
         data_dir / "region" / "grid_cells.csv")[["key", "lat", "lon"]]
@@ -237,7 +237,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--data-dir", default=Path("data"), type=Path)
     ap.add_argument("--out",
-                    default=Path("data/dpl_entities/entity_cells.csv"),
+                    default=Path("data/multifamily/entity_cells.csv"),
                     type=Path)
     args = ap.parse_args()
 
