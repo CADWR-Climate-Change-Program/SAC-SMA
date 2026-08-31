@@ -30,10 +30,10 @@ runs over the training entities on the registry envelope (WY1950-2018): each
 daily entity joins the chunk NNSE window-masked (NaN outside its own
 ``train_start``/``train_end``), the monthly entities add a chunk-additive
 monthly NNSE term (simulated daily flow bucketed to complete calendar
-months), and selection pools per-entity KGE at each entity's native
-timescale.  Train chunks are graph-captured for this domain too — the
-monthly term is captured with static target buffers — and only the short
-tail chunk (the envelope ends at the forcing record) replays eagerly.
+months), and selection scores per-entity KGE at each entity's native
+timescale — pooled mean by default; with ``mt_family_weight="equal"`` the
+selection scalar is the family-mean-of-means, so checkpoint choice follows
+the family-balanced training objective.  
 
 On CUDA the day-stepped pipeline runs as captured CUDA graphs
 (:mod:`sacsma.dpl.graphs`) — eager execution is dispatch-bound.  Graph
@@ -531,7 +531,8 @@ def train(
         """Pooled per-entity cal KGE at each entity's NATIVE timescale: daily
         rows at daily stride, monthly rows on calendar-month sums of the same
         simulated flow (>= 12 obs months to enter the pool).  Prints the
-        per-family means alongside the pooled selection scalar."""
+        per-family means; the selection scalar is the pooled mean, or the
+        family-mean-of-means under ``mt_family_weight="equal"``."""
         k = kge_torch(sim.double(), calobs.obs.double())
         sim_m = torch.zeros(len(eobs.monthly_rows), eobs.obs_monthly.shape[1],
                             device=sim.device, dtype=torch.float64)
@@ -541,13 +542,23 @@ def train(
         valid[m_rows] = torch.isfinite(eobs.obs_monthly).sum(dim=1) >= 12
         fams = np.array(eobs.family)
         k_np, v_np = k.cpu().numpy(), valid.cpu().numpy()
+        fam_means = {f: float(k_np[(fams == f) & v_np].mean())
+                     for f in ("usgs_daily", "cdec_daily", "uf_monthly")
+                     if ((fams == f) & v_np).any()}
         parts = "  ".join(
-            f"{f.split('_')[0]} {k_np[(fams == f) & v_np].mean():.4f}"
-            f" (n={int(((fams == f) & v_np).sum())})"
-            for f in ("usgs_daily", "cdec_daily", "uf_monthly")
-            if ((fams == f) & v_np).any())
+            f"{f.split('_')[0]} {m:.4f} (n={int(((fams == f) & v_np).sum())})"
+            for f, m in fam_means.items())
+        pooled = float(k[valid].mean())
+        if cfg.mt_family_weight == "equal":
+            # selection follows the training objective: with equal family
+            # weighting, each family casts one equal vote on which epoch is
+            # best (the pooled mean stays printed for cross-run comparison).
+            fam_scalar = float(np.mean(list(fam_means.values())))
+            print(f"    per-family cal KGE: {parts}  | sel family-mean "
+                  f"{fam_scalar:.4f} (pooled {pooled:.4f})", flush=True)
+            return k, fam_scalar
         print(f"    per-family cal KGE: {parts}", flush=True)
-        return k, float(k[valid].mean())
+        return k, pooled
 
     def _spinup_and_maybe_eval(
         do_eval: bool,
@@ -576,6 +587,10 @@ def train(
         torch.save({"net": net.state_dict(), "opt": opt.state_dict(),
                     "sched": sched.state_dict(), "epoch": epoch,
                     "best_kge": best_kge, "stale": stale, "cal_kge": kge,
+                    "mt_select": (("family_mean"
+                                   if cfg.mt_family_weight == "equal"
+                                   else "pooled")
+                                  if eobs is not None else None),
                     "cfg": asdict(cfg), "variant": variant, "domain": domain,
                     "basins": list(dom.basins),
                     "net_config": {"hidden": cfg.hidden, "embed": cfg.embed,
@@ -890,6 +905,6 @@ def train(
     if pooled > best_kge:
         best_kge = pooled
         _save(ckdir / "best.pt", epoch=cfg.n_epochs, kge=pooled)
-    print(f"train[{variant}]: done — best pooled cal KGE {best_kge:.4f} "
+    print(f"train[{variant}]: done — best selection cal KGE {best_kge:.4f} "
           f"(final {pooled:.4f}) -> {ckdir / 'best.pt'}", flush=True)
     return out
