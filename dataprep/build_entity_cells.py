@@ -192,8 +192,13 @@ def gates(df: pd.DataFrame, checks: pd.DataFrame, grid_keys: set) -> None:
     # cdec_BND: 9,083.72 = the 8,401.7 strip+SHSTA union + I_SRBB_VAL (682.0),
     # added via EXTRA_ARCS in build_entities.py (the Bend Bridge FNF drainage
     # includes the valley floor; depth basis stays the published 8,900).
+    # cdec_YRS: 1,129.25 = the 18 crosswalk arcs less the two Deer Creek
+    # arcs trimmed via TRIM_ARCS in build_entities.py (64.18 mi^2 joining
+    # the Yuba below the Smartville gauge; depth basis stays the published
+    # 1,108).
     for eid, want in (("cdec_CLE", 692.86), ("cdec_SHA", 6588.45),
-                      ("cdec_FOL", 1863.78), ("cdec_BND", 9083.72)):
+                      ("cdec_FOL", 1863.78), ("cdec_BND", 9083.72),
+                      ("cdec_YRS", 1129.25)):
         assert abs(named[eid] - want) < 0.1, (eid, named[eid])
 
     tul = checks[checks["delineation"] == "sacsma_15cdec_gis"]
@@ -210,9 +215,10 @@ def gates(df: pd.DataFrame, checks: pd.DataFrame, grid_keys: set) -> None:
     # Merged polygons; exact recompute 2,847).
     # The uf_03 target drop then removed the 49 cells only Cache used
     # (2,654 -> 2,605; the other 44 of its 93 stay via the three in-basin
-    # USGS gauges and the uf_02/uf_04 edge overlaps).
+    # USGS gauges and the uf_02/uf_04 edge overlaps), and the YRS Deer
+    # Creek trim two more that only YRS used (2,605 -> 2,603).
     union = df["key"].nunique()
-    assert union == 2605, union
+    assert union == 2603, union
 
     fam = checks.groupby("family").agg(
         entities=("entity_id", "size"), rows=("n_cells", "sum"),

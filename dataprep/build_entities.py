@@ -75,6 +75,16 @@ BASIN_NESTS = {"BND": ["SHA"]}
 # I_SRBB_VAL node; sacsma/calsim/catchments.py (VALLEY_SYSTEMS) already adds
 # that node to BND's CalSim catchment -- this keeps the registry consistent.
 EXTRA_ARCS = {"BND": ["I_SRBB_VAL"]}
+
+# The inverse correction: arcs the crosswalk files under a basin's CalSim
+# system whose water the observing gauge never sees.  Deer Creek joins the
+# Yuba below the Smartville gauge, so CalSim correctly books its two arcs
+# as Yuba-system inflow, but the YRS full natural flow (naturalized at the
+# gauge, published 1,108 mi^2) contains none of that water -- keeping them
+# would average ~64 mi^2 of unobserved runoff into the training depth.
+# The crosswalk itself is untouched: it states CalSim's delivery topology,
+# and validation aggregations keep using it.
+TRIM_ARCS = {"YRS": ["I_DER001", "I_DER004"]}
 # SWAT model areas live in uf_gauges.csv (area_mi2_swat + area_source per
 # row)
 UF_FLAGS = {
@@ -224,6 +234,7 @@ def build(data_dir: Path) -> pd.DataFrame:
         for nest in BASIN_NESTS.get(basin, []):
             arcs += cw_arcs.get(nest, [])
         arcs += EXTRA_ARCS.get(basin, [])
+        arcs = [a for a in arcs if a not in TRIM_ARCS.get(basin, ())]
         st = CDEC_STATION[basin]
         olat, olon = stations.loc[st, ["lat", "lon"]]
         t0 = spans.loc[basin, "min"].date().isoformat()
@@ -248,6 +259,8 @@ def build(data_dir: Path) -> pd.DataFrame:
             _add_flag(row, "polygon_2.6pct_above_published_area")
         if basin == "BND":
             _add_flag(row, "footprint_includes_valley_node")
+        if basin == "YRS":
+            _add_flag(row, "footprint_excludes_below_gauge_arcs")
         rows.append(row)
 
     # --- cdec_daily: CLE + CSN --------------------------------------------

@@ -57,7 +57,11 @@ the in-basin USGS gauges; the rest regionalizes.
 `footprint_includes_valley_node` (BND — the cell set includes the series-less
 `I_SRBB_VAL` valley node because the Bend Bridge FNF drainage covers the
 valley floor between the rim margin and the gauge; `area_mi2` keeps the
-published 8,900 as the depth basis).
+published 8,900 as the depth basis) ·
+`footprint_excludes_below_gauge_arcs` (YRS — the two Deer Creek arcs
+`I_DER001`/`I_DER004` (64 mi²) join the Yuba below the Smartville gauge,
+so their water never passes the observing station; they are trimmed from
+the cell set and `area_mi2` keeps the published 1,108).
 
 Note for consumers of `arcs`: `I_RUB002` (FOL's list) has no
 `CalSim3_Merged` polygon — its terrain was dissolved into `MFA025`, so
@@ -65,7 +69,7 @@ coverage is complete.
 
 ## entity_cells.csv — cell sets and weights
 
-One row per (entity, region grid cell): 5,761 rows, 94 entities, 2,605
+One row per (entity, region grid cell): 5,756 rows, 94 entities, 2,603
 distinct cells of `data/region/grid_cells.csv`. Replaces the per-domain
 `hruinfo` tables as the aggregation basis for entity training.
 
@@ -94,14 +98,15 @@ true geometric area, plus a once-per-arc count of arc-overlap slivers
 (largest pairwise overlap 1.4% of the smaller arc; ≤0.04% at entity
 level).
 
-Cell-basis note: the training basis is 2,605 cells. The de-dup drops left
+Cell-basis note: the training basis is 2,603 cells. The de-dup drops left
 the union unchanged (every dropped monthly twin's cells stay via its daily
 twin; TNL's extra `I_LWSTN` cells via `usgs_11525500`); the Tulare remap
 onto the real polygons then added 8 edge cells (the inherited cell sets
 were a strict subset of the new); cdec_BND's `I_SRBB_VAL` valley cells
 add no new distinct cells — every one already serves uf_06; the uf_03
 target drop then removed the 49 cells only Cache used (its other 44 stay
-via the three in-basin USGS gauges and uf_02/uf_04 edge overlaps). The full-rim basis — every cell touching
+via the three in-basin USGS gauges and uf_02/uf_04 edge overlaps); the
+YRS Deer Creek trim then dropped two more (2,605 → 2,603). The full-rim basis — every cell touching
 any rim polygon + USGS + Tulare — is 2,847 (an earlier tally of 2,853 was
 that basis, less a 6-cell bookkeeping difference). Statics coverage is
 **complete**: the full-grid ingest on main (`a77e4a8`) extended
@@ -127,7 +132,7 @@ time.
 ## flowlens.csv — per-entity traced flow lengths
 
 One row per (entity, region grid cell), covering exactly the
-`entity_cells.csv` pairs (5,761 rows). `flowlen_m` is the along-network
+`entity_cells.csv` pairs (5,756 rows). `flowlen_m` is the along-network
 distance (m) from the cell to the entity outlet, traced on the
 HydroSHEDS v2 1-arcsec flow-direction grid (TanDEM-X basis,
 hydrosheds.org; see `references.bib`).
@@ -151,7 +156,7 @@ outlet) whose path reaches the outlet; `center` marks cell-center starts
 implied upstream area falls within [0.2×, 5×] of the registry
 `area_mi2` (snapped-ACC/area landed at 0.75–1.11, median ≈ 1.00).
 `uf_07` (multi-outlet composite) traces each cell to where its path
-exits the entity footprint. `fallback` (1,343 rows, **5.9% of total area
+exits the entity footprint. `fallback` (1,338 rows, **5.9% of total area
 weight**) = haversine × the entity's median traced sinuosity, for cells
 none of whose candidates drain through the outlet — below-outlet valley
 cells, square-overlap edge slivers, and sub-cell basins; per-entity
