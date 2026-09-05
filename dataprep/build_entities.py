@@ -124,16 +124,17 @@ DEDUP_DROPS = {
     "obs11_TNL": "cdec_CLE",  # CLE 1986-04
 }
 
-# Built and then dropped like the de-dup twins, but for target validity:
-# UF 3's observation is the routed outflow at Rumsey, below Clear Lake and
-# Indian Valley, while its four arcs are the inflows CalSim routes through
-# those lakes itself (arc sum +16% volume, r 0.877 vs the obs -- storage
-# attenuation plus net lake evaporation, a shape difference no scaling
-# fixes).  A lake-free cell parameterization can only fit that series by
-# learning the lakes' behavior, which the inflow arcs would then apply
-# twice.  The footprint keeps partial daily supervision (the Kelsey, NF
-# Cache and Bear Creek gauges); its remaining cells regionalize.
-TARGET_DROPS = ("uf_03",)
+# Target-validity drops (built like the de-dup twins, then removed).  The
+# one candidate is UF 3: its observation is the routed outflow at Rumsey,
+# below Clear Lake and Indian Valley, while its four arcs are the inflows
+# CalSim routes through those lakes itself (arc sum +16% volume, r 0.877 vs
+# the obs -- storage attenuation plus net lake evaporation, a shape
+# difference no scaling fixes), so a lake-free cell parameterization can
+# only fit that series by learning the lakes' behavior.  uf_03 is kept in
+# the registry (flag obs_routed_through_lakes) so a run can include it when
+# it is the only supervision of the Cache Creek cells; whether it trains is
+# the run's choice (``--basins``).  Add "uf_03" here to drop it at build time.
+TARGET_DROPS: tuple[str, ...] = ()
 
 
 def _entity(entity_id, family, timescale, site_id, name, delineation, arcs,
@@ -339,16 +340,16 @@ def main() -> None:
 
     df = build(args.data_dir)
     counts = df["family"].value_counts()
-    assert counts["uf_monthly"] == 8, counts
+    assert counts["uf_monthly"] == 9, counts
     assert counts["usgs_daily"] == 69, counts
     assert counts["cdec_daily"] == 17, counts
     assert "obs11_monthly" not in counts, counts  # both rows are DEDUP_DROPS
     assert df["entity_id"].is_unique
 
     by_fam = df.groupby("family")["n_obs"].sum()
-    # 2,880 DWR site-months (8 UFs x 360; 6,480 before the de-dup and
-    # target drops); 821,412 USGS gauge-days over the reference windows.
-    assert by_fam["uf_monthly"] == 2880, by_fam
+    # 3,240 DWR site-months (9 UFs x 360; 6,480 before the de-dup drops);
+    # 821,412 USGS gauge-days over the reference windows.
+    assert by_fam["uf_monthly"] == 3240, by_fam
     assert by_fam["usgs_daily"] == 821412, by_fam
 
     cle = df.loc[df["entity_id"] == "cdec_CLE", "area_mi2"].iloc[0]

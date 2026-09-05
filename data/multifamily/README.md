@@ -1,8 +1,9 @@
 # data/multifamily — multi-timescale training-entity registry
 
-`entities.csv`: 94 training entities — 8 `uf_monthly` + 69 `usgs_daily` +
+`entities.csv`: 95 training entities — 9 `uf_monthly` + 69 `usgs_daily` +
 17 `cdec_daily` (15 + CLE + CSN). One row per (site × timescale × family);
-every target trains as an independent entity.
+every target trains as an independent entity. Which entities a run trains
+on is chosen at launch (`dpl train --basins`); the registry is the superset.
 
 Generated file — do not edit. Regenerate (sacsma conda env):
 `python dataprep/build_entities.py`. UF pour points are hand-maintained in
@@ -18,15 +19,16 @@ The short-daily pairs stay: uf_13/cdec_CSN (CSN 1999-04) and uf_06/cdec_BND
 record completeness verified against `cdec15/gage.csv` and
 `cdec_fnf/fnf_daily.csv`.
 
-A second build-time drop is for target validity: `uf_03` (Cache Creek
-above Rumsey) is built and then excluded (`TARGET_DROPS`). Its
-observation is the routed outflow below Clear Lake and Indian Valley,
+A second build-time drop list exists for target validity (`TARGET_DROPS`,
+currently empty). Its one candidate is `uf_03` (Cache Creek above Rumsey):
+the observation is the routed outflow below Clear Lake and Indian Valley,
 while its four arcs are the inflows CalSim routes through those lakes
-itself (+16% volume, r 0.877 against the obs) — not a valid target for a
-lake-free cell parameterization, which could only fit it by learning the
-lakes' storage and evaporation into the runoff parameters the inflow
-arcs then reapply. Part of the footprint keeps daily supervision via
-the in-basin USGS gauges; the rest regionalizes.
+itself (+16% volume, r 0.877 against the obs), so a lake-free cell
+parameterization can only fit it by learning the lakes' storage and
+evaporation into the runoff parameters the inflow arcs then reapply. The
+row is kept (flag `obs_routed_through_lakes`) so a run without the USGS
+family can still supervise the Cache Creek cells; a run with the in-basin
+USGS gauges can leave it out via `--basins`.
 
 ## Columns
 
@@ -69,7 +71,7 @@ coverage is complete.
 
 ## entity_cells.csv — cell sets and weights
 
-One row per (entity, region grid cell): 5,756 rows, 94 entities, 2,603
+One row per (entity, region grid cell): 5,849 rows, 95 entities, 2,652
 distinct cells of `data/region/grid_cells.csv`. Replaces the per-domain
 `hruinfo` tables as the aggregation basis for entity training.
 
@@ -98,15 +100,16 @@ true geometric area, plus a once-per-arc count of arc-overlap slivers
 (largest pairwise overlap 1.4% of the smaller arc; ≤0.04% at entity
 level).
 
-Cell-basis note: the training basis is 2,603 cells. The de-dup drops left
+Cell-basis note: the store's cell union is 2,652 cells. The de-dup drops left
 the union unchanged (every dropped monthly twin's cells stay via its daily
 twin; TNL's extra `I_LWSTN` cells via `usgs_11525500`); the Tulare remap
 onto the real polygons then added 8 edge cells (the inherited cell sets
 were a strict subset of the new); cdec_BND's `I_SRBB_VAL` valley cells
-add no new distinct cells — every one already serves uf_06; the uf_03
-target drop then removed the 49 cells only Cache used (its other 44 stay
-via the three in-basin USGS gauges and uf_02/uf_04 edge overlaps); the
-YRS Deer Creek trim then dropped two more (2,605 → 2,603). The full-rim basis — every cell touching
+add no new distinct cells — every one already serves uf_06; uf_03 holds
+93 cells, 49 of which no other entity uses (its other 44 are shared with
+the three in-basin USGS gauges and uf_02/uf_04 edge overlaps); the YRS
+Deer Creek trim dropped two cells only YRS used (2,654 → 2,652). A run's
+basis is the union over the entities it selects (2,603 without uf_03). The full-rim basis — every cell touching
 any rim polygon + USGS + Tulare — is 2,847 (an earlier tally of 2,853 was
 that basis, less a 6-cell bookkeeping difference). Statics coverage is
 **complete**: the full-grid ingest on main (`a77e4a8`) extended
@@ -132,7 +135,7 @@ time.
 ## flowlens.csv — per-entity traced flow lengths
 
 One row per (entity, region grid cell), covering exactly the
-`entity_cells.csv` pairs (5,756 rows). `flowlen_m` is the along-network
+`entity_cells.csv` pairs (5,849 rows). `flowlen_m` is the along-network
 distance (m) from the cell to the entity outlet, traced on the
 HydroSHEDS v2 1-arcsec flow-direction grid (TanDEM-X basis,
 hydrosheds.org; see `references.bib`).
