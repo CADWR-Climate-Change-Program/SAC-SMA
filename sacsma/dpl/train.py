@@ -32,8 +32,9 @@ daily entity joins the chunk NNSE window-masked (NaN outside its own
 monthly NNSE term (simulated daily flow bucketed to complete calendar
 months), and selection scores per-entity KGE at each entity's native
 timescale — pooled mean by default; with ``mt_family_weight="equal"`` the
-selection scalar is the family-mean-of-means, so checkpoint choice follows
-the family-balanced training objective.  
+selection scalar is the family-mean-of-means, and with numeric family
+shares ("usgs=0.27,cdec=0.54,uf=0.19") the share-weighted family mean, so
+checkpoint choice follows the training objective.  
 
 On CUDA the day-stepped pipeline runs as captured CUDA graphs
 (:mod:`sacsma.dpl.graphs`) — eager execution is dispatch-bound.  Graph
@@ -57,6 +58,7 @@ from .config import (
     CANOPY_LEARNED_PARAMS,
     CANOPY_LITE_LEARNED,
     DplConfig,
+    family_shares,
     pick_device,
 )
 from .data import (
@@ -171,19 +173,34 @@ def _feature_stats(fs: FeatureSet) -> dict:
     return d
 
 
+def _shares_stat(fam_means: dict[str, float], shares: dict[str, float]) -> float:
+    """Share-weighted mean of the family means over the families present in
+    ``fam_means`` (shares renormalized over those families)."""
+    present = [f for f in fam_means if f in shares]
+    if not present:
+        return float("nan")
+    tot = sum(shares[f] for f in present)
+    return float(sum(shares[f] / tot * fam_means[f] for f in present))
+
+
 def _donor_subset_stat(k: np.ndarray, valid: np.ndarray, in_donor: np.ndarray,
-                       fams: np.ndarray | None, select: str | None) -> float:
+                       fams: np.ndarray | None, select: str | None,
+                       shares: dict[str, float] | None = None) -> float:
     """The donor's selection statistic recomputed from this run's per-entity
     KGE vector ``k`` over the donor's entities: the pooled mean over valid
-    donor entities, or (``select == "family_mean"``) the mean over families
-    of the per-family means — the same arithmetic as the trainer's own
-    selection, restricted to ``in_donor``."""
+    donor entities, (``select == "family_mean"``) the mean over families of
+    the per-family means, or (``"family_weighted"``) the share-weighted
+    family mean with the donor's ``shares`` — the same arithmetic as the
+    trainer's own selection, restricted to ``in_donor``."""
     m = valid & in_donor
     if not m.any():
         return float("nan")
-    if select == "family_mean" and fams is not None:
-        return float(np.mean([k[m & (fams == f)].mean()
-                              for f in np.unique(fams[m])]))
+    if select in ("family_mean", "family_weighted") and fams is not None:
+        fam_means = {f: float(k[m & (fams == f)].mean())
+                     for f in np.unique(fams[m])}
+        if select == "family_weighted":
+            return _shares_stat(fam_means, shares or {})
+        return float(np.mean(list(fam_means.values())))
     return float(k[m].mean())
 
 
@@ -289,6 +306,40 @@ def train(
         daily_scale, monthly_scale = 2.0 / 3.0, 1.0 / 3.0
         print("train: family weighting EQUAL — usgs/cdec split the daily "
               "mean's mass; daily x 2/3, monthly x 1/3", flush=True)
+    # numeric shares: each family's share of the loss, renormalized over the
+    # families this run trains; entities weigh equally within a family.  The
+    # daily term carries the daily families' shares (their ratio set through
+    # the per-entity weights, the sum through daily_scale) and the monthly
+    # term the monthly family's share.
+    shares = (family_shares(cfg.mt_family_weight)
+              if eobs is not None else None)
+    if shares is not None:
+        fam = np.array(eobs.family)
+        present = [f for f in shares if (fam == f).any()]
+        if not present:
+            raise ValueError(f"mt_family_weight {cfg.mt_family_weight!r} "
+                             "names no family present in this run")
+        tot = sum(shares[f] for f in present)
+        shares = {f: shares[f] / tot for f in present}
+        missing = [str(f) for f in sorted(set(fam)) if f not in shares]
+        if missing:
+            raise ValueError(f"mt_family_weight {cfg.mt_family_weight!r} "
+                             f"gives no share to {missing} (present in this "
+                             "run); name every family or drop it with --basins")
+        w_np = np.zeros(len(fam))
+        for f in ("usgs_daily", "cdec_daily"):
+            msk = fam == f
+            if msk.any():
+                w_np[msk] = shares[f] / msk.sum()
+        if (w_np > 0).any():
+            w_np *= (w_np > 0).sum() / w_np.sum()      # unit mean, as above
+            fam_w = torch.as_tensor(w_np, device=dev, dtype=dtype)
+        daily_scale = sum(shares.get(f, 0.0) for f in ("usgs_daily", "cdec_daily"))
+        monthly_scale = shares.get("uf_monthly", 0.0)
+        print("train: family weighting by SHARES — "
+              + ", ".join(f"{f.split('_')[0]} {s:.3f}" for f, s in shares.items())
+              + f"; daily x {daily_scale:.3f}, monthly x {monthly_scale:.3f}; "
+              "selection = share-weighted family mean", flush=True)
     # truncated spinup start (clamped to the record start; == 0 restores the
     # exact frozen full-prefix convention)
     spin_req = int(dom.dates.searchsorted(pd.Timestamp(cfg.spinup_start)))
@@ -458,6 +509,7 @@ def train(
     donor_gate = None
     donor_basins: tuple[str, ...] = ()
     donor_select = None
+    donor_shares = None
     if ick is not None:
         # strict=False: heads the donor lacks (e.g. a fresh seasonal head)
         # keep their zero-init, so training starts EXACTLY at the donor's
@@ -467,15 +519,21 @@ def train(
             raise ValueError(f"init_from checkpoint carries heads this net "
                              f"lacks: {sorted(unexpected)}")
         donor_basins = tuple(ick.get("basins") or ())
-        this_select = (("family_mean" if cfg.mt_family_weight == "equal"
-                        else "pooled") if eobs is not None else None)
+        this_select = ((("family_mean" if cfg.mt_family_weight == "equal"
+                         else "family_weighted" if shares is not None
+                         else "pooled")) if eobs is not None else None)
         donor_select = ick.get("mt_select") or "pooled"
+        donor_shares = (family_shares(ick.get("cfg", {}).get("mt_family_weight", "none"))
+                        if donor_select == "family_weighted" else None)
         # a checkpoint without an entity list (pre-multi-timescale) is taken
         # as the same entity set, as the gate always assumed for those
         if ((not donor_basins or donor_basins == tuple(dom.basins))
-                and donor_select == (this_select or "pooled")):
+                and donor_select == (this_select or "pooled")
+                and donor_select != "family_weighted"):
             donor_gate = "same"
         elif donor_basins and set(donor_basins) <= set(dom.basins):
+            # also the route for share-weighted donors: their statistic is
+            # recomputed with the donor's own shares
             donor_gate = "subset"
         print(f"train: warm-start from {cfg.init_from} (epoch {ick['epoch']}, "
               f"sel cal KGE {ick.get('cal_kge', float('nan')):.4f}, "
@@ -637,6 +695,13 @@ def train(
             print(f"    per-family cal KGE: {parts}  | sel family-mean "
                   f"{fam_scalar:.4f} (pooled {pooled:.4f})", flush=True)
             return k, fam_scalar
+        if shares is not None:
+            # share-weighted family mean over the families with a valid
+            # entity, renormalized like the loss
+            fam_scalar = _shares_stat(fam_means, shares)
+            print(f"    per-family cal KGE: {parts}  | sel family-weighted "
+                  f"{fam_scalar:.4f} (pooled {pooled:.4f})", flush=True)
+            return k, fam_scalar
         print(f"    per-family cal KGE: {parts}", flush=True)
         return k, pooled
 
@@ -667,9 +732,10 @@ def train(
         torch.save({"net": net.state_dict(), "opt": opt.state_dict(),
                     "sched": sched.state_dict(), "epoch": epoch,
                     "best_kge": best_kge, "stale": stale, "cal_kge": kge,
-                    "mt_select": (("family_mean"
-                                   if cfg.mt_family_weight == "equal"
-                                   else "pooled")
+                    "mt_select": ((("family_mean"
+                                    if cfg.mt_family_weight == "equal" else
+                                    "family_weighted" if shares is not None
+                                    else "pooled"))
                                   if eobs is not None else None),
                     "cfg": asdict(cfg), "variant": variant, "domain": domain,
                     "basins": list(dom.basins),
@@ -846,7 +912,8 @@ def train(
             else:
                 gate_val = _donor_subset_stat(
                     per_basin.detach().cpu().numpy().astype(float),
-                    gate_valid, gate_in_donor, gate_fams, donor_select)
+                    gate_valid, gate_in_donor, gate_fams, donor_select,
+                    donor_shares)
                 how = (f"{donor_select} statistic over the donor's "
                        f"{len(donor_basins)} entities")
             gap = abs(gate_val - donor_kge)

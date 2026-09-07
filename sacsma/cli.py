@@ -355,12 +355,14 @@ def main(argv: list[str] | None = None) -> int:
                          "entity ids (debug slices and cost pilots); "
                          "'' = the full domain")
     tr.add_argument("--mt-family-weight", default="none",
-                    choices=["none", "equal"],
                     help="multi-timescale family weighting: none = every "
                          "valid daily entity weighs equally and the monthly "
                          "term adds with coefficient 1 (baseline); equal = "
                          "usgs/cdec/uf families carry equal thirds of the "
-                         "loss (multifamily domain only)")
+                         "loss; or numeric shares 'usgs=0.27,cdec=0.54,uf=0.19' "
+                         "(renormalized over the families present, entities "
+                         "equal within a family; selection uses the same "
+                         "share-weighted family mean) (multifamily domain only)")
     tr.add_argument("--et", default="sac", choices=["sac", "noah"],
                     help="ET scheme: sac = frozen Hamon PET (scorable via "
                          "run_basin); noah = Noah canopy-resistance ET (NEW "
