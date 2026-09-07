@@ -122,7 +122,7 @@ def _dpl_train(args: argparse.Namespace) -> int:
         shape_sigma_floor=args.shape_sigma_floor,
         et_anchor_band=args.et_anchor_band,
         et_products=args.et_products,
-        init_from=args.init_from,
+        init_from=args.init_from, init_gate=args.init_gate,
         lr=args.lr,
         lr_warmup_epochs=args.warmup_epochs, n_epochs=args.epochs,
         spinup_refresh_every=args.spinup_refresh,
@@ -452,9 +452,16 @@ def main(argv: list[str] | None = None) -> int:
     tr.add_argument("--init-from", default="",
                     help="warm-start checkpoint (e.g. a baseline best.pt): net "
                          "weights load strict=False so fresh zero-init heads "
-                         "(e.g. --seasonal) start EXACTLY at the donor's field; "
+                         "(e.g. --seasonal) start EXACTLY at the donor's field, "
+                         "and the donor's feature standardization is reused "
+                         "(exact start even on a different --basins subset); "
                          "fresh optimizer/scheduler — pair with a low --lr for "
                          "the fine-tune regime")
+    tr.add_argument("--init-gate", default="warn", choices=["warn", "abort"],
+                    help="what to do when the epoch-0 selection of a warm "
+                         "start does not reproduce the donor's sel cal KGE "
+                         "(|d| > 1e-3): warn and continue, or abort the run "
+                         "(unattended fine-tunes)")
     tr.add_argument("--fourier-k", type=int, default=0,
                     help="net-v2: spatial Fourier feature order (4k extra "
                          "features; low-frequency regional fields; 0 = off)")

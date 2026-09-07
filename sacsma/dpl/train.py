@@ -171,6 +171,22 @@ def _feature_stats(fs: FeatureSet) -> dict:
     return d
 
 
+def _donor_subset_stat(k: np.ndarray, valid: np.ndarray, in_donor: np.ndarray,
+                       fams: np.ndarray | None, select: str | None) -> float:
+    """The donor's selection statistic recomputed from this run's per-entity
+    KGE vector ``k`` over the donor's entities: the pooled mean over valid
+    donor entities, or (``select == "family_mean"``) the mean over families
+    of the per-family means — the same arithmetic as the trainer's own
+    selection, restricted to ``in_donor``."""
+    m = valid & in_donor
+    if not m.any():
+        return float("nan")
+    if select == "family_mean" and fams is not None:
+        return float(np.mean([k[m & (fams == f)].mean()
+                              for f in np.unique(fams[m])]))
+    return float(k[m].mean())
+
+
 def train(
     variant: str = "static",
     data_dir: str = "data",
@@ -312,13 +328,44 @@ def train(
               "selection metric", flush=True)
     _needs_climate = variant in ("climate", "physical_climate")
     _needs_physical = variant in ("physical", "physical_climate")
+    # warm start: the donor checkpoint is read here, before the features are
+    # built, so that its feature standardization (z-scoring stats, categories,
+    # Fourier extent) is reused exactly as the evaluate path does.  Without
+    # this a different entity subset (--basins) re-z-scores the HRU table and
+    # the loaded weights start from a perturbed copy of the donor field.
+    ick = None
+    donor_stats = None
+    if cfg.init_from:
+        if resume:
+            raise ValueError("init_from and resume are mutually exclusive "
+                             "(resume restores this run's own last.pt)")
+        ick = torch.load(cfg.init_from, map_location=dev, weights_only=False)
+        if ick.get("variant") != variant or ick.get("domain") != domain:
+            raise ValueError(
+                f"init_from checkpoint is variant={ick.get('variant')!r} "
+                f"domain={ick.get('domain')!r}; this run is "
+                f"{variant!r}/{domain!r}")
+        if ick.get("features"):
+            donor_stats = FeatureSet(x=np.empty((0, 0), dtype=np.float32),
+                                     **ick["features"])
+            if donor_stats.fourier_k != cfg.fourier_k:
+                raise ValueError(
+                    f"init_from checkpoint was trained with fourier_k="
+                    f"{donor_stats.fourier_k}; this run asks for "
+                    f"{cfg.fourier_k}")
     fs = build_features(
         dom.hrus, variant=variant,
         forcing=dom.forcing if _needs_climate else None,
-        climate_product="historical_livneh_unsplit" if _needs_climate else None,
+        climate_window=(donor_stats.climate_window
+                        if donor_stats is not None else None),
+        climate_product=(donor_stats.climate_product
+                         if donor_stats is not None else
+                         ("historical_livneh_unsplit"
+                          if _needs_climate else None)),
         fourier_k=cfg.fourier_k,
         physical_path=(soilveg_path(data_dir, domain)
                        if _needs_physical else None),
+        stats=donor_stats,
     )
     x = torch.as_tensor(fs.x).to(dev, dtype)
 
@@ -403,16 +450,15 @@ def train(
         priors = ga_priors(load_params(data_dir, domain=domain), dom.hrus)
     net.init_from_priors(priors)
     donor_kge = float("nan")
-    if cfg.init_from:
-        if resume:
-            raise ValueError("init_from and resume are mutually exclusive "
-                             "(resume restores this run's own last.pt)")
-        ick = torch.load(cfg.init_from, map_location=dev, weights_only=False)
-        if ick.get("variant") != variant or ick.get("domain") != domain:
-            raise ValueError(
-                f"init_from checkpoint is variant={ick.get('variant')!r} "
-                f"domain={ick.get('domain')!r}; this run is "
-                f"{variant!r}/{domain!r}")
+    # ep0-donor gate mode: "same" compares the selection scalar directly
+    # (same entity set, same statistic); "subset" recomputes the donor's own
+    # statistic from this run's per-entity KGE vector over the donor's
+    # entities (the donor trained a subset of this run's entities); None =
+    # not applicable.
+    donor_gate = None
+    donor_basins: tuple[str, ...] = ()
+    donor_select = None
+    if ick is not None:
         # strict=False: heads the donor lacks (e.g. a fresh seasonal head)
         # keep their zero-init, so training starts EXACTLY at the donor's
         # parameter field; donor keys the net lacks are a config error.
@@ -420,11 +466,45 @@ def train(
         if unexpected:
             raise ValueError(f"init_from checkpoint carries heads this net "
                              f"lacks: {sorted(unexpected)}")
+        donor_basins = tuple(ick.get("basins") or ())
+        this_select = (("family_mean" if cfg.mt_family_weight == "equal"
+                        else "pooled") if eobs is not None else None)
+        donor_select = ick.get("mt_select") or "pooled"
+        # a checkpoint without an entity list (pre-multi-timescale) is taken
+        # as the same entity set, as the gate always assumed for those
+        if ((not donor_basins or donor_basins == tuple(dom.basins))
+                and donor_select == (this_select or "pooled")):
+            donor_gate = "same"
+        elif donor_basins and set(donor_basins) <= set(dom.basins):
+            donor_gate = "subset"
         print(f"train: warm-start from {cfg.init_from} (epoch {ick['epoch']}, "
-              f"sel cal KGE {ick.get('cal_kge', float('nan')):.4f}); fresh "
-              f"zero-init heads: {sorted(missing) if missing else 'none'}; "
+              f"sel cal KGE {ick.get('cal_kge', float('nan')):.4f}, "
+              f"{len(donor_basins) or 'n/a'} entities); feature "
+              f"standardization {'reused from the donor' if donor_stats is not None else 'REBUILT (donor carries no feature stats)'}; "
+              f"fresh zero-init heads: {sorted(missing) if missing else 'none'}; "
               "fresh optimizer/scheduler", flush=True)
+        if donor_stats is None and cfg.init_gate == "abort":
+            raise RuntimeError("init_from: the donor checkpoint carries no "
+                               "feature standardization, so the warm start "
+                               "cannot be exact (--init-gate abort)")
+        if donor_gate == "subset":
+            print(f"train: ep0-donor gate in subset mode — this run trains "
+                  f"{len(dom.basins)} entities with selection "
+                  f"{this_select!r}; the donor's {donor_select!r} statistic "
+                  f"over its {len(donor_basins)} entities is recomputed from "
+                  "the epoch-0 per-entity KGE and must reproduce its sel cal "
+                  "KGE", flush=True)
+        elif donor_gate is None:
+            print(f"train: ep0-donor gate off — the donor's {len(donor_basins) or 'n/a'} "
+                  f"entities are not a subset of this run's {len(dom.basins)}",
+                  flush=True)
         donor_kge = float(ick.get("cal_kge", float("nan")))
+        if cfg.init_gate == "abort" and (donor_gate is None
+                                         or not math.isfinite(donor_kge)):
+            raise RuntimeError(
+                f"init_from: the ep0-donor gate cannot be armed (mode "
+                f"{donor_gate!r}, donor sel cal KGE {donor_kge}); "
+                "--init-gate abort requires a gate")
     opt = torch.optim.AdamW(net.parameters(), lr=cfg.lr,
                             weight_decay=cfg.weight_decay)
     warm = max(int(cfg.lr_warmup_epochs), 0)
@@ -719,6 +799,17 @@ def train(
              else ' [eager]'),
           flush=True)
 
+    # subset-mode donor gate: the selection validity mask (static, obs-only)
+    # and the donor-entity membership, evaluated once
+    gate_valid = gate_in_donor = gate_fams = None
+    if donor_gate == "subset":
+        v = torch.isfinite(calobs.obs).sum(dim=1) >= 90
+        if eobs is not None:
+            v[m_rows] = torch.isfinite(eobs.obs_monthly).sum(dim=1) >= 12
+        gate_valid = v.cpu().numpy()
+        gate_in_donor = np.isin(np.array(dom.basins), list(donor_basins))
+        gate_fams = np.array(eobs.family) if eobs is not None else None
+
     state_spin: PipelineState | None = None
     stop = False
     for epoch in range(start_epoch, cfg.n_epochs):
@@ -743,15 +834,36 @@ def train(
 
         # ep0-donor gate: with zero-init extra heads the warm-started net IS the
         # donor field, so the pre-update epoch-0 selection must reproduce the
-        # donor's sel cal-KGE.  A gap means a NUMERICS/CONFIG mismatch (n_inc,
-        # spinup basis, domain/footprint flags) — kill the run and fix flags.
-        if (cfg.init_from and epoch == start_epoch and do_eval
-                and math.isfinite(donor_kge) and abs(pooled - donor_kge) > 1e-3):
-            print(f"train: WARNING — ep0 cal KGE {pooled:.4f} != donor "
-                  f"{donor_kge:.4f} (|d|={abs(pooled - donor_kge):.4f} > 1e-3): "
-                  "this run's numerics/config do NOT reproduce the donor; "
-                  "check --n-inc / spinup / footprint before trusting the "
-                  "fine-tune", flush=True)
+        # donor's sel cal-KGE.  A gap means a NUMERICS/CONFIG/DATA mismatch
+        # (n_inc, spinup basis, domain/footprint flags, data revision).  In
+        # "same" mode the selection scalar is compared directly; in "subset"
+        # mode the donor's statistic is recomputed over its own entities.
+        # --init-gate abort turns a failure into a hard stop (unattended runs).
+        if (donor_gate is not None and epoch == start_epoch and do_eval
+                and math.isfinite(donor_kge)):
+            if donor_gate == "same":
+                gate_val, how = pooled, "same entity set"
+            else:
+                gate_val = _donor_subset_stat(
+                    per_basin.detach().cpu().numpy().astype(float),
+                    gate_valid, gate_in_donor, gate_fams, donor_select)
+                how = (f"{donor_select} statistic over the donor's "
+                       f"{len(donor_basins)} entities")
+            gap = abs(gate_val - donor_kge)
+            if not math.isfinite(gap) or gap > 1e-3:
+                msg = (f"ep0-donor gate FAILED — {how}: {gate_val:.4f} vs "
+                       f"donor {donor_kge:.4f} (|d|={gap:.4f} > 1e-3): this "
+                       "run's numerics/config/data do NOT reproduce the "
+                       "donor; check --n-inc / spinup / footprint / data "
+                       "revision before trusting the fine-tune")
+                if cfg.init_gate == "abort":
+                    print(f"train: {msg} — aborting (--init-gate abort)",
+                          flush=True)
+                    raise RuntimeError(msg)
+                print(f"train: WARNING — {msg}", flush=True)
+            else:
+                print(f"train: ep0-donor gate PASSED — {how}: {gate_val:.4f} "
+                      f"vs donor {donor_kge:.4f}", flush=True)
 
         is_best = False
         if do_eval:

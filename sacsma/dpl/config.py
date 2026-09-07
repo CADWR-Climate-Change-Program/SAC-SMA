@@ -290,10 +290,20 @@ class DplConfig:
     #: warm-start checkpoint path: the net's weights are loaded strict=False
     #: BEFORE training (heads absent from the donor — e.g. a fresh seasonal
     #: head — keep their zero-init, so the run starts EXACTLY at the donor's
-    #: parameter field).  Optimizer/scheduler start fresh; combine with a low
-    #: lr for the fine-tune regime (obs losses select within the donor's flow-
-    #: optimal plateau instead of fighting a from-scratch descent).  "" = off.
+    #: parameter field).  The donor's feature standardization is reused, so
+    #: the start is exact even when this run trains a different entity subset
+    #: (--basins) than the donor.  Optimizer/scheduler start fresh; combine
+    #: with a low lr for the fine-tune regime (obs losses select within the
+    #: donor's flow-optimal plateau instead of fighting a from-scratch
+    #: descent).  "" = off.
     init_from: str = ""
+    #: ep0-donor gate action when the epoch-0 selection does not reproduce
+    #: the donor's sel cal KGE (|d| > 1e-3): "warn" prints and continues;
+    #: "abort" raises, for unattended warm starts.  The gate compares the
+    #: selection scalar directly when the donor trained the same entity set
+    #: under the same statistic, and otherwise recomputes the donor's own
+    #: statistic over its entities from this run's per-entity KGE.
+    init_gate: str = "warn"
 
     # -- parameter net (net-v2 knobs; defaults = the v1 architecture) --------
     hidden: int = 64
@@ -442,6 +452,8 @@ class DplConfig:
             raise ValueError(
                 "et_anchor_band re-targets the level hinge — it needs "
                 "et_level_lambda > 0 to have any effect")
+        if self.init_gate not in ("warn", "abort"):
+            raise ValueError(f"init_gate {self.init_gate!r}")
         if self.mt_family_weight not in ("none", "equal"):
             raise ValueError(f"mt_family_weight {self.mt_family_weight!r}")
         if self.train_graph_segments < 1:
