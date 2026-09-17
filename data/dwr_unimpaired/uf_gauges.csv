@@ -10,8 +10,8 @@ uf,lat,lon,gauge_source,note,area_mi2_swat,area_source
 11,38.636016,-121.221893,cdec_stations:AMF,American R at Fair Oaks (Nimbus),1908.5,Table A-1 p.A-7 (pdf p.97) 
 13,38.5,-121.044,cdec_stations:CSN,Cosumnes R at Michigan Bar,536,Table A-1 p.A-7 (pdf p.97) 
 14,38.256861,-120.850771,CDEC MKM staMeta,Pardee Dam; CDEC PAR staMeta coords are rounded to 2 decimals - do not use,580,Table A-1 p.A-7 (pdf p.97) 
-15,38.0888106,-120.8657702,USGS NWIS 11309500,Calaveras R at Jenny Lind; below New Hogan,390,Table A-1 New Hogan model 360.2 + 30 mi2 Jenny Lind reach (p.3-11) per scoping note
-16,37.9481,-120.525,CDEC NML staMeta,New Melones Dam; uf_locations cdec_id SNS is Goodwin ~14 km downstream of the arc set - review with Wyatt,972.2,Table A-2 p.A-7 (pdf p.97)  ~= Goodwin footprint 980
+15,38.0888106,-120.8657702,USGS NWIS 11309500,Calaveras R at Jenny Lind; below New Hogan,390,Table A-1 New Hogan model 360.2 + 30 mi2 Jenny Lind reach (p.3-11)
+16,37.9481,-120.525,CDEC NML staMeta,New Melones Dam; uf_locations cdec_id SNS is Goodwin ~14 km downstream of the arc set,972.2,Table A-2 p.A-7 (pdf p.97)  ~= Goodwin footprint 980
 18,37.666,-120.441,cdec_stations:TLG,Tuolumne R at Don Pedro,1536.7,Table A-2 p.A-7 (pdf p.97) 
 19,37.522,-120.331,cdec_stations:MRC,Merced R nr Merced Falls (Exchequer),1058.7,Table A-2 p.A-7 (pdf p.97) 
 20,37.21550105,-119.991276,USGS NWIS 11259000,Chowchilla R bl Buchanan Dam (gid also in data/usgs/gauges.csv),258,Table A-2 p.A-7 (pdf p.97) 
