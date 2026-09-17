@@ -9,7 +9,8 @@ on), `usgs/` (cleaned gauge observations inside the CalSim3 domain),
 `dwr_unimpaired/` (DWR's published Central Valley unimpaired flows — the source of the
 `9unimp`/`11obs` calibration targets — plus the SWAT rim simulation of the same
 quantity) and `multifamily/` (the training-entity registry of the dPL multi-timescale
-domain). Every file in the application stores is
+domain). A fifth, `cdec_fnf/` (CDEC daily full-natural-flow pulls beyond the 15-CDEC
+store), is documented in its own README. Every file in the application stores is
 referenced by package code; the cross-cutting stores are built and consumed by
 `dataprep/` and the dPL work. Sizes are approximate.
 
@@ -443,5 +444,5 @@ Observation series stay beside their raw sources and are selected through the re
 `obs_store` column: `usgs/flow_daily.nc`, `cdec15/gage.csv`, `cdec_fnf/fnf_daily_mm.csv`
 and `dwr_unimpaired/uf_monthly_mm.csv`. Footprints: the USGS entities use
 `usgs/gis/usgs_watersheds.gpkg`; the four Tulare basins use
-`cdec15/gis/SACSMA_15CDEC.geojson` (3.4 MB, the original 15-basin delineations); every
+`cdec15/gis/SACSMA_15CDEC.geojson` (3.6 MB, the original 15-basin delineations); every
 other CDEC and UF entity is a set of `calsim/gis/calsim3.gpkg` rim polygons.

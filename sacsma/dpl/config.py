@@ -212,8 +212,10 @@ class DplConfig:
     loss: str = "nnse"          # "nnse" (variance-normalized MSE) | "mse"
     log_loss_lambda: float = 0.15
     log_loss_eps: float = 0.01  # mm/day
-    #: per-chunk variance-matching penalty (std-ratio - 1)^2 — counters the
-    #: squared-error variance damping (alpha -> r); NOT chunked KGE.
+    #: per-chunk variance-matching penalty on alpha = std-ratio: (alpha - 1)^2 up
+    #: to |alpha - 1| = 1, linear beyond, skipped for a basin-chunk under 0.1% of
+    #: the basin's record variance — counters the squared-error variance damping
+    #: (alpha -> r); NOT chunked KGE.
     var_loss_lambda: float = 1.0
     #: per-chunk BIAS penalty (mean-ratio beta - 1)^2 — the KGE beta term the
     #: MSE/NNSE loss lacks (it penalizes correlation + variance but NOT volume

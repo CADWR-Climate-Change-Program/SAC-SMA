@@ -20,7 +20,7 @@ record completeness verified against `cdec15/gage.csv` and
 `cdec_fnf/fnf_daily.csv`.
 
 A second build-time drop list exists for target validity (`TARGET_DROPS`,
-currently empty). Its one candidate is `uf_03` (Cache Creek above Rumsey):
+empty by default). `uf_03` (Cache Creek above Rumsey) is the documented case:
 the observation is the routed outflow below Clear Lake and Indian Valley,
 while its four arcs are the inflows CalSim routes through those lakes
 itself (+16% volume, r 0.877 against the obs), so a lake-free cell
@@ -100,21 +100,19 @@ true geometric area, plus a once-per-arc count of arc-overlap slivers
 (largest pairwise overlap 1.4% of the smaller arc; ≤0.04% at entity
 level).
 
-Cell-basis note: the store's cell union is 2,652 cells. The de-dup drops left
-the union unchanged (every dropped monthly twin's cells stay via its daily
-twin; TNL's extra `I_LWSTN` cells via `usgs_11525500`); the Tulare remap
-onto the real polygons then added 8 edge cells (the inherited cell sets
-were a strict subset of the new); cdec_BND's `I_SRBB_VAL` valley cells
-add no new distinct cells — every one already serves uf_06; uf_03 holds
+Cell basis: the store's cell union is 2,652 distinct cells. The dropped
+monthly twins contribute none of their own (their cells are their daily
+twins'; TNL's extra `I_LWSTN` cells are those of `usgs_11525500`); the
+Tulare polygons reach 8 edge cells beyond the `cdec15_grid` cell sets;
+cdec_BND's `I_SRBB_VAL` valley cells all serve uf_06 as well; uf_03 holds
 93 cells, 49 of which no other entity uses (its other 44 are shared with
-the three in-basin USGS gauges and uf_02/uf_04 edge overlaps); the YRS
-Deer Creek trim dropped two cells only YRS used (2,654 → 2,652). A run's
-basis is the union over the entities it selects (2,603 without uf_03). The full-rim basis — every cell touching
-any rim polygon + USGS + Tulare — is 2,847. Statics coverage is
-**complete**: the full-grid ingest on main (`a77e4a8`) extended
-`data/region/soilveg_continuous.csv` and `lai_climatology.csv` to all
-4,410 region cells, closing what was a 256-cell gap in the training basis
-(447 full-rim).
+the three in-basin USGS gauges and uf_02/uf_04 edge overlaps); the two
+Deer Creek cells below the YRS gauge are not in the store. A run's basis
+is the union over the entities it selects (2,603 without uf_03). The
+full-rim basis — every cell touching any rim polygon + USGS + Tulare — is
+2,847. Statics coverage is **complete**: `data/region/soilveg_continuous.csv`
+and `lai_climatology.csv` cover all 4,410 region cells (full-grid ingest,
+`a77e4a8`).
 
 ## Where the observation series live
 

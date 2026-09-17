@@ -76,10 +76,9 @@ def build(data_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
     sq_mi = catch.set_index("node")["sq_mi"]
     arc_map = _map_weights(catch, cells, "calsim arcs")
 
-    # USGS watersheds, shaped like a load_catchments frame. make_valid is
-    # belt-and-braces: this layer is valid on this checkout, but at least
-    # one other environment (different GEOS/PROJ) produced zero areas for
-    # it without the repair.
+    # USGS watersheds, shaped like a load_catchments frame. make_valid is a
+    # safeguard: some GEOS/PROJ builds return zero areas for this layer
+    # without the repair.
     ws = gpd.read_file(data_dir / "usgs" / "gis" / "usgs_watersheds.gpkg")
     ws_catch = gpd.GeoDataFrame(
         {"cid": range(len(ws)), "node": ws["gid"].astype(str),
@@ -89,8 +88,8 @@ def build(data_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
     usgs_map = _map_weights(ws_catch, cells, "usgs watersheds")
 
     # Tulare 4: the original SAC-SMA boundary polygons, mapped square-overlap
-    # like every other polygon source. make_valid is belt-and-braces here
-    # (all four are valid on this checkout; one of the other 11 is not).
+    # like every other polygon source. make_valid is a safeguard here (the
+    # four polygons are valid as stored; one of the other 11 is not).
     tul = gpd.read_file(data_dir / "cdec15" / "gis" / "SACSMA_15CDEC.geojson")
     tul = tul[tul["Name"].isin(TULARE)].reset_index(drop=True)
     tul_ea = tul.to_crs(5070)
@@ -205,18 +204,16 @@ def gates(df: pd.DataFrame, checks: pd.DataFrame, grid_keys: set) -> None:
     assert dict(zip(tul["entity_id"], tul["n_cells"], strict=True)) == {
         "cdec_ISB": 177, "cdec_PNF": 133, "cdec_SCC": 40, "cdec_TRM": 62}
 
-    # The training basis: 2,654 distinct cells. The de-dup drops left the
-    # union unchanged at 2,646 (every dropped monthly twin's cells stay via
-    # its daily twin; obs11_TNL's extra I_LWSTN cells via usgs_11525500);
-    # the Tulare remap onto the SACSMA_15CDEC polygons then added 8 edge
-    # cells (the inherited cell sets were a strict subset of the new).
-    # Statics cover all 4,410 region cells (a77e4a8) — no gap from the
-    # additions. An earlier full-rim tally logged 2,853 cells (all 200
-    # Merged polygons; exact recompute 2,847).
-    # uf_03 stays in the store (93 cells, 49 of them used by no other
-    # entity; the other 44 are shared with the three in-basin USGS gauges
-    # and the uf_02/uf_04 edge overlaps); the YRS Deer Creek trim removed
-    # two cells that only YRS used (2,654 -> 2,652).
+    # The training basis: the union over all entities is 2,652 distinct
+    # cells. Dropped monthly twins add none (their cells are their daily
+    # twins'; obs11_TNL's extra I_LWSTN cells are usgs_11525500's); the
+    # SACSMA_15CDEC polygons give the Tulare basins 8 edge cells beyond the
+    # cdec15_grid cell sets; uf_03 holds 93 cells, 49 of them used by no
+    # other entity (the other 44 are shared with the three in-basin USGS
+    # gauges and the uf_02/uf_04 edge overlaps); the two Deer Creek cells
+    # below the YRS gauge are not in the store. Statics cover all 4,410
+    # region cells (a77e4a8). The full-rim basis (all 200 Merged polygons +
+    # USGS + Tulare) is 2,847 cells.
     union = df["key"].nunique()
     assert union == 2652, union
 

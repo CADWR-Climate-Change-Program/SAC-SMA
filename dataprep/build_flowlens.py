@@ -20,7 +20,8 @@ Conventions:
 - **uf_07** (gauge-less composite of east-side creeks, one entity with
   one outlet per sub-arc): each cell traces until its path exits the
   union of the entity's cell squares — the exit is the creek's valley
-  outlet (instantaneous delivery there, per the multi-outlet design).
+  outlet (delivery at that exit is treated as instantaneous: uf_07 has one
+  outlet per creek, not a common one).
 - **Fallback** for cells none of whose candidates drain to the outlet
   (square-overlap edge cells whose ground truly drains elsewhere):
   ``flowlen_m`` = haversine(cell center -> outlet) x the entity's

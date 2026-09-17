@@ -163,7 +163,7 @@ def _dpl_evaluate(args: argparse.Namespace) -> int:
     from .dpl.evaluate import evaluate_checkpoint
 
     ck = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
-    if ck.get("domain") in ("multifamily", "dpl_entities"):  # pre-rename ckpts
+    if ck.get("domain") == "multifamily":
         # multi-timescale checkpoints score per entity at native timescales
         from .dpl.evaluate_multi_timescale import evaluate_checkpoint_mt
 
@@ -353,7 +353,7 @@ def main(argv: list[str] | None = None) -> int:
                          "checkpoint so evaluate scores the same domain")
     tr.add_argument("--basins", default="",
                     help="comma list restricting training to these basin/"
-                         "entity ids (debug slices and cost pilots); "
+                         "entity ids (subset runs, e.g. debug slices or timing tests); "
                          "'' = the full domain")
     tr.add_argument("--mt-family-weight", default="none",
                     help="multi-timescale family weighting: none = every "
@@ -424,8 +424,11 @@ def main(argv: list[str] | None = None) -> int:
     tr.add_argument("--log-lambda", type=float, default=0.15,
                     help="low-flow log-space loss weight (0 disables)")
     tr.add_argument("--var-lambda", type=float, default=1.0,
-                    help="per-chunk variance-matching weight (std ratio - 1)^2; "
-                         "counters squared-error variance damping (0 disables)")
+                    help="per-chunk variance-matching weight on alpha = std ratio: "
+                         "(alpha-1)^2 up to |alpha-1| = 1, linear beyond, skipped "
+                         "for a basin-chunk under 0.1%% of the basin's record "
+                         "variance; counters squared-error variance damping "
+                         "(0 disables)")
     tr.add_argument("--bias-lambda", type=float, default=0.0,
                     help="per-chunk bias penalty (mean ratio - 1)^2; the KGE beta "
                          "term the MSE/NNSE loss lacks (0 disables)")

@@ -14,9 +14,11 @@ unstable over one-year chunks):
 
 Optional low-flow emphasis: ``+ lambda * (log(sim+eps) - log(obs+eps))^2``.
 
-Optional variance matching: ``+ var_lambda * (std(sim)/std(obs) - 1)^2`` per
-basin over the chunk's finite-obs days.  Squared error alone is variance-
-damping — its optimum is ``alpha = r < 1`` (the classic NSE peak-flattening),
+Optional variance matching: ``+ var_lambda * rho(std(sim)/std(obs) - 1)`` per
+basin over the chunk's finite-obs days, with ``rho(d) = d^2`` up to
+``|d| = 1`` and ``2|d| - 1`` beyond (Huber), skipped for a basin-chunk whose
+observed variance is under 0.1% of the basin's record variance.  Squared
+error alone is variance-damping — its optimum is ``alpha = r < 1`` (the classic NSE peak-flattening),
 which the 2026-07-10 static run showed directly (mean cal alpha 0.88 vs the
 GA's 1.08, costing ~0.1 KGE on the strong basins).  A chunk std over ~366
 days is a stable statistic, unlike chunk-local correlation/mean ratios —
@@ -78,7 +80,7 @@ def masked_basin_loss(
         # a chunk whose obs are ~flat FOR THIS BASIN (an ephemeral gauge's
         # zero-flow season, a window-masked sliver) carries no variance
         # signal to match — the ratio explodes through the 1e-12 clamp
-        # (observed: 1e6+ chunk losses on the entity domain's west-side
+        # (1e6+ chunk losses occur on the multifamily domain's west-side
         # gauges), and an absolute floor alone still passes near-flat
         # chunks whose tiny denominator lets this one term hijack the
         # gradient.  The gate is therefore RELATIVE — the chunk must carry
