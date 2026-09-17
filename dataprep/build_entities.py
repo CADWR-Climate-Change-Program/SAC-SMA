@@ -24,9 +24,9 @@ Families:
   obs11_monthly SHA + TNL built for lineage, both dropped (SIS/CLE daily twins)
 
 Outlet coordinates, one source per family:
-  - UF entities: data/dwr_unimpaired/uf_gauges.csv 
-  `cdec_stations:*` are copies of
-    cdec_fnf/stations.csv coordinates; 
+  - UF entities: data/dwr_unimpaired/uf_gauges.csv (hand-maintained; rows
+    tagged `cdec_stations:*` copy cdec_fnf/stations.csv coordinates and are
+    drift-gated against it below).
   - USGS entities: gauges.csv lat/lon.
   - CDEC and obs11 entities: the station row in cdec_fnf/stations.csv
     (obs11_TNL: USGS gauge 11525500).
@@ -41,8 +41,9 @@ The uf_monthly family carries TWO area columns:
   - I_RUB002 (UF 11 / FOL lists) has no CalSim3_Merged polygon — its terrain
     was dissolved into MFA025, so coverage is complete.
   - Some outlets sit a few km outside their polygons (dam/valley-floor
-    stations below the delineation terminus). The coordinates are correct —
-    do not "fix" them; flagged outlet_below_delineation (BELOW_DAM below).
+    stations below the delineation terminus). The coordinates are the
+    stations' own and are kept; flagged outlet_below_delineation (BELOW_DAM
+    below).
   - UF 7 is a composite of east-side creeks with no gauge by construction.
 
 Usage (sacsma conda env):
