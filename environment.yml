@@ -35,3 +35,6 @@ dependencies:
   - pip
   - pip:
       - -e .
+      # dataprep/build_flowlens.py (HydroSHEDS flow-length tracing). The pip wheel carries
+      # its own GDAL: keep it out of any process that also imports geopandas/pyogrio.
+      - rasterio>=1.4
