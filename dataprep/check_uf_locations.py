@@ -106,7 +106,7 @@ NWIS_CAND = {
     11: (["11446500"], [["AMERICAN"], ["FAIR OAKS"]]),
     13: (["11335000"], [["COSUMNES"], ["MICHIGAN BAR"]]),
     14: (["11319500"], [["MOKELUMNE"]]),
-    # the historical Jenny Lind gauge no longer exists in NWIS; New Hogan anchors
+    # the Jenny Lind gauge (NWIS 11309500) has a 1907-1966 record only; New Hogan anchors
     15: (["11308900"], [["CALAVERAS"]]),
     16: (["11299000", "11302000"], [["MELONES", "STANISLAUS"]]),
     18: (["11288000", "11289650"], [["TUOLUMNE"]]),
