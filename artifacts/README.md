@@ -80,7 +80,7 @@ Three tools score a trained `multifamily` run against CalSim3 over **WY1950–84
 ```bash
 python -m sacsma.dpl.calsim_tier1 <run>              # -> <run>/tier1/
 python -m sacsma.dpl.calsim_tier2 <run> [--no-extend]   # -> <run>/tier2/   (re-runs the checkpoint forward)
-python -m sacsma.dpl.calsim_atlas <run>/tier1        # -> <run>/tier1/atlas/calsim_validation_atlas.html
+python -m sacsma.dpl.calsim_atlas <run>              # -> <run>/atlas/calsim_validation_atlas.html
 ```
 
 **Tier 1** (`sacsma.dpl.calsim_tier1`) scores monthly volume (TAF) at the twenty training locations of `data/calsim/tier1_sets.csv`: against FLOW-UNIMPAIRED where a rim system carries one (ten anchors), against the sum of the member INFLOW arcs elsewhere (ten arc sums). Volumes use the `CalSim3_Merged` polygon areas, so no third area enters. Each entity's own training window is reported alongside as the in-sample comparison. At the ten anchored locations the reference coincides with the training target's source, so that score is a temporal holdout rather than an independent reference.

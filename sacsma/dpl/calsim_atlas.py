@@ -1,7 +1,7 @@
 """CalSim3 validation atlas: where every validated location is, and how the run scored on it.
 
-Builds, from a finished tier-1 output folder (:mod:`sacsma.dpl.calsim_tier1`) and, when given, the
-run's tier-2 folder (:mod:`sacsma.dpl.calsim_tier2`):
+Builds, from a run's tier-1 outputs (:mod:`sacsma.dpl.calsim_tier1`) and, when present, its tier-2
+outputs (:mod:`sacsma.dpl.calsim_tier2`), the folder ``<run>/atlas/`` beside ``tier1/`` and ``tier2/``:
 
 * ``atlas/tier1_map_kge_<window>.png`` and ``atlas/tier1_map_pbias_<window>.png`` — the
   CalSim3 rim domain with every tier-1 arc set dissolved and coloured by its score, the
@@ -23,7 +23,9 @@ unconstrained-arcs table; no tool here writes it, and the page is complete witho
 
 Usage::
 
-    python -m sacsma.dpl.calsim_atlas <tier1_out_dir> [--data-dir data] [--tier2-dir ...] [--label ...]
+    python -m sacsma.dpl.calsim_atlas <run_dir> [--data-dir data] [--out DIR] [--tier2-dir ...] [--label ...]
+
+``<run_dir>`` is the run folder holding ``tier1/``; its ``tier1/`` folder is accepted as well.
 """
 
 from __future__ import annotations
@@ -32,6 +34,7 @@ import argparse
 import base64
 import html
 import io
+import os
 from pathlib import Path
 
 import numpy as np
@@ -976,7 +979,10 @@ def write_html(sets, metrics, out: Path, label: str, window: str, maps: list[Pat
     return path
 
 
-def write_markdown(sets, metrics, out: Path, label: str, window: str, maps: list[Path], creeks: dict | None = None) -> Path:
+def write_markdown(sets, metrics, out: Path, label: str, window: str, maps: list[Path], creeks: dict | None = None,
+                   t1_dir: Path | None = None) -> Path:
+    # tier-1 figures are linked relative to the atlas folder, wherever it is written
+    figs = (Path(os.path.relpath((t1_dir or out.parent) / "figures", out)).as_posix())
     lines = [f"# CalSim3 validation atlas (tier 1) — {label}", "",
              f"Validation window {window}, monthly volume against CalSim3 (FLOW-UNIMPAIRED at the anchored "
              "systems, the sum of the member INFLOW arcs elsewhere). Per location: the domain map with the "
@@ -1013,7 +1019,7 @@ def write_markdown(sets, metrics, out: Path, label: str, window: str, maps: list
             lines.append(f"| {wl} | {int(r.n_months)} | {r.kge:.3f} | {r.nse:.3f} | {r.pbias:+.1f}% | {r.r:.3f} | "
                          f"{r.alpha:.2f} | {r.beta:.2f} | {r.seas_mismatch:.3f} | {r.sim_taf_yr:,.0f} / {r.ref_taf_yr:,.0f} |")
         lines += ["", f"![{s.set_id} map]({s.set_id}_map.png) ![{s.set_id} zoom]({s.set_id}_zoom.png)", "",
-                  f"![{s.set_id} time series](../figures/{s.set_id}.png)", ""]
+                  f"![{s.set_id} time series]({figs}/{s.set_id}.png)", ""]
         if creeks and s.set_id in creeks:
             lines += [f"![{s.set_id} USGS creek overlap]({s.set_id}_creeks.png)", "",
                       _creek_summary_sentence(creeks[s.set_id][1], bold=("**", "**")), ""]
@@ -1024,21 +1030,26 @@ def write_markdown(sets, metrics, out: Path, label: str, window: str, maps: list
 
 def main(argv=None) -> None:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    p.add_argument("tier1_dir", help="a tier-1 output folder (tier1_metrics.csv + figures/<set>.png)")
+    p.add_argument("run_dir_or_tier1", metavar="run_dir",
+                   help="the run folder holding tier1/ (tier1_metrics.csv + figures/<set>.png); "
+                        "the tier1/ folder itself is accepted as well")
     p.add_argument("--data-dir", default="data")
     p.add_argument("--label", default="")
-    p.add_argument("--out", default=None, help="default <tier1_dir>/atlas")
+    p.add_argument("--out", default=None, help="default <run_dir>/atlas")
     p.add_argument("--run-dir", default=None,
                    help="run folder with sim_daily_mm.npz, to know which entities trained (for the "
-                        "daily/monthly overlap hatching; default <tier1_dir>/..)")
+                        "daily/monthly overlap hatching; default: the run folder)")
     p.add_argument("--tier2-dir", default=None,
                    help="a tier-2 output folder (tier2_metrics.csv, maps, figures/) to embed per set; "
                         "default <run-dir>/tier2 when it exists")
     p.add_argument("--arc-derivation", default=None,
                    help="per-arc derivation table (default data/calsim/calsim3_arc_derivation.csv when present)")
     a = p.parse_args(argv)
-    t1 = Path(a.tier1_dir)
-    out = Path(a.out) if a.out else t1 / "atlas"
+    given = Path(a.run_dir_or_tier1)
+    t1 = given if (given / "tier1_metrics.csv").exists() else given / "tier1"
+    if not (t1 / "tier1_metrics.csv").exists():
+        p.error(f"no tier1_metrics.csv under {given} or {given / 'tier1'}: run calsim_tier1 first")
+    out = Path(a.out) if a.out else t1.parent / "atlas"
     out.mkdir(parents=True, exist_ok=True)
     label = a.label or t1.parent.name
     metrics = pd.read_csv(t1 / "tier1_metrics.csv")
@@ -1093,7 +1104,7 @@ def main(argv=None) -> None:
           + ("" if creeks_trained else "; none trained in this run") + ")")
     page = write_html(sets, metrics, out, label, VALIDATION_WINDOW, maps, t1, t2=t2, t2_dir=t2_dir,
                       fam_maps=fam_maps, creeks=creeks, creeks_trained=creeks_trained)
-    md = write_markdown(sets, metrics, out, label, VALIDATION_WINDOW, maps, creeks=creeks)
+    md = write_markdown(sets, metrics, out, label, VALIDATION_WINDOW, maps, creeks=creeks, t1_dir=t1)
     print(f"wrote {n} location map pairs, {len(maps)} domain maps, {page} ({page.stat().st_size / 1e6:.1f} MB) and {md}")
 
 

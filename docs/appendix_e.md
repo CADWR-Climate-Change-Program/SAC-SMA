@@ -76,5 +76,5 @@ sacsma dpl train physical_climate --domain multifamily --et noah --noah-pet prie
 sacsma dpl evaluate <run>/checkpoints/best.pt     # per-entity metrics + sim_daily_mm.npz
 python -m sacsma.dpl.calsim_tier1 <run>           # the twenty training locations
 python -m sacsma.dpl.calsim_tier2 <run> [--no-extend] # every rim INFLOW arc
-python -m sacsma.dpl.calsim_atlas <run>/tier1     # the HTML validation atlas
+python -m sacsma.dpl.calsim_atlas <run>           # the HTML validation atlas -> <run>/atlas/
 ```
