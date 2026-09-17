@@ -63,13 +63,15 @@ The PyTorch physics run all HRUs as one batched tensor computation per day, with
 
 ### Training
 
-**Loss.** Training minimizes a per-basin variance-normalized squared error, summed over fixed 366-day chunks. Each basin's error is normalized by its full calibration-window observed variance, so chunk losses add up to per-basin NSE and basins weigh comparably. Two auxiliary terms are added, a log-flow term (weight 0.15) for low-flow shape and a variance-matching penalty $(\sigma_{sim}/\sigma_{obs} - 1)^2$ per chunk (weight 1.0) that counters the systematic variance damping of squared-error optima:
+**Loss.** Training minimizes a per-basin variance-normalized squared error, summed over fixed 366-day chunks. Each basin's error is normalized by its full calibration-window observed variance, so chunk losses add up to per-basin NSE and basins weigh comparably. Two auxiliary terms are added, a log-flow term (weight 0.15) for low-flow shape and a variance-matching penalty on the chunk ratio $\alpha = \sigma_{sim}/\sigma_{obs}$ (weight 1.0) that counters the systematic variance damping of squared-error optima:
 
 $$\mathcal{L} = \frac{1}{B}\sum_b \left[
 \frac{\sum_t (\hat{q}_{b,t} - q_{b,t})^2}{n_b\,\mathrm{Var}_{cal}(q_b)}
 + 0.15\,\overline{\left(\log\tfrac{\hat{q}+\epsilon}{q+\epsilon}\right)^2}
-+ \left(\tfrac{\sigma(\hat{q}_b)}{\sigma(q_b)} - 1\right)^2
++ \rho\!\left(\tfrac{\sigma(\hat{q}_b)}{\sigma(q_b)} - 1\right)
 \right]$$
+
+with $\rho(d) = d^2$ for $|d| \le 1$ and $\rho(d) = 2|d| - 1$ beyond. The penalty is thus quadratic near $\alpha = 1$ and linear beyond $|\alpha - 1| = 1$, so no single chunk contributes without bound, and it is skipped for a basin-chunk whose observed variance is below 0.1 % of that basin's calibration-window variance, where the ratio carries no signal (the dry season of an ephemeral gauge). Both guards came with the multi-timescale training domain and apply to every domain. The runs reported in this part were trained with the plain quadratic penalty $(\alpha - 1)^2$ and no gate. On the 15 CDEC basins the gate is never active (the least variable of the 214 scored basin-chunks carries 1.3 % of its record variance) and at the converged `noah` fit the cap binds in one basin-chunk, but it can bind more often early in training, so re-training these runs is close but not bit-identical. Scoring of a trained checkpoint does not involve the loss and is unchanged.
 
 **Optimization.** AdamW (learning rate $10^{-3}$, 3-epoch warmup, cosine decay to $10^{-5}$; weight decay $10^{-5}$; gradient clip 1.0), up to 60 epochs with early stopping. Training is truncated backpropagation through time over the 366-day chunks with all basins simulated simultaneously; hydrologic state and the 106-day routing history carry across chunk boundaries detached. Model selection uses the exact pooled 15-basin mean calibration KGE, computed gradient-free every second epoch.
 

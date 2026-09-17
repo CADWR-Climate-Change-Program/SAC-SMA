@@ -110,8 +110,7 @@ add no new distinct cells — every one already serves uf_06; uf_03 holds
 the three in-basin USGS gauges and uf_02/uf_04 edge overlaps); the YRS
 Deer Creek trim dropped two cells only YRS used (2,654 → 2,652). A run's
 basis is the union over the entities it selects (2,603 without uf_03). The full-rim basis — every cell touching
-any rim polygon + USGS + Tulare — is 2,847 (an earlier tally of 2,853 was
-that basis, less a 6-cell bookkeeping difference). Statics coverage is
+any rim polygon + USGS + Tulare — is 2,847. Statics coverage is
 **complete**: the full-grid ingest on main (`a77e4a8`) extended
 `data/region/soilveg_continuous.csv` and `lai_climatology.csv` to all
 4,410 region cells, closing what was a 256-cell gap in the training basis

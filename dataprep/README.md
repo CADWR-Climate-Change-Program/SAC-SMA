@@ -530,6 +530,24 @@ Needs `pypdf` (added to `environment.yml`).
     python dataprep/dwr_unimpaired.py --pdf <report.pdf>
     python dataprep/dwr_unimpaired.py --verify
 
+## Multi-timescale training inputs (`build_obs_depth.py`, `build_entities.py`, `build_entity_cells.py`, `build_flowlens.py`)
+
+The inputs of the dPL `multifamily` domain (`data/multifamily/`, documented in that
+store's README). Four builders, run in this order from the repo root; each checks its
+own output against in-script gates and rewrites its table in full:
+
+| script | writes | what |
+|---|---|---|
+| `build_obs_depth.py` | `data/dwr_unimpaired/uf_monthly_mm.csv`, `data/cdec_fnf/fnf_daily_mm.csv` | depth companions of the two volume/cfs stores, each series over its own stated area |
+| `build_entities.py` | `data/multifamily/entities.csv` | the registry: one row per training target, from `usgs/gauges.csv`, `cdec15/`, `cdec_fnf/stations.csv`, `dwr_unimpaired/uf_locations.csv` and the hand-maintained `uf_gauges.csv` |
+| `build_entity_cells.py` | `data/multifamily/entity_cells.csv` | per-entity region-grid cell sets with cell-square overlap areas as weights |
+| `build_flowlens.py` | `data/multifamily/flowlens.csv` | per-cell path length to each entity outlet on the HydroSHEDS v2 flow directions |
+
+The first three need only committed stores and reproduce their tables byte for byte.
+`build_flowlens.py` needs `rasterio` (declared in `environment.yml`) and four HydroSHEDS
+tiles (~6 GB, downloaded on demand to `tmp/hydrosheds/`, not in git); it imports no
+geopandas, because the two GDAL stacks must stay in separate processes.
+
 ## Verification
 
 Every local ingest reproduces its committed or legacy predecessor before it lands. `local_obs_region.py --verify` reproduces the legacy 2074-cell npz (rel RMS < 1e-3, achieved 1e-7); `wgen_forcing.py --verify` reproduces the committed forcing stores from the master; `build_region_forcing.py` re-passes the SAC-SMA parity gate for every domain with a simflow reference (KGE > 0.9999).

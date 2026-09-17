@@ -346,7 +346,8 @@ def main(argv: list[str] | None = None) -> int:
                     choices=["15cdec", "15cdec_grid", "multifamily"],
                     help="training domain: 15cdec HRU cloud (7891), the native "
                          "1/16-deg Livneh grid (2074 cells), or the "
-                         "multi-timescale training entities (94 entities, "
+                         "multi-timescale training entities (the registry in "
+                         "data/multifamily, restrict with --basins; "
                          "daily + monthly targets on the registry envelope; "
                          "physical variants only); baked into the "
                          "checkpoint so evaluate scores the same domain")
@@ -366,8 +367,8 @@ def main(argv: list[str] | None = None) -> int:
     tr.add_argument("--et", default="sac", choices=["sac", "noah"],
                     help="ET scheme: sac = frozen Hamon PET (scorable via "
                          "run_basin); noah = Noah canopy-resistance ET (NEW "
-                         "physics, needs per-cell tmin/tmax = 15cdec_grid, "
-                         "scored via the torch pipeline)")
+                         "physics, needs per-cell tmin/tmax = 15cdec_grid or "
+                         "multifamily, scored via the torch pipeline)")
     tr.add_argument("--noah-pet", default="hamon",
                     choices=["hamon", "priestley_taylor"],
                     help="Noah potential-ET source: hamon = temperature-only "
@@ -394,7 +395,9 @@ def main(argv: list[str] | None = None) -> int:
     tr.add_argument("--calsim-footprint", action="store_true",
                     help="re-foot basin aggregation onto the CalSim3 catchments "
                          "(overlap weights) to correct the coarse-grid footprint "
-                         "over-reach; the 4 Tulare/Kern basins keep full footprint")
+                         "over-reach; the 4 Tulare/Kern basins keep full footprint "
+                         "(15cdec domains only: no effect on multifamily, whose "
+                         "entity weights are already footprint overlaps)")
     tr.add_argument("--dynamic-params", default="",
                     help="comma list of params made climate-state-dependent "
                          "(Kpet | canopy params e.g. soil_chi); '' = static")

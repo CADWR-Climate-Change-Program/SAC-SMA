@@ -24,9 +24,9 @@ Families:
   obs11_monthly SHA + TNL built for lineage, both dropped (SIS/CLE daily twins)
 
 Outlet coordinates, one source per family:
-  - UF entities: data/dwr_unimpaired/uf_gauges.csv 
-  `cdec_stations:*` are copies of
-    cdec_fnf/stations.csv coordinates; 
+  - UF entities: data/dwr_unimpaired/uf_gauges.csv (hand-maintained; rows
+    tagged `cdec_stations:*` copy cdec_fnf/stations.csv coordinates and are
+    drift-gated against it below).
   - USGS entities: gauges.csv lat/lon.
   - CDEC and obs11 entities: the station row in cdec_fnf/stations.csv
     (obs11_TNL: USGS gauge 11525500).
