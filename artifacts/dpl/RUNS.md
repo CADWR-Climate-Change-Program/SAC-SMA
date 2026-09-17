@@ -791,11 +791,11 @@ families they train on. Each tracks ten files: `checkpoints/best.pt`, `train_log
 `metrics_entities.csv`, `params_dpl.csv`, `params_canopy.csv`, `sim_daily_mm.npz` (the simulated
 daily depth, entity × day over the envelope: the physics channel a hybrid reads),
 `tier1/tier1_metrics.csv`, `tier2/tier2_metrics.csv`, `tier2/tier2_arcs.csv` and
-`tier1/atlas/calsim_validation_atlas.html` (self-contained; download it to view). Everything else
+`atlas/calsim_validation_atlas.html` (self-contained; download it to view). Everything else
 in a run folder is git-ignored and regenerates: `sacsma dpl evaluate <run>/checkpoints/best.pt`
 (metrics, parameters, `sim_daily_mm.npz`, figures), `python -m sacsma.dpl.calsim_tier1 <run>`,
 `python -m sacsma.dpl.calsim_tier2 <run>` (a forward pass; `--figures-only` redraws maps and
-figures from the CSVs) and `python -m sacsma.dpl.calsim_atlas <run>/tier1`.
+figures from the CSVs) and `python -m sacsma.dpl.calsim_atlas <run>`.
 
 **What the numbers are.** Entity metrics are calibration-window skill at each entity's native
 timescale, scored by the torch pipeline (no frozen re-score, no held-out flow period). Validation

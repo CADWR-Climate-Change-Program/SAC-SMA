@@ -85,9 +85,9 @@ artifacts/dpl/multifamily/*/checkpoints/*
 !artifacts/dpl/multifamily/*/tier1/
 artifacts/dpl/multifamily/*/tier1/*
 !artifacts/dpl/multifamily/*/tier1/tier1_metrics.csv
-!artifacts/dpl/multifamily/*/tier1/atlas/
-artifacts/dpl/multifamily/*/tier1/atlas/*
-!artifacts/dpl/multifamily/*/tier1/atlas/calsim_validation_atlas.html
+!artifacts/dpl/multifamily/*/atlas/
+artifacts/dpl/multifamily/*/atlas/*
+!artifacts/dpl/multifamily/*/atlas/calsim_validation_atlas.html
 !artifacts/dpl/multifamily/*/tier2/
 artifacts/dpl/multifamily/*/tier2/*
 !artifacts/dpl/multifamily/*/tier2/tier2_metrics.csv
