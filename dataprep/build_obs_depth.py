@@ -11,7 +11,7 @@ no entity vocabulary:
   (WY1922-2014, month-end stamps).
 * ``data/cdec_fnf/fnf_daily_mm.csv`` (``station, date, depth_mm``) —
   ``fnf_daily.csv`` cfs converted to mm/day (USGS formula) for the two
-  approved daily targets: CLE at 692.86 mi^2 (the I_TRNTY arc area, the
+  stations with a defined depth area: CLE at 692.86 mi^2 (the I_TRNTY arc area, the
   crosswalk convention for Trinity) and CSN at the UF 13 arc-sum area
   (same four arcs as its delineation).  Negative-flow days are dropped
   (computation artifacts per the store README).
@@ -35,11 +35,11 @@ SQMI_PER_KM2 = 0.386102
 CFS_TO_MM_PER_KM2 = 2.4465755   # mm/day = cfs x this / area_km2 (USGS)
 TAF_TO_MM_PER_KM2 = 1233.48184  # mm = TAF x this / area_km2
 
-#: The APPROVED daily-FNF depth conversions: station -> depth area (mi^2).
-#: An area here is a decided convention, not a lookup - only stations whose
-#: depth basis has been ruled on are converted (fnf_daily.csv also carries
-#: the SNS and WHI candidates; they join this table if/when approved, with
-#: their own area rulings).  ``None`` = read the UF 13 arc-sum from
+#: The daily-FNF depth conversions: station -> depth area (mi^2).
+#: An area here is a stated convention, not a lookup - only stations with a
+#: defined depth basis are converted (fnf_daily.csv also carries the SNS and
+#: WHI candidates, which have none yet; they join this table together with
+#: their own depth areas).  ``None`` = read the UF 13 arc-sum from
 #: uf_locations.csv at build time (CSN shares that delineation exactly).
 FNF_DEPTH_AREAS: dict[str, float | None] = {
     # CLE FNF is computed at Trinity Dam; the crosswalk maps it to the

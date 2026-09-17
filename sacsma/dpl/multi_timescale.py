@@ -38,7 +38,7 @@ from ..cdec15 import load_gage
 from ..io import MULTI_TIMESCALE_DOMAIN, domain_dir
 from .data import DomainTensors, et_chunk_target
 
-#: global training envelope (plan: WY1950-2018; forcing ends 2018-12-31).
+#: global training envelope (WY1950-2018; forcing ends 2018-12-31).
 ENVELOPE_START = "1949-10-01"
 ENVELOPE_END = "2018-12-31"
 
