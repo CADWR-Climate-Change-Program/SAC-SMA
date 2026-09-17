@@ -18,7 +18,7 @@ sources that did not produce it:
    noted so map readers know the arc set is one larger than the drawn set.
 
 
-Plus the Paynes Creek ruling: the NLDI-delineated Bend Bridge watershed
+Plus the Paynes Creek membership check: the NLDI-delineated Bend Bridge watershed
 (USGS 11377100) is intersected with I_PYN001 (and control arcs) — 0.4 %
 overlap vs 99.9 % for a true member proves the creek joins BELOW the gauge,
 so I_PYN001 is correctly excluded from UF 6.
@@ -29,7 +29,7 @@ with the committed caches the script reruns offline and byte-reproducibly.
 
 Outputs
 -------
-    data/dwr_unimpaired/uf_outlets.csv    verified UF -> USGS gauge mapping
+    data/dwr_unimpaired/uf_outlets.csv    UF -> USGS gauge used by the checks
                                           (site, name, lat/lon, published DA,
                                           CDEC coords, offset km)
     artifacts/dwr_unimpaired/verification/
@@ -74,7 +74,7 @@ SKIP = {1: "valley floor, n_arcs=0", 12: "valley floor, n_arcs=0",
         5: "no arc set by design (west-side minor streams)"}
 
 #: unassigned arcs adjacent to a UF outlet, highlighted on that UF's map.
-#: Both were ruled OUT: PYN001 joins below the Bend Bridge gauge
+#: Neither is a member: PYN001 joins below the Bend Bridge gauge
 #: (NLDI overlap 0.4 %); PARDE is the Mokelumne-Hill-gauge-to-Pardee-dam
 #: increment and DWR's B-14 series matches the gauge footprint (544 mi2) exactly.
 ADJACENT = {"I_PYN001": 6, "I_PARDE": 14}
@@ -373,7 +373,7 @@ def main() -> None:
     sheet.convert("P", palette=Image.ADAPTIVE, colors=256).save(
         FIG / "uf_all_grid.png", optimize=True)
 
-    # ---- Paynes Creek ruling (NLDI Bend Bridge watershed vs I_PYN001)
+    # ---- Paynes Creek membership check (NLDI Bend Bridge watershed vs I_PYN001)
     basin_f = OUT / "nldi_bend_basin.json"
     try:
         if not basin_f.exists():
@@ -389,7 +389,7 @@ def main() -> None:
             if a == "I_PYN001" and frac > 0.5:
                 findings.append(("flag", 6, "I_PYN001 falls INSIDE the Bend Bridge watershed "
                                  "— its exclusion from UF 6 no longer holds"))
-    except Exception as e:  # noqa: BLE001 - offline runs keep the cached ruling
+    except Exception as e:  # noqa: BLE001 - offline runs keep the cached result
         print("  NLDI check skipped: %s" % e)
 
     # ------------------------------------------------------------- write out
