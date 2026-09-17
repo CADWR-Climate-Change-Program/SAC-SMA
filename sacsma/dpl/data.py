@@ -582,8 +582,7 @@ def _load_canopy_obs(data_dir: str, domain: str, forcing):
     Both are PINNED inputs (never learned).  Paths resolve through the
     suffix-aware ``io.soilveg_path``/``io.lai_climatology_path`` helpers, so
     suffixed calsim domains and the multi-timescale domain (region tables) find their
-    sidecars — previously the unsuffixed names were hard-coded here and the
-    suffixed domains silently lost their canopy inputs.
+    sidecars.
     """
     import re
 

@@ -539,13 +539,15 @@ own output against in-script gates and rewrites its table in full:
 | script | writes | what |
 |---|---|---|
 | `build_obs_depth.py` | `data/dwr_unimpaired/uf_monthly_mm.csv`, `data/cdec_fnf/fnf_daily_mm.csv` | depth companions of the two volume/cfs stores, each series over its own stated area |
-| `build_entities.py` | `data/multifamily/entities.csv` | the registry: one row per training target, from `usgs/gauges.csv`, `cdec15/`, `cdec_fnf/stations.csv`, `dwr_unimpaired/uf_locations.csv` and the hand-maintained `uf_gauges.csv` |
+| `build_entities.py` | `data/multifamily/entities.csv` | the registry: one row per training target, from `usgs/gauges.csv` + `usgs/flow_daily.nc` (LFS), `cdec15/`, `cdec_fnf/`, `dwr_unimpaired/uf_locations.csv` + `uf_monthly.csv`, the hand-maintained `uf_gauges.csv`, and `calsim/` (crosswalk, `gis/calsim3.gpkg`, `fnf_11obs_monthly.csv`) |
 | `build_entity_cells.py` | `data/multifamily/entity_cells.csv` | per-entity region-grid cell sets with cell-square overlap areas as weights |
 | `build_flowlens.py` | `data/multifamily/flowlens.csv` | per-cell path length to each entity outlet on the HydroSHEDS v2 flow directions |
 
-The first three need only committed stores and reproduce their tables byte for byte.
-`build_flowlens.py` needs `rasterio` (declared in `environment.yml`) and four HydroSHEDS
-tiles (~6 GB, downloaded on demand to `tmp/hydrosheds/`, not in git); it imports no
+The first three need only committed stores (including the LFS files) and, in the
+`environment.yml` environment, reproduce their tables byte for byte.
+`build_flowlens.py` needs `rasterio` (declared in `environment.yml`) and the DIR and ACC
+rasters of four 10-degree HydroSHEDS tiles (8 files, ~6 GB, downloaded on demand to
+`tmp/hydrosheds/`, not in git); it imports no
 geopandas, because the two GDAL stacks must stay in separate processes.
 
 ## Verification

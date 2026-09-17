@@ -41,8 +41,9 @@ The uf_monthly family carries TWO area columns:
   - I_RUB002 (UF 11 / FOL lists) has no CalSim3_Merged polygon — its terrain
     was dissolved into MFA025, so coverage is complete.
   - Some outlets sit a few km outside their polygons (dam/valley-floor
-    stations below the delineation terminus). The coordinates are correct —
-    do not "fix" them; flagged outlet_below_delineation (BELOW_DAM below).
+    stations below the delineation terminus). The coordinates are the
+    stations' own and are kept; flagged outlet_below_delineation (BELOW_DAM
+    below).
   - UF 7 is a composite of east-side creeks with no gauge by construction.
 
 Usage (sacsma conda env):
@@ -101,9 +102,8 @@ BELOW_DAM = {"uf_08", "uf_10", "uf_11", "uf_14", "uf_15",
 MONTHLY_START, MONTHLY_END = "1984-10-01", "2014-09-30"
 FORCING_END = "2018-12-31"
 # De-dup rule: a watershed does NOT train at both daily and monthly unless
-# its daily record is short (starts ~2000 or later). Arc-match sweep +
-# record verification: each monthly entity below
-# shares its arc set with a CDEC daily whose record is contiguous back to
+# its daily record is short (starts ~2000 or later). Each monthly entity
+# below shares its arc set with a CDEC daily whose record is contiguous back to
 # 1985-88 (advertised starts in cdec_fnf/stations.csv; completeness verified
 # against gage.csv / fnf_daily.csv: SHA 99.7%, TLG 90.7% scattered-gap,
 # NML 98.1%, MIL 98.3%, CLE 94.5% usable), so the monthly twin is dropped.
@@ -124,8 +124,8 @@ DEDUP_DROPS = {
     "obs11_TNL": "cdec_CLE",  # CLE 1986-04
 }
 
-# Target-validity drops (built like the de-dup twins, then removed).  The
-# one candidate is UF 3: its observation is the routed outflow at Rumsey,
+# Target-validity drops (built like the de-dup twins, then removed); empty
+# by default.  UF 3 is the documented case: its observation is the routed outflow at Rumsey,
 # below Clear Lake and Indian Valley, while its four arcs are the inflows
 # CalSim routes through those lakes itself (arc sum +16% volume, r 0.877 vs
 # the obs -- storage attenuation plus net lake evaporation, a shape
@@ -251,9 +251,9 @@ def build(data_dir: Path) -> pd.DataFrame:
             olat, olon, f"cdec_stations:{st}", rec0, t0, t1, n_obs,
             "cdec15/gage.csv:flow",
             "train_only" if basin in TULARE else "")
-        # The old inherited-footprint PNF flag (footprint_overlaps_MIL_2.5pct)
-        # is gone: on the real SACSMA_15CDEC polygons the PNF x MLRTN overlap
-        # measures 0.09% - the 2.5% was a whole-cell counting artifact.
+        # PNF carries no overlap flag: on the SACSMA_15CDEC polygons the PNF x
+        # MLRTN overlap measures 0.09% (whole-cell counting on the cdec15_grid
+        # cell sets overstates it at 2.5%).
         if basin == "TRM":
             # The SACSMA_15CDEC polygon measures 575.8 mi^2 vs the published
             # 561; area_mi2 keeps the published value as the depth basis.

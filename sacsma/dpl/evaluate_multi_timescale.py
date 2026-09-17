@@ -17,11 +17,11 @@ Outputs (next to the checkpoint, like the other domains):
   registry ``n_obs``).
 * ``sim_daily_mm.npz`` — the simulated daily basin depth (entities x days)
   over the envelope, for downstream figures/analyses.
-* ``figures/skill_by_family.png`` — per-entity KGE by family (house style).
-* ``figures/entities/<entity_id>.png`` — the house per-basin diagnostics
-  figure (time series + mean-monthly regimes) at the entity's native
-  timescale; by default the reviewable cdec_daily + uf_monthly set
-  (``hydrographs="all"`` draws all entities, ``"none"`` skips).
+* ``figures/skill_by_family.png`` — per-entity KGE by family (fixed 0-1 axis).
+* ``figures/entities/<entity_id>.png`` — the per-basin diagnostics figure of
+  ``sacsma._figures`` (time series + mean-monthly regimes) at the entity's
+  native timescale; by default the cdec_daily + uf_monthly entities
+  (``hydrographs="all"`` adds the USGS entities, ``"none"`` skips).
 """
 
 from __future__ import annotations
@@ -55,8 +55,8 @@ def _entity_flow(net, x, dom, cfg) -> tuple[np.ndarray, int, int]:
     t0 = int(dom.dates.searchsorted(pd.Timestamp(ENVELOPE_START)))
     t1 = int(dom.dates.searchsorted(pd.Timestamp(ENVELOPE_END))) + 1
     # the trainer's spinup basis exactly: honor an explicit early
-    # cfg.spinup_start; redirect the (15cdec-era) in-window default to ten
-    # water years ahead of the envelope
+    # cfg.spinup_start; redirect the default (set for the 15cdec calibration
+    # window, which falls inside this envelope) to ten water years ahead of it
     spin_req = int(dom.dates.searchsorted(pd.Timestamp(cfg.spinup_start)))
     if spin_req >= t0:
         spin_req = int(dom.dates.searchsorted(
@@ -101,7 +101,7 @@ def _components(s: np.ndarray, o: np.ndarray) -> tuple[float, float]:
 
 
 def _skill_by_family_fig(met: pd.DataFrame, out: Path) -> None:
-    """Sorted per-entity cal KGE, one panel per family (house scale 0-1,
+    """Sorted per-entity cal KGE, one panel per family (fixed 0-1 scale,
     negatives clipped and marked)."""
     fams = [f for f in ("usgs_daily", "cdec_daily", "uf_monthly")
             if (met["family"] == f).any()]

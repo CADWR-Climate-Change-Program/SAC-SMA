@@ -344,8 +344,9 @@ def train(
     # exact frozen full-prefix convention)
     spin_req = int(dom.dates.searchsorted(pd.Timestamp(cfg.spinup_start)))
     if eobs is not None and spin_req >= calobs.t0:
-        # the (15cdec-era) default spinup_start sits inside this cal window —
-        # keep the ten-water-year spinup convention relative to the window
+        # the default spinup_start (set for the 15cdec calibration window) sits
+        # inside this cal window — keep the ten-water-year spinup convention
+        # relative to the window
         ts = dom.dates[calobs.t0] - pd.DateOffset(years=10)
         spin_req = int(dom.dates.searchsorted(ts))
         print(f"train: spinup_start {cfg.spinup_start} is inside the cal "

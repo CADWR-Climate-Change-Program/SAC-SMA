@@ -68,8 +68,9 @@ most caution.
 
 ## Conventions
 
-- **`fnf_daily.csv` is cfs only, verbatim** — no depth column. Depth (mm/day) over
-  the site's own drainage area lives in the derived `fnf_daily_mm.csv`.
+- **`fnf_daily.csv` is cfs only, verbatim** — no depth column. Depth (mm/day) lives
+  in the derived `fnf_daily_mm.csv`, for the two stations with a stated depth area
+  (CLE and CSN, the CalSim3 arc areas in the table above).
 - **Negative days kept** in `fnf_daily.csv` (the depth companion drops them) —
   mask `flow_cfs < 0` before use (negative flow is
   a computation artifact). Per the FNF report notes, daily

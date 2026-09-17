@@ -9,7 +9,8 @@ on), `usgs/` (cleaned gauge observations inside the CalSim3 domain),
 `dwr_unimpaired/` (DWR's published Central Valley unimpaired flows — the source of the
 `9unimp`/`11obs` calibration targets — plus the SWAT rim simulation of the same
 quantity) and `multifamily/` (the training-entity registry of the dPL multi-timescale
-domain). Every file in the application stores is
+domain). A fifth, `cdec_fnf/` (CDEC daily full-natural-flow pulls beyond the 15-CDEC
+store), is documented in its own README. Every file in the application stores is
 referenced by package code; the cross-cutting stores are built and consumed by
 `dataprep/` and the dPL work. Sizes are approximate.
 
@@ -291,7 +292,7 @@ natural and unimpaired flows."*
 | `swat_monthly.csv` | 0.4 MB | `[date, uf, flow_taf]`, the SWAT rim simulation, the 18 subbasins that have one = 20088 rows |
 | `delta_monthly.csv` | 0.2 MB | `[date, series, flow_taf]`, the 6 derived totals B-25…B-30: `SAC_VALLEY_OUTFLOW`, `EASTSIDE_OUTFLOW`, `SJ_VALLEY_OUTFLOW`, `DELTA_INFLOW`, `DELTA_OUTFLOW`, `DELTA_NET_USE` |
 | `uf_locations.csv` | 0.004 MB | `[uf, table, name, cdec_id, basin_11obs, basin_9unimp, n_arcs, arcs, area_mi2_calsim, has_swat, swat_scale_appendix_d, swat_partial, note]` |
-| `uf_gauges.csv` | 0.002 MB | `[uf, lat, lon, gauge_source, note, area_mi2_swat, area_source]`, hand-maintained, the 18 arc-mapped subbasins: one pour point each (UF 7 has none by construction) and the report's Appendix A SWAT model area, every value with its source. The pour point is where the subbasin's arc set drains (the dam or gauge that `dataprep/build_entities.py` takes as the training-entity outlet), so it can sit a few km from the USGS site whose name and drainage area identify the subbasin |
+| `uf_gauges.csv` | 0.002 MB | `[uf, lat, lon, gauge_source, note, area_mi2_swat, area_source]`, hand-maintained, the 18 arc-mapped subbasins: one pour point each (UF 7 has none by construction) and, for 16 of them, the report's Appendix A SWAT model area (UF 6 and UF 7 have no usable single model), every value with its source. The pour point is where the subbasin's arc set drains (the dam or gauge that `dataprep/build_entities.py` takes as the training-entity outlet), so it can sit several km from the station the subbasin is named after (up to ~14 km, UF 16) |
 | `uf_monthly_mm.csv` | 0.4 MB | `[uf, date, depth_mm]`, `uf_monthly.csv` as depth over each subbasin's CalSim arc-sum area (`uf_locations.csv.area_mi2_calsim`), the 18 arc-mapped subbasins = 20088 rows; written by `dataprep/build_obs_depth.py` |
 
 **These 24 subbasins are the `9unimp`/`11obs` calibration targets.** Established, not
@@ -445,5 +446,5 @@ Observation series stay beside their raw sources and are selected through the re
 `obs_store` column: `usgs/flow_daily.nc`, `cdec15/gage.csv`, `cdec_fnf/fnf_daily_mm.csv`
 and `dwr_unimpaired/uf_monthly_mm.csv`. Footprints: the USGS entities use
 `usgs/gis/usgs_watersheds.gpkg`; the four Tulare basins use
-`cdec15/gis/SACSMA_15CDEC.geojson` (3.4 MB, the original 15-basin delineations); every
+`cdec15/gis/SACSMA_15CDEC.geojson` (3.6 MB, the original 15-basin delineations); every
 other CDEC and UF entity is a set of `calsim/gis/calsim3.gpkg` rim polygons.
