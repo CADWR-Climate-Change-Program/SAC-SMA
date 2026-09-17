@@ -2,6 +2,7 @@
 *sublime*
 CLAUDE.md
 .claude*
+/scripts/
 
 # --- Working / reference-only material (kept LOCAL, never committed) ---
 # tmp/ holds local scratch work and the original reference material the tracked
@@ -47,6 +48,9 @@ artifacts/*
 !artifacts/README.md
 !artifacts/cdec15
 !artifacts/calsim
+!artifacts/dwr_unimpaired
+# written by dataprep/check_uf_locations.py for GIS viewing; carries a write timestamp
+artifacts/dwr_unimpaired/verification/uf_dissolved.gpkg
 
 # dPL: CANONICAL runs + the fidelity numerics gate + the track-record log are
 # tracked (tiny nets — best.pt is ~60 KB); exploratory runs stay local under

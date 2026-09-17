@@ -1,6 +1,6 @@
 # `artifacts/`: simulated outputs and diagnostic figures
 
-Generated outputs, organized by application: `cdec15/` (the 15-CDEC diagnostics) and `calsim/` (the CalLite domains `9unimp`/`11obs`/`12rim`, the cross-compare `compare/`, and the alternate-forcing runs `wgen_product_a/` + `historical_lto/` with their `forcing_compare/`). The committed copies are the published results of the current data and model. Regenerate with:
+Generated outputs, organized by application: `cdec15/` (the 15-CDEC diagnostics) and `calsim/` (the CalLite domains `9unimp`/`11obs`/`12rim`, the cross-compare `compare/`, and the alternate-forcing runs `wgen_product_a/` + `historical_lto/` with their `forcing_compare/`), plus `dwr_unimpaired/` (checks of the DWR unimpaired-flow location table). The committed copies are the published results of the current data and model. Regenerate with:
 
 ```bash
 sacsma plots --domain 15cdec              # -> artifacts/cdec15/
@@ -53,6 +53,20 @@ Maps and figures show skill at the **main-basin level**: every sub-area polygon 
 Footprint screening (`catchments.SCREENED_BASINS` = SHA, BND, SNS, ChowchillaRiver) trims the four basins whose HRU footprint materially over-reaches its CalSim3 catchment; every other basin keeps its full calibrated footprint. The everything-unscreened parallel and its delta are in `anchor_*_full.csv` and `anchor_screened_vs_full.csv`. The footprint-method maps (`figures/{shasta,sns,chowchilla,tnl,fresno}_footprint_panels.png`) and the HRU attribute maps (`figures/hru_{veg,soil,kpet}_*.png`) are single-basin and input illustrations, not part of the basin-level scoring.
 
 The engine is `sacsma.calsim.catchments`. The full method (anchor reference, screening, QMAP, figure style) is documented in the [report](https://cadwr-climate-change-program.github.io/SAC-SMA/) and `CLAUDE.md`.
+
+## DWR unimpaired-flow location checks (`dwr_unimpaired/verification/`)
+
+`python dataprep/check_uf_locations.py` tests `data/dwr_unimpaired/uf_locations.csv` (the arc sets that reconstruct DWR's unimpaired-flow subbasins from CalSim3 catchments) against sources that did not produce it: DWR's published unimpaired volumes over WY1950–84, NWIS outlet identity and drainage areas, and the geometry of the dissolved arc sets. A *flag* is a check outside tolerance, not automatically an error in the table; a *note* records an expected or structural condition.
+
+| File | What |
+|------|------|
+| `findings.md` | Generated summary: the flags and notes, per subbasin. |
+| `report_table.csv` | Per-subbasin numbers behind every check (areas, volumes, outlets). |
+| `uf_outlets.csv` | The USGS gauge (and the CDEC coordinates where a station exists) that identifies each subbasin's outlet in the checks: site, name, coordinates, published drainage area. An output of the checks, not an input to any model. |
+| `figures/uf_NN.png`, `figures/uf_dissolved_overview.png` | One map per subbasin (member arcs, outlet pinned) and all subbasins dissolved onto one overview. |
+| `web_cache.json`, `nldi_bend_basin.json` | Cached NWIS / CDEC / NLDI responses, so the tables regenerate offline; delete to re-fetch. |
+
+The script also writes `uf_dissolved.gpkg` for GIS viewing; it is local only (git-ignored).
 
 ## SAC-SMA vs VIC vs BCM (`calsim/compare/sacsma_vic_bcm_*`)
 
