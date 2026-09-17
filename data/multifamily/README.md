@@ -50,6 +50,11 @@ USGS gauges can leave it out via `--basins`.
 
 ## Flags
 
+Flags are annotations for readers: each marks a caveat of its row, and no code
+branches on them. Footprint and target choices live in the builder
+(`EXTRA_ARCS`, `TRIM_ARCS`, `TARGET_DROPS`), and which entities a run trains on
+is set by `--basins`.
+
 `train_only` (Tulare 4) · `polygon_2.6pct_above_published_area` (TRM —
 `area_mi2` keeps the published 561 as the depth basis) ·
 `outlet_below_delineation` (gauge/dam 5–13 km below the delineation) ·
