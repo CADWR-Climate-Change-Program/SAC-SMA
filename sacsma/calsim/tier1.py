@@ -230,7 +230,7 @@ def score_run(run_dir: str | Path, data_dir: str | Path = "data") -> tuple[pd.Da
 
 
 def location_figure(panel: dict, out: Path, run_label: str = "") -> None:
-    """Per-location figure in the house layout: the monthly volume series (validation
+    """Per-location figure in the basin-diagnostics layout: the monthly volume series (validation
     window shaded, training window clear) with per-window stat boxes, and the two
     mean-monthly regimes.  The entity's own gauge record is overlaid where one exists,
     with its volume ratio to the CalSim3 reference in the legend; for a partial footprint

@@ -75,7 +75,7 @@ Result: SAC-SMA median KGE **0.870**, VIC **0.767**, BCM **0.656**, SAC-SMA best
 
 ## CalSim3 validation of multifamily dPL runs (tier 1, tier 2, atlas)
 
-Three tools score a trained `multifamily` run against CalSim3 over **WY1950–84**, the years before any training window. They write into the run folder (`<run>` = the `--out` of `sacsma dpl train`, holding `checkpoints/best.pt` and the evaluator's `sim_daily_mm.npz`):
+Three tools score a trained `multifamily` run against CalSim3 over **WY1950–84**, which precedes the training window of every CDEC and DWR-unimpaired target. USGS creek records do reach into those years; the atlas reports, per location, which creeks overlap it and how much of the window they cover. The tools write into the run folder (`<run>` = the `--out` of `sacsma dpl train`, holding `checkpoints/best.pt` and the evaluator's `sim_daily_mm.npz`):
 
 ```bash
 python -m sacsma.calsim.tier1 <run>              # -> <run>/tier1/
@@ -85,7 +85,7 @@ python -m sacsma.calsim.atlas <run>/tier1        # -> <run>/tier1/atlas/calsim_v
 
 **Tier 1** (`sacsma.calsim.tier1`) scores monthly volume (TAF) at the twenty training locations of `data/calsim/tier1_sets.csv`: against FLOW-UNIMPAIRED where a rim system carries one (ten anchors), against the sum of the member INFLOW arcs elsewhere (ten arc sums). Volumes use the `CalSim3_Merged` polygon areas, so no third area enters. Each entity's own training window is reported alongside as the in-sample comparison. At the ten anchored locations the reference coincides with the training target's source, so that score is a temporal holdout rather than an independent reference.
 
-**Tier 2** (`sacsma.calsim.tier2`) aggregates per-cell runoff onto every rim INFLOW polygon and scores each arc on its own series. Arcs no trained entity lists are simulated on their region cells as a regionalization test and flagged `basis = extrapolated` (`--no-extend` skips them). It needs the `dpl` extra and a source checkout; the extrapolated arcs also need `rasterio` and the HydroSHEDS v2 tiles, and fall back to straight-line flow lengths without them.
+**Tier 2** (`sacsma.calsim.tier2`) aggregates per-cell runoff onto every rim INFLOW polygon and scores each arc on its own series. Arcs no trained entity lists are simulated on their region cells as a regionalization test and flagged `basis = extrapolated` (`--no-extend` skips them). It needs the `dpl` extra and a source checkout; the extrapolated arcs also need `rasterio`, the HydroSHEDS v2 tiles and network access, and fall back to straight-line × 1.5 flow lengths without them. Tier 1 and the atlas need the `gis` extra (geopandas); the atlas also needs `io` (xarray) for `flow_daily.nc`.
 
 **Atlas** (`sacsma.calsim.atlas`) is one self-contained HTML page (plus `atlas.md`): domain maps, a tab per location (metrics, time series, sub-arc table with each arc's derivation class from `data/calsim/calsim3_arc_derivation.csv`, maps), the arcs outside every trained footprint, the footprints of each target family, and per location the USGS creek watersheds that overlap it with their records inside the validation window. It reads `data/usgs/flow_daily.nc`, a git-LFS file.
 

@@ -32,8 +32,9 @@ figures under ``figures/``, and prints the summary.  When the run folder holds
 
 Needs the ``dpl`` extra (torch) and a source checkout: the extrapolated arcs import the
 tracer of ``dataprep/build_flowlens.py``, which needs ``rasterio`` and the HydroSHEDS v2
-tiles (read from ``--tiles-dir``, fetched on demand); without them those arcs fall back to
-straight-line lengths, and ``--no-extend`` needs neither.
+tiles (read from ``--tiles-dir`` when complete, otherwise streamed from the HydroSHEDS
+server; the size check needs network either way); without them those arcs fall back to
+straight-line x 1.5 lengths, and ``--no-extend`` needs neither.
 """
 
 from __future__ import annotations

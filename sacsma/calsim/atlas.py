@@ -16,6 +16,11 @@ run's tier-2 folder (:mod:`sacsma.calsim.tier2`):
   the unconstrained arcs, and a tab of training footprints by family;
 * ``atlas/atlas.md`` — the tier-1 content as Markdown with image links.
 
+One input is optional and user-supplied: a ``tier2_extrapolated_trained_cover.csv`` in the
+tier-2 folder (``basin, trained_cell_frac, ...``: the share of each extrapolated arc's cell
+weight that lies on cells some trained entity uses) adds a "trained cells" column to the
+unconstrained-arcs table; no tool here writes it, and the page is complete without it.
+
 Usage::
 
     python -m sacsma.calsim.atlas <tier1_out_dir> [--data-dir data] [--tier2-dir ...] [--label ...]
@@ -744,7 +749,7 @@ def _t2_table(rows, e, *, show_set: bool, show_cover: bool) -> list[str]:
 
 def _not_counted_note(sets, v, fmt: str) -> str:
     """One sentence naming the locations that are shown but left out of the run's summary
-    figures (mean KGE, volumes, terciles), with the set table's reason; empty if none."""
+    figures (mean and median KGE, volumes), with the set table's reason; empty if none."""
     out = [s for s in sets.itertuples(index=False) if s.set_id in v.index and not s.volume_scored]
     if not out:
         return ""
@@ -753,7 +758,7 @@ def _not_counted_note(sets, v, fmt: str) -> str:
         note = str(s.note or "")
         return note[len("not volume-scored: "):] if note.startswith("not volume-scored: ") else note
     parts = [f"{s.set_id} ({s.name})" + (f": {reason(s)}" if s.note else "") for s in out]
-    text = (f"The run's summary figures (mean KGE, volumes, terciles) cover the {n} volume-scored locations. "
+    text = (f"The run's summary figures (mean and median KGE, volumes) cover the {n} volume-scored locations. "
             f"Shown but not counted: " + "; ".join(parts) + ".")
     if fmt == "p":
         return f"<p class='note'>{html.escape(text)}</p>"
