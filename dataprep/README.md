@@ -525,6 +525,11 @@ use that row.
 | `delta_monthly.csv` | 0.2 MB | `[date, series, flow_taf]`, the 6 derived totals |
 | `uf_locations.csv` | 4 KB | `uf` → name, CDEC id, calibration basin, CalSim3 arcs, CalSim area, SWAT flags |
 
+`check_uf_locations.py` tests `uf_locations.csv` against sources that did not produce it
+(DWR's published volumes, NWIS outlet identity and drainage areas, the dissolved geometry)
+and writes its findings, table and maps to `artifacts/dwr_unimpaired/verification/` (file
+table in `artifacts/README.md`). Web responses are cached there, so it reruns offline.
+
 Needs `pypdf` (added to `environment.yml`).
 
     python dataprep/dwr_unimpaired.py --pdf <report.pdf>

@@ -12,8 +12,8 @@ sources that did not produce it:
 2. **Independent area + outlet identity** — USGS NWIS station name, coordinates
    and published drainage area at each outlet gauge, plus CDEC staMeta
    coordinates where a ``cdec_id`` exists.  The key independent check.
-3. **Geometry** — one map per UF (member arcs + outlet pins), all UFs dissolved
-   onto one overview, and an 18-panel contact sheet.
+3. **Geometry** — one map per UF (member arcs + outlet pins) and all UFs dissolved
+   onto one overview.
    Arcs with no polygon of their own in ``CalSim3_Merged`` (``I_RUB002``) are
    noted so map readers know the arc set is one larger than the drawn set.
 
@@ -25,22 +25,23 @@ so I_PYN001 is correctly excluded from UF 6.
 
 Web calls (NWIS site service, CDEC staMeta, NLDI basin) are cached in
 ``artifacts/dwr_unimpaired/verification/web_cache.json`` + ``nldi_bend_basin.json``;
-with the committed caches the script reruns offline and byte-reproducibly.
+with the committed caches the script reruns offline and reproduces its tables
+byte for byte.
 
 Outputs
 -------
-    data/dwr_unimpaired/uf_outlets.csv    UF -> USGS gauge used by the checks
-                                          (site, name, lat/lon, published DA,
-                                          CDEC coords, offset km)
     artifacts/dwr_unimpaired/verification/
         report_table.csv                  per-UF results (areas, volumes, outlets)
+        uf_outlets.csv                    UF -> USGS gauge used by the checks
+                                          (site, name, lat/lon, published DA,
+                                          CDEC coords, offset km)
         findings.md                       flags + notes
         figures/uf_NN.png                 per-UF map, outlet pinned
         figures/uf_dissolved_overview.png Figure-2-1 analogue
-        figures/uf_all_grid.png           18-panel contact sheet
-        uf_dissolved.gpkg                 the dissolved UF polygons (QGIS-ready)
+        uf_dissolved.gpkg                 the dissolved UF polygons (QGIS-ready;
+                                          local only, not tracked)
 
-Needs geopandas + pyogrio + matplotlib + pillow (any env that can read the
+Needs geopandas + pyogrio + matplotlib (any env that can read the
 repo's gpkg).  Usage::
 
     python dataprep/check_uf_locations.py
@@ -357,22 +358,6 @@ def main() -> None:
     print("tiling: %d rim arcs, %d assigned, %d unassigned (%.0f mi2)"
           % (len(g), len(claims & set(g.index)), len(unassigned), unassigned.SQ_MI.sum()))
 
-    # ---- 3c. contact sheet
-    from PIL import Image
-    files = sorted(FIG.glob("uf_[0-9][0-9].png"))
-    W = 320
-    thumbs = []
-    for f in files:
-        im = Image.open(f)
-        thumbs.append(im.resize((W, int(im.height * W / im.width)), Image.LANCZOS))
-    ph = max(t.height for t in thumbs)
-    cols = 5
-    sheet = Image.new("RGB", (cols * W, -(-len(thumbs) // cols) * ph), "white")
-    for i, t in enumerate(thumbs):
-        sheet.paste(t, ((i % cols) * W, (i // cols) * ph))
-    sheet.convert("P", palette=Image.ADAPTIVE, colors=256).save(
-        FIG / "uf_all_grid.png", optimize=True)
-
     # ---- Paynes Creek membership check (NLDI Bend Bridge watershed vs I_PYN001)
     basin_f = OUT / "nldi_bend_basin.json"
     try:
@@ -394,7 +379,7 @@ def main() -> None:
 
     # ------------------------------------------------------------- write out
     pd.DataFrame(rows).to_csv(OUT / "report_table.csv", index=False)
-    pd.DataFrame(outlets).to_csv(REPO / "data/dwr_unimpaired/uf_outlets.csv", index=False)
+    pd.DataFrame(outlets).to_csv(OUT / "uf_outlets.csv", index=False)
     nflag = sum(1 for s, _, _ in findings if s == "flag")
     nnote = len(findings) - nflag
     names = dict(zip(locs["uf"], locs["name"]))  # name each subbasin, not just its number
