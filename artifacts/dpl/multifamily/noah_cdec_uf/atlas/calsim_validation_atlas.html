@@ -23,7 +23,7 @@
       if(!document.getElementById(t)) t='domain'; show(t);
       document.querySelectorAll('img').forEach(i=>i.addEventListener('click',()=>i.classList.toggle('big')))});
     </script></head><body>
-<header><h1>CalSim3 validation atlas — noah_cdec_uf</h1><p>Validation window WY1950-84, monthly volume against CalSim3. Tier 1: the twenty trained locations, FLOW-UNIMPAIRED at the anchored systems and the sum of the member INFLOW arcs elsewhere. Tier 2: every rim inflow arc on its own, shown under the set it belongs to and, for the arcs outside every set, on the unconstrained-arcs tab. Each location tab also lists the USGS daily creeks whose watersheds overlap it and their records inside the validation window, which say whether the model saw that window at the location through a creek while training (out of sample, partly seen, or seen through creeks). Red star = the registry outlet of the trained entity.</p></header>
+<header><h1>CalSim3 validation atlas — noah_cdec_uf</h1><p><b>Trained on 26 entities (17 cdec_daily, 9 uf_monthly) with --mt-family-weight none: nominal share of the loss cdec 50%, uf 50%.</b></p><p>Validation window WY1950-84, monthly volume against CalSim3. Tier 1: the twenty trained locations, FLOW-UNIMPAIRED at the anchored systems and the sum of the member INFLOW arcs elsewhere. Tier 2: every rim inflow arc on its own, shown under the set it belongs to and, for the arcs outside every set, on the unconstrained-arcs tab. Each location tab also lists the USGS daily creeks whose watersheds overlap it and their records inside the validation window, which say whether the model saw that window at the location through a creek while training (out of sample, partly seen, or seen through creeks). Red star = the registry outlet of the trained entity.</p></header>
 <nav><button data-t='domain' onclick="show('domain')">Domain</button>
 <button data-t='SHA' onclick="show('SHA')">cdec_SHA</button>
 <button data-t='CLE' onclick="show('CLE')">cdec_CLE</button>
@@ -48,7 +48,12 @@
 <button data-t='unconstrained' onclick="show('unconstrained')">unconstrained arcs</button>
 <button data-t='footprints' onclick="show('footprints')">footprints</button>
 </nav>
-<section id='domain'><h2>All locations</h2><p class='note'>Click a row to open its tab.</p>
+<section id='domain'>
+<h2>Training recipe</h2><table><tr><th>family</th><th>entities</th><th>nominal share of the loss</th></tr>
+<tr><td class='l'>cdec_daily — CDEC daily full natural flow</td><td>17</td><td>50%</td></tr>
+<tr><td class='l'>uf_monthly — DWR Appendix B monthly unimpaired flow</td><td>9</td><td>50%</td></tr>
+</table><p class='note'><code>--mt-family-weight none</code> — no family weighting: every daily entity weighs equally in the daily term, and the daily and monthly terms add with equal weight. The share is nominal: a chunk of years only counts the entities with observations in it. Checkpoint = epoch 52; selected by the mean cal KGE over all entities; seed 0.</p>
+<h2>All locations</h2><p class='note'>Click a row to open its tab.</p>
 <table><tr><th>training entity</th><th>location</th><th>reference</th><th>arcs</th><th>mi²</th><th>KGE</th><th>NSE</th><th>bias</th><th>r</th><th>seas. mismatch</th><th>sim / ref TAF/yr</th></tr>
 <tr class='pick' onclick="show('SHA')"><td>cdec_SHA</td><td class='l'>Sacramento R. at Shasta (cdec_SHA: CDEC SIS daily FNF)</td><td class='l'>UNIMP SHAS</td><td>1</td><td>6,588</td><td>0.904</td><td>0.912</td><td>-7.7%</td><td>0.960</td><td>0.044</td><td>5,836 / 6,323</td></tr>
 <tr class='pick' onclick="show('CLE')"><td>cdec_CLE</td><td class='l'>Trinity R. at Trinity Dam (cdec_CLE: CDEC CLE daily FNF)</td><td class='l'>UNIMP TRIN</td><td>1</td><td>693</td><td>0.740</td><td>0.608</td><td>+16.4%</td><td>0.846</td><td>0.124</td><td>1,648 / 1,416</td></tr>
