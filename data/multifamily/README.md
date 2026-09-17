@@ -152,11 +152,11 @@ Conventions. The start pixel per cell is its **main-channel pixel**: the
 highest-accumulation pixel in the cell square (capped at 1.3× the entity
 area — a pixel carrying more water than the basin cannot drain to its
 outlet) whose path reaches the outlet; `center` marks cell-center starts
-(158 rows). The outlet is snapped to the nearest pixel (≤ ~2 km) whose
+(159 rows). The outlet is snapped to the nearest pixel (≤ ~2 km) whose
 implied upstream area falls within [0.2×, 5×] of the registry
 `area_mi2` (snapped-ACC/area landed at 0.75–1.11, median ≈ 1.00).
 `uf_07` (multi-outlet composite) traces each cell to where its path
-exits the entity footprint. `fallback` (1,338 rows, **5.9% of total area
+exits the entity footprint. `fallback` (1,362 rows, **5.9% of total area
 weight**) = haversine × the entity's median traced sinuosity, for cells
 none of whose candidates drain through the outlet — below-outlet valley
 cells, square-overlap edge slivers, and sub-cell basins; per-entity

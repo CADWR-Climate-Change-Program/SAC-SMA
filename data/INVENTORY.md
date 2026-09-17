@@ -102,6 +102,7 @@ same off-grid reason.
 | `gage.csv` | 5.8 MB | **Observed daily CDEC full-natural-flow** (the calibration target), 1986–2019, converted from cfs to mm/day over `basin_area.csv`; negatives/sentinels → NaN | `cdec15.load_gage` → `cdec15.plots` |
 | `simflow.csv` | 15 MB | The original **MATLAB simulated** gauge flow, 1915–2018 — the exact-reproduction (parity) target | `io.load_reference` → plots, parity checks |
 | `basin_area.csv` | <0.01 MB | Published drainage areas `[basin, area_mi2]` for the 15 basins | `io.load_basin_area` — mm/day ↔ cfs |
+| `gis/SACSMA_15CDEC.geojson` | 3.6 MB | The original SAC-SMA delineations of the 15 basins (polygons, `Name` = basin code). The four Tulare basins (ISB, PNF, SCC, TRM) have no CalSim3 polygons, so their `data/multifamily/` footprints come from here | `dataprep/build_entity_cells.py` |
 
 ## `data/calsim/` — the CalSim/CalLite application
 
@@ -431,21 +432,14 @@ with the snow-regime median (806 mm/yr) about twice rain and mixed (~425).
 
 The inputs of the dPL `multifamily` training domain: one row per training target
 (site × timescale × source family), each with its own cell set, area weights and flow
-lengths on the region grid, so one parameter network trains against daily and monthly
-records at once. Statics, LAI and forcing are not duplicated here — the loaders join
-them from `region/` by cell key. The store's own README documents every column, the
+lengths on the region grid. Statics, LAI and forcing are not duplicated here (the loaders
+join them from `region/` by cell key), and the observation series stay in their source
+stores. **`data/multifamily/README.md` is the reference** for columns, flags, counts, the
 de-duplication rule, the footprint conventions and the flow-length method. All three
 tables are generated, never hand-edited.
 
-| File | Size | What / provenance |
-|------|------|-------------------|
-| `entities.csv` | 0.02 MB | The registry: 95 entities = 69 `usgs_daily` + 17 `cdec_daily` + 9 `uf_monthly`, with site, arcs, areas, outlet, record start, training window, `n_obs`, the observation store each reads and caveat flags. `dataprep/build_entities.py` |
-| `entity_cells.csv` | 0.3 MB | `[entity_id, key, lat, lon, overlap_mi2]`, 5,849 rows over 2,652 distinct region cells: each entity's cells, weighted by the area the cell square shares with the footprint. `dataprep/build_entity_cells.py` |
-| `flowlens.csv` | 0.3 MB | `[entity_id, key, flowlen_m, method]`, same keys as `entity_cells.csv`: path length from each cell to the entity's outlet, traced on the HydroSHEDS v2 1-arc-second flow directions (`method` = `channel` / `center` / `fallback`). `dataprep/build_flowlens.py`, which needs `rasterio` and ~6 GB of tiles that are not in git |
-
-Observation series stay beside their raw sources and are selected through the registry's
-`obs_store` column: `usgs/flow_daily.nc`, `cdec15/gage.csv`, `cdec_fnf/fnf_daily_mm.csv`
-and `dwr_unimpaired/uf_monthly_mm.csv`. Footprints: the USGS entities use
-`usgs/gis/usgs_watersheds.gpkg`; the four Tulare basins use
-`cdec15/gis/SACSMA_15CDEC.geojson` (3.6 MB, the original 15-basin delineations); every
-other CDEC and UF entity is a set of `calsim/gis/calsim3.gpkg` rim polygons.
+| File | Size | Built by |
+|------|------|----------|
+| `entities.csv` | 0.02 MB | `dataprep/build_entities.py` — the registry |
+| `entity_cells.csv` | 0.3 MB | `dataprep/build_entity_cells.py` — per-entity cell sets and area weights |
+| `flowlens.csv` | 0.3 MB | `dataprep/build_flowlens.py` — per-cell flow length to each entity's outlet |
