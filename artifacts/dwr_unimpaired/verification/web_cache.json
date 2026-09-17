@@ -1,0 +1,278 @@
+{
+ "nwis": {
+  "11454000": {
+   "site_no": "11454000",
+   "station_nm": "PUTAH C NR WINTERS CA",
+   "lat": 38.5151562,
+   "lon": -122.0818793,
+   "da_mi2": 574.0,
+   "cda_mi2": NaN
+  },
+  "11451800": {
+   "site_no": "11451800",
+   "station_nm": "CACHE C A RUMSEY CA",
+   "lat": 38.8898988,
+   "lon": -122.2383082,
+   "da_mi2": 964.0,
+   "cda_mi2": NaN
+  },
+  "11451760": {
+   "site_no": "11451760",
+   "station_nm": "CACHE C AB RUMSEY CA",
+   "lat": 38.9129536,
+   "lon": -122.2716419,
+   "da_mi2": 955.0,
+   "cda_mi2": NaN
+  },
+  "11388000": {
+   "site_no": "11388000",
+   "station_nm": "STONY C BL BLACK BUTTE DAM NR ORLAND CA",
+   "lat": 39.81849004,
+   "lon": -122.3249913,
+   "da_mi2": 738.0,
+   "cda_mi2": NaN
+  },
+  "11387990": {
+   "site_no": "11387990",
+   "station_nm": "SOUTH DIVERSION CN NR ORLAND CA",
+   "lat": 39.80987896,
+   "lon": -122.330269,
+   "da_mi2": NaN,
+   "cda_mi2": NaN
+  },
+  "11387500": {
+   "site_no": "11387500",
+   "station_nm": "STONY C NR ORLAND CA",
+   "lat": 39.77904565,
+   "lon": -122.3594361,
+   "da_mi2": 634.0,
+   "cda_mi2": NaN
+  },
+  "11377100": {
+   "site_no": "11377100",
+   "station_nm": "SACRAMENTO R AB BEND BRIDGE NR RED BLUFF CA",
+   "lat": 40.2884596,
+   "lon": -122.1866312,
+   "da_mi2": 8900.0,
+   "cda_mi2": NaN
+  },
+  "11407000": {
+   "site_no": "11407000",
+   "station_nm": "FEATHER R A OROVILLE CA",
+   "lat": 39.52155294,
+   "lon": -121.5477477,
+   "da_mi2": 3624.0,
+   "cda_mi2": NaN
+  },
+  "11419000": {
+   "site_no": "11419000",
+   "station_nm": "YUBA R A SMARTSVILLE CA",
+   "lat": 39.2235041,
+   "lon": -121.2935704,
+   "da_mi2": 1200.0,
+   "cda_mi2": NaN
+  },
+  "11424000": {
+   "site_no": "11424000",
+   "station_nm": "BEAR R NR WHEATLAND CA",
+   "lat": 39.0001537,
+   "lon": -121.4065908,
+   "da_mi2": 292.0,
+   "cda_mi2": NaN
+  },
+  "11446500": {
+   "site_no": "11446500",
+   "station_nm": "AMERICAN R A FAIR OAKS CA",
+   "lat": 38.6354394,
+   "lon": -121.227692,
+   "da_mi2": 1888.0,
+   "cda_mi2": NaN
+  },
+  "11335000": {
+   "site_no": "11335000",
+   "station_nm": "COSUMNES R A MICHIGAN BAR CA",
+   "lat": 38.5001656,
+   "lon": -121.0451852,
+   "da_mi2": 536.0,
+   "cda_mi2": NaN
+  },
+  "11319500": {
+   "site_no": "11319500",
+   "station_nm": "MOKELUMNE R NR MOKELUMNE HILL CA",
+   "lat": 38.3126926,
+   "lon": -120.7202112,
+   "da_mi2": 544.0,
+   "cda_mi2": NaN
+  },
+  "11315000": {
+   "site_no": "11315000",
+   "station_nm": "COLE C NR SALT SPRINGS DAM CA",
+   "lat": 38.5190783,
+   "lon": -120.2126928,
+   "da_mi2": 21.0,
+   "cda_mi2": NaN
+  },
+  "11308500": {
+   "site_no": "11308500",
+   "station_nm": "MURRAY C NR SAN ANDREAS CA",
+   "lat": 38.2116111,
+   "lon": -120.675611,
+   "da_mi2": 22.7,
+   "cda_mi2": NaN
+  },
+  "11308900": {
+   "site_no": "11308900",
+   "station_nm": "CALAVERAS R BL NEW HOGAN DAM NR VALLEY SPRINGS CA",
+   "lat": 38.14797568,
+   "lon": -120.8249362,
+   "da_mi2": 363.0,
+   "cda_mi2": NaN
+  },
+  "11299000": {
+   "site_no": "11299000",
+   "station_nm": "NEW MELONES RES NR SONORA CA",
+   "lat": 37.95103624,
+   "lon": -120.5235323,
+   "da_mi2": 904.0,
+   "cda_mi2": NaN
+  },
+  "11302000": {
+   "site_no": "11302000",
+   "station_nm": "STANISLAUS R BL GOODWIN DAM NR KNIGHTS FERRY CA",
+   "lat": 37.85159385,
+   "lon": -120.6379816,
+   "da_mi2": 986.0,
+   "cda_mi2": NaN
+  },
+  "11289650": {
+   "site_no": "11289650",
+   "station_nm": "TUOLUMNE R BL LAGRANGE DAM NR LAGRANGE CA",
+   "lat": 37.66629746,
+   "lon": -120.4421023,
+   "da_mi2": 1538.0,
+   "cda_mi2": NaN
+  },
+  "11289000": {
+   "site_no": "11289000",
+   "station_nm": "MODESTO CN NR LA GRANGE CA",
+   "lat": 37.67240817,
+   "lon": -120.474881,
+   "da_mi2": NaN,
+   "cda_mi2": NaN
+  },
+  "11270900": {
+   "site_no": "11270900",
+   "station_nm": "MERCED R BL MERCED FALLS DAM NR SNELL CA",
+   "lat": 37.5216029,
+   "lon": -120.3324114,
+   "da_mi2": 1061.0,
+   "cda_mi2": NaN
+  },
+  "11268500": {
+   "site_no": "11268500",
+   "station_nm": "MERCED R A BAGBY CA",
+   "lat": 37.61104447,
+   "lon": -120.1315726,
+   "da_mi2": 911.0,
+   "cda_mi2": NaN
+  },
+  "11259000": {
+   "site_no": "11259000",
+   "station_nm": "CHOWCHILLA R BL BUCHANAN DAM NR RAYMOND CA",
+   "lat": 37.21550105,
+   "lon": -119.991276,
+   "da_mi2": 236.0,
+   "cda_mi2": NaN
+  },
+  "11257500": {
+   "site_no": "11257500",
+   "station_nm": "FRESNO R NR KNOWLES CA",
+   "lat": 37.2371691,
+   "lon": -119.7748763,
+   "da_mi2": 133.0,
+   "cda_mi2": NaN
+  },
+  "11251000": {
+   "site_no": "11251000",
+   "station_nm": "SAN JOAQUIN R BL FRIANT CA",
+   "lat": 36.98439397,
+   "lon": -119.7243124,
+   "da_mi2": 1676.0,
+   "cda_mi2": NaN
+  },
+  "11250100": {
+   "site_no": "11250100",
+   "station_nm": "MILLERTON LK A FRIANT CA",
+   "lat": 36.99994956,
+   "lon": -119.7045894,
+   "da_mi2": 1638.0,
+   "cda_mi2": NaN
+  },
+  "11288000": {
+   "site_no": "11288000",
+   "station_nm": "TUOLUMNE R AB LA GRANGE DAM NR LA GRANGE CA",
+   "lat": 37.7090976,
+   "lon": -120.4132502,
+   "da_mi2": 1532.0,
+   "cda_mi2": NaN
+  },
+  "11270000": {
+   "site_no": "11270000",
+   "station_nm": "MERCED R A EXCHEQUER CA",
+   "lat": 37.581879,
+   "lon": -120.2801884,
+   "da_mi2": 1037.0,
+   "cda_mi2": NaN
+  },
+  "11258000": {
+   "site_no": "11258000",
+   "station_nm": "FRESNO R BL HIDDEN DAM NR DAULTON CA",
+   "lat": 37.09744734,
+   "lon": -119.8896013,
+   "da_mi2": 258.0,
+   "cda_mi2": NaN
+  }
+ },
+ "cdec": {
+  "SBB": [
+   40.289,
+   -122.186
+  ],
+  "FTO": [
+   39.522,
+   -121.547
+  ],
+  "YRS": [
+   39.22357,
+   -121.293651
+  ],
+  "AMF": [
+   38.636016,
+   -121.221893
+  ],
+  "CSN": [
+   38.5,
+   -121.044
+  ],
+  "PAR": [
+   38.25,
+   -120.85
+  ],
+  "SNS": [
+   37.852,
+   -120.637
+  ],
+  "TLG": [
+   37.666,
+   -120.441
+  ],
+  "MRC": [
+   37.522,
+   -120.331
+  ],
+  "SJF": [
+   36.98415,
+   -119.72429
+  ]
+ }
+}
