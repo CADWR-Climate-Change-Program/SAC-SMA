@@ -37,9 +37,9 @@ TAF_TO_MM_PER_KM2 = 1233.48184  # mm = TAF x this / area_km2
 
 #: The daily-FNF depth conversions: station -> depth area (mi^2).
 #: An area here is a stated convention, not a lookup - only stations with a
-#: defined depth basis are converted (fnf_daily.csv also carries the SNS and
-#: WHI candidates, which have none yet; they join this table together with
-#: their own depth areas).  ``None`` = read the UF 13 arc-sum from
+#: defined depth basis are converted (fnf_daily.csv also carries SNS and WHI,
+#: which have no defined depth area and are not converted; a station added
+#: here comes with its own depth area).  ``None`` = read the UF 13 arc-sum from
 #: uf_locations.csv at build time (CSN shares that delineation exactly).
 FNF_DEPTH_AREAS: dict[str, float | None] = {
     # CLE FNF is computed at Trinity Dam; the crosswalk maps it to the
