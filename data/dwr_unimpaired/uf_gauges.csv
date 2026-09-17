@@ -1,19 +1,19 @@
-uf,lat,lon,gauge_source,note,area_mi2_swat,area_source
-2,38.5151562,-122.0818793,USGS NWIS 11454000,Putah Cr nr Winters; below Putah Diversion Dam,581,Table A-1 p.A-7 (pdf p.97) 
-3,38.8898988,-122.2383082,USGS NWIS 11451800,Cache Cr at Rumsey; DWR 'above Rumsey' = gauge at Rumsey (DA 964 mi2 vs arc set 953.4),942,Table A-1 p.A-7 (pdf p.97) 
-4,39.81849004,-122.3249913,USGS NWIS 11388000,Stony Cr bl Black Butte Dam,758,Table A-1 p.A-7 (pdf p.97) 
-6,40.289,-122.186,cdec_stations:SBB,Sacramento R abv Bend Bridge,,none - no single Appendix A model for UF 6 (Shasta model covers part only)
-7,,,,no gauge by construction - composite of east-side minor streams,,none - the Table A-1 Mill/Deer/Big Chico model covers only 3 of its creeks (399.2 mi2 of ~1036) so no single model area applies
-8,39.522,-121.547,cdec_stations:FTO,Feather R at Oroville,3624,report p.3-7 prose rim area; Table A-1 gives 9335 km2 = 3604.3
-9,39.22357,-121.293651,cdec_stations:YRS,Yuba R at Smartville,1225.5,Table A-1 p.A-7 (pdf p.97) 
-10,39.0001537,-121.4065908,USGS NWIS 11424000,Bear R nr Wheatland,290,Table A-1 p.A-7 (pdf p.97) 
-11,38.636016,-121.221893,cdec_stations:AMF,American R at Fair Oaks (Nimbus),1908.5,Table A-1 p.A-7 (pdf p.97) 
-13,38.5,-121.044,cdec_stations:CSN,Cosumnes R at Michigan Bar,536,Table A-1 p.A-7 (pdf p.97) 
-14,38.256861,-120.850771,CDEC MKM staMeta,Pardee Dam; coordinates from the CDEC MKM station metadata (the CDEC PAR metadata rounds them to 2 decimals),580,Table A-1 p.A-7 (pdf p.97) 
-15,38.0888106,-120.8657702,USGS NWIS 11309500,Calaveras R at Jenny Lind; below New Hogan,390,Table A-1 New Hogan model 360.2 + 30 mi2 Jenny Lind reach (p.3-11)
-16,37.9481,-120.525,CDEC NML staMeta,New Melones Dam; uf_locations cdec_id SNS is Goodwin ~14 km downstream of the arc set,972.2,Table A-2 p.A-7 (pdf p.97)  ~= Goodwin footprint 980
-18,37.666,-120.441,cdec_stations:TLG,Tuolumne R at Don Pedro,1536.7,Table A-2 p.A-7 (pdf p.97) 
-19,37.522,-120.331,cdec_stations:MRC,Merced R nr Merced Falls (Exchequer),1058.7,Table A-2 p.A-7 (pdf p.97) 
-20,37.21550105,-119.991276,USGS NWIS 11259000,Chowchilla R bl Buchanan Dam (gid also in data/usgs/gauges.csv),258,Table A-2 p.A-7 (pdf p.97) 
-21,37.09744734,-119.8896013,USGS NWIS 11258000,Fresno R bl Hidden Dam nr Daulton (gid also in data/usgs/gauges.csv),292,Table A-2 p.A-7 (pdf p.97) 
-22,36.999167,-119.706111,cdec_stations:SBF,San Joaquin R at Friant (Millerton); the SJF monthly site is Friant Dam,1658.7,Table A-2 p.A-7 (pdf p.97) 
+uf,lat,lon,gauge_source,area_mi2_swat,area_source
+2,38.5151562,-122.0818793,USGS NWIS 11454000,581,DWR (2016) unimpaired-flow report Table A-1 p.A-7 (pdf p.97)
+3,38.8898988,-122.2383082,USGS NWIS 11451800,942,DWR (2016) unimpaired-flow report Table A-1 p.A-7 (pdf p.97)
+4,39.81849004,-122.3249913,USGS NWIS 11388000,758,DWR (2016) unimpaired-flow report Table A-1 p.A-7 (pdf p.97)
+6,40.289,-122.186,cdec_stations:SBB,,none - DWR (2016) unimpaired-flow report Appendix A has no single model for UF 6 (its Shasta model covers part only)
+7,,,,,none - the DWR (2016) unimpaired-flow report Table A-1 Mill/Deer/Big Chico model covers only 3 of its creeks (399.2 mi2 of ~1036) so no single model area applies
+8,39.522,-121.547,cdec_stations:FTO,3624,DWR (2016) unimpaired-flow report p.3-7 (pdf p.35) drainage area at the gauge; its Table A-1 gives 9335 km2 = 3604.3 mi2
+9,39.22357,-121.293651,cdec_stations:YRS,1225.5,DWR (2016) unimpaired-flow report Table A-1 p.A-7 (pdf p.97)
+10,39.0001537,-121.4065908,USGS NWIS 11424000,290,DWR (2016) unimpaired-flow report Table A-1 p.A-7 (pdf p.97)
+11,38.636016,-121.221893,cdec_stations:AMF,1908.5,DWR (2016) unimpaired-flow report Table A-1 p.A-7 (pdf p.97)
+13,38.5,-121.044,cdec_stations:CSN,536,DWR (2016) unimpaired-flow report Table A-1 p.A-7 (pdf p.97)
+14,38.256861,-120.850771,cdec_stations:MKM,580,DWR (2016) unimpaired-flow report Table A-1 p.A-7 (pdf p.97)
+15,38.0888106,-120.8657702,USGS NWIS 11309500,390,DWR (2016) unimpaired-flow report Table A-1 p.A-7 (pdf p.97) Calaveras River 933 km2 = 360.2 mi2 + the 30 mi2 Jenny Lind to New Hogan reach of p.3-11 (pdf p.39)
+16,37.9481,-120.525,cdec_stations:NML,972.2,DWR (2016) unimpaired-flow report Table A-2 p.A-7 (pdf p.97)
+18,37.666,-120.441,cdec_stations:TLG,1536.7,DWR (2016) unimpaired-flow report Table A-2 p.A-7 (pdf p.97)
+19,37.522,-120.331,cdec_stations:MRC,1058.7,DWR (2016) unimpaired-flow report Table A-2 p.A-7 (pdf p.97)
+20,37.21550105,-119.991276,USGS NWIS 11259000,258,DWR (2016) unimpaired-flow report Table A-2 p.A-7 (pdf p.97)
+21,37.09744734,-119.8896013,USGS NWIS 11258000,292,DWR (2016) unimpaired-flow report Table A-2 p.A-7 (pdf p.97)
+22,36.999167,-119.706111,cdec_stations:SBF,1658.7,DWR (2016) unimpaired-flow report Table A-2 p.A-7 (pdf p.97)
