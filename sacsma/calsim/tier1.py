@@ -99,7 +99,7 @@ def footprint_areas(data_dir: str | Path = "data") -> dict[str, float]:
 
 def load_run_monthly_depth(run_dir: str | Path) -> pd.DataFrame:
     """Monthly entity depth (mm/month, complete calendar months) from ``sim_daily_mm.npz``."""
-    z = np.load(Path(run_dir) / "sim_daily_mm.npz", allow_pickle=True)
+    z = np.load(Path(run_dir) / "sim_daily_mm.npz")
     daily = pd.DataFrame(np.asarray(z["sim_mm"]).T.astype(float),
                          index=pd.to_datetime(z["date"]), columns=list(z["entity_id"]))
     monthly = daily.resample("ME").sum(min_count=1)

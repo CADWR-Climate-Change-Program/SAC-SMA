@@ -18,4 +18,4 @@ UF18,Tuolumne R. at Don Pedro (cdec_TLG: CDEC TLG daily FNF),cdec_TLG,anchor,TU,
 UF19,Merced R. at Exchequer (cdec_MRC: CDEC MRC daily FNF),cdec_MRC,anchor,ME,I_MCLRE,1036.08,True,
 UF20,Chowchilla R. at Buchanan (uf_20: DWR UF 20 monthly),uf_20,arcsum,,I_ESTMN,234.81,True,
 UF22,San Joaquin R. at Millerton (cdec_MIL: CDEC SBF daily FNF),cdec_MIL,anchor,SJ,I_MLRTN,1637.80,True,
-UF21,Fresno R. near Daulton (uf_21: DWR UF 21 monthly),uf_21,arcsum,,I_COT033;I_DBC024;I_FRS046;I_HNSLY,343.68,True,arc set under review: the three below-dam arcs may lie outside the Daulton gauge basin
+UF21,Fresno R. near Daulton (uf_21: DWR UF 21 monthly),uf_21,arcsum,,I_COT033;I_DBC024;I_FRS046;I_HNSLY,343.68,True,the three below-dam arcs may lie outside the Daulton gauge basin

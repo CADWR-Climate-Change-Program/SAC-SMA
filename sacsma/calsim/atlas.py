@@ -75,7 +75,7 @@ def daily_monthly_overlap(data_dir: str | Path, run_dir: Path | None):
     reg = pd.read_csv(Path(data_dir) / "multifamily" / "entities.csv", dtype={"site_id": str})
     trained = None
     if run_dir is not None and (Path(run_dir) / "sim_daily_mm.npz").exists():
-        trained = set(np.load(Path(run_dir) / "sim_daily_mm.npz", allow_pickle=True)["entity_id"].tolist())
+        trained = set(np.load(Path(run_dir) / "sim_daily_mm.npz")["entity_id"].tolist())
     if trained is not None:
         reg = reg[reg["entity_id"].isin(trained)]
     cells = pd.read_csv(Path(data_dir) / "multifamily" / "entity_cells.csv")
@@ -284,8 +284,8 @@ def creek_overlap(sets, geoms, data_dir: str | Path, trained=None, window: str =
     Verdict from ``window_cover``: ``out of sample`` (0), ``partly seen through creeks``
     (below 0.5) or ``seen through creeks``.  Where the model saw the window through a creek,
     the validation there tests a transfer of scale and variable (daily interior gauge in
-    training, monthly whole-basin volume in validation), not an unseen period; the design
-    calls that a scale-and-variable holdout.
+    training, monthly whole-basin volume in validation), not an unseen period: a
+    scale-and-variable holdout.
 
     Returns ``{set_id: (DataFrame of listed creeks, summary dict)}``."""
     import geopandas as gpd
@@ -548,7 +548,7 @@ def _creek_definitions(window: str, e) -> str:
             f"record inside {w}; window coverage = the mean over the {w} months of the area under such creeks with data "
             "in that month, i.e. the share of the location's area-months the model saw through a creek. Verdict from the "
             "window coverage: out of sample = 0%; partly seen through creeks = under 50%; seen through creeks = 50% or "
-            "more. The design calls a location the model saw through creeks a scale-and-variable holdout.</p>")
+            "more. A location the model saw through creeks is a scale-and-variable holdout, not an unseen period.</p>")
 
 
 def _creek_block(sid: str, df, summary: dict, out: Path, e, any_trained: bool) -> list[str]:
@@ -913,7 +913,12 @@ def write_html(sets, metrics, out: Path, label: str, window: str, maps: list[Pat
                 if t2_dir is not None:
                     fig2 = t2_dir / "figures" / f"tier2_regime_{sid}_{window}.png"
                     if not fig2.exists() and len(sub2) == 1:
-                        fig2 = t2_dir / "figures" / f"tier2_regime_single-arc_sets_{window}.png"
+                        # a nested one-arc set (Shasta inside Red Bluff) is drawn in the figure of
+                        # the set tier 2 filed the arc under, otherwise in the shared single-arc one
+                        host = str(sub2.tier1_set.iloc[0])
+                        fig2 = t2_dir / "figures" / f"tier2_regime_{host}_{window}.png"
+                        if host == sid or not fig2.exists():
+                            fig2 = t2_dir / "figures" / f"tier2_regime_single-arc_sets_{window}.png"
                     if fig2.exists():
                         parts.append("<div class='row ts'>"
                                      + f"<img src='{_b64(fig2, jpeg_quality=88)}' alt='{e(sid)} tier-2 regimes'>"
@@ -1083,7 +1088,7 @@ def main(argv=None) -> None:
     maps = domain_maps(catch, sets, geoms, metrics, out, label, VALIDATION_WINDOW, overlap=overlap, overlap_note=note)
     trained = None
     if (run_dir / "sim_daily_mm.npz").exists():
-        trained = set(np.load(run_dir / "sim_daily_mm.npz", allow_pickle=True)["entity_id"].tolist())
+        trained = set(np.load(run_dir / "sim_daily_mm.npz")["entity_id"].tolist())
     fam_maps = family_maps(catch, a.data_dir, out, trained=trained, label=label)
     print("atlas: family footprint maps for " + ", ".join(f"{k} ({len(v[1])})" for k, v in fam_maps.items())
           + ("" if trained else " (all registry entities: the run has no sim_daily_mm.npz)"))

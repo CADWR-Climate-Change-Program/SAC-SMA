@@ -21,12 +21,19 @@ simulated for its volume but has no series to score against.
 Usage::
 
     python -m sacsma.calsim.tier2 <run_dir | checkpoint.pt> [--out DIR] [--data-dir data]
-                                  [--device cpu|cuda] [--no-maps]
+                                  [--device cpu|cuda] [--no-maps] [--no-extend]
+                                  [--tiles-dir tmp/hydrosheds] [--figures-only] [--label NAME]
 
 Writes ``tier2_metrics.csv`` (one row per arc x window), ``tier2_monthly.csv``,
-``tier2_arcs.csv`` (coverage and parent entity per arc), the KGE / bias maps, and prints
-the summary.  When the run folder holds ``sim_daily_mm.npz`` the re-run's entity
-aggregates are checked against it.
+``tier2_arcs.csv`` (coverage and parent entity per arc), ``tier2_not_simulated.csv``,
+``tier2_extension_cells.csv``, ``tier2_sim_daily.npz``, the KGE / bias maps and the regime
+figures under ``figures/``, and prints the summary.  When the run folder holds
+``sim_daily_mm.npz`` the re-run's entity aggregates are checked against it.
+
+Needs the ``dpl`` extra (torch) and a source checkout: the extrapolated arcs import the
+tracer of ``dataprep/build_flowlens.py``, which needs ``rasterio`` and the HydroSHEDS v2
+tiles (read from ``--tiles-dir``, fetched on demand); without them those arcs fall back to
+straight-line lengths, and ``--no-extend`` needs neither.
 """
 
 from __future__ import annotations
@@ -42,7 +49,6 @@ import pandas as pd
 import torch
 
 from ..metrics import center_of_timing, kge, nse, pbias, pearson, seasonal_mismatch
-from . import calsim_dir
 from .catchments import (_EQ_CRS, _GRID_STEP_DEG, EXCLUDE_ARCS, MERGED_LAYER,
                          _square_cell_overlap, load_catchments, load_crosswalk, series_arc)
 from .tier1 import (AF_PER_MM_MI2, VALIDATION_WINDOW, WINDOWS, load_references, load_sets,
@@ -355,7 +361,7 @@ def score_run(ckpt: str | Path, data_dir: str | Path = "data", *, device=None, r
     arcs["basis"] = "trained entity"
     print(f"tier2: {len(catch)} rim polygons; {len(arcs)} arcs inside the {len(dom.basins)} trained "
           f"entities; {len(dom.hrus)} HRU rows on {dom.device.type}", flush=True)
-    print(f"tier2: streaming the envelope ...", flush=True)
+    print("tier2: streaming the envelope ...", flush=True)
     sim_arc, sim_ent, t0, t1, bad = stream(net, x, dom, cfg, W_arc)
     sim_arc, arcs["n_nan_cells"], arcs["nan_weight_frac"] = _drop_bad_cells(sim_arc, W_arc, bad, dom.hrus, "trained-footprint")
     dates = dom.dates[t0:t1]
@@ -387,7 +393,7 @@ def score_run(ckpt: str | Path, data_dir: str | Path = "data", *, device=None, r
 
     entity_check = None
     if run_dir is not None and (Path(run_dir) / "sim_daily_mm.npz").exists():
-        z = np.load(Path(run_dir) / "sim_daily_mm.npz", allow_pickle=True)
+        z = np.load(Path(run_dir) / "sim_daily_mm.npz")
         ref = pd.DataFrame(np.asarray(z["sim_mm"]).T.astype(float), columns=list(z["entity_id"]))
         mine = pd.DataFrame(sim_ent.T, columns=list(dom.basins))
         common = [b for b in dom.basins if b in ref.columns]
