@@ -10,7 +10,8 @@ outputs (:mod:`sacsma.dpl.calsim_tier2`), the folder ``<run>/atlas/`` beside ``t
   the domain map with its registry outlet, and a zoom naming its arcs, coloured by tier-2
   KGE when the tier-2 metrics are available;
 * ``atlas/family_<family>.png`` — the training footprints and gauges of each target family;
-* ``atlas/calsim_validation_atlas.html`` — a self-contained page (images embedded): a domain
+* ``atlas/calsim_validation_atlas.html`` — a self-contained page (images embedded): a header
+  stating what the run trained on and its family weighting (read from ``checkpoints/best.pt``), a domain
   tab with the tier-1 and tier-2 maps and the summary table, one tab per location with its
   tier-1 metrics, time series, tier-2 sub-arc table and regime figure and its maps, a tab for
   the unconstrained arcs, and a tab of training footprints by family;
@@ -99,6 +100,61 @@ def daily_monthly_overlap(data_dir: str | Path, run_dir: Path | None):
         return None, trained is not None
     ov = unions["daily"].intersection(unions["monthly"])
     return (ov if not ov.is_empty else None), trained is not None
+
+
+_SELECT_LABEL = {"pooled": "the mean cal KGE over all entities",
+                 "family_mean": "the mean of the family-mean cal KGEs",
+                 "family_weighted": "the share-weighted mean of the family-mean cal KGEs"}
+
+
+def run_recipe(run_dir: Path, data_dir: str | Path, trained=None) -> dict | None:
+    """What the run trained on and how its families were weighted, for the page header: entity
+    counts by family (``trained`` ids against the registry) and, from ``checkpoints/best.pt``, the
+    ``--mt-family-weight`` setting with each family's nominal share of the loss, the selected
+    epoch, the selection statistic and the seed.  ``None`` when the run folder has no checkpoint."""
+    ckpt = Path(run_dir) / "checkpoints" / "best.pt"
+    if not ckpt.exists():
+        return None
+    import torch
+
+    from .config import family_shares
+    ck = torch.load(ckpt, map_location="cpu", weights_only=False)
+    cfg = ck.get("cfg") or {}
+    ids = [str(x) for x in (trained if trained is not None else ck.get("basins") or [])]
+    reg = pd.read_csv(Path(data_dir) / "multifamily" / "entities.csv", dtype={"site_id": str})
+    fam_of = dict(zip(reg["entity_id"], reg["family"], strict=True))
+    counts = {f: sum(fam_of.get(i) == f for i in ids) for f in ("usgs_daily", "cdec_daily", "uf_monthly")}
+    counts = {f: n for f, n in counts.items() if n}
+    spec = str(cfg.get("mt_family_weight", "none"))
+    daily = [f for f in ("usgs_daily", "cdec_daily") if f in counts]
+    monthly = [f for f in ("uf_monthly",) if f in counts]
+    n_daily = sum(counts[f] for f in daily)
+    if spec == "none":                      # every daily entity equal in the daily term; the two terms add 1:1
+        d = 0.5 if monthly else 1.0
+        share = {f: d * counts[f] / n_daily for f in daily} | {f: 1.0 - d if daily else 1.0 for f in monthly}
+        how = ("no family weighting: every daily entity weighs equally in the daily term, and the daily "
+               "and monthly terms add with equal weight")
+    elif spec == "equal":                   # daily families split the daily term; daily x 2/3, monthly x 1/3
+        d = 2.0 / 3.0 if monthly else 1.0
+        share = {f: d / len(daily) for f in daily} | {f: 1.0 - d if daily else 1.0 for f in monthly}
+        how = ("equal family weighting: the daily families split the daily term equally, the daily term "
+               "counts 2/3 and the monthly term 1/3; entities weigh equally within a family")
+    else:                                   # numeric shares, renormalized over the families trained
+        s = family_shares(spec) or {}
+        tot = sum(s.get(f, 0.0) for f in counts) or 1.0
+        share = {f: s.get(f, 0.0) / tot for f in counts}
+        how = ("family shares set by the user: each family carries its share of the loss, entities weigh "
+               f"equally within a family (daily term x {sum(share[f] for f in daily):.2f}, "
+               f"monthly term x {sum(share[f] for f in monthly):.2f})")
+    return dict(counts=counts, n=len(ids), spec=spec, share=share, how=how, epoch=ck.get("epoch"),
+                select=_SELECT_LABEL.get(ck.get("mt_select")), seed=cfg.get("seed"))
+
+
+def _recipe_sentence(rc: dict) -> str:
+    fams = ", ".join(f"{n} {f}" for f, n in rc["counts"].items())
+    shares = ", ".join(f"{f.split('_')[0]} {100 * s:.0f}%" for f, s in rc["share"].items())
+    return (f"Trained on {rc['n']} entities ({fams}) with --mt-family-weight {rc['spec']}: "
+            f"nominal share of the loss {shares}.")
 
 
 FAMILY_LABEL = {"cdec_daily": "CDEC daily full natural flow",
@@ -786,7 +842,7 @@ def _metrics_rows(metrics, sid, window):
 
 def write_html(sets, metrics, out: Path, label: str, window: str, maps: list[Path], t1_dir: Path,
                t2=None, t2_dir: Path | None = None, fam_maps: dict | None = None,
-               creeks: dict | None = None, creeks_trained: bool = True) -> Path:
+               creeks: dict | None = None, creeks_trained: bool = True, recipe: dict | None = None) -> Path:
     e = html.escape
     t2 = t2 if t2 is not None else pd.DataFrame()
     fam_maps = fam_maps or {}
@@ -821,7 +877,8 @@ def write_html(sets, metrics, out: Path, label: str, window: str, maps: list[Pat
     parts = [f"<!doctype html><html><head><meta charset='utf-8'><title>CalSim3 validation atlas {e(label)}</title>",
              f"<style>{css}</style><script>{js}</script></head><body>",
              f"<header><h1>CalSim3 validation atlas — {e(label)}</h1>"
-             f"<p>Validation window {e(window)}, monthly volume against CalSim3. Tier 1: the twenty trained locations, "
+             + (f"<p><b>{e(_recipe_sentence(recipe))}</b></p>" if recipe else "")
+             + f"<p>Validation window {e(window)}, monthly volume against CalSim3. Tier 1: the twenty trained locations, "
              "FLOW-UNIMPAIRED at the anchored systems and the sum of the member INFLOW arcs elsewhere. Tier 2: every rim "
              "inflow arc on its own, shown under the set it belongs to and, for the arcs outside every set, on the "
              "unconstrained-arcs tab. Each location tab also lists the USGS daily creeks whose watersheds overlap it and their records inside the validation window, which say whether the model saw that window at the location through a creek while training (out of sample, partly seen, or seen through creeks). Red star = the registry outlet of the trained entity.</p></header>",
@@ -835,7 +892,20 @@ def write_html(sets, metrics, out: Path, label: str, window: str, maps: list[Pat
         parts.append("<button data-t='footprints' onclick=\"show('footprints')\">footprints</button>")
     parts.append("</nav>")
     # domain tab
-    parts.append("<section id='domain'><h2>All locations</h2><p class='note'>Click a row to open its tab.</p>")
+    parts.append("<section id='domain'>")
+    if recipe:
+        parts.append("<h2>Training recipe</h2><table><tr><th>family</th><th>entities</th>"
+                     "<th>nominal share of the loss</th></tr>")
+        parts += [f"<tr><td class='l'>{e(f)} — {e(FAMILY_LABEL.get(f, f))}</td><td>{n}</td>"
+                  f"<td>{100 * recipe['share'][f]:.0f}%</td></tr>" for f, n in recipe["counts"].items()]
+        tail = "; ".join(x for x in (
+            f"checkpoint = epoch {recipe['epoch']}" if recipe["epoch"] is not None else "",
+            f"selected by {recipe['select']}" if recipe["select"] else "",
+            f"seed {recipe['seed']}" if recipe["seed"] is not None else "") if x)
+        parts.append(f"</table><p class='note'><code>--mt-family-weight {e(recipe['spec'])}</code> — {e(recipe['how'])}. "
+                     "The share is nominal: a chunk of years only counts the entities with observations in it."
+                     + (f" {e(tail[0].upper() + tail[1:])}." if tail else "") + "</p>")
+    parts.append("<h2>All locations</h2><p class='note'>Click a row to open its tab.</p>")
     parts.append("<table><tr><th>training entity</th><th>location</th><th>reference</th><th>arcs</th><th>mi²</th><th>KGE</th><th>NSE</th>"
                  "<th>bias</th><th>r</th><th>seas. mismatch</th><th>sim / ref TAF/yr</th></tr>")
     for s in sets.itertuples(index=False):
@@ -980,11 +1050,13 @@ def write_html(sets, metrics, out: Path, label: str, window: str, maps: list[Pat
 
 
 def write_markdown(sets, metrics, out: Path, label: str, window: str, maps: list[Path], creeks: dict | None = None,
-                   t1_dir: Path | None = None) -> Path:
+                   t1_dir: Path | None = None, recipe: dict | None = None) -> Path:
     # tier-1 figures are linked relative to the atlas folder, wherever it is written
     figs = (Path(os.path.relpath((t1_dir or out.parent) / "figures", out)).as_posix())
-    lines = [f"# CalSim3 validation atlas (tier 1) — {label}", "",
-             f"Validation window {window}, monthly volume against CalSim3 (FLOW-UNIMPAIRED at the anchored "
+    lines = [f"# CalSim3 validation atlas (tier 1) — {label}", ""]
+    if recipe:
+        lines += [f"**{_recipe_sentence(recipe)}** ({recipe['how']}.)", ""]
+    lines += [f"Validation window {window}, monthly volume against CalSim3 (FLOW-UNIMPAIRED at the anchored "
              "systems, the sum of the member INFLOW arcs elsewhere). Per location: the domain map with the "
              "arc set highlighted and its registry outlet (red star), a zoom naming the arcs, and the "
              "tier-1 time-series figure, and the USGS creeks overlapping the location with their records inside the "
@@ -1102,9 +1174,12 @@ def main(argv=None) -> None:
     n_ov = sum(1 for v in creeks.values() if v[1]["n"])
     print(f"atlas: USGS creek overlap computed for {len(creeks)} sets ({n_ov} with an overlapping creek"
           + ("" if creeks_trained else "; none trained in this run") + ")")
+    recipe = run_recipe(run_dir, a.data_dir, trained=trained)
+    print("atlas: " + (_recipe_sentence(recipe) if recipe else
+                       f"no {run_dir / 'checkpoints' / 'best.pt'}: the page will not state the training recipe"))
     page = write_html(sets, metrics, out, label, VALIDATION_WINDOW, maps, t1, t2=t2, t2_dir=t2_dir,
-                      fam_maps=fam_maps, creeks=creeks, creeks_trained=creeks_trained)
-    md = write_markdown(sets, metrics, out, label, VALIDATION_WINDOW, maps, creeks=creeks, t1_dir=t1)
+                      fam_maps=fam_maps, creeks=creeks, creeks_trained=creeks_trained, recipe=recipe)
+    md = write_markdown(sets, metrics, out, label, VALIDATION_WINDOW, maps, creeks=creeks, t1_dir=t1, recipe=recipe)
     print(f"wrote {n} location map pairs, {len(maps)} domain maps, {page} ({page.stat().st_size / 1e6:.1f} MB) and {md}")
 
 
