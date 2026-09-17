@@ -1,7 +1,7 @@
 """CalSim3 validation atlas: where every validated location is, and how the run scored on it.
 
-Builds, from a finished tier-1 output folder (:mod:`sacsma.calsim.tier1`) and, when given, the
-run's tier-2 folder (:mod:`sacsma.calsim.tier2`):
+Builds, from a finished tier-1 output folder (:mod:`sacsma.dpl.calsim_tier1`) and, when given, the
+run's tier-2 folder (:mod:`sacsma.dpl.calsim_tier2`):
 
 * ``atlas/tier1_map_kge_<window>.png`` and ``atlas/tier1_map_pbias_<window>.png`` — the
   CalSim3 rim domain with every tier-1 arc set dissolved and coloured by its score, the
@@ -23,7 +23,7 @@ unconstrained-arcs table; no tool here writes it, and the page is complete witho
 
 Usage::
 
-    python -m sacsma.calsim.atlas <tier1_out_dir> [--data-dir data] [--tier2-dir ...] [--label ...]
+    python -m sacsma.dpl.calsim_atlas <tier1_out_dir> [--data-dir data] [--tier2-dir ...] [--label ...]
 """
 
 from __future__ import annotations
@@ -37,8 +37,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from .catchments import MERGED_LAYER, load_catchments, series_arc
-from .tier1 import VALIDATION_WINDOW, load_sets
+from ..calsim.catchments import MERGED_LAYER, load_catchments, series_arc
+from .calsim_tier1 import VALIDATION_WINDOW, load_sets
 
 
 def _rim(data_dir):
@@ -191,7 +191,7 @@ def _hatch(ax, overlap, crs, label="daily + monthly targets overlap"):
 
 
 def domain_maps(catch, sets, geoms, metrics, out: Path, label: str, window: str,
-                overlap=None, overlap_note: str = "") -> list[Path]:
+                overlap=None) -> list[Path]:
     import matplotlib
     matplotlib.use("Agg")
     import geopandas as gpd
@@ -297,7 +297,7 @@ def creek_overlap(sets, geoms, data_dir: str | Path, trained=None, window: str =
     import xarray as xr
     from shapely import make_valid
     from shapely.ops import unary_union
-    from .tier1 import WINDOWS
+    from .calsim_tier1 import WINDOWS
     data_dir = Path(data_dir)
     reg = pd.read_csv(data_dir / "multifamily" / "entities.csv", dtype={"site_id": str})
     creeks = reg[reg["family"] == "usgs_daily"].set_index("entity_id")
@@ -401,7 +401,7 @@ def creek_overlap_figure(sid: str, row, catch, geoms, outlets, df, summary: dict
     from matplotlib.lines import Line2D
     from matplotlib.patches import Patch, Rectangle
     from matplotlib.ticker import MaxNLocator
-    from .tier1 import WINDOWS
+    from .calsim_tier1 import WINDOWS
     g, diss = geoms[sid]
     asp = _aspect(catch)
     n = len(df)
@@ -887,7 +887,6 @@ def write_html(sets, metrics, out: Path, label: str, window: str, maps: list[Pat
             # (Shasta's I_SHSTA is also a member of Red Bluff) and each tab shows all of its own
             sub2 = t2[t2.arc.isin(set(s.arcs))].sort_values("ref_taf_yr", ascending=False)
             if len(sub2):
-                has_cls = "method_class" in sub2.columns
                 parts.append(f"<h3>Tier 2: the {len(sub2)} sub-arc(s) of this set, {e(window)}</h3>")
                 parts.append("<p class='note'>Each arc's monthly volume against its own CalSim3 INFLOW series. "
                              "Derivation and record share come from the Hydrology Report's Tables 5-1/5-2 and "
@@ -896,25 +895,7 @@ def write_html(sets, metrics, out: Path, label: str, window: str, maps: list[Pat
                              "the arc was split or proportioned from, not to the arc itself. Outside the record the "
                              "reference is a regression on an index gauge with a borrowed monthly shape, so those "
                              "scores are bounded by the reference, not by the model.</p>")
-                parts.append("<table><tr><th>arc</th><th>mi²</th>"
-                             + ("<th>derivation</th><th>record share</th>" if has_cls else "")
-                             + "<th>basis</th><th>KGE</th><th>NSE</th><th>bias</th><th>r</th><th>seas. mismatch</th>"
-                               "<th>sim / ref TAF/yr</th></tr>")
-                for r in sub2.itertuples(index=False):
-                    cls = ""
-                    if has_cls:
-                        mc = "" if r.method_class != r.method_class else str(r.method_class).replace("_", " ")
-                        rf = getattr(r, "record_frac", float("nan"))
-                        own = getattr(r, "record_owner", "")
-                        own = "" if own != own else str(own)
-                        mf = "" if rf != rf else (f"{rf:.0%}" + (" (donor)" if own == "donor" else ""))
-                        cls = f"<td class='l'>{e(mc)}</td><td>{mf}</td>"
-                    parts.append(f"<tr><td class='l'>{e(r.arc)}</td><td>{r.sq_mi:,.0f}</td>{cls}"
-                                 f"<td class='l'>{e(str(r.basis))}</td><td>{_fmt(r.kge, '.3f')}</td>"
-                                 f"<td>{_fmt(r.nse, '.3f')}</td><td>{_fmt(r.pbias, '+.0f')}{'' if r.pbias != r.pbias else '%'}</td>"
-                                 f"<td>{_fmt(r.r, '.3f')}</td><td>{_fmt(r.seas_mismatch, '.3f')}</td>"
-                                 f"<td>{r.sim_taf_yr:,.0f} / {_fmt(r.ref_taf_yr, ',.0f')}</td></tr>")
-                parts.append("</table>")
+                parts += _t2_table(sub2, e, show_set=False, show_cover=False)
                 if t2_dir is not None:
                     fig2 = t2_dir / "figures" / f"tier2_regime_{sid}_{window}.png"
                     if not fig2.exists() and len(sub2) == 1:
@@ -1066,7 +1047,7 @@ def main(argv=None) -> None:
     geoms = _set_geoms(catch, sets)
     outlets = _outlets(a.data_dir)
     run_dir = Path(a.run_dir) if a.run_dir else t1.parent
-    overlap, from_run = daily_monthly_overlap(a.data_dir, run_dir)
+    overlap, _ = daily_monthly_overlap(a.data_dir, run_dir)
     t2_dir = Path(a.tier2_dir) if a.tier2_dir else run_dir / "tier2"
     t2 = None
     if (t2_dir / "tier2_metrics.csv").exists():
@@ -1089,8 +1070,7 @@ def main(argv=None) -> None:
     else:
         t2_dir = None
     t2_idx = t2.set_index("arc") if t2 is not None else None
-    note = "; hatched: cells trained at both daily and monthly timescale" + ("" if from_run else " (all registry entities assumed)")
-    maps = domain_maps(catch, sets, geoms, metrics, out, label, VALIDATION_WINDOW, overlap=overlap, overlap_note=note)
+    maps = domain_maps(catch, sets, geoms, metrics, out, label, VALIDATION_WINDOW, overlap=overlap)
     trained = None
     if (run_dir / "sim_daily_mm.npz").exists():
         trained = set(np.load(run_dir / "sim_daily_mm.npz")["entity_id"].tolist())

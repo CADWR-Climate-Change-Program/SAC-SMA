@@ -25,7 +25,7 @@ daily families) is scored alongside as the in-sample comparison (``window = trai
 
 Usage::
 
-    python -m sacsma.calsim.tier1 <run_dir> [--out DIR] [--data-dir data]
+    python -m sacsma.dpl.calsim_tier1 <run_dir> [--out DIR] [--data-dir data]
 
 Writes ``tier1_metrics.csv`` (one row per set x reference x window), ``tier1_monthly.csv``
 (the aligned monthly volumes) and ``tier1_regime_WY1950-84.png`` under ``--out``
@@ -42,8 +42,8 @@ import pandas as pd
 
 from ..io import read_table
 from ..metrics import center_of_timing, kge, nse, pbias, pearson, seasonal_mismatch
-from . import calsim_dir, load_calsim3_monthly
-from .catchments import CALSIM_GPKG, MERGED_LAYER, series_arc
+from ..calsim import calsim_dir, load_calsim3_monthly
+from ..calsim.catchments import CALSIM_GPKG, MERGED_LAYER, series_arc
 
 #: 1 mm of depth over 1 mi^2 in acre-feet: 2,589,988.11 m^2 x 1e-3 m / 1,233.4818 m^3 per AF.
 AF_PER_MM_MI2 = 2589988.110336e-3 / 1233.48183754752

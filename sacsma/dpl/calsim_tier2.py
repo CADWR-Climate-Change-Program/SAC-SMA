@@ -20,7 +20,7 @@ simulated for its volume but has no series to score against.
 
 Usage::
 
-    python -m sacsma.calsim.tier2 <run_dir | checkpoint.pt> [--out DIR] [--data-dir data]
+    python -m sacsma.dpl.calsim_tier2 <run_dir | checkpoint.pt> [--out DIR] [--data-dir data]
                                   [--device cpu|cuda] [--no-maps] [--no-extend]
                                   [--tiles-dir tmp/hydrosheds] [--figures-only] [--label NAME]
 
@@ -50,9 +50,9 @@ import pandas as pd
 import torch
 
 from ..metrics import center_of_timing, kge, nse, pbias, pearson, seasonal_mismatch
-from .catchments import (_EQ_CRS, _GRID_STEP_DEG, EXCLUDE_ARCS, MERGED_LAYER,
+from ..calsim.catchments import (_EQ_CRS, _GRID_STEP_DEG, EXCLUDE_ARCS, MERGED_LAYER,
                          _square_cell_overlap, load_catchments, load_crosswalk, series_arc)
-from .tier1 import (AF_PER_MM_MI2, VALIDATION_WINDOW, WINDOWS, load_references, load_sets,
+from .calsim_tier1 import (AF_PER_MM_MI2, VALIDATION_WINDOW, WINDOWS, load_references, load_sets,
                     registry_arcs, registry_windows)
 
 
@@ -176,7 +176,7 @@ def _flowlens_for(cells: pd.DataFrame, tiles_dir: str | Path) -> pd.DataFrame:
     with tempfile.TemporaryDirectory() as td:
         cin, cout = Path(td) / "cells.csv", Path(td) / "flowlens.csv"
         cells.to_csv(cin, index=False)
-        r = subprocess.run([sys.executable, "-m", "sacsma.calsim.tier2", "--trace-only", str(cin),
+        r = subprocess.run([sys.executable, "-m", "sacsma.dpl.calsim_tier2", "--trace-only", str(cin),
                             str(cout), "--tiles-dir", str(tiles_dir)], capture_output=True, text=True)
         if r.returncode == 0 and cout.exists():
             fl = pd.read_csv(cout)
@@ -206,10 +206,10 @@ def _net_for_hrus(ckpt: str | Path, hrus: pd.DataFrame, data_dir: str | Path, de
     import dataclasses as _dc
 
     import sacsma.dpl.data as D
-    from ..dpl.config import DplConfig
-    from ..dpl.data import load_domain_tensors
-    from ..dpl.features import FeatureSet, build_features
-    from ..dpl.parameter_net import ParameterNet
+    from .config import DplConfig
+    from .data import load_domain_tensors
+    from .features import FeatureSet, build_features
+    from .parameter_net import ParameterNet
     from ..io import soilveg_path
     ck = torch.load(ckpt, map_location="cpu", weights_only=False)
     known = {f.name for f in _dc.fields(DplConfig)}
@@ -258,8 +258,8 @@ def stream(net, x, dom, cfg, W_arc: np.ndarray):
     (arc depth (A, T), entity depth (B, T), t0, t1, bad_rows) in mm/day.  A cell whose
     physics returns NaN (extrapolated parameters at their bounds) is zeroed and flagged in
     ``bad_rows`` so it cannot blank every aggregate that carries a zero weight on it."""
-    from ..dpl.forward import initial_state, routing_uh, run_window
-    from ..dpl.multi_timescale import ENVELOPE_END, ENVELOPE_START
+    from .forward import initial_state, routing_uh, run_window
+    from .multi_timescale import ENVELOPE_END, ENVELOPE_START
 
     t0 = int(dom.dates.searchsorted(pd.Timestamp(ENVELOPE_START)))
     t1 = int(dom.dates.searchsorted(pd.Timestamp(ENVELOPE_END))) + 1
@@ -353,7 +353,7 @@ def score_run(ckpt: str | Path, data_dir: str | Path = "data", *, device=None, r
               extend: bool = True, tiles_dir: str | Path = "tmp/hydrosheds", out: Path | None = None):
     """Returns (metrics, monthly, arcs, not_sim, entity_check).  ``extend`` simulates the
     arcs outside every trained footprint on their own region cells (``basis = extrapolated``)."""
-    from ..dpl.evaluate import load_net_from_checkpoint
+    from .evaluate import load_net_from_checkpoint
     net, x, dom, cfg, ck = load_net_from_checkpoint(ckpt, data_dir, device=device)
     catch = rim_polygons(data_dir)
     mapping = cell_arc_overlap(dom.hrus, catch)
@@ -485,12 +485,13 @@ def summarize(metrics: pd.DataFrame, not_sim: pd.DataFrame, window: str = VALIDA
     return "\n".join(lines)
 
 
-def maps(metrics: pd.DataFrame, out: Path, label: str, window: str = VALIDATION_WINDOW) -> None:
-    from .compare import _arc_choropleth
+def maps(metrics: pd.DataFrame, out: Path, label: str, data_dir: str | Path = "data",
+         window: str = VALIDATION_WINDOW) -> None:
+    from ..calsim.compare import _arc_choropleth
     m = metrics[(metrics.window == window) & metrics.has_series].set_index("arc")
-    _arc_choropleth("data", m["kge"], f"Tier 2 — KGE per rim arc, {window}  [{label}]", "KGE",
+    _arc_choropleth(data_dir, m["kge"], f"Tier 2 — KGE per rim arc, {window}  [{label}]", "KGE",
                     out / f"tier2_kge_{window}.png", cmap="plasma", vmin=0.0, vmax=1.0)
-    _arc_choropleth("data", m["pbias"], f"Tier 2 — volume bias per rim arc, {window}  [{label}]",
+    _arc_choropleth(data_dir, m["pbias"], f"Tier 2 — volume bias per rim arc, {window}  [{label}]",
                     "pbias (%)", out / f"tier2_pbias_{window}.png", cmap="BrBG", vmin=-50.0, vmax=50.0)
 
 
@@ -611,7 +612,8 @@ def main(argv=None) -> None:
                    help="do not simulate the arcs outside every trained footprint")
     p.add_argument("--tiles-dir", default="tmp/hydrosheds", help="HydroSHEDS DIR/ACC tiles")
     p.add_argument("--figures-only", action="store_true",
-                   help="only (re)draw the per-set regime figures from the CSVs already in --out")
+                   help="only (re)draw the maps and the per-set regime figures from the CSVs "
+                        "already in --out (no forward pass)")
     p.add_argument("--trace-only", nargs=2, metavar=("CELLS_CSV", "OUT_CSV"), default=None,
                    help=argparse.SUPPRESS)   # the flow-length subprocess entry point
     a = p.parse_args(argv)
@@ -634,12 +636,14 @@ def main(argv=None) -> None:
         arcs.to_csv(out / "tier2_arcs.csv", index=False)
         not_sim.to_csv(out / "tier2_not_simulated.csv", index=False)
         print(summarize(metrics, not_sim))
-        if not a.no_maps:
-            try:
-                maps(metrics, out, label)
-            except Exception as e:  # noqa: BLE001 — maps are a convenience on top of the CSVs
-                print(f"tier2: maps skipped ({e})")
         print(f"wrote {out / 'tier2_metrics.csv'}, tier2_monthly.csv, tier2_arcs.csv, tier2_not_simulated.csv")
+    else:
+        metrics = pd.read_csv(out / "tier2_metrics.csv")
+    if not a.no_maps:
+        try:
+            maps(metrics, out, label, a.data_dir)
+        except Exception as e:  # noqa: BLE001 — maps are a convenience on top of the CSVs
+            print(f"tier2: maps skipped ({e})")
     paths = regime_figures(out, a.data_dir, label)
     print(f"wrote {len(paths)} regime figures under {out / 'figures'}")
 
