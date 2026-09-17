@@ -224,7 +224,7 @@ def domain_maps(catch, sets, geoms, metrics, out: Path, label: str, window: str,
             r = m.loc[sid]
             txt = (f"{sid}  KGE {r.kge:.2f}  {r.pbias:+.0f}%" if np.isfinite(r.kge) else f"{sid}  not scored")
             if not bool(S.loc[sid, "volume_scored"]):
-                txt += "\n(not aggregated)"
+                txt += "\n(not counted)"
             labels.append((sid, p.x, p.y, txt, float(S.loc[sid, "area_mi2"])))
         box = dict(boxstyle="round,pad=0.25", fc="white", ec="0.4", alpha=0.95)
         # big basins carry their label inside; the rest go to a side column with a leader line
@@ -263,6 +263,360 @@ def domain_maps(catch, sets, geoms, metrics, out: Path, label: str, window: str,
         plt.close(fig)
         paths.append(path)
     return paths
+
+
+def creek_overlap(sets, geoms, data_dir: str | Path, trained=None, window: str = VALIDATION_WINDOW) -> dict:
+    """Per tier-1 location: the USGS creek gauges whose delineated watersheds overlap the
+    location's arcs, with their record windows, and how much of the validation window the
+    model saw at that location through them while training.
+
+    The overlap is the exact intersection of the gauge's delineated watershed
+    (``data/usgs/gis/usgs_watersheds.gpkg``, keyed by site id) with the location's dissolved arc
+    polygon, in an equal-area projection (EPSG:3310).  A creek is listed when at least 5% of its
+    watershed and at least 1 mi² lie inside.  Three coverages, all as a share of the location's
+    area with nested gauges counted once: ``covered`` = under any listed creek; ``covered_val`` =
+    under the trained creeks that have a record inside ``window``; ``window_cover`` = the mean
+    over the window's months of the area under trained creeks that have data in that month
+    (the share of the location's area-months the model saw through a creek).  A creek has data
+    in a month when it has >= 15 days; its record is its daily data inside the registry
+    training window (first and last day, complete water years with >= 300 days).
+
+    Verdict from ``window_cover``: ``out of sample`` (0), ``partly seen through creeks``
+    (below 0.5) or ``seen through creeks``.  Where the model saw the window through a creek,
+    the validation there tests a transfer of scale and variable (daily interior gauge in
+    training, monthly whole-basin volume in validation), not an unseen period; the design
+    calls that a scale-and-variable holdout.
+
+    Returns ``{set_id: (DataFrame of listed creeks, summary dict)}``."""
+    import geopandas as gpd
+    import xarray as xr
+    from shapely import make_valid
+    from shapely.ops import unary_union
+    from .tier1 import WINDOWS
+    data_dir = Path(data_dir)
+    reg = pd.read_csv(data_dir / "multifamily" / "entities.csv", dtype={"site_id": str})
+    creeks = reg[reg["family"] == "usgs_daily"].set_index("entity_id")
+    if not len(creeks):
+        return {}
+    shp = gpd.read_file(data_dir / "usgs" / "gis" / "usgs_watersheds.gpkg")
+    shp["gid"] = shp["gid"].astype(str)
+    shp = shp[shp["gid"].isin(creeks["site_id"])].set_index("gid")
+    shp_eq = shp.to_crs("EPSG:3310")
+    poly_eq = {sid: make_valid(g) for sid, g in shp_eq.geometry.items()}
+    poly_ll = {sid: g for sid, g in shp.geometry.items()}
+    MI2 = 2.589988e6
+    w0, w1 = (pd.Period(m, "M") for m in WINDOWS[window])
+    win_months = pd.period_range(w0, w1, freq="M")
+    n_val_months = len(win_months)
+    ds = xr.open_dataset(data_dir / "usgs" / "flow_daily.nc")
+    rec = {}
+    for eid, r in creeks.iterrows():
+        s = ds["flow_mm"].sel(gauge=str(r["site_id"])).to_series()
+        s = s[(s.index >= pd.Timestamp(r["train_start"])) & (s.index <= pd.Timestamp(r["train_end"]))]
+        fin = s[np.isfinite(s.to_numpy())]
+        if not len(fin):
+            rec[eid] = dict(first=pd.NaT, last=pd.NaT, n_days=0, n_wy=0, val_months=0, wy_with_data=(), months=frozenset())
+            continue
+        wy = fin.index.year + (fin.index.month >= 10)
+        days_per_wy = pd.Series(1, index=wy).groupby(level=0).sum()
+        months = fin.groupby(fin.index.to_period("M")).size()
+        vm = months[(months.index >= w0) & (months.index <= w1) & (months >= 15)]
+        rec[eid] = dict(first=fin.index[0], last=fin.index[-1], n_days=int(len(fin)),
+                        n_wy=int((days_per_wy >= 300).sum()), val_months=int(len(vm)),
+                        wy_with_data=tuple(int(y) for y in days_per_wy.index[days_per_wy >= 300]),
+                        months=frozenset(vm.index))
+    ds.close()
+    out = {}
+    for st in sets.itertuples(index=False):
+        g, diss = geoms.get(st.set_id, (None, None))
+        if diss is None:
+            continue
+        setp = make_valid(gpd.GeoSeries([diss], crs="EPSG:4326").to_crs("EPSG:3310").iloc[0])
+        set_area = float(st.area_mi2)
+        rows = []
+        for eid, r in creeks.iterrows():
+            sid = str(r["site_id"])
+            if sid not in poly_eq:
+                continue
+            cp = poly_eq[sid]
+            inside = cp.intersection(setp).area / MI2
+            area = cp.area / MI2
+            if inside < 1.0 or inside < 0.05 * area:
+                continue
+            k = rec[eid]
+            is_trained = trained is None or eid in trained
+            seen = ("yes" if is_trained and k["val_months"] > 0 else
+                    "no (not trained)" if not is_trained else "no (record outside window)")
+            rows.append(dict(entity_id=eid, site_id=sid, name=str(r["name"]), area_mi2=area, inside_mi2=inside,
+                             share_creek=inside / area, share_set=inside / set_area, trained=is_trained, seen=seen,
+                             outlet_lat=float(r["outlet_lat"]), outlet_lon=float(r["outlet_lon"]),
+                             first=k["first"], last=k["last"], n_days=k["n_days"], n_wy=k["n_wy"],
+                             val_months=k["val_months"], val_share=k["val_months"] / n_val_months,
+                             wy_with_data=k["wy_with_data"], geometry=poly_ll[sid]))
+        df = pd.DataFrame(rows).sort_values("inside_mi2", ascending=False).reset_index(drop=True) if rows else pd.DataFrame(rows)
+        n = len(df)
+
+        def _cover(ids) -> float:
+            ids = list(ids)
+            if not ids:
+                return 0.0
+            u = unary_union([poly_eq[creeks.loc[e, "site_id"]] for e in ids])
+            return float(min(u.intersection(setp).area / MI2 / set_area, 1.0))
+        seen_ids = list(df.loc[df["seen"] == "yes", "entity_id"]) if n else []
+        covered = _cover(df["entity_id"]) if n else 0.0
+        covered_val = _cover(seen_ids)
+        # window coverage: mean over the window's months of the area under the trained creeks that
+        # have data in that month; months with the same active set share one union
+        window_cover = 0.0
+        if seen_ids:
+            active = {}
+            for m in win_months:
+                key = frozenset(e for e in seen_ids if m in rec[e]["months"])
+                active[key] = active.get(key, 0) + 1
+            window_cover = sum(_cover(key) * cnt for key, cnt in active.items()) / n_val_months
+        verdict = ("out of sample" if window_cover <= 0.0 else
+                   "partly seen through creeks" if window_cover < 0.5 else "seen through creeks")
+        same_scale = bool(n) and float(df["share_set"].max()) >= 0.9
+        out[st.set_id] = (df, dict(set_area=set_area, n=n, n_seen=len(seen_ids), covered=covered, covered_val=covered_val,
+                                   window_cover=window_cover, n_val_months=n_val_months, window=window,
+                                   verdict=verdict, same_scale=same_scale))
+    return out
+
+
+def creek_overlap_figure(sid: str, row, catch, geoms, outlets, df, summary: dict, out: Path) -> Path:
+    """Left: the location (thick outline, its arcs as thin lines) with the overlapping creek
+    watersheds and their gauges numbered.  Right: each creek's daily record as a timeline of
+    complete water years, the validation window shaded, with the record's water years and the
+    two shares written beside it."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import geopandas as gpd
+    import matplotlib.pyplot as plt
+    from matplotlib import colormaps
+    from matplotlib.lines import Line2D
+    from matplotlib.patches import Patch, Rectangle
+    from matplotlib.ticker import MaxNLocator
+    from .tier1 import WINDOWS
+    g, diss = geoms[sid]
+    asp = _aspect(catch)
+    n = len(df)
+    w = summary["window"]
+    fig, (ax, at) = plt.subplots(1, 2, figsize=(11.6, max(5.2, 2.8 + 0.3 * n)),
+                                 gridspec_kw=dict(width_ratios=[1.0, 1.25]))
+    bx = list(diss.bounds)
+    if n:
+        bx = [min(bx[0], df["outlet_lon"].min()), min(bx[1], df["outlet_lat"].min()),
+              max(bx[2], df["outlet_lon"].max()), max(bx[3], df["outlet_lat"].max())]
+    pad = max(0.15, 0.12 * max(bx[2] - bx[0], bx[3] - bx[1]))
+    catch.plot(ax=ax, color="0.94", edgecolor="0.75", linewidth=0.4)
+    g.plot(ax=ax, color="#fff8e1", edgecolor="0.3", linewidth=0.5)
+    gpd.GeoSeries([diss], crs=catch.crs).plot(ax=ax, facecolor="none", edgecolor="k", linewidth=1.4, zorder=3)
+    cmap = colormaps["tab10"]
+    placed: list[tuple[float, float]] = []
+    step = 0.035 * max(1.0, (bx[2] - bx[0]) / 1.2)
+    o = outlets.get(row.entity_id)
+    if o is not None:
+        ax.plot(o[1], o[0], marker="*", color="red", ms=13, mec="k", mew=0.6, ls="none", zorder=4)
+        placed.append((o[1], o[0]))
+    for i, r in enumerate(df.itertuples(index=False)):
+        col = cmap(i % 10)
+        gs = gpd.GeoSeries([r.geometry], crs=catch.crs)
+        if not r.trained:
+            gs.plot(ax=ax, facecolor="none", edgecolor="0.35", hatch="///", linewidth=0.9, zorder=2)
+        elif r.val_months > 0:
+            gs.plot(ax=ax, facecolor=col, edgecolor="none", alpha=0.25, zorder=2)
+            gs.boundary.plot(ax=ax, color=col, linewidth=1.3, zorder=3.5)
+        else:
+            gs.boundary.plot(ax=ax, color=col, linewidth=1.3, linestyle="--", zorder=3.5)
+        x, y = r.outlet_lon, r.outlet_lat
+        k = 0
+        while any(abs(x - px) < 0.6 * step and abs(y - py) < 0.6 * step for px, py in placed) and k < 8:
+            k += 1
+            x = r.outlet_lon + step * (k % 2 * 2 - 1) * ((k + 1) // 2)
+            y = r.outlet_lat + step * 0.6 * ((k + 1) // 2) * (1 if k % 4 < 2 else -1)
+        placed.append((x, y))
+        if (x, y) != (r.outlet_lon, r.outlet_lat):
+            ax.plot([r.outlet_lon, x], [r.outlet_lat, y], color="0.3", linewidth=0.6, zorder=4.5)
+        ax.plot(x, y, marker="o", ms=11, mfc="white", mec=col if r.trained else "0.35", mew=1.6, ls="none", zorder=5)
+        ax.annotate(str(i + 1), (x, y), ha="center", va="center", fontsize=6.5, fontweight="bold", zorder=6)
+    ax.set_xlim(bx[0] - pad, bx[2] + pad)
+    ax.set_ylim(bx[1] - pad, bx[3] + pad)
+    ax.set_aspect(asp)
+    ax.xaxis.set_major_locator(MaxNLocator(nbins=5))
+    ax.yaxis.set_major_locator(MaxNLocator(nbins=6))
+    ax.tick_params(labelsize=7)
+    any_filled = bool(n) and (df["trained"] & (df["val_months"] > 0)).any()
+    any_dashed = bool(n) and (df["trained"] & (df["val_months"] == 0)).any()
+    any_untrained = bool(n) and (~df["trained"]).any()
+    handles = [Patch(fc="#fff8e1", ec="k", lw=1.4, label="this location (thick outline); thin lines: its CalSim3 arcs"),
+               Line2D([], [], marker="*", ms=10, color="red", mec="k", ls="none", label="outlet of the trained entity")]
+    if any_filled:
+        handles.append(Patch(fc="0.6", ec="0.3", alpha=0.5, lw=1.3, label=f"creek watershed with a record inside {w} (fill + outline; colour = its bar)"))
+    if any_dashed:
+        handles.append(Patch(fc="none", ec="0.3", lw=1.3, ls="--", label=f"creek watershed, no record inside {w} (dashed outline)"))
+    if any_untrained:
+        handles.append(Patch(fc="none", ec="0.35", hatch="///", label="not in this run's training set (hatched)"))
+    if n:
+        handles.append(Line2D([], [], marker="o", ms=8, mfc="white", mec="0.2", mew=1.4, ls="none", label="gauge, numbered as in the table"))
+    plural = "creek watershed" if n == 1 else "creek watersheds"
+    if n:
+        ttl = (f"{sid}: {n} USGS {plural} overlap this location (coverage {100 * summary['covered']:.0f}%)\n"
+               f"{summary['n_seen']} trained with a record inside {w}: coverage with a record {100 * summary['covered_val']:.0f}%, "
+               f"window coverage {100 * summary['window_cover']:.0f}%")
+    else:
+        ttl = f"{sid}: no USGS creek watershed overlaps this location\n(out of sample)"
+    ax.set_title(ttl, fontsize=8.2)
+    # timeline
+    m0, m1 = WINDOWS[w]
+    y0 = int(m0[:4]) + (int(m0[5:7]) >= 10)
+    y1 = int(m1[:4]) + (int(m1[5:7]) >= 10)
+    at.axvspan(y0 - 0.5, y1 + 0.5, color="0.86", alpha=0.6, label=f"validation window {w}")
+    if n:
+        for i, r in enumerate(df.itertuples(index=False)):
+            col = cmap(i % 10) if r.trained else "0.5"
+            yy = n - 1 - i
+            if r.first == r.first:
+                f_wy = r.first.year + (r.first.month >= 10)
+                l_wy = r.last.year + (r.last.month >= 10)
+                at.add_patch(Rectangle((f_wy - 0.5, yy - 0.32), l_wy - f_wy + 1.0, 0.64, facecolor="none",
+                                       edgecolor=col, linewidth=0.8))
+                for y in r.wy_with_data:
+                    at.add_patch(Rectangle((y - 0.5, yy - 0.32), 1.0, 0.64, color=col, linewidth=0))
+                span = f"WY{f_wy}-{l_wy % 100:02d}"
+            else:
+                span = "no data"
+            loc_txt = "<1%" if r.share_set < 0.005 else f"{100 * r.share_set:.1f}%"
+            at.text(1945.5, yy, f"{i + 1:>2d}  {r.site_id}", ha="right", va="center", fontsize=7, family="monospace")
+            at.text(2021.5, yy, f"{span:<11s} {100 * r.share_creek:3.0f}% of creek, {loc_txt:>5s} of location",
+                    ha="left", va="center", fontsize=6.3, family="monospace")
+        at.set_ylim(-0.7, n - 0.3)
+        tl_handles = [Patch(fc="0.86", alpha=0.6, label=f"validation window {w}")]
+        if any_untrained:
+            tl_handles.append(Patch(fc="0.5", label="grey bar: not in this run's training set"))
+        fig.legend(handles=tl_handles, loc="lower right", bbox_to_anchor=(0.995, 0.0), fontsize=6.3, frameon=True)
+    else:
+        at.text(0.5, 0.5, "no overlapping creek records", transform=at.transAxes, ha="center", va="center", fontsize=9)
+    at.set_xlim(1946, 2060)
+    at.set_xticks(range(1950, 2021, 10))
+    at.set_yticks([])
+    at.set_xlabel("water year", fontsize=8)
+    at.tick_params(labelsize=7)
+    at.set_title("gauge records (filled: complete water years with data; outline: first to last year)", fontsize=8.2)
+    for sp in ("top", "right", "left"):
+        at.spines[sp].set_visible(False)
+    fig.legend(handles=handles, loc="lower left", bbox_to_anchor=(0.005, 0.0), ncol=2, fontsize=6.3, frameon=True)
+    fig.tight_layout(rect=[0, 0.1, 1, 1])
+    p = out / f"{sid}_creeks.png"
+    fig.savefig(p, dpi=120, bbox_inches="tight", pad_inches=0.15)
+    plt.close(fig)
+    return p
+
+
+def _creek_summary_sentence(summary: dict, bold=("<b>", "</b>")) -> str:
+    """The location-specific verdict sentence shared by the HTML intro and the Markdown copy."""
+    s = summary
+    w = s["window"]
+    b0, b1 = bold
+    if not s["n"]:
+        return (f"{b0}Verdict: out of sample.{b1} No USGS creek watershed overlaps this location, so the model never saw "
+                f"{w} here while training.")
+    plural = "creek watershed overlaps" if s["n"] == 1 else "creek watersheds overlap"
+    txt = (f"{b0}Verdict: {s['verdict']}.{b1} {s['n']} USGS {plural} this location (coverage {100 * s['covered']:.0f}% "
+           f"of its {s['set_area']:,.0f} mi²). ")
+    if s["n_seen"] == 0:
+        txt += f"None of them was in this run's training set with a record inside {w}, so the model never saw {w} here."
+        return txt
+    who = ("It was" if s["n"] == 1 else ("All of them were" if s["n_seen"] == s["n"] else f"{s['n_seen']} of them were"))
+    txt += (f"{who} in this run's training set with a record inside {w}; those cover {100 * s['covered_val']:.0f}% of the "
+            f"area and {100 * s['window_cover']:.0f}% of the window's area-months, which is how much of this location the "
+            f"model saw, at daily creek scale, while training. The validation here therefore tests a transfer of scale and "
+            f"variable (daily flow at an interior gauge to monthly whole-basin volume), not an unseen period.")
+    if s.get("same_scale"):
+        txt += (" One listed gauge covers nearly the whole location, so for it the transfer is of variable and timescale "
+                "only, not of scale.")
+    return txt
+
+
+def _creek_definitions(window: str, e) -> str:
+    w = e(window)
+    return ("<p class='note'><b>Definitions.</b> A creek is listed when at least 5% of its delineated watershed, and at "
+            "least 1 mi², lies inside this location's arcs; gauges can be nested, so the per-creek shares overlap while "
+            "every coverage counts each square mile once. Record = the gauge's daily data inside its registry training "
+            "period (not the full USGS period of record); a water year is complete with 300 or more days of data; a "
+            f"month inside {w} counts when it has 15 or more days. Coverage = share of the location's area under the "
+            f"listed creeks; coverage with a record = under the creeks that were in this run's training set and have a "
+            f"record inside {w}; window coverage = the mean over the {w} months of the area under such creeks with data "
+            "in that month, i.e. the share of the location's area-months the model saw through a creek. Verdict from the "
+            "window coverage: out of sample = 0%; partly seen through creeks = under 50%; seen through creeks = 50% or "
+            "more. The design calls a location the model saw through creeks a scale-and-variable holdout.</p>")
+
+
+def _creek_block(sid: str, df, summary: dict, out: Path, e, any_trained: bool) -> list[str]:
+    """The per-location HTML block: verdict paragraph, figure, table, definitions."""
+    w = e(summary["window"])
+    intro = _creek_summary_sentence(summary)
+    if not any_trained:
+        intro += " This run trained no USGS creeks; the gauges shown are the registry's, for reference."
+    parts = ["<h3>USGS creeks overlapping this location</h3>", f"<p class='note'>{intro}</p>"]
+    p = out / f"{sid}_creeks.png"
+    if p.exists():
+        parts.append(f"<div class='row ts'><img src='{_b64(p, jpeg_quality=88)}' alt='{e(sid)} creek overlap'></div>")
+    if summary["n"]:
+        parts.append("<table><tr><th>no. on figure</th><th>USGS site</th><th>name</th><th>creek watershed mi²</th>"
+                     "<th>inside this location, mi² (% of creek)</th><th>% of location</th><th>in this run's training set</th>"
+                     f"<th>seen in {w} through this creek</th><th>daily record used in training (first to last month)</th>"
+                     f"<th>complete water years (300+ days)</th><th>months with data inside {w} (of {summary['n_val_months']}, 15+ days each)</th></tr>")
+        for i, r in enumerate(df.itertuples(index=False)):
+            recw = (f"{r.first:%Y-%m} to {r.last:%Y-%m}" if r.first == r.first else "no data")
+            a_spec = ",.1f" if r.area_mi2 < 10 else ",.0f"
+            parts.append(f"<tr><td>{i + 1}</td><td>{e(r.site_id)}</td><td class='l'>{e(r.name)}</td><td>{format(r.area_mi2, a_spec)}</td>"
+                         f"<td>{format(r.inside_mi2, a_spec)} ({100 * r.share_creek:.0f}%)</td><td>{100 * r.share_set:.1f}%</td>"
+                         f"<td>{'yes' if r.trained else 'no'}</td><td class='l'>{e(r.seen)}</td><td class='l'>{e(recw)}</td>"
+                         f"<td>{r.n_wy}</td><td>{r.val_months} ({100 * r.val_share:.0f}%)</td></tr>")
+        parts.append("</table>")
+    parts.append(_creek_definitions(summary["window"], e))
+    return parts
+
+
+def _creek_domain_rows(sets, creeks: dict):
+    rows = []
+    for s in sets.itertuples(index=False):
+        if s.set_id not in creeks:
+            continue
+        df, sm = creeks[s.set_id]
+        rows.append(dict(set_id=s.set_id, entity_id=s.entity_id, n=sm["n"], n_seen=sm["n_seen"], covered=sm["covered"],
+                         covered_val=sm["covered_val"], window_cover=sm["window_cover"], verdict=sm["verdict"]))
+    return rows
+
+
+def _creek_domain_block(sets, creeks: dict, window: str, e, fmt: str = "html") -> list[str]:
+    rows = _creek_domain_rows(sets, creeks)
+    if not rows:
+        return []
+    w = e(window)
+    intro = (f"Where the model saw the validation window {w} in training through a USGS creek. Per location: the creeks "
+             "whose delineated watersheds overlap its arcs (5% and 1 mi² rule), how many of them were in this run's "
+             f"training set with a record inside {w}, the coverage (share of the location's area under the listed creeks) "
+             "and the coverage with a record (under those trained creeks), both counting nested gauges once, the window "
+             f"coverage (share of the location's area-months inside {w} under a trained creek record), and the verdict: "
+             "out of sample = window coverage 0%; partly seen through creeks = under 50%; seen through creeks = 50% or "
+             "more. Details and figures on each location's tab.")
+    hdr = ["training entity", "location", "creeks listed", f"trained, record inside {w}", "coverage",
+           "coverage with a record", "window coverage", "verdict"]
+    if fmt == "html":
+        parts = ["<h3>USGS creek overlap by location</h3>", f"<p class='note'>{intro}</p>",
+                 "<table><tr>" + "".join(f"<th>{h}</th>" for h in hdr) + "</tr>"]
+        for r in rows:
+            parts.append(f"<tr class='pick' onclick=\"show('{e(r['set_id'])}')\"><td>{e(r['entity_id'])}</td><td class='l'>{e(r['set_id'])}</td>"
+                         f"<td>{r['n']}</td><td>{r['n_seen']}</td><td>{100 * r['covered']:.0f}%</td><td>{100 * r['covered_val']:.0f}%</td>"
+                         f"<td>{100 * r['window_cover']:.0f}%</td><td class='l'>{e(r['verdict'])}</td></tr>")
+        parts.append("</table>")
+        return parts
+    lines = ["## USGS creek overlap by location", "", intro, "", "| " + " | ".join(hdr) + " |", "|" + "---|" * len(hdr)]
+    for r in rows:
+        lines.append(f"| {r['entity_id']} | {r['set_id']} | {r['n']} | {r['n_seen']} | {100 * r['covered']:.0f}% | "
+                     f"{100 * r['covered_val']:.0f}% | {100 * r['window_cover']:.0f}% | {r['verdict']} |")
+    return lines + [""]
 
 
 def location_maps(sid: str, row, catch, geoms, outlets, out: Path, overlap=None, t2=None) -> tuple[Path, Path]:
@@ -388,6 +742,24 @@ def _t2_table(rows, e, *, show_set: bool, show_cover: bool) -> list[str]:
     return out
 
 
+def _not_counted_note(sets, v, fmt: str) -> str:
+    """One sentence naming the locations that are shown but left out of the run's summary
+    figures (mean KGE, volumes, terciles), with the set table's reason; empty if none."""
+    out = [s for s in sets.itertuples(index=False) if s.set_id in v.index and not s.volume_scored]
+    if not out:
+        return ""
+    n = int(sum(1 for s in sets.itertuples(index=False) if s.set_id in v.index and s.volume_scored))
+    def reason(s):
+        note = str(s.note or "")
+        return note[len("not volume-scored: "):] if note.startswith("not volume-scored: ") else note
+    parts = [f"{s.set_id} ({s.name})" + (f": {reason(s)}" if s.note else "") for s in out]
+    text = (f"The run's summary figures (mean KGE, volumes, terciles) cover the {n} volume-scored locations. "
+            f"Shown but not counted: " + "; ".join(parts) + ".")
+    if fmt == "p":
+        return f"<p class='note'>{html.escape(text)}</p>"
+    return text
+
+
 def _fmt(v, spec: str) -> str:
     """Formatted number, or '' for NaN."""
     return "" if v != v else format(v, spec)
@@ -405,10 +777,12 @@ def _metrics_rows(metrics, sid, window):
 
 
 def write_html(sets, metrics, out: Path, label: str, window: str, maps: list[Path], t1_dir: Path,
-               t2=None, t2_dir: Path | None = None, fam_maps: dict | None = None) -> Path:
+               t2=None, t2_dir: Path | None = None, fam_maps: dict | None = None,
+               creeks: dict | None = None, creeks_trained: bool = True) -> Path:
     e = html.escape
     t2 = t2 if t2 is not None else pd.DataFrame()
     fam_maps = fam_maps or {}
+    creeks = creeks or {}
     v = metrics[(metrics.window == window) & metrics.ref_kind.isin(["anchor", "arcsum"])].set_index("set_id")
     ids = [s.set_id for s in sets.itertuples(index=False) if s.set_id in v.index]
     css = """
@@ -442,7 +816,7 @@ def write_html(sets, metrics, out: Path, label: str, window: str, maps: list[Pat
              f"<p>Validation window {e(window)}, monthly volume against CalSim3. Tier 1: the twenty trained locations, "
              "FLOW-UNIMPAIRED at the anchored systems and the sum of the member INFLOW arcs elsewhere. Tier 2: every rim "
              "inflow arc on its own, shown under the set it belongs to and, for the arcs outside every set, on the "
-             "unconstrained-arcs tab. Red star = the registry outlet of the trained entity.</p></header>",
+             "unconstrained-arcs tab. Each location tab also lists the USGS daily creeks whose watersheds overlap it and their records inside the validation window, which say whether the model saw that window at the location through a creek while training (out of sample, partly seen, or seen through creeks). Red star = the registry outlet of the trained entity.</p></header>",
              "<nav><button data-t='domain' onclick=\"show('domain')\">Domain</button>"]
     ent_of = {s.set_id: s.entity_id for s in sets.itertuples(index=False)}
     parts += [f"<button data-t='{e(sid)}' onclick=\"show('{e(sid)}')\">{e(ent_of[sid])}</button>" for sid in ids]
@@ -455,7 +829,7 @@ def write_html(sets, metrics, out: Path, label: str, window: str, maps: list[Pat
     # domain tab
     parts.append("<section id='domain'><h2>All locations</h2><p class='note'>Click a row to open its tab.</p>")
     parts.append("<table><tr><th>training entity</th><th>location</th><th>reference</th><th>arcs</th><th>mi²</th><th>KGE</th><th>NSE</th>"
-                 "<th>bias</th><th>r</th><th>seas. mismatch</th><th>sim / ref TAF/yr</th><th>aggregated</th></tr>")
+                 "<th>bias</th><th>r</th><th>seas. mismatch</th><th>sim / ref TAF/yr</th></tr>")
     for s in sets.itertuples(index=False):
         if s.set_id not in v.index:
             continue
@@ -464,8 +838,11 @@ def write_html(sets, metrics, out: Path, label: str, window: str, maps: list[Pat
         parts.append(f"<tr class='pick' onclick=\"show('{e(s.set_id)}')\"><td>{e(s.entity_id)}</td><td class='l'>{e(s.name)}</td>"
                      f"<td class='l'>{e(ref)}</td><td>{len(s.arcs)}</td><td>{s.area_mi2:,.0f}</td><td>{r.kge:.3f}</td>"
                      f"<td>{r.nse:.3f}</td><td>{r.pbias:+.1f}%</td><td>{r.r:.3f}</td><td>{r.seas_mismatch:.3f}</td>"
-                     f"<td>{r.sim_taf_yr:,.0f} / {r.ref_taf_yr:,.0f}</td><td>{'yes' if s.volume_scored else 'no'}</td></tr>")
-    parts.append("</table><p class='note'>Click any image to enlarge it.</p><div class='row domain'>")
+                     f"<td>{r.sim_taf_yr:,.0f} / {r.ref_taf_yr:,.0f}</td></tr>")
+    parts.append("</table>")
+    parts.append(_not_counted_note(sets, v, "p"))
+    parts += _creek_domain_block(sets, creeks, window, e, "html")
+    parts.append("<p class='note'>Click any image to enlarge it.</p><div class='row domain'>")
     for p in maps:
         parts.append(f"<img src='{_b64(p, jpeg_quality=90)}' alt='{e(p.stem)}'>")
     parts.append("</div>")
@@ -487,7 +864,7 @@ def write_html(sets, metrics, out: Path, label: str, window: str, maps: list[Pat
         parts.append(f"<section id='{e(sid)}'><h2>{e(s.entity_id)} — {e(s.name)}</h2>")
         parts.append(f"<p class='note'>Tier-1 set <code>{e(sid)}</code>, trained on <code>{e(s.entity_id)}</code>, {len(s.arcs)} arc(s), {s.area_mi2:,.0f} mi², "
                      f"reference {e(ref)}." + (f" {e(s.note)}." if s.note else "") +
-                     (" Not included in the volume-scored aggregate." if not s.volume_scored else "") + "</p>")
+                     (" Shown but not counted in the run's summary figures." if not s.volume_scored else "") + "</p>")
         parts.append("<table><tr><th>window</th><th>months</th><th>KGE</th><th>NSE</th><th>bias</th><th>r</th><th>alpha</th>"
                      "<th>beta</th><th>seas. mismatch</th><th>CT diff (mo)</th><th>sim / ref TAF/yr</th></tr>")
         for wl, r in _metrics_rows(metrics, sid, window):
@@ -501,7 +878,9 @@ def write_html(sets, metrics, out: Path, label: str, window: str, maps: list[Pat
             parts.append(f"<img src='{_b64(ts, jpeg_quality=88)}' alt='{e(sid)} time series'>")
         parts.append("</div>")
         if len(t2) and "tier1_set" in t2.columns:
-            sub2 = t2[t2.tier1_set == sid].sort_values("ref_taf_yr", ascending=False)
+            # the set's own arc list, not the one-set-per-arc map: nested sets share arcs
+            # (Shasta's I_SHSTA is also a member of Red Bluff) and each tab shows all of its own
+            sub2 = t2[t2.arc.isin(set(s.arcs))].sort_values("ref_taf_yr", ascending=False)
             if len(sub2):
                 has_cls = "method_class" in sub2.columns
                 parts.append(f"<h3>Tier 2: the {len(sub2)} sub-arc(s) of this set, {e(window)}</h3>")
@@ -539,6 +918,8 @@ def write_html(sets, metrics, out: Path, label: str, window: str, maps: list[Pat
                         parts.append("<div class='row ts'>"
                                      + f"<img src='{_b64(fig2, jpeg_quality=88)}' alt='{e(sid)} tier-2 regimes'>"
                                      + "</div>")
+        if sid in creeks:
+            parts += _creek_block(sid, creeks[sid][0], creeks[sid][1], out, e, creeks_trained)
         parts.append("<h3>Location</h3>")
         parts.append("<p class='note'>Arcs: " + e(", ".join(s.arcs)) + "</p>")
         parts.append("<div class='row locmaps'>")
@@ -582,7 +963,9 @@ def write_html(sets, metrics, out: Path, label: str, window: str, maps: list[Pat
                      "of the 1/16-degree forcing cells assigned to an entity, which is the area whose runoff the "
                      "entity's observation constrains; red dots are the gauge or pour point from the registry, and "
                      "the pale polygons behind are the CalSim3 rim watersheds. Nested entities overlap: the "
-                     "Sacramento above Red Bluff contains Shasta, and several CDEC basins contain USGS creeks.</p>")
+                     "Sacramento above Red Bluff contains Shasta"
+                     + (", and several CDEC basins contain USGS creeks" if "usgs_daily" in fam_maps else "")
+                     + ".</p>")
         for fam, (path, rows) in fam_maps.items():
             parts.append(f"<h3>{e(FAMILY_LABEL.get(fam, fam))} ({len(rows)})</h3>")
             parts.append("<div class='row domain'>"
@@ -602,29 +985,30 @@ def write_html(sets, metrics, out: Path, label: str, window: str, maps: list[Pat
     return path
 
 
-def write_markdown(sets, metrics, out: Path, label: str, window: str, maps: list[Path]) -> Path:
+def write_markdown(sets, metrics, out: Path, label: str, window: str, maps: list[Path], creeks: dict | None = None) -> Path:
     lines = [f"# CalSim3 validation atlas (tier 1) — {label}", "",
              f"Validation window {window}, monthly volume against CalSim3 (FLOW-UNIMPAIRED at the anchored "
              "systems, the sum of the member INFLOW arcs elsewhere). Per location: the domain map with the "
              "arc set highlighted and its registry outlet (red star), a zoom naming the arcs, and the "
-             "tier-1 time-series figure. The tabbed version, which also carries tier 2, the unconstrained "
+             "tier-1 time-series figure, and the USGS creeks overlapping the location with their records inside the "
+             "validation window. The tabbed version, which also carries tier 2, the unconstrained "
              "arcs and the training footprints, is `calsim_validation_atlas.html`.",
              "", "## Domain maps", ""]
     for p in maps:
         lines += [f"![{p.stem}]({p.name})", ""]
     v = metrics[(metrics.window == window) & metrics.ref_kind.isin(["anchor", "arcsum"])].set_index("set_id")
     lines += ["## Locations", "",
-              "| set | location | reference | arcs | mi² | KGE | NSE | bias | r | seas. mismatch | sim / ref TAF/yr | aggregated |",
-              "|---|---|---|---|---|---|---|---|---|---|---|---|"]
+              "| set | location | reference | arcs | mi² | KGE | NSE | bias | r | seas. mismatch | sim / ref TAF/yr |",
+              "|---|---|---|---|---|---|---|---|---|---|---|"]
     for s in sets.itertuples(index=False):
         if s.set_id not in v.index:
             continue
         r = v.loc[s.set_id]
         ref = f"UNIMP {s.system}" if s.ref_kind == "anchor" else "arc sum"
         lines.append(f"| {s.set_id} | {s.name} | {ref} | {len(s.arcs)} | {s.area_mi2:,.0f} | {r.kge:.3f} | {r.nse:.3f} | "
-                     f"{r.pbias:+.1f}% | {r.r:.3f} | {r.seas_mismatch:.3f} | {r.sim_taf_yr:,.0f} / {r.ref_taf_yr:,.0f} | "
-                     f"{'yes' if s.volume_scored else 'no'} |")
-    lines.append("")
+                     f"{r.pbias:+.1f}% | {r.r:.3f} | {r.seas_mismatch:.3f} | {r.sim_taf_yr:,.0f} / {r.ref_taf_yr:,.0f} |")
+    lines += ["", _not_counted_note(sets, v, "md"), ""]
+    lines += _creek_domain_block(sets, creeks or {}, window, lambda x: x, "md")
     for s in sets.itertuples(index=False):
         if s.set_id not in v.index:
             continue
@@ -639,6 +1023,9 @@ def write_markdown(sets, metrics, out: Path, label: str, window: str, maps: list
                          f"{r.alpha:.2f} | {r.beta:.2f} | {r.seas_mismatch:.3f} | {r.sim_taf_yr:,.0f} / {r.ref_taf_yr:,.0f} |")
         lines += ["", f"![{s.set_id} map]({s.set_id}_map.png) ![{s.set_id} zoom]({s.set_id}_zoom.png)", "",
                   f"![{s.set_id} time series](../figures/{s.set_id}.png)", ""]
+        if creeks and s.set_id in creeks:
+            lines += [f"![{s.set_id} USGS creek overlap]({s.set_id}_creeks.png)", "",
+                      _creek_summary_sentence(creeks[s.set_id][1], bold=("**", "**")), ""]
     path = out / "atlas.md"
     path.write_text("\n".join(lines), encoding="utf-8")
     return path
@@ -700,16 +1087,23 @@ def main(argv=None) -> None:
     fam_maps = family_maps(catch, a.data_dir, out, trained=trained, label=label)
     print("atlas: family footprint maps for " + ", ".join(f"{k} ({len(v[1])})" for k, v in fam_maps.items())
           + ("" if trained else " (all registry entities: the run has no sim_daily_mm.npz)"))
+    creeks = creek_overlap(sets, geoms, a.data_dir, trained=trained, window=VALIDATION_WINDOW)
+    creeks_trained = trained is None or any(str(x).startswith("usgs_") for x in trained)
     n = 0
     for s in sets.itertuples(index=False):
         if not (t1 / "figures" / f"{s.set_id}.png").exists():
             print(f"atlas: no tier-1 figure for {s.set_id}, skipped")
             continue
         location_maps(s.set_id, s, catch, geoms, outlets, out, overlap=overlap, t2=t2_idx)
+        if s.set_id in creeks:
+            creek_overlap_figure(s.set_id, s, catch, geoms, outlets, creeks[s.set_id][0], creeks[s.set_id][1], out)
         n += 1
+    n_ov = sum(1 for v in creeks.values() if v[1]["n"])
+    print(f"atlas: USGS creek overlap computed for {len(creeks)} sets ({n_ov} with an overlapping creek"
+          + ("" if creeks_trained else "; none trained in this run") + ")")
     page = write_html(sets, metrics, out, label, VALIDATION_WINDOW, maps, t1, t2=t2, t2_dir=t2_dir,
-                      fam_maps=fam_maps)
-    md = write_markdown(sets, metrics, out, label, VALIDATION_WINDOW, maps)
+                      fam_maps=fam_maps, creeks=creeks, creeks_trained=creeks_trained)
+    md = write_markdown(sets, metrics, out, label, VALIDATION_WINDOW, maps, creeks=creeks)
     print(f"wrote {n} location map pairs, {len(maps)} domain maps, {page} ({page.stat().st_size / 1e6:.1f} MB) and {md}")
 
 

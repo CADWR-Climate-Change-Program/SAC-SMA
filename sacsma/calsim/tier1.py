@@ -12,9 +12,9 @@ entity simulates, so no third area enters the comparison.
 Two of the sets are simulated on a footprint smaller than the arc set (the registry
 entity omits an arc); those are scored against the tier-1 reference as defined *and*
 against the sum of the arcs they do simulate (``ref_kind = arcsum_covered``), and the
-covered area fraction is reported.  Cache Creek is scored but excluded from the
-volume-scored aggregate: its arcs are lake inflows while its record is the routed
-outflow.
+covered area fraction is reported.  Cache Creek is counted like the others although its
+arcs are lake inflows while its training record is the routed outflow; the set table's
+``volume_scored`` flag is what includes or excludes a location from the aggregate.
 
 The ten anchored locations coincide with the monthly training targets, so their
 1950-1984 scores are a temporal holdout of the training target rather than an
