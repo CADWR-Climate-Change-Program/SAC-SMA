@@ -14,7 +14,9 @@ outputs (:mod:`sacsma.dpl.calsim_tier2`), the folder ``<run>/atlas/`` beside ``t
   stating what the run trained on and its family weighting (read from ``checkpoints/best.pt``), a domain
   tab with the tier-1 and tier-2 maps and the summary table, one tab per location with its
   tier-1 metrics, time series, tier-2 sub-arc table and regime figure and its maps, a tab for
-  the unconstrained arcs, and a tab of training footprints by family;
+  the unconstrained arcs, a tab of training footprints by family, and a tab that sets the full
+  validation window against each location's trimmed window (:mod:`sacsma.dpl.calsim_windows`):
+  the scores over both and the USGS creek coverage that remains inside the trimmed one;
 * ``atlas/atlas.md`` — the tier-1 content as Markdown with image links.
 
 One input is optional and user-supplied: a ``tier2_extrapolated_trained_cover.csv`` in the
@@ -42,7 +44,7 @@ import numpy as np
 import pandas as pd
 
 from ..calsim.catchments import MERGED_LAYER, load_catchments, series_arc
-from .calsim_tier1 import VALIDATION_WINDOW, load_sets
+from .calsim_tier1 import TRIMMED_WINDOW, VALIDATION_WINDOW, load_sets
 
 
 def _rim(data_dir):
@@ -345,6 +347,12 @@ def creek_overlap(sets, geoms, data_dir: str | Path, trained=None, window: str =
     in a month when it has >= 15 days; its record is its daily data inside the registry
     training window (first and last day, complete water years with >= 300 days).
 
+    The summary also carries ``cover_by_wy`` (the same area-month coverage for each water year of
+    the window, which :mod:`sacsma.dpl.calsim_windows` picks the trimmed window from), ``trim_wy``
+    (the set table's ``val_start_wy``, ``val_end_wy``; None where the location keeps the full
+    window), ``trim_cover`` (the coverage inside it) and ``n_seen_trim`` (the seen creeks with data
+    inside it).
+
     Verdict from ``window_cover``: ``out of sample`` (0), ``partly seen through creeks``
     (below 0.5) or ``seen through creeks``.  Where the model saw the window through a creek,
     the validation there tests a transfer of scale and variable (daily interior gauge in
@@ -432,18 +440,33 @@ def creek_overlap(sets, geoms, data_dir: str | Path, trained=None, window: str =
         # window coverage: mean over the window's months of the area under the trained creeks that
         # have data in that month; months with the same active set share one union
         window_cover = 0.0
+        cover_by_wy = {int(y): 0.0 for y in sorted(set(win_months.year + (win_months.month >= 10)))}
         if seen_ids:
-            active = {}
+            by_key = {}
             for m in win_months:
                 key = frozenset(e for e in seen_ids if m in rec[e]["months"])
-                active[key] = active.get(key, 0) + 1
-            window_cover = sum(_cover(key) * cnt for key, cnt in active.items()) / n_val_months
+                by_key.setdefault(key, []).append(m)
+            cov = {key: _cover(key) for key in by_key}
+            window_cover = sum(cov[key] * len(ms) for key, ms in by_key.items()) / n_val_months
+            # the same coverage by water year (what calsim_windows picks the trimmed window from)
+            for key, ms in by_key.items():
+                for m in ms:
+                    cover_by_wy[m.year + (m.month >= 10)] += cov[key] / 12.0
+        # the location's trimmed validation window (set table val_start_wy .. val_end_wy), the coverage
+        # inside it and the creeks that still have data there
+        trim_wy = (int(getattr(st, "val_start_wy", min(cover_by_wy))), int(getattr(st, "val_end_wy", max(cover_by_wy))))
+        if trim_wy == (min(cover_by_wy), max(cover_by_wy)):
+            trim_wy = None
+        trim_cover = float(np.mean([c for y, c in cover_by_wy.items() if trim_wy is None or trim_wy[0] <= y <= trim_wy[1]]))
+        n_seen_trim = sum(1 for e in seen_ids if trim_wy is None or any(
+            trim_wy[0] <= m.year + (m.month >= 10) <= trim_wy[1] for m in rec[e]["months"]))
         verdict = ("out of sample" if window_cover <= 0.0 else
                    "partly seen through creeks" if window_cover < 0.5 else "seen through creeks")
         same_scale = bool(n) and float(df["share_set"].max()) >= 0.9
         out[st.set_id] = (df, dict(set_area=set_area, n=n, n_seen=len(seen_ids), covered=covered, covered_val=covered_val,
                                    window_cover=window_cover, n_val_months=n_val_months, window=window,
-                                   verdict=verdict, same_scale=same_scale))
+                                   verdict=verdict, same_scale=same_scale, cover_by_wy=cover_by_wy,
+                                   trim_wy=trim_wy, trim_cover=trim_cover, n_seen_trim=n_seen_trim))
     return out
 
 
@@ -683,6 +706,127 @@ def _creek_domain_block(sets, creeks: dict, window: str, e, fmt: str = "html") -
     return lines + [""]
 
 
+def windows_table(sets, metrics, cover: dict, window: str) -> tuple[list[dict], dict]:
+    """The full validation window against each location's trimmed window: one record per location
+    (the scores over both, and the registry creeks' coverage over both from ``cover`` = the summaries
+    of :func:`creek_overlap` with every registry creek taken as trained) and the mean and median over
+    the locations the run's summary counts, the trimmed window standing in where a location has one."""
+    main = metrics[metrics.ref_kind.isin(["anchor", "arcsum"])]
+    v = main[main.window == window].set_index("set_id")
+    t = main[main.window == TRIMMED_WINDOW].set_index("set_id")
+    recs = []
+    for s in sets.itertuples(index=False):
+        if s.set_id not in v.index:
+            continue
+        f = v.loc[s.set_id]
+        r = t.loc[s.set_id] if s.set_id in t.index else f
+        # the creek columns follow the set table's window: the scores must be over the same one
+        scored = (int(str(r.win_start)[:4]) + 1, int(str(r.win_end)[:4]))
+        if len(t) and scored != (int(s.val_start_wy), int(s.val_end_wy)):
+            raise ValueError(f"{s.set_id}: tier 1 scored WY{scored[0]}-{scored[1]}, data/calsim/tier1_sets.csv has "
+                             f"WY{s.val_start_wy}-{s.val_end_wy}: re-run calsim_tier1")
+        sm = cover.get(s.set_id, {})
+        recs.append(dict(
+            set_id=s.set_id, entity_id=s.entity_id, location=str(s.name).split(" (")[0], counted=bool(s.volume_scored),
+            trimmed=s.set_id in t.index, label=_trim_label(r) if s.set_id in t.index else window,
+            years=int(r.n_months) // 12, n_seen=sm.get("n_seen"), n_seen_trim=sm.get("n_seen_trim"),
+            cover_full=sm.get("window_cover", np.nan), cover_trim=sm.get("trim_cover", np.nan),
+            kge_full=float(f.kge), kge_trim=float(r.kge), nse_full=float(f.nse), nse_trim=float(r.nse),
+            bias_full=float(f.pbias), bias_trim=float(r.pbias)))
+    c = pd.DataFrame([x for x in recs if x["counted"]])
+    agg = {}
+    if len(c):
+        keys = ("cover_full", "cover_trim", "kge_full", "kge_trim", "nse_full", "nse_trim", "bias_full", "bias_trim")
+        for name in ("mean", "median"):
+            agg[name] = {k: float(getattr(c[k].abs() if k.startswith("bias") else c[k], name)()) for k in keys}
+        agg["n"] = len(c)
+    return recs, agg
+
+
+def _chunks(items: list, sizes: list[int]) -> list[list]:
+    out, i = [], 0
+    for n in sizes:
+        out.append(items[i:i + n])
+        i += n
+    return out
+
+
+def _windows_block(sets, metrics, cover: dict, window: str, e, fmt: str = "html", creek_note: str = "") -> list[str]:
+    """The tab (HTML) or section (Markdown) that sets the full validation window against the trimmed
+    windows; empty when tier 1 scored no trimmed window."""
+    recs, agg = windows_table(sets, metrics, cover, window)
+    if not any(x["trimmed"] for x in recs):
+        return []
+    n_drop = sum(1 for x in recs if x["cover_full"] - x["cover_trim"] >= 0.05)
+    intro = (f"The USGS creeks train over their whole records, which reach into {window}; the CDEC and DWR-unimpaired "
+             f"targets start after it. The {window} scores " + ("on the other tabs" if fmt == "html" else "above")
+             + " are over the full window. This table sets them against each location's trimmed window: the run of at "
+             f"least 20 water years inside {window} in which the registry's creek gauges covered the least of the "
+             "location (sacsma.dpl.calsim_windows; val_start_wy and val_end_wy in data/calsim/tier1_sets.csv, the same "
+             "for every run). Creek coverage is the share of the location's area-months under creek gauges with data; "
+             "the coverage left inside the trimmed window is the lowest that any run of 20 or more water years allows. "
+             "The two scores are over different years, so a change between them is first of all a change of years: in a "
+             "run that trained the creeks it points to them only where the coverage drops markedly from one column to "
+             f"the next, by 5 points or more at {n_drop} of the {len(recs)} locations here. A location no creek reaches "
+             "keeps the full window.")
+    if creek_note:
+        intro += " " + creek_note
+
+    def pct(x) -> str:
+        return "" if x != x else f"{100 * x:.1f}%"
+
+    def signed(x) -> str:
+        s = _fmt(x, "+.3f")
+        return "0.000" if s in ("+0.000", "-0.000") else s
+
+    def scores(a: dict, bias: str) -> list[str]:
+        # the change is that of the two scores as printed beside it
+        return [_fmt(a["kge_full"], ".3f"), _fmt(a["kge_trim"], ".3f"),
+                signed(round(a["kge_trim"], 3) - round(a["kge_full"], 3)),
+                _fmt(a["nse_full"], ".3f"), _fmt(a["nse_trim"], ".3f"),
+                *(_fmt(a[k], bias) + ("%" if a[k] == a[k] else "") for k in ("bias_full", "bias_trim"))]
+
+    def cells(x: dict) -> list[str]:
+        kept = "" if x["trimmed"] else (" (kept: no creek reaches it)" if not x["cover_full"] > 0 else
+                                        " (kept: no run of years lowers the coverage)")
+        return [x["label"] + kept, str(x["years"]),
+                "" if x["n_seen"] is None else str(int(x["n_seen"])),
+                "" if x["n_seen_trim"] is None else str(int(x["n_seen_trim"])),
+                pct(x["cover_full"]), pct(x["cover_trim"])] + scores(x, "+.1f")
+
+    # no pipe characters in the label: it is also a Markdown table cell
+    closing = [(f"{k} of the {agg['n']} locations (absolute bias in the bias columns)",
+                ["", "", "", "", pct(agg[k]["cover_full"]), pct(agg[k]["cover_trim"])] + scores(agg[k], ".1f"))
+               for k in ("mean", "median")] if agg else []
+    lead = ["training entity", "location", "trimmed window", "water years"]
+    groups = [("USGS creeks with data", 2), ("creek coverage", 2), ("KGE", 3), ("NSE", 2), ("bias", 2)]
+    sub = [window, "trimmed", window, "trimmed", window, "trimmed", "change", window, "trimmed", window, "trimmed"]
+    if fmt == "html":
+        # the header cells are styled in place, the page's stylesheet staying as it is for the other tabs
+        parts = ["<h2>Full validation window against the trimmed windows</h2>", f"<p class='note'>{e(intro)}</p>",
+                 "<p class='note'>Click a row to open the location's tab.</p>",
+                 "<table><tr>" + "".join(f"<th rowspan='2'>{e(h)}</th>" for h in lead)
+                 + "".join(f"<th colspan='{n}' style='text-align:center'>{e(h)}</th>" for h, n in groups) + "</tr>",
+                 "<tr>" + "".join(f"<th style='text-align:right;white-space:nowrap'>{e(h)}</th>" for h in sub) + "</tr>"]
+        for x in recs:
+            c = cells(x)
+            where = x["location"] + ("" if x["counted"] else " (not counted in the mean and median)")
+            parts.append(f"<tr class='pick' onclick=\"show('{e(x['set_id'])}')\"><td>{e(x['entity_id'])}</td>"
+                         f"<td class='l'>{e(where)}</td><td class='l'>{e(c[0])}</td>"
+                         + "".join(f"<td>{e(y)}</td>" for y in c[1:]) + "</tr>")
+        for name, c in closing:
+            parts.append(f"<tr><td class='l' colspan='2'><b>{e(name)}</b></td>"
+                         + "".join(f"<td><b>{e(y)}</b></td>" for y in c) + "</tr>")
+        return parts + ["</table>"]
+    hdr = lead + [f"{g}, {h}" for (g, _), hs in zip(groups, _chunks(sub, [n for _, n in groups]), strict=True) for h in hs]
+    lines = ["## Full validation window against the trimmed windows", "", intro, "",
+             "| " + " | ".join(hdr) + " |", "|" + "---|" * len(hdr)]
+    lines += ["| " + " | ".join([x["entity_id"], x["location"] + ("" if x["counted"] else " (not counted in the mean and median)")]
+                                + cells(x)) + " |" for x in recs]
+    lines += ["| " + " | ".join([f"**{name}**", ""] + c) + " |" for name, c in closing]
+    return lines + [""]
+
+
 def location_maps(sid: str, row, catch, geoms, outlets, out: Path, overlap=None, t2=None) -> tuple[Path, Path]:
     """The set on the domain map (with its registry outlet) and a zoom naming its arcs; with ``t2`` (tier-2
     metrics indexed by arc) the zoom colours each arc by its tier-2 KGE."""
@@ -829,10 +973,15 @@ def _fmt(v, spec: str) -> str:
     return "" if v != v else format(v, spec)
 
 
+def _trim_label(r) -> str:
+    return f"WY{int(str(r.win_start)[:4]) + 1}-{str(r.win_end)[2:4]}"
+
+
 def _metrics_rows(metrics, sid, window):
     m = metrics[(metrics.set_id == sid)]
     rows = []
-    for r in m[m.ref_kind != "arcsum_covered"].itertuples(index=False):
+    # the trimmed window has its own tab
+    for r in m[(m.ref_kind != "arcsum_covered") & m.window.isin([window, "train"])].itertuples(index=False):
         wl = r.window if r.window == window else f"training window {r.win_start}..{r.win_end}"
         rows.append((wl, r))
     for r in m[(m.ref_kind == "arcsum_covered") & (m.window == window)].itertuples(index=False):
@@ -842,11 +991,13 @@ def _metrics_rows(metrics, sid, window):
 
 def write_html(sets, metrics, out: Path, label: str, window: str, maps: list[Path], t1_dir: Path,
                t2=None, t2_dir: Path | None = None, fam_maps: dict | None = None,
-               creeks: dict | None = None, creeks_trained: bool = True, recipe: dict | None = None) -> Path:
+               creeks: dict | None = None, creeks_trained: bool = True, recipe: dict | None = None,
+               window_cover: dict | None = None, creek_note: str = "") -> Path:
     e = html.escape
     t2 = t2 if t2 is not None else pd.DataFrame()
     fam_maps = fam_maps or {}
     creeks = creeks or {}
+    windows_tab = _windows_block(sets, metrics, window_cover or {}, window, e, "html", creek_note)
     v = metrics[(metrics.window == window) & metrics.ref_kind.isin(["anchor", "arcsum"])].set_index("set_id")
     ids = [s.set_id for s in sets.itertuples(index=False) if s.set_id in v.index]
     css = """
@@ -890,6 +1041,8 @@ def write_html(sets, metrics, out: Path, label: str, window: str, maps: list[Pat
                      "unconstrained arcs</button>")
     if fam_maps:
         parts.append("<button data-t='footprints' onclick=\"show('footprints')\">footprints</button>")
+    if windows_tab:
+        parts.append("<button data-t='windows' onclick=\"show('windows')\">full vs trimmed window</button>")
     parts.append("</nav>")
     # domain tab
     parts.append("<section id='domain'>")
@@ -1043,6 +1196,8 @@ def write_html(sets, metrics, out: Path, label: str, window: str, maps: list[Pat
                              f"<td class='l'>{e(t0)} to {e(t1_)}</td><td>{nobs:,}</td></tr>")
             parts.append("</table>")
         parts.append("</section>")
+    if windows_tab:
+        parts += ["<section id='windows'>"] + windows_tab + ["</section>"]
     parts.append("</body></html>")
     path = out / "calsim_validation_atlas.html"
     path.write_text("\n".join(parts), encoding="utf-8")
@@ -1050,7 +1205,8 @@ def write_html(sets, metrics, out: Path, label: str, window: str, maps: list[Pat
 
 
 def write_markdown(sets, metrics, out: Path, label: str, window: str, maps: list[Path], creeks: dict | None = None,
-                   t1_dir: Path | None = None, recipe: dict | None = None) -> Path:
+                   t1_dir: Path | None = None, recipe: dict | None = None,
+                   window_cover: dict | None = None, creek_note: str = "") -> Path:
     # tier-1 figures are linked relative to the atlas folder, wherever it is written
     figs = (Path(os.path.relpath((t1_dir or out.parent) / "figures", out)).as_posix())
     lines = [f"# CalSim3 validation atlas (tier 1) — {label}", ""]
@@ -1095,6 +1251,7 @@ def write_markdown(sets, metrics, out: Path, label: str, window: str, maps: list
         if creeks and s.set_id in creeks:
             lines += [f"![{s.set_id} USGS creek overlap]({s.set_id}_creeks.png)", "",
                       _creek_summary_sentence(creeks[s.set_id][1], bold=("**", "**")), ""]
+    lines += _windows_block(sets, metrics, window_cover or {}, window, lambda x: x, "md", creek_note)
     path = out / "atlas.md"
     path.write_text("\n".join(lines), encoding="utf-8")
     return path
@@ -1177,9 +1334,29 @@ def main(argv=None) -> None:
     recipe = run_recipe(run_dir, a.data_dir, trained=trained)
     print("atlas: " + (_recipe_sentence(recipe) if recipe else
                        f"no {run_dir / 'checkpoints' / 'best.pt'}: the page will not state the training recipe"))
+    # the full-against-trimmed tab reads the coverage of all the registry's creeks, which is what the
+    # trimmed windows are picked from; a run that left creeks out gets that coverage computed apart
+    reg = pd.read_csv(Path(a.data_dir) / "multifamily" / "entities.csv")
+    reg_creeks = set(reg.loc[reg["family"] == "usgs_daily", "entity_id"])
+    n_tr = len(reg_creeks) if trained is None else len(reg_creeks & set(trained))
+    all_creeks = creeks if n_tr == len(reg_creeks) else creek_overlap(sets, geoms, a.data_dir, trained=None,
+                                                                      window=VALIDATION_WINDOW)
+    window_cover = {sid: v[1] for sid, v in all_creeks.items()}
+    if not (metrics.window == TRIMMED_WINDOW).any() and any(v.get("trim_wy") for v in window_cover.values()):
+        print("atlas: tier1_metrics.csv has no trimmed rows: the page will not have the full-against-trimmed tab "
+              "(re-run calsim_tier1)")
+    creek_note = ("" if n_tr == len(reg_creeks) else
+                  "This run trained no USGS creeks, so it saw none of these locations inside either window: the creek "
+                  "columns describe the registry's gauges, which set the windows, and the two scores differ by the "
+                  "change of years alone." if n_tr == 0 else
+                  f"This run trained {n_tr} of the registry's {len(reg_creeks)} USGS creeks: the creek columns describe "
+                  "all of the registry's gauges, which set the windows; the coverage by the trained creeks alone is on "
+                  "each location's tab.")
     page = write_html(sets, metrics, out, label, VALIDATION_WINDOW, maps, t1, t2=t2, t2_dir=t2_dir,
-                      fam_maps=fam_maps, creeks=creeks, creeks_trained=creeks_trained, recipe=recipe)
-    md = write_markdown(sets, metrics, out, label, VALIDATION_WINDOW, maps, creeks=creeks, t1_dir=t1, recipe=recipe)
+                      fam_maps=fam_maps, creeks=creeks, creeks_trained=creeks_trained, recipe=recipe,
+                      window_cover=window_cover, creek_note=creek_note)
+    md = write_markdown(sets, metrics, out, label, VALIDATION_WINDOW, maps, creeks=creeks, t1_dir=t1, recipe=recipe,
+                        window_cover=window_cover, creek_note=creek_note)
     print(f"wrote {n} location map pairs, {len(maps)} domain maps, {page} ({page.stat().st_size / 1e6:.1f} MB) and {md}")
 
 
