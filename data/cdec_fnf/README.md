@@ -7,6 +7,7 @@ Built by `dataprep/cdec_fnf.py` (survey 2026-08-03). Re-run: bare = everything;
 |---|---|
 | `stations.csv` | Every CDEC station with daily FNF (sensor 8, daily): id, name, lat/lon, advertised period. Classification of each station: the table below |
 | `fnf_daily.csv` | `station, date, flow_cfs` — daily FNF for the 4 pulled stations, verbatim cfs, through 2018-12-31 (forcing end) |
+| `fnf_daily_mm.csv` | `station, date, depth_mm` — derived depth companion for the two stations with a defined depth area (built by `dataprep/build_obs_depth.py`): CLE at 692.86 mi² (the `I_TRNTY` arc area) and CSN at the UF 13 arc-sum (539.1 mi²); negative-flow days dropped |
 
 ## Survey
 
@@ -67,9 +68,11 @@ most caution.
 
 ## Conventions
 
-- **cfs only, verbatim** — no depth column. The training pipeline converts
-  each series to depth (mm/day) with the observing site's own drainage area.
-- **Negative days kept** — mask `flow_cfs < 0` before use (negative flow is
+- **`fnf_daily.csv` is cfs only, verbatim** — no depth column. Depth (mm/day) lives
+  in the derived `fnf_daily_mm.csv`, for the two stations with a stated depth area
+  (CLE and CSN, the CalSim3 arc areas in the table above).
+- **Negative days kept** in `fnf_daily.csv` (the depth companion drops them) —
+  mask `flow_cfs < 0` before use (negative flow is
   a computation artifact). Per the FNF report notes, daily
   FNF uses less data than the month-end computation and goes negative from
   reservoir-elevation noise — the monthly product is the reconciled volume.
