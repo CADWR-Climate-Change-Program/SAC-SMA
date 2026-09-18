@@ -1,0 +1,21 @@
+set_id,name,entity_id,ref_kind,system,arcs,area_mi2,volume_scored,note
+SHA,Sacramento R. at Shasta (cdec_SHA: CDEC SIS daily FNF),cdec_SHA,anchor,SHAS,I_SHSTA,6588.45,True,anchor equals the 11obs SHA training target (temporal holdout)
+CLE,Trinity R. at Trinity Dam (cdec_CLE: CDEC CLE daily FNF),cdec_CLE,anchor,TRIN,I_TRNTY,692.86,True,the daily training target is the Trinity Lake full natural flow at Trinity Dam (CalSim3 I_TRNTY = FLOW-UNIMPAIRED TRIN); the monthly record at Lewiston (CDEC TNL) is the two-arc sum I_TRNTY + I_LWSTN (719 mi2) and is not a registry target
+UF6,Sacramento R. near Red Bluff (uf_06: DWR UF 6 monthly),uf_06,anchor,SRBB,I_BCN010;I_BTL006;I_CLR011;I_COW014;I_CWD018;I_SCW008;I_SHSTA;I_SRBB_VAL;I_WKYTN,9083.72,True,UNIMP SRBB only - the arc sum lacks the series-less valley node I_SRBB_VAL (11% of the volume)
+UF7,Sacramento Valley east-side minor streams (uf_07: DWR UF 7 monthly),uf_07,arcsum,,I_ANT011;I_BCC014;I_BTC048;I_DRC012;I_LCC038;I_LDC029;I_MLC006;I_MNS000,1035.90,True,DWR's UF 7 also carries valley-floor runoff no rim arc holds (about 4% of volume); the arc sum is the consistent reference
+UF8,Feather R. near Oroville (cdec_ORO: CDEC FTO daily FNF),cdec_ORO,anchor,OROV,I_ALMNR;I_ANTLP;I_BTVLY;I_BUCKS;I_DAVIS;I_EBF001;I_FRMAN;I_GZL009;I_LGRSV;I_MFF019;I_MFF087;I_MTMDW;I_NFF029;I_OROVL;I_RVPHB;I_SFF008;I_SFF011;I_SLYCK;I_WBF006;I_WBF015;I_WBF030,3601.62,True,
+UF4,Stony Creek at Black Butte (uf_04: DWR UF 4 monthly),uf_04,arcsum,,I_BLKBT;I_EPARK;I_SGRGE,744.94,True,
+UF11,American R. at Fair Oaks (cdec_FOL: CDEC AMF daily FNF),cdec_FOL,anchor,FOLS,I_ALD002;I_ALD004;I_ALOHA;I_BSH003;I_CAPLS;I_CYN009;I_DCC010;I_ECHOL;I_FOLSM;I_FRMDW;I_GERLE;I_HHOLE;I_ICEHS;I_LKVLY;I_LNG012;I_LOONL;I_LRB004;I_MFA001;I_MFA023;I_MFA025;I_MFA036;I_NFA016;I_NFA022;I_NFA054;I_NLC003;I_NMA003;I_NNA013;I_PLC007;I_PLM001;I_PYR001;I_RCK001;I_RUB002;I_RUB047;I_SFA030;I_SFA040;I_SFA066;I_SFA076;I_SFR006;I_SILVR;I_SLC003;I_SLF009;I_SLV006;I_SLV015;I_STMPY;I_UNVLY;I_WBR001,1863.78,True,I_RUB002 has no polygon of its own (dissolved into I_MFA025)
+UF9,Yuba R. at Smartville (cdec_YRS: CDEC YRS daily FNF),cdec_YRS,anchor,YUBA,I_BOWMN;I_DER001;I_DER004;I_ENGLB;I_FRDYC;I_FRNCH;I_JKSMD;I_LCBRF;I_MFY013;I_NBLDB;I_NFY029;I_OGN005;I_SCOTF;I_SFD003;I_SFY007;I_SFY048;I_SLT009;I_SPLDG,1193.43,True,registry entity cdec_YRS omits the Deer Creek arcs I_DER001/I_DER004 (64 mi2); scored on its covered arcs as well
+UF10,Bear R. near Wheatland (uf_10: DWR UF 10 monthly),uf_10,arcsum,,I_BRR023;I_CMBIE;I_CMPFW;I_RLLNS;I_WLF013,281.96,True,CalSim3 arcs carry Jul-Sep baseflow the DWR unimpaired series does not; low-flow months disagree by construction
+UF3,Cache Creek above Rumsey (uf_03: DWR UF 3 monthly),uf_03,arcsum,,I_BRC003;I_CCH053;I_CLRLK;I_INDVL,953.37,True,the arcs are the Clear Lake / Indian Valley inflows while the DWR record is the routed outflow at Rumsey
+UF2,Putah Creek near Winters (uf_02: DWR UF 2 monthly),uf_02,arcsum,,I_PTH070,567.46,True,
+UF13,Cosumnes R. at Michigan Bar (uf_13: DWR UF 13 monthly),uf_13,arcsum,,I_CMP001;I_CMP014;I_CSM035;I_JNKSN,539.11,True,
+UF14,Mokelumne R. at Pardee (cdec_MKM: CDEC MKM daily FNF),cdec_MKM,arcsum,,I_COL003;I_MFM008;I_MOK079;I_NFM010;I_SFM005;I_SLTSP;I_TGC003;I_UBEAR,543.90,True,
+UF16,Stanislaus R. at Melones (cdec_NML: CDEC NML daily FNF),cdec_NML,anchor,ST,I_ANG017;I_BEARD;I_BVC007;I_CFS001;I_DONLL;I_LYONS;I_MFS013;I_MFS022;I_MFS047;I_MIL003;I_NFS005;I_NFS009;I_NFS033;I_PCRST;I_RLIEF;I_SFS030;I_SFS033;I_SPICE;I_STS072,903.74,True,
+UF15,Calaveras R. at Jenny Lind (cdec_NHG: CDEC NHG daily FNF),cdec_NHG,arcsum,,I_NHGAN,361.61,True,
+UF18,Tuolumne R. at Don Pedro (cdec_TLG: CDEC TLG daily FNF),cdec_TLG,anchor,TU,I_ELENR;I_HTCHY;I_LLOYD;I_PEDRO,1531.57,True,
+UF19,Merced R. at Exchequer (cdec_MRC: CDEC MRC daily FNF),cdec_MRC,anchor,ME,I_MCLRE,1036.08,True,
+UF20,Chowchilla R. at Buchanan (uf_20: DWR UF 20 monthly),uf_20,arcsum,,I_ESTMN,234.81,True,
+UF22,San Joaquin R. at Millerton (cdec_MIL: CDEC SBF daily FNF),cdec_MIL,anchor,SJ,I_MLRTN,1637.80,True,
+UF21,Fresno R. near Daulton (uf_21: DWR UF 21 monthly),uf_21,arcsum,,I_COT033;I_DBC024;I_FRS046;I_HNSLY,343.68,True,the three below-dam arcs may lie outside the Daulton gauge basin
