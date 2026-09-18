@@ -1,4 +1,4 @@
-"""Build data/dpl_entities/entities.csv — the multi-timescale training-entity registry.
+"""Build data/multifamily/entities.csv — the multi-timescale training-entity registry.
 
 One row per training entity
 (site x timescale x family), carrying: delineation arcs, depth-conversion area,
@@ -47,7 +47,7 @@ The uf_monthly family carries TWO area columns:
   - UF 7 is a composite of east-side creeks with no gauge by construction.
 
 Usage (sacsma conda env):
-    python dataprep/build_entities.py [--data-dir data] [--out data/dpl_entities/entities.csv]
+    python dataprep/build_entities.py [--data-dir data] [--out data/multifamily/entities.csv]
 """
 
 from __future__ import annotations
@@ -70,6 +70,22 @@ CDEC_STATION = {
 TULARE = ("ISB", "PNF", "SCC", "TRM")
 # BASIN_NESTS (catchments.py): BND as a watershed includes SHA's arc.
 BASIN_NESTS = {"BND": ["SHA"]}
+# Arcs the crosswalk cannot assign (no inflow series) that still belong in a
+# training footprint.  BND's FNF is naturalized at Bend Bridge, whose published
+# 8,900 mi^2 drainage includes the valley floor carried only by the series-less
+# I_SRBB_VAL node; sacsma/calsim/catchments.py (VALLEY_SYSTEMS) already adds
+# that node to BND's CalSim catchment -- this keeps the registry consistent.
+EXTRA_ARCS = {"BND": ["I_SRBB_VAL"]}
+
+# The inverse correction: arcs the crosswalk files under a basin's CalSim
+# system whose water the observing gauge never sees.  Deer Creek joins the
+# Yuba below the Smartville gauge, so CalSim correctly books its two arcs
+# as Yuba-system inflow, but the YRS full natural flow (naturalized at the
+# gauge, published 1,108 mi^2) contains none of that water -- keeping them
+# would average ~64 mi^2 of unobserved runoff into the training depth.
+# The crosswalk itself is untouched: it states CalSim's delivery topology,
+# and validation aggregations keep using it.
+TRIM_ARCS = {"YRS": ["I_DER001", "I_DER004"]}
 # SWAT model areas live in uf_gauges.csv (area_mi2_swat + area_source per
 # row)
 UF_FLAGS = {
@@ -86,9 +102,8 @@ BELOW_DAM = {"uf_08", "uf_10", "uf_11", "uf_14", "uf_15",
 MONTHLY_START, MONTHLY_END = "1984-10-01", "2014-09-30"
 FORCING_END = "2018-12-31"
 # De-dup rule: a watershed does NOT train at both daily and monthly unless
-# its daily record is short (starts ~2000 or later). Arc-match sweep +
-# record verification: each monthly entity below
-# shares its arc set with a CDEC daily whose record is contiguous back to
+# its daily record is short (starts ~2000 or later). Each monthly entity
+# below shares its arc set with a CDEC daily whose record is contiguous back to
 # 1985-88 (advertised starts in cdec_fnf/stations.csv; completeness verified
 # against gage.csv / fnf_daily.csv: SHA 99.7%, TLG 90.7% scattered-gap,
 # NML 98.1%, MIL 98.3%, CLE 94.5% usable), so the monthly twin is dropped.
@@ -108,6 +123,18 @@ DEDUP_DROPS = {
     "obs11_SHA": "cdec_SHA",  # SIS 1987-05
     "obs11_TNL": "cdec_CLE",  # CLE 1986-04
 }
+
+# Target-validity drops (built like the de-dup twins, then removed); empty
+# by default.  UF 3 is the documented case: its observation is the routed outflow at Rumsey,
+# below Clear Lake and Indian Valley, while its four arcs are the inflows
+# CalSim routes through those lakes itself (arc sum +16% volume, r 0.877 vs
+# the obs -- storage attenuation plus net lake evaporation, a shape
+# difference no scaling fixes), so a lake-free cell parameterization can
+# only fit that series by learning the lakes' behavior.  uf_03 is kept in
+# the registry (flag obs_routed_through_lakes) so a run can include it when
+# it is the only supervision of the Cache Creek cells; whether it trains is
+# the run's choice (``--basins``).  Add "uf_03" here to drop it at build time.
+TARGET_DROPS: tuple[str, ...] = ()
 
 
 def _entity(entity_id, family, timescale, site_id, name, delineation, arcs,
@@ -207,6 +234,8 @@ def build(data_dir: Path) -> pd.DataFrame:
         arcs = list(cw_arcs.get(basin, []))
         for nest in BASIN_NESTS.get(basin, []):
             arcs += cw_arcs.get(nest, [])
+        arcs += EXTRA_ARCS.get(basin, [])
+        arcs = [a for a in arcs if a not in TRIM_ARCS.get(basin, ())]
         st = CDEC_STATION[basin]
         olat, olon = stations.loc[st, ["lat", "lon"]]
         t0 = spans.loc[basin, "min"].date().isoformat()
@@ -222,13 +251,17 @@ def build(data_dir: Path) -> pd.DataFrame:
             olat, olon, f"cdec_stations:{st}", rec0, t0, t1, n_obs,
             "cdec15/gage.csv:flow",
             "train_only" if basin in TULARE else "")
-        # The old inherited-footprint PNF flag (footprint_overlaps_MIL_2.5pct)
-        # is gone: on the real SACSMA_15CDEC polygons the PNF x MLRTN overlap
-        # measures 0.09% - the 2.5% was a whole-cell counting artifact.
+        # PNF carries no overlap flag: on the SACSMA_15CDEC polygons the PNF x
+        # MLRTN overlap measures 0.09% (whole-cell counting on the cdec15_grid
+        # cell sets overstates it at 2.5%).
         if basin == "TRM":
             # The SACSMA_15CDEC polygon measures 575.8 mi^2 vs the published
             # 561; area_mi2 keeps the published value as the depth basis.
             _add_flag(row, "polygon_2.6pct_above_published_area")
+        if basin == "BND":
+            _add_flag(row, "footprint_includes_valley_node")
+        if basin == "YRS":
+            _add_flag(row, "footprint_excludes_below_gauge_arcs")
         rows.append(row)
 
     # --- cdec_daily: CLE + CSN --------------------------------------------
@@ -288,7 +321,9 @@ def build(data_dir: Path) -> pd.DataFrame:
     # the twin assertions run), then the monthly twins are dropped.
     ids = set(df["entity_id"])
     assert set(DEDUP_DROPS) <= ids and set(DEDUP_DROPS.values()) <= ids
+    assert set(TARGET_DROPS) <= ids
     df = df[~df["entity_id"].isin(DEDUP_DROPS)]
+    df = df[~df["entity_id"].isin(TARGET_DROPS)]
 
     fam_rank = {"uf_monthly": 0, "usgs_daily": 1, "cdec_daily": 2,
                 "obs11_monthly": 3}
@@ -300,7 +335,7 @@ def build(data_dir: Path) -> pd.DataFrame:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--data-dir", default="data", type=Path)
-    ap.add_argument("--out", default=Path("data/dpl_entities/entities.csv"), type=Path)
+    ap.add_argument("--out", default=Path("data/multifamily/entities.csv"), type=Path)
     args = ap.parse_args()
 
     df = build(args.data_dir)

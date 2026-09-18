@@ -122,7 +122,7 @@ def _dpl_train(args: argparse.Namespace) -> int:
         shape_sigma_floor=args.shape_sigma_floor,
         et_anchor_band=args.et_anchor_band,
         et_products=args.et_products,
-        init_from=args.init_from,
+        init_from=args.init_from, init_gate=args.init_gate,
         lr=args.lr,
         lr_warmup_epochs=args.warmup_epochs, n_epochs=args.epochs,
         spinup_refresh_every=args.spinup_refresh,
@@ -145,16 +145,35 @@ def _dpl_train(args: argparse.Namespace) -> int:
         dynamic_params=(tuple(args.dynamic_params.split(","))
                         if args.dynamic_params else ()),
         dynamic_amp=args.dynamic_amp, dynamic_window=args.dynamic_window,
+        mt_family_weight=args.mt_family_weight,
+        train_chunk_days=args.train_chunk_days,
+        nograd_window=args.nograd_window,
+        train_graph_segments=args.train_graph_segments,
         seed=args.seed, use_cuda_graphs=not args.no_graphs,
     )
     train(args.variant, data_dir=args.data_dir, out_dir=args.out, cfg=cfg,
-          resume=args.resume, domain=args.domain)
+          resume=args.resume, domain=args.domain,
+          basins=(tuple(args.basins.split(",")) if args.basins else None))
     return 0
 
 
 def _dpl_evaluate(args: argparse.Namespace) -> int:
+    import torch
+
     from .dpl.evaluate import evaluate_checkpoint
 
+    ck = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
+    if ck.get("domain") == "multifamily":
+        # multi-timescale checkpoints score per entity at native timescales
+        from .dpl.evaluate_multi_timescale import evaluate_checkpoint_mt
+
+        if args.temp_delta:
+            raise ValueError("--temp-delta is not wired for the "
+                             "multi-timescale domain")
+        evaluate_checkpoint_mt(args.checkpoint, data_dir=args.data_dir,
+                               out_dir=args.out,
+                               hydrographs=args.hydrographs)
+        return 0
     evaluate_checkpoint(args.checkpoint, data_dir=args.data_dir,
                         out_dir=args.out, parallel=not args.serial,
                         temp_delta=args.temp_delta)
@@ -324,15 +343,32 @@ def main(argv: list[str] | None = None) -> int:
                          "so the learned params ADAPT under a perturbed climate)")
     tr.add_argument("--data-dir", default="data", help="organized data/ store")
     tr.add_argument("--domain", default="15cdec",
-                    choices=["15cdec", "15cdec_grid"],
-                    help="training domain: 15cdec HRU cloud (7891) or the native "
-                         "1/16-deg Livneh grid (2074 cells); baked into the "
+                    choices=["15cdec", "15cdec_grid", "multifamily"],
+                    help="training domain: 15cdec HRU cloud (7891), the native "
+                         "1/16-deg Livneh grid (2074 cells), or the "
+                         "multi-timescale training entities (the registry in "
+                         "data/multifamily, restrict with --basins; "
+                         "daily + monthly targets on the registry envelope; "
+                         "physical variants only); baked into the "
                          "checkpoint so evaluate scores the same domain")
+    tr.add_argument("--basins", default="",
+                    help="comma list restricting training to these basin/"
+                         "entity ids (subset runs, e.g. debug slices or timing tests); "
+                         "'' = the full domain")
+    tr.add_argument("--mt-family-weight", default="none",
+                    help="multi-timescale family weighting: none = every "
+                         "valid daily entity weighs equally and the monthly "
+                         "term adds with coefficient 1 (baseline); equal = "
+                         "usgs/cdec/uf families carry equal thirds of the "
+                         "loss; or numeric shares 'usgs=0.27,cdec=0.54,uf=0.19' "
+                         "(renormalized over the families present, entities "
+                         "equal within a family; selection uses the same "
+                         "share-weighted family mean) (multifamily domain only)")
     tr.add_argument("--et", default="sac", choices=["sac", "noah"],
                     help="ET scheme: sac = frozen Hamon PET (scorable via "
                          "run_basin); noah = Noah canopy-resistance ET (NEW "
-                         "physics, needs per-cell tmin/tmax = 15cdec_grid, "
-                         "scored via the torch pipeline)")
+                         "physics, needs per-cell tmin/tmax = 15cdec_grid or "
+                         "multifamily, scored via the torch pipeline)")
     tr.add_argument("--noah-pet", default="hamon",
                     choices=["hamon", "priestley_taylor"],
                     help="Noah potential-ET source: hamon = temperature-only "
@@ -359,7 +395,9 @@ def main(argv: list[str] | None = None) -> int:
     tr.add_argument("--calsim-footprint", action="store_true",
                     help="re-foot basin aggregation onto the CalSim3 catchments "
                          "(overlap weights) to correct the coarse-grid footprint "
-                         "over-reach; the 4 Tulare/Kern basins keep full footprint")
+                         "over-reach; the 4 Tulare/Kern basins keep full footprint "
+                         "(15cdec domains only: no effect on multifamily, whose "
+                         "entity weights are already footprint overlaps)")
     tr.add_argument("--dynamic-params", default="",
                     help="comma list of params made climate-state-dependent "
                          "(Kpet | canopy params e.g. soil_chi); '' = static")
@@ -386,8 +424,11 @@ def main(argv: list[str] | None = None) -> int:
     tr.add_argument("--log-lambda", type=float, default=0.15,
                     help="low-flow log-space loss weight (0 disables)")
     tr.add_argument("--var-lambda", type=float, default=1.0,
-                    help="per-chunk variance-matching weight (std ratio - 1)^2; "
-                         "counters squared-error variance damping (0 disables)")
+                    help="per-chunk variance-matching weight on alpha = std ratio: "
+                         "(alpha-1)^2 up to |alpha-1| = 1, linear beyond, skipped "
+                         "for a basin-chunk under 0.1%% of the basin's record "
+                         "variance; counters squared-error variance damping "
+                         "(0 disables)")
     tr.add_argument("--bias-lambda", type=float, default=0.0,
                     help="per-chunk bias penalty (mean ratio - 1)^2; the KGE beta "
                          "term the MSE/NNSE loss lacks (0 disables)")
@@ -419,9 +460,16 @@ def main(argv: list[str] | None = None) -> int:
     tr.add_argument("--init-from", default="",
                     help="warm-start checkpoint (e.g. a baseline best.pt): net "
                          "weights load strict=False so fresh zero-init heads "
-                         "(e.g. --seasonal) start EXACTLY at the donor's field; "
+                         "(e.g. --seasonal) start EXACTLY at the donor's field, "
+                         "and the donor's feature standardization is reused "
+                         "(exact start even on a different --basins subset); "
                          "fresh optimizer/scheduler — pair with a low --lr for "
                          "the fine-tune regime")
+    tr.add_argument("--init-gate", default="warn", choices=["warn", "abort"],
+                    help="what to do when the epoch-0 selection of a warm "
+                         "start does not reproduce the donor's sel cal KGE "
+                         "(|d| > 1e-3): warn and continue, or abort the run "
+                         "(unattended fine-tunes)")
     tr.add_argument("--fourier-k", type=int, default=0,
                     help="net-v2: spatial Fourier feature order (4k extra "
                          "features; low-frequency regional fields; 0 = off)")
@@ -488,6 +536,20 @@ def main(argv: list[str] | None = None) -> int:
                          "full-prefix convention)")
     tr.add_argument("--lr", type=float, default=1e-3)
     tr.add_argument("--seed", type=int, default=0)
+    tr.add_argument("--train-chunk-days", type=int, default=366,
+                    help="TBPTT chunk length in days (366 = one water year; "
+                         "shorter chunks cut the backward's VRAM peak at the "
+                         "cost of a shorter gradient horizon)")
+    tr.add_argument("--nograd-window", type=int, default=512,
+                    help="CUDA-graph replay window (days) for the no-grad "
+                         "spinup/selection streams; numerics-neutral (256 "
+                         "on drivers that fault on very large graphs)")
+    tr.add_argument("--train-graph-segments", type=int, default=1,
+                    help="split the train-chunk CUDA graph into N consecutive "
+                         "segment graphs with autograd across them (same TBPTT "
+                         "gradient as the single graph up to float32 summation "
+                         "order); 2 keeps 366-day chunks under the graph-size "
+                         "limit of drivers that fault on whole-year captures")
     tr.add_argument("--no-graphs", action="store_true",
                     help="disable CUDA-graph capture (eager; much slower)")
     tr.add_argument("--resume", action="store_true",
@@ -512,6 +574,11 @@ def main(argv: list[str] | None = None) -> int:
                          "the perturbed daily sim (torch path only; label gets a "
                          "_dT suffix, gage metrics/figures are skipped) — the "
                          "TEACHER for the hybrid temperature-consistency loss")
+    ev.add_argument("--hydrographs", default="review",
+                    choices=["review", "all", "none"],
+                    help="multi-timescale checkpoints only: which per-entity "
+                         "diagnostics figures to draw (review = the cdec_daily "
+                         "+ uf_monthly set; all adds the 69 USGS entities)")
     ev.set_defaults(func=_dpl_evaluate)
 
     hy = dpl_sub.add_parser(

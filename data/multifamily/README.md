@@ -1,8 +1,9 @@
-# data/dpl_entities — multi-timescale training-entity registry
+# data/multifamily — multi-timescale training-entity registry
 
 `entities.csv`: 95 training entities — 9 `uf_monthly` + 69 `usgs_daily` +
 17 `cdec_daily` (15 + CLE + CSN). One row per (site × timescale × family);
-every target trains as an independent entity.
+every target trains as an independent entity. Which entities a run trains
+on is chosen at launch (`dpl train --basins`); the registry is the superset.
 
 Generated file — do not edit. Regenerate (sacsma conda env):
 `python dataprep/build_entities.py`. UF pour points are hand-maintained in
@@ -17,6 +18,17 @@ The short-daily pairs stay: uf_13/cdec_CSN (CSN 1999-04) and uf_06/cdec_BND
 (SBB 1999-05). Per-drop twin and record start: `DEDUP_DROPS` in the builder;
 record completeness verified against `cdec15/gage.csv` and
 `cdec_fnf/fnf_daily.csv`.
+
+A second build-time drop list exists for target validity (`TARGET_DROPS`,
+empty by default). `uf_03` (Cache Creek above Rumsey) is the documented case:
+the observation is the routed outflow below Clear Lake and Indian Valley,
+while its four arcs are the inflows CalSim routes through those lakes
+itself (+16% volume, r 0.877 against the obs), so a lake-free cell
+parameterization can only fit it by learning the lakes' storage and
+evaporation into the runoff parameters the inflow arcs then reapply. The
+row is kept (flag `obs_routed_through_lakes`) so a run without the USGS
+family can still supervise the Cache Creek cells; a run with the in-basin
+USGS gauges can leave it out via `--basins`.
 
 ## Columns
 
@@ -38,13 +50,25 @@ record completeness verified against `cdec15/gage.csv` and
 
 ## Flags
 
+Flags are annotations for readers: each marks a caveat of its row, and no code
+branches on them. Footprint and target choices live in the builder
+(`EXTRA_ARCS`, `TRIM_ARCS`, `TARGET_DROPS`), and which entities a run trains on
+is set by `--basins`.
+
 `train_only` (Tulare 4) · `polygon_2.6pct_above_published_area` (TRM —
 `area_mi2` keeps the published 561 as the depth basis) ·
 `outlet_below_delineation` (gauge/dam 5–13 km below the delineation) ·
-`obs_routed_through_lakes` (Cache — obs is the outflow below Clear
-Lake/Indian Valley) · `obs_includes_valley_floor` + `no_gauge_composite`
+`obs_includes_valley_floor` + `no_gauge_composite`
 (UF 7) · `calsim_ref_wetter_summers` (Bear) ·
-`daily_runs_6pct_below_monthly` (CSN) · `fnf_computed_at_trinity_dam` (CLE).
+`daily_runs_6pct_below_monthly` (CSN) · `fnf_computed_at_trinity_dam` (CLE) ·
+`footprint_includes_valley_node` (BND — the cell set includes the series-less
+`I_SRBB_VAL` valley node because the Bend Bridge FNF drainage covers the
+valley floor between the rim margin and the gauge; `area_mi2` keeps the
+published 8,900 as the depth basis) ·
+`footprint_excludes_below_gauge_arcs` (YRS — the two Deer Creek arcs
+`I_DER001`/`I_DER004` (64 mi²) join the Yuba below the Smartville gauge,
+so their water never passes the observing station; they are trimmed from
+the cell set and `area_mi2` keeps the published 1,108).
 
 Note for consumers of `arcs`: `I_RUB002` (FOL's list) has no
 `CalSim3_Merged` polygon — its terrain was dissolved into `MFA025`, so
@@ -52,7 +76,7 @@ coverage is complete.
 
 ## entity_cells.csv — cell sets and weights
 
-One row per (entity, region grid cell): 5,818 rows, 95 entities, 2,654
+One row per (entity, region grid cell): 5,849 rows, 95 entities, 2,652
 distinct cells of `data/region/grid_cells.csv`. Replaces the per-domain
 `hruinfo` tables as the aggregation basis for entity training.
 
@@ -81,17 +105,19 @@ true geometric area, plus a once-per-arc count of arc-overlap slivers
 (largest pairwise overlap 1.4% of the smaller arc; ≤0.04% at entity
 level).
 
-Cell-basis note: the training basis is 2,654 cells. The de-dup drops left
-the union unchanged (every dropped monthly twin's cells stay via its daily
-twin; TNL's extra `I_LWSTN` cells via `usgs_11525500`); the Tulare remap
-onto the real polygons then added 8 edge cells (the inherited cell sets
-were a strict subset of the new). The full-rim basis — every cell touching
-any rim polygon + USGS + Tulare — is 2,847 (an earlier tally of 2,853 was
-that basis, less a 6-cell bookkeeping difference). Statics coverage is
-**complete**: the full-grid ingest on main (`a77e4a8`) extended
-`data/region/soilveg_continuous.csv` and `lai_climatology.csv` to all
-4,410 region cells, closing what was a 256-cell gap in the training basis
-(447 full-rim).
+Cell basis: the store's cell union is 2,652 distinct cells. The dropped
+monthly twins contribute none of their own (their cells are their daily
+twins'; TNL's extra `I_LWSTN` cells are those of `usgs_11525500`); the
+Tulare polygons reach 8 edge cells beyond the `cdec15_grid` cell sets;
+cdec_BND's `I_SRBB_VAL` valley cells all serve uf_06 as well; uf_03 holds
+93 cells, 49 of which no other entity uses (its other 44 are shared with
+the three in-basin USGS gauges and uf_02/uf_04 edge overlaps); the two
+Deer Creek cells below the YRS gauge are not in the store. A run's basis
+is the union over the entities it selects (2,603 without uf_03). The
+full-rim basis — every cell touching any rim polygon + USGS + Tulare — is
+2,847. Statics coverage is **complete**: `data/region/soilveg_continuous.csv`
+and `lai_climatology.csv` cover all 4,410 region cells (full-grid ingest,
+`a77e4a8`).
 
 ## Where the observation series live
 
@@ -111,7 +137,7 @@ time.
 ## flowlens.csv — per-entity traced flow lengths
 
 One row per (entity, region grid cell), covering exactly the
-`entity_cells.csv` pairs (5,818 rows). `flowlen_m` is the along-network
+`entity_cells.csv` pairs (5,849 rows). `flowlen_m` is the along-network
 distance (m) from the cell to the entity outlet, traced on the
 HydroSHEDS v2 1-arcsec flow-direction grid (TanDEM-X basis,
 hydrosheds.org; see `references.bib`).
@@ -131,11 +157,11 @@ Conventions. The start pixel per cell is its **main-channel pixel**: the
 highest-accumulation pixel in the cell square (capped at 1.3× the entity
 area — a pixel carrying more water than the basin cannot drain to its
 outlet) whose path reaches the outlet; `center` marks cell-center starts
-(157 rows). The outlet is snapped to the nearest pixel (≤ ~2 km) whose
+(159 rows). The outlet is snapped to the nearest pixel (≤ ~2 km) whose
 implied upstream area falls within [0.2×, 5×] of the registry
 `area_mi2` (snapped-ACC/area landed at 0.75–1.11, median ≈ 1.00).
 `uf_07` (multi-outlet composite) traces each cell to where its path
-exits the entity footprint. `fallback` (1,362 rows, **6.0% of total area
+exits the entity footprint. `fallback` (1,362 rows, **5.9% of total area
 weight**) = haversine × the entity's median traced sinuosity, for cells
 none of whose candidates drain through the outlet — below-outlet valley
 cells, square-overlap edge slivers, and sub-cell basins; per-entity

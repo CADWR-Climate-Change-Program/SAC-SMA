@@ -14,9 +14,11 @@ unstable over one-year chunks):
 
 Optional low-flow emphasis: ``+ lambda * (log(sim+eps) - log(obs+eps))^2``.
 
-Optional variance matching: ``+ var_lambda * (std(sim)/std(obs) - 1)^2`` per
-basin over the chunk's finite-obs days.  Squared error alone is variance-
-damping — its optimum is ``alpha = r < 1`` (the classic NSE peak-flattening),
+Optional variance matching: ``+ var_lambda * rho(std(sim)/std(obs) - 1)`` per
+basin over the chunk's finite-obs days, with ``rho(d) = d^2`` up to
+``|d| = 1`` and ``2|d| - 1`` beyond (Huber), skipped for a basin-chunk whose
+observed variance is under 0.1% of the basin's record variance.  Squared
+error alone is variance-damping — its optimum is ``alpha = r < 1`` (the classic NSE peak-flattening),
 which the 2026-07-10 static run showed directly (mean cal alpha 0.88 vs the
 GA's 1.08, costing ~0.1 KGE on the strong basins).  A chunk std over ~366
 days is a stable statistic, unlike chunk-local correlation/mean ratios —
@@ -75,8 +77,23 @@ def masked_basin_loss(
         ms = (sim_f.sum(dim=1) / n_safe).unsqueeze(1)
         vo = ((obs_f - mo) ** 2 * finite).sum(dim=1) / n_safe
         vs = ((sim_f - ms) ** 2 * finite).sum(dim=1) / n_safe
+        # a chunk whose obs are ~flat FOR THIS BASIN (an ephemeral gauge's
+        # zero-flow season, a window-masked sliver) carries no variance
+        # signal to match — the ratio explodes through the 1e-12 clamp
+        # (1e6+ chunk losses occur on the multifamily domain's west-side
+        # gauges), and an absolute floor alone still passes near-flat
+        # chunks whose tiny denominator lets this one term hijack the
+        # gradient.  The gate is therefore RELATIVE — the chunk must carry
+        # >= 0.1% of the basin's full-record variance (absolute floor kept
+        # for ~flat records) — and the penalty is Huber-capped (quadratic
+        # to |alpha - 1| = 1, linear beyond) so no surviving chunk
+        # contributes unboundedly.  Skipped chunks keep their NNSE/log
+        # terms.  Branch-free.
+        has_var = (vo > torch.clamp(1e-3 * obs_var, min=1e-8)).to(per_basin.dtype)
         alpha = vs.clamp_min(1e-12).sqrt() / vo.clamp_min(1e-12).sqrt()
-        per_basin = per_basin + var_lambda * (alpha - 1.0) ** 2
+        d = alpha - 1.0
+        pen = torch.where(d.abs() <= 1.0, d * d, 2.0 * d.abs() - 1.0)
+        per_basin = per_basin + var_lambda * has_var * pen
 
     if bias_lambda > 0.0:
         # KGE beta term: per-basin chunk mean-ratio (sim/obs).  Penalizes volume

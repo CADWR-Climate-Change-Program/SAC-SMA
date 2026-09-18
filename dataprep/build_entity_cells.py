@@ -1,4 +1,4 @@
-"""Build data/dpl_entities/entity_cells.csv — per-entity cell sets and weights.
+"""Build data/multifamily/entity_cells.csv — per-entity cell sets and weights.
 
 One row per (entity, region grid cell) with the proportional square-overlap
 area weight (overlap_mi2). Outlet coordinates stay in the
@@ -24,7 +24,7 @@ one allowed skip.
 
 Usage (sacsma conda env, from the repo root):
     python dataprep/build_entity_cells.py [--data-dir data]
-        [--out data/dpl_entities/entity_cells.csv]
+        [--out data/multifamily/entity_cells.csv]
 """
 
 from __future__ import annotations
@@ -65,7 +65,7 @@ def _map_weights(catch: gpd.GeoDataFrame, cells: pd.DataFrame,
 
 def build(data_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Return (entity_cells, checks) — checks has one gate row per entity."""
-    ent = pd.read_csv(data_dir / "dpl_entities" / "entities.csv",
+    ent = pd.read_csv(data_dir / "multifamily" / "entities.csv",
                       dtype={"site_id": str})
     cells = pd.read_csv(
         data_dir / "region" / "grid_cells.csv")[["key", "lat", "lon"]]
@@ -76,10 +76,9 @@ def build(data_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
     sq_mi = catch.set_index("node")["sq_mi"]
     arc_map = _map_weights(catch, cells, "calsim arcs")
 
-    # USGS watersheds, shaped like a load_catchments frame. make_valid is
-    # belt-and-braces: this layer is valid on this checkout, but at least
-    # one other environment (different GEOS/PROJ) produced zero areas for
-    # it without the repair.
+    # USGS watersheds, shaped like a load_catchments frame. make_valid is a
+    # safeguard: some GEOS/PROJ builds return zero areas for this layer
+    # without the repair.
     ws = gpd.read_file(data_dir / "usgs" / "gis" / "usgs_watersheds.gpkg")
     ws_catch = gpd.GeoDataFrame(
         {"cid": range(len(ws)), "node": ws["gid"].astype(str),
@@ -89,8 +88,8 @@ def build(data_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
     usgs_map = _map_weights(ws_catch, cells, "usgs watersheds")
 
     # Tulare 4: the original SAC-SMA boundary polygons, mapped square-overlap
-    # like every other polygon source. make_valid is belt-and-braces here
-    # (all four are valid on this checkout; one of the other 11 is not).
+    # like every other polygon source. make_valid is a safeguard here (the
+    # four polygons are valid as stored; one of the other 11 is not).
     tul = gpd.read_file(data_dir / "cdec15" / "gis" / "SACSMA_15CDEC.geojson")
     tul = tul[tul["Name"].isin(TULARE)].reset_index(drop=True)
     tul_ea = tul.to_crs(5070)
@@ -189,24 +188,34 @@ def gates(df: pd.DataFrame, checks: pd.DataFrame, grid_keys: set) -> None:
     # slivers (largest pairwise overlap 1.4% of the smaller arc;
     # entity-level effect <= 0.04%). Worst combined deviation: uf_10 +0.14%.
     named = checks.set_index("entity_id")["geom_ref"]
+    # cdec_BND: 9,083.72 = the 8,401.7 strip+SHSTA union + I_SRBB_VAL (682.0),
+    # added via EXTRA_ARCS in build_entities.py (the Bend Bridge FNF drainage
+    # includes the valley floor; depth basis stays the published 8,900).
+    # cdec_YRS: 1,129.25 = the 18 crosswalk arcs less the two Deer Creek
+    # arcs trimmed via TRIM_ARCS in build_entities.py (64.18 mi^2 joining
+    # the Yuba below the Smartville gauge; depth basis stays the published
+    # 1,108).
     for eid, want in (("cdec_CLE", 692.86), ("cdec_SHA", 6588.45),
-                      ("cdec_FOL", 1863.78), ("cdec_BND", 8401.7)):
+                      ("cdec_FOL", 1863.78), ("cdec_BND", 9083.72),
+                      ("cdec_YRS", 1129.25)):
         assert abs(named[eid] - want) < 0.1, (eid, named[eid])
 
     tul = checks[checks["delineation"] == "sacsma_15cdec_gis"]
     assert dict(zip(tul["entity_id"], tul["n_cells"], strict=True)) == {
         "cdec_ISB": 177, "cdec_PNF": 133, "cdec_SCC": 40, "cdec_TRM": 62}
 
-    # The training basis: 2,654 distinct cells. The de-dup drops left the
-    # union unchanged at 2,646 (every dropped monthly twin's cells stay via
-    # its daily twin; obs11_TNL's extra I_LWSTN cells via usgs_11525500);
-    # the Tulare remap onto the SACSMA_15CDEC polygons then added 8 edge
-    # cells (the inherited cell sets were a strict subset of the new).
-    # Statics cover all 4,410 region cells (a77e4a8) — no gap from the
-    # additions. An earlier full-rim tally logged 2,853 cells (all 200
-    # Merged polygons; exact recompute 2,847).
+    # The training basis: the union over all entities is 2,652 distinct
+    # cells. Dropped monthly twins add none (their cells are their daily
+    # twins'; obs11_TNL's extra I_LWSTN cells are usgs_11525500's); the
+    # SACSMA_15CDEC polygons give the Tulare basins 8 edge cells beyond the
+    # cdec15_grid cell sets; uf_03 holds 93 cells, 49 of them used by no
+    # other entity (the other 44 are shared with the three in-basin USGS
+    # gauges and the uf_02/uf_04 edge overlaps); the two Deer Creek cells
+    # below the YRS gauge are not in the store. Statics cover all 4,410
+    # region cells (a77e4a8). The full-rim basis (all 200 Merged polygons +
+    # USGS + Tulare) is 2,847 cells.
     union = df["key"].nunique()
-    assert union == 2654, union
+    assert union == 2652, union
 
     fam = checks.groupby("family").agg(
         entities=("entity_id", "size"), rows=("n_cells", "sum"),
@@ -225,7 +234,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--data-dir", default=Path("data"), type=Path)
     ap.add_argument("--out",
-                    default=Path("data/dpl_entities/entity_cells.csv"),
+                    default=Path("data/multifamily/entity_cells.csv"),
                     type=Path)
     args = ap.parse_args()
 

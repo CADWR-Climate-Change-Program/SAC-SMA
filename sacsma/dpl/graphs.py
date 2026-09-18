@@ -35,6 +35,7 @@ from .data import ET_MAXM, DomainTensors
 from .et_noah import NoahCanopyState
 from .forward import PipelineState, routing_uh, run_window
 from .loss import level_hinge_loss, masked_basin_loss, shape_pull_loss
+from .multi_timescale import monthly_nnse_loss
 from .routing import N_TAPS
 from .sma import SacState
 from .snow17 import Snow17State
@@ -125,9 +126,15 @@ class _WindowBase:
 
     def _pingpong(self) -> None:
         assert self.state_out is not None
-        for i_buf, o_buf in zip(_state_tensors(self.state_in),
-                                _state_tensors(self.state_out), strict=True):
-            i_buf.copy_(o_buf)
+        # value copy only: TrainChunk's state_out carries autograd history from
+        # the capture pass; copying it WITH grad would attach that history to the
+        # static state_in buffers, and an eager chunk started from get_state()
+        # (the multi-timescale tail) would then backward into the freed capture
+        # graph ("Trying to backward through the graph a second time").
+        with torch.no_grad():
+            for i_buf, o_buf in zip(_state_tensors(self.state_in),
+                                    _state_tensors(self.state_out), strict=True):
+                i_buf.copy_(o_buf)
 
 
 class NoGradWindow(_WindowBase):
@@ -203,7 +210,10 @@ class TrainChunk(_WindowBase):
     def __init__(self, net: torch.nn.Module, dom: DomainTensors,
                  cfg: DplConfig, length: int, x: torch.Tensor,
                  obs_var: torch.Tensor, weight: torch.Tensor | None = None,
-                 swe_basin_w: torch.Tensor | None = None):
+                 swe_basin_w: torch.Tensor | None = None,
+                 mt_rows: torch.Tensor | None = None,
+                 mt_var: torch.Tensor | None = None,
+                 daily_scale: float = 1.0, monthly_scale: float = 1.0):
         super().__init__(dom, length, et_mode=cfg.et_mode,
                          need_tmm=cfg.sac_pet == "priestley_taylor")
         b = dom.W.shape[0]
@@ -240,6 +250,19 @@ class TrainChunk(_WindowBase):
             self.swe_sig = torch.ones(b, ET_MAXM, device=dev, dtype=dt)
             self.swe_mask = torch.zeros(ET_MAXM, device=dev, dtype=dt)
             self.swe_w = swe_basin_w.detach().clone()   # (B,) static snow mask
+        #: monthly-flow term (multi-timescale domain): static per-chunk target
+        #: buffers like the ET/SWE ones.  Init tgt=0/fin=0 -> the term is 0 at
+        #: capture while its backward path IS captured (mask-zero pattern).
+        self.mt = mt_rows is not None
+        self.daily_scale = daily_scale
+        self.monthly_scale = monthly_scale
+        if self.mt:
+            m = int(mt_rows.numel())
+            self.mt_rows = mt_rows.detach().clone()
+            self.mt_var = mt_var.detach().clone()
+            self.mt_bucket = torch.zeros(length, ET_MAXM, device=dev, dtype=dt)
+            self.mt_tgt = torch.zeros(m, ET_MAXM, device=dev, dtype=dt)
+            self.mt_fin = torch.zeros(m, ET_MAXM, device=dev, dtype=dt)
 
         def _step():
             out = net(self.x)
@@ -286,6 +309,13 @@ class TrainChunk(_WindowBase):
                 loss = loss + self.swe_lambda * shape_pull_loss(
                     swe_monthly, self.swe_mu, self.swe_sig, self.swe_mask,
                     basin_w=self.swe_w)
+            if self.mt:
+                # multi-timescale monthly NNSE on the same simulated flow; the
+                # scales only depart from 1.0 under family weighting
+                sim_m = basin[self.mt_rows] @ self.mt_bucket
+                loss = self.daily_scale * loss + self.monthly_scale * \
+                    monthly_nnse_loss(sim_m, self.mt_tgt, self.mt_fin,
+                                      self.mt_var)
             return loss, st
 
         net.train()
@@ -344,18 +374,182 @@ class TrainChunk(_WindowBase):
             self.swe_sig.copy_(sig)
             self.swe_mask.copy_(mask)
 
+    def set_mt_target(self, bucket, tgt, fin) -> None:
+        """Copy this chunk's monthly-flow target (day->month bucket, observed
+        mm/month 0-filled, finite-slot mask) into the static buffers."""
+        if self.mt:
+            self.mt_bucket.copy_(bucket)
+            self.mt_tgt.copy_(tgt)
+            self.mt_fin.copy_(fin)
+
     def run(self, pr, ta, doy, leap, obs, tmin=None, tmax=None,
-            lai=None, state_idx=None, et_target=None, swe_target=None) -> float:
+            lai=None, state_idx=None, et_target=None, swe_target=None,
+            mt_target=None) -> float:
         """One chunk: replay forward+backward, carry state, return the loss.
         Gradients are left in the net's static ``.grad`` tensors.  ``et_target``
-        (bucket, mu, sig, mask, lo, hi) and ``swe_target`` (bucket_mean, mu, sig,
-        mask) are copied in when the respective obs losses are active."""
+        (bucket, mu, sig, mask, lo, hi), ``swe_target`` (bucket_mean, mu, sig,
+        mask) and ``mt_target`` (bucket, tgt, fin) are copied in when the
+        respective loss terms are active."""
         self._copy_forcing(pr, ta, doy, leap, tmin, tmax, lai, state_idx)
         self.obs.copy_(obs)
         if et_target is not None:
             self.set_et_target(*et_target)
         if swe_target is not None:
             self.set_swe_target(*swe_target)
+        if mt_target is not None:
+            self.set_mt_target(*mt_target)
         self.graph.replay()
         self._pingpong()
         return float(self.loss.detach())
+
+
+def _unflatten_state(ts, noah: bool) -> PipelineState:
+    """Inverse of :func:`_state_tensors` (same field order as ``_STATE_FIELDS``)."""
+    canopy = NoahCanopyState(wc=ts[12]) if noah else None
+    return PipelineState(snow=Snow17State(*ts[0:4]), sac=SacState(*ts[4:10]),
+                         hist_surf=ts[10], hist_base=ts[11], canopy=canopy)
+
+
+class SegmentedTrainWindow:
+    """Autograd-composable graphed ``run_window`` for one TBPTT chunk, captured as
+    ``segments`` consecutive sub-windows through ``torch.cuda.make_graphed_callables``
+    (a forward graph and a backward graph per segment, one shared memory pool).
+
+    Why it exists: some GPU/driver combinations (RTX A4500 under WDDM, driver
+    596.86) fault when a captured graph is very large -- the whole-year fwd+bwd
+    :class:`TrainChunk` exceeds that limit while half-year pieces do not.
+    Splitting the *capture* does not split the *gradient*: the chunk loss is
+    formed eagerly on the concatenated segment flows, and backward runs the
+    segments' captured backward graphs in reverse, passing the state gradient
+    from each segment into the previous one (chain rule through the carried
+    state).  The optimisation problem is therefore the same 366-day TBPTT as the
+    single-graph path; differences are float32 summation order only.
+
+    Only the day-stepped pipeline is graphed.  ``net(x)``, ``routing_uh`` and the
+    loss stay eager (they are tiny), so no static ``.grad`` buffers, no static
+    target buffers and no graph-side RNG are involved.  ``return_tet`` /
+    ``return_swe`` (ET/SWE auxiliary losses) are not supported.
+    """
+
+    def __init__(self, dom: DomainTensors, cfg: DplConfig, length: int,
+                 segments: int, params: dict[str, torch.Tensor],
+                 uh: tuple[torch.Tensor, torch.Tensor],
+                 canopy_params: dict[str, torch.Tensor] | None = None,
+                 *, sample_c0: int | None = None):
+        if segments < 1 or segments > length:
+            raise ValueError(f"segments {segments} outside [1, {length}]")
+        n, dev, dt = dom.n_hru, dom.device, dom.dtype
+        self.dom, self.cfg, self.length, self.segments = dom, cfg, length, segments
+        self.noah = cfg.et_mode == "noah"
+        self.need_tmm = cfg.sac_pet == "priestley_taylor" or self.noah
+        base, extra = divmod(length, segments)
+        self.lens = [base + (1 if j < extra else 0) for j in range(segments)]
+        self.offs = [sum(self.lens[:j]) for j in range(segments)]
+        self.param_keys = tuple(params.keys())
+        self.canopy_keys = (tuple(canopy_params.keys())
+                            if self.noah and canopy_params is not None else ())
+        self.n_state = 13 if self.noah else 12
+
+        # per-segment static forcing buffers (never require grad)
+        self.bufs: list[dict] = []
+        for L in self.lens:
+            self.bufs.append({
+                "pr": torch.zeros(n, L, device=dev, dtype=dt),
+                "ta": torch.zeros(n, L, device=dev, dtype=dt),
+                "doy": torch.zeros(L, device=dev, dtype=dom.doy.dtype),
+                "leap": torch.zeros(L, device=dev, dtype=torch.bool),
+                "tmin": torch.zeros(n, L, device=dev, dtype=dt) if self.need_tmm else None,
+                "tmax": torch.zeros(n, L, device=dev, dtype=dt) if self.need_tmm else None,
+                "lai": torch.zeros(n, L, device=dev, dtype=dt) if self.noah else None,
+                "state_idx": (torch.zeros(n, L, device=dev, dtype=dt)
+                              if dom.state is not None else None),
+            })
+        if sample_c0 is not None:          # realistic forcing for warmup/capture
+            for j in range(segments):
+                self._copy_forcing(j, sample_c0)
+
+        fns, sample_args = [], []
+        for j in range(segments):
+            fns.append(self._make_fn(self.bufs[j]))
+            st0 = PipelineState(
+                snow=Snow17State.zeros(n, dev, dt),
+                sac=SacState.reference_init(n, dev, dt),
+                hist_surf=torch.zeros(n, N_TAPS - 1, device=dev, dtype=dt),
+                hist_base=torch.zeros(n, N_TAPS - 1, device=dev, dtype=dt),
+                canopy=NoahCanopyState.zeros(n, dev, dt) if self.noah else None)
+            st_args = tuple(t.requires_grad_(True) for t in _state_tensors(st0))
+            p_args = tuple(params[k].detach().clone().requires_grad_(True)
+                           for k in self.param_keys)
+            uh_args = (uh[0].detach().clone().requires_grad_(True),
+                       uh[1].detach().clone().requires_grad_(True))
+            c_args = tuple(canopy_params[k].detach().clone().requires_grad_(True)
+                           for k in self.canopy_keys)
+            sample_args.append(st_args + p_args + uh_args + c_args)
+        self.fns = torch.cuda.make_graphed_callables(
+            tuple(fns), tuple(sample_args), allow_unused_input=True)
+
+    def _copy_forcing(self, j: int, c0: int) -> None:
+        dom, buf = self.dom, self.bufs[j]
+        a, b = c0 + self.offs[j], c0 + self.offs[j] + self.lens[j]
+        pr, ta, doy, leap = dom.chunk(a, b)
+        buf["pr"].copy_(pr)
+        buf["ta"].copy_(ta)
+        buf["doy"].copy_(doy)
+        buf["leap"].copy_(leap)
+        if self.need_tmm:
+            tn, tx = dom.chunk_tmm(a, b)
+            buf["tmin"].copy_(tn)
+            buf["tmax"].copy_(tx)
+        if self.noah:
+            buf["lai"].copy_(dom.chunk_lai(a, b))
+        if buf["state_idx"] is not None:
+            buf["state_idx"].copy_(dom.chunk_state(a, b))
+
+    def _make_fn(self, buf: dict):
+        dom, cfg = self.dom, self.cfg
+        n_state, pk, ck, noah = self.n_state, self.param_keys, self.canopy_keys, self.noah
+
+        def fn(*args):
+            st = _unflatten_state(args[:n_state], noah)
+            i = n_state
+            params = dict(zip(pk, args[i:i + len(pk)], strict=True))
+            i += len(pk)
+            uh = (args[i], args[i + 1])
+            i += 2
+            cp = dict(zip(ck, args[i:i + len(ck)], strict=True)) if ck else None
+            flow, st_out = run_window(
+                buf["pr"], buf["ta"], buf["doy"], buf["leap"], dom.lat_rad, dom.elev,
+                params, uh, st, n_inc=cfg.n_inc, perc_mode=cfg.perc_mode,
+                fracp_floor=cfg.fracp_floor, ninc_mode="fixed",
+                et_mode=cfg.et_mode, canopy_params=cp,
+                tmin=buf["tmin"], tmax=buf["tmax"], veg_frac=dom.veg_frac,
+                lai=buf["lai"], noah_pet=cfg.noah_pet, sac_pet=cfg.sac_pet,
+                pt_snow_albedo=cfg.pt_snow_albedo,
+                pt_dewpoint_depression=cfg.pt_dewpoint_depression,
+                canopy_lite=cfg.canopy_lite, state_idx=buf["state_idx"])[:2]
+            # graphed callables must not return their own inputs (static
+            # buffers would alias); a pass-through state field gets a copy
+            in_ptrs = {a.data_ptr() for a in args}
+            outs = [flow] + list(_state_tensors(st_out))
+            return tuple(o.clone() if o.data_ptr() in in_ptrs else o for o in outs)
+        return fn
+
+    def forward(self, c0: int, params: dict[str, torch.Tensor],
+                uh: tuple[torch.Tensor, torch.Tensor],
+                canopy_params: dict[str, torch.Tensor] | None,
+                state: PipelineState) -> tuple[torch.Tensor, PipelineState]:
+        """Graphed ``run_window`` over ``[c0, c0 + length)``; returns
+        (flow (N, length), state) with autograd through every segment."""
+        p_args = tuple(params[k] for k in self.param_keys)
+        uh_args = (uh[0], uh[1])
+        c_args = tuple(canopy_params[k] for k in self.canopy_keys)
+        # segment 1 starts from a detached carried state (TBPTT boundary); the
+        # graphs were captured with grad-requiring state inputs, so mark leaves
+        st = tuple(t.detach().requires_grad_(True) for t in _state_tensors(state))
+        flows = []
+        for j in range(self.segments):
+            self._copy_forcing(j, c0)
+            out = self.fns[j](*(st + p_args + uh_args + c_args))
+            flows.append(out[0])
+            st = tuple(out[1:])
+        return torch.cat(flows, dim=1), _unflatten_state(st, self.noah)

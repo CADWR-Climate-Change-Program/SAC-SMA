@@ -3,12 +3,14 @@
 A complete manifest of the tracked data store — what each file is, where it came
 from, and what consumes it. The store is split by application: `cdec15/` (the
 15-CDEC domain) and `calsim/` (the CalSim/CalLite domains `9unimp`, `11obs`,
-`12rim`, plus the CalSim3 and VIC references), with three cross-cutting stores
+`12rim`, plus the CalSim3 and VIC references), with four cross-cutting stores
 alongside them — `region/` (the auxiliary-data region store the dPL models draw
-on), `usgs/` (cleaned gauge observations inside the CalSim3 domain) and
+on), `usgs/` (cleaned gauge observations inside the CalSim3 domain),
 `dwr_unimpaired/` (DWR's published Central Valley unimpaired flows — the source of the
 `9unimp`/`11obs` calibration targets — plus the SWAT rim simulation of the same
-quantity). Every file in the application stores is
+quantity) and `multifamily/` (the training-entity registry of the dPL multi-timescale
+domain). A fifth, `cdec_fnf/` (CDEC daily full-natural-flow pulls beyond the 15-CDEC
+store), is documented in its own README. Every file in the application stores is
 referenced by package code; the cross-cutting stores are built and consumed by
 `dataprep/` and the dPL work. Sizes are approximate.
 
@@ -99,6 +101,7 @@ same off-grid reason.
 | `gage.csv` | 5.8 MB | **Observed daily CDEC full-natural-flow** (the calibration target), 1986–2019, converted from cfs to mm/day over `basin_area.csv`; negatives/sentinels → NaN | `cdec15.load_gage` → `cdec15.plots` |
 | `simflow.csv` | 15 MB | The original **MATLAB simulated** gauge flow, 1915–2018 — the exact-reproduction (parity) target | `io.load_reference` → plots, parity checks |
 | `basin_area.csv` | <0.01 MB | Published drainage areas `[basin, area_mi2]` for the 15 basins | `io.load_basin_area` — mm/day ↔ cfs |
+| `gis/SACSMA_15CDEC.geojson` | 3.6 MB | The original SAC-SMA delineations of the 15 basins (polygons, `Name` = basin code). The four Tulare basins (ISB, PNF, SCC, TRM) have no CalSim3 polygons, so their `data/multifamily/` footprints come from here | `dataprep/build_entity_cells.py` |
 
 ## `data/calsim/` — the CalSim/CalLite application
 
@@ -421,3 +424,19 @@ Verified by `usgs_flows.py --verify`: `mm → cfs` round-trip to 1.65e-07, no
 negative discharge, and mean annual runoff depth 10–1386 mm/yr — dry Coast
 Range and Tehachapi creeks at the bottom, high-Sierra snow basins at the top,
 with the snow-regime median (806 mm/yr) about twice rain and mixed (~425).
+
+## `data/multifamily/` — multi-timescale training-entity registry
+
+The inputs of the dPL `multifamily` training domain: one row per training target
+(site × timescale × source family), each with its own cell set, area weights and flow
+lengths on the region grid. Statics, LAI and forcing are not duplicated here (the loaders
+join them from `region/` by cell key), and the observation series stay in their source
+stores. **`data/multifamily/README.md` is the reference** for columns, flags, counts, the
+de-duplication rule, the footprint conventions and the flow-length method. All three
+tables are generated, never hand-edited.
+
+| File | Size | Built by |
+|------|------|----------|
+| `entities.csv` | 0.02 MB | `dataprep/build_entities.py` — the registry |
+| `entity_cells.csv` | 0.3 MB | `dataprep/build_entity_cells.py` — per-entity cell sets and area weights |
+| `flowlens.csv` | 0.3 MB | `dataprep/build_flowlens.py` — per-cell flow length to each entity's outlet |

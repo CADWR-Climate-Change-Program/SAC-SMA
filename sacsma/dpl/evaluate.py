@@ -528,6 +528,11 @@ def load_net_from_checkpoint(
         dev = torch.device(device)
     dom = load_domain_tensors(data_dir, domain=domain, device=dev,
                               dtype=torch.float64,
+                              # honor a --basins training subset stored in the
+                              # checkpoint; checkpoints without the key load
+                              # the full domain
+                              basins=(tuple(ck["basins"])
+                                      if ck.get("basins") else None),
                               dynamic_window=(nc.get("dynamic_window", 365)
                                               if dyn else None),
                               calsim_footprint=ck.get("cfg", {}).get(

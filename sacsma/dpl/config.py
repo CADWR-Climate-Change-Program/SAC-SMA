@@ -21,6 +21,8 @@ core package paths.
 
 from __future__ import annotations
 
+import math
+
 import os
 from dataclasses import dataclass, field
 
@@ -210,8 +212,10 @@ class DplConfig:
     loss: str = "nnse"          # "nnse" (variance-normalized MSE) | "mse"
     log_loss_lambda: float = 0.15
     log_loss_eps: float = 0.01  # mm/day
-    #: per-chunk variance-matching penalty (std-ratio - 1)^2 — counters the
-    #: squared-error variance damping (alpha -> r); NOT chunked KGE.
+    #: per-chunk variance-matching penalty on alpha = std-ratio: (alpha - 1)^2 up
+    #: to |alpha - 1| = 1, linear beyond, skipped for a basin-chunk under 0.1% of
+    #: the basin's record variance — counters the squared-error variance damping
+    #: (alpha -> r); NOT chunked KGE.
     var_loss_lambda: float = 1.0
     #: per-chunk BIAS penalty (mean-ratio beta - 1)^2 — the KGE beta term the
     #: MSE/NNSE loss lacks (it penalizes correlation + variance but NOT volume
@@ -278,13 +282,38 @@ class DplConfig:
     #: min-max level envelope is degenerate, so one product REQUIRES the P-Q
     #: anchor (``et_anchor_band`` > 0) as the level constraint.
     et_products: tuple[str, ...] = ()
+    #: multi-timescale family weighting (multifamily domain only): "none" =
+    #: every valid daily entity weighs equally in the chunk mean and the
+    #: monthly term adds with coefficient 1 (the baseline); "equal" = the
+    #: three families carry equal thirds of the loss — usgs_daily and
+    #: cdec_daily each get half the daily mean's mass (per-entity weight
+    #: 1/n_family) and the daily/monthly terms are scaled 2/3 and 1/3.
+    #: Numeric shares, e.g. "usgs=0.27,cdec=0.54,uf=0.19": each family's
+    #: share of the loss (renormalized over the families present, entities
+    #: equal within a family); the daily term is scaled by the daily
+    #: families' shares and the monthly term by the monthly family's, and
+    #: checkpoint selection is the same share-weighted mean of the family
+    #: means.  Guards against combining with adaptive_loss (both drive the
+    #: same per-basin weight vector).  Ignored outside the multi-timescale
+    #: domain.
+    mt_family_weight: str = "none"
     #: warm-start checkpoint path: the net's weights are loaded strict=False
     #: BEFORE training (heads absent from the donor — e.g. a fresh seasonal
     #: head — keep their zero-init, so the run starts EXACTLY at the donor's
-    #: parameter field).  Optimizer/scheduler start fresh; combine with a low
-    #: lr for the fine-tune regime (obs losses select within the donor's flow-
-    #: optimal plateau instead of fighting a from-scratch descent).  "" = off.
+    #: parameter field).  The donor's feature standardization is reused, so
+    #: the start is exact even when this run trains a different entity subset
+    #: (--basins) than the donor.  Optimizer/scheduler start fresh; combine
+    #: with a low lr for the fine-tune regime (obs losses select within the
+    #: donor's flow-optimal plateau instead of fighting a from-scratch
+    #: descent).  "" = off.
     init_from: str = ""
+    #: ep0-donor gate action when the epoch-0 selection does not reproduce
+    #: the donor's sel cal KGE (|d| > 1e-3): "warn" prints and continues;
+    #: "abort" raises, for unattended warm starts.  The gate compares the
+    #: selection scalar directly when the donor trained the same entity set
+    #: under the same statistic, and otherwise recomputes the donor's own
+    #: statistic over its entities from this run's per-entity KGE.
+    init_gate: str = "warn"
 
     # -- parameter net (net-v2 knobs; defaults = the v1 architecture) --------
     hidden: int = 64
@@ -402,6 +431,10 @@ class DplConfig:
     #: ~300 tiny kernels/day).  Falls back to eager on CPU or capture failure.
     use_cuda_graphs: bool = True
     nograd_window: int = 512        # replay window for spinup/selection streaming
+    #: >1 splits the train-chunk capture into this many consecutive segment
+    #: graphs (forward + backward each, autograd across them) -- for drivers
+    #: that fault on very large graphs; 1 = the single whole-chunk graph.
+    train_graph_segments: int = 1
     seed: int = 0
     extras: dict = field(default_factory=dict)
 
@@ -429,6 +462,21 @@ class DplConfig:
             raise ValueError(
                 "et_anchor_band re-targets the level hinge — it needs "
                 "et_level_lambda > 0 to have any effect")
+        if self.init_gate not in ("warn", "abort"):
+            raise ValueError(f"init_gate {self.init_gate!r}")
+        if self.mt_family_weight not in ("none", "equal"):
+            family_shares(self.mt_family_weight)   # raises on a bad spec
+        if self.train_graph_segments < 1:
+            raise ValueError(f"train_graph_segments {self.train_graph_segments} < 1")
+        if self.nograd_window < 1:
+            raise ValueError(f"nograd_window {self.nograd_window} < 1")
+        if not 30 <= self.train_chunk_days <= 366:
+            # > 366 days can hold a 14th complete calendar month, overflowing
+            # the fixed 13-slot monthly buckets (ET_MAXM) — months past the
+            # 13th would be dropped from the ET/SWE/monthly-flow targets
+            # SILENTLY (et_chunk_target caps at maxm without error)
+            raise ValueError(f"train_chunk_days {self.train_chunk_days} "
+                             "outside [30, 366]")
         if isinstance(self.et_products, str):   # tolerate a bare CLI string
             self.et_products = tuple(p for p in self.et_products.split(",") if p)
         if (len(self.et_products) == 1
@@ -512,3 +560,37 @@ def pick_device(requested: str = "cuda"):
             "if only cuDNN fails to load)."
         )
     return torch.device("cuda")
+
+
+FAMILY_KEYS = {"usgs": "usgs_daily", "cdec": "cdec_daily", "uf": "uf_monthly"}
+
+
+def family_shares(spec: str) -> dict[str, float] | None:
+    """Parse a numeric ``mt_family_weight`` spec ("usgs=0.27,cdec=0.54,uf=0.19")
+    into ``{family_id: share}`` summing to 1 over the families named; ``None``
+    for the keyword modes ("none", "equal").  Family keys may be the short
+    names or the registry family ids; every share must be positive."""
+    if spec in ("none", "equal"):
+        return None
+    shares: dict[str, float] = {}
+    for item in spec.split(","):
+        if "=" not in item:
+            raise ValueError(f"mt_family_weight {spec!r}: expected "
+                             "family=share items or 'none'/'equal'")
+        key, val = (t.strip() for t in item.split("=", 1))
+        fam = FAMILY_KEYS.get(key, key)
+        if fam not in FAMILY_KEYS.values():
+            raise ValueError(f"mt_family_weight {spec!r}: unknown family "
+                             f"{key!r} (usgs, cdec, uf)")
+        if fam in shares:
+            raise ValueError(f"mt_family_weight {spec!r}: {key!r} repeated")
+        try:
+            share = float(val)
+        except ValueError as e:
+            raise ValueError(f"mt_family_weight {spec!r}: share {val!r}") from e
+        if not (math.isfinite(share) and share > 0.0):
+            raise ValueError(f"mt_family_weight {spec!r}: shares must be finite and > 0")
+        shares[fam] = share
+    tot = sum(shares.values())
+    return {f: v / tot for f, v in shares.items()}
+
