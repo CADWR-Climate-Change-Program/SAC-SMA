@@ -802,7 +802,10 @@ timescale, scored by the torch pipeline (no frozen re-score, no held-out flow pe
 is the CalSim3 comparison over WY1950–84 only: tier 1 = the twenty training locations in monthly
 volume, tier 2 = every rim `INFLOW` arc. At the ten anchored tier-1 locations the reference
 coincides with the source of the monthly training target, so that score is a temporal holdout;
-USGS creek records reach into WY1950–84, and the atlas reports that overlap per location.
+USGS creek records reach into WY1950–84: the atlas reports that overlap per location, and its
+last tab sets the full-window scores against each location's trimmed window, the 20 or more
+water years in which the creeks covered the least of it (`window = trimmed` in
+`tier1/tier1_metrics.csv`; rule in `sacsma.dpl.calsim_windows`).
 
 Common recipe: `sacsma dpl train physical_climate --domain multifamily --et noah --noah-pet
 priestley_taylor --canopy-lite --patience 10 --warmup-epochs 4`, seed 0, 366-day chunks, no

@@ -69,7 +69,7 @@ sacsma calsim                        # cross-compare -> artifacts/calsim/compare
 
 dPL training and evaluation run through `sacsma.dpl` (see `artifacts/dpl/RUNS.md` for the exact command line of every canonical run); `sacsma dpl evaluate <checkpoint> --temp-delta 2.0` dumps a temperature-perturbed teacher simulation, one input to the hybrid's response-consistency loss. The cross-model climatology and temperature-sensitivity figures regenerate through `sacsma dpl climatology` and `sacsma.dpl.forcing_sensitivity` into `artifacts/dpl/figures/`; the (Δp, ΔT) response surfaces regenerate through `python -m sacsma.dpl.noah_ca_hybrids`.
 
-The multi-timescale domain trains through the same command with `--domain multifamily`, and a trained run is scored against CalSim3 over WY1950–84 by three modules (file tables in `artifacts/README.md`):
+The multi-timescale domain trains through the same command with `--domain multifamily`, and a trained run is scored against CalSim3 over WY1950–84 by three modules, with two helpers for the trimmed validation windows and for comparing two scored runs (file tables in `artifacts/README.md`):
 
 ```
 sacsma dpl train physical_climate --domain multifamily --et noah --noah-pet priestley_taylor --canopy-lite \
@@ -78,4 +78,6 @@ sacsma dpl evaluate <run>/checkpoints/best.pt     # per-entity metrics + sim_dai
 python -m sacsma.dpl.calsim_tier1 <run>           # the twenty training locations
 python -m sacsma.dpl.calsim_tier2 <run> [--no-extend] # every rim INFLOW arc
 python -m sacsma.dpl.calsim_atlas <run>           # the HTML validation atlas -> <run>/atlas/
+python -m sacsma.dpl.calsim_windows               # derive / check the trimmed validation windows (val_start_wy, val_end_wy)
+python -m sacsma.dpl.calsim_compare <run_a> <run_b>  # tier 1 of two scored runs side by side
 ```
