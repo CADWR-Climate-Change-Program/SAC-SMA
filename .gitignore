@@ -76,6 +76,7 @@ artifacts/dpl/*
 !artifacts/dpl/multifamily
 artifacts/dpl/multifamily/*
 !artifacts/dpl/multifamily/noah_cdec_uf_usgs/
+!artifacts/dpl/multifamily/noah_cdec_uf_usgs_areaw/
 !artifacts/dpl/multifamily/noah_cdec_uf/
 artifacts/dpl/multifamily/*/*
 !artifacts/dpl/multifamily/*/train_log.csv
