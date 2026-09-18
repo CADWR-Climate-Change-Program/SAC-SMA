@@ -9,10 +9,11 @@ elsewhere.  The simulation is the run's archived daily entity depth
 calendar months and converted with the ``CalSim3_Merged`` ``SQ_MI`` of the arcs the
 entity simulates, so no third area enters the comparison.
 
-Two of the sets are simulated on a footprint smaller than the arc set (the registry
-entity omits an arc); those are scored against the tier-1 reference as defined *and*
-against the sum of the arcs they do simulate (``ref_kind = arcsum_covered``), and the
-covered area fraction is reported.  Cache Creek is counted like the others although its
+A set whose registry entity omits an arc is simulated on a footprint smaller than the arc
+set (at present only the Yuba, whose entity leaves out the two Deer Creek arcs); it is
+scored against the tier-1 reference as defined *and* against the sum of the arcs it does
+simulate (``ref_kind = arcsum_covered``), and the covered area fraction is reported.
+Cache Creek is counted like the others although its
 arcs are lake inflows while its training record is the routed outflow; the set table's
 ``volume_scored`` flag is what includes or excludes a location from the aggregate.
 
@@ -22,6 +23,14 @@ independent reference; the arc-sum locations compare against CalSim3's own inflo
 hydrology.  Each entity's own training window (the registry's ``train_start`` ..
 ``train_end``: WY1985-2014 for the monthly family, record start to 2018-12 for the
 daily families) is scored alongside as the in-sample comparison (``window = train``).
+
+The USGS creek gauges train over their whole records, which reach into 1950-1984.  Every
+location they reach is therefore also scored over a trimmed window, water years ``val_start_wy`` to
+``val_end_wy`` of the set table: the run of at least 20 water years inside 1950-1984 in
+which the creeks covered the least of the location (``window = trimmed``; the rule is
+:mod:`sacsma.dpl.calsim_windows`).  A location the creeks never reached keeps the full
+window and has no ``trimmed`` row.  The full-window score is always reported; the summary
+gives the aggregate both ways.
 
 Usage::
 
@@ -52,6 +61,9 @@ AF_PER_MM_MI2 = 2589988.110336e-3 / 1233.48183754752
 #: in-sample window is per entity (see :func:`registry_windows`).
 WINDOWS = {"WY1950-84": ("1949-10", "1984-09")}
 VALIDATION_WINDOW = "WY1950-84"
+#: a location the USGS creek gauges reached inside the validation window is also scored over water
+#: years ``val_start_wy`` .. ``val_end_wy`` of the set table (see :mod:`sacsma.dpl.calsim_windows`)
+TRIMMED_WINDOW = "trimmed"
 _WY_MONTHS = ["Oct", "Nov", "Dec", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep"]
 
 
@@ -63,11 +75,28 @@ def _split(arcs) -> list[str]:
 
 def load_sets(data_dir: str | Path = "data") -> pd.DataFrame:
     """The tier-1 arc-set table, ``arcs`` split into lists."""
-    s = pd.read_csv(calsim_dir(data_dir) / "tier1_sets.csv")
+    # only an empty cell is a missing value: a word such as NA in a val_* cell must not pass for a blank
+    s = pd.read_csv(calsim_dir(data_dir) / "tier1_sets.csv", keep_default_na=False, na_values=[""])
     s["arcs"] = s["arcs"].map(_split)
     s["system"] = s["system"].fillna("")
     s["note"] = s["note"].fillna("")
     s["volume_scored"] = s["volume_scored"].astype(bool)
+    # the trimmed window's water years; a blank or missing cell is the validation window's own bound
+    bounds = {"val_start_wy": int(WINDOWS[VALIDATION_WINDOW][0][:4]) + 1, "val_end_wy": int(WINDOWS[VALIDATION_WINDOW][1][:4])}
+    for col, wy in bounds.items():
+        if col not in s.columns:
+            s[col] = wy
+            continue
+        num = pd.to_numeric(s[col], errors="coerce")
+        blank = s[col].isna() | (s[col].astype(str).str.strip() == "")
+        odd = s[(num.isna() & ~blank) | (num.notna() & (num % 1 != 0))]
+        if len(odd):
+            raise ValueError(f"tier1_sets.csv: {col} is not a water year at {', '.join(odd.set_id)} "
+                             "(blank the cell and run python -m sacsma.dpl.calsim_windows --write)")
+        s[col] = num.fillna(wy).astype(int)
+    bad = s[(s.val_start_wy < bounds["val_start_wy"]) | (s.val_end_wy > bounds["val_end_wy"]) | (s.val_start_wy > s.val_end_wy)]
+    if len(bad):
+        raise ValueError(f"tier1_sets.csv: val_start_wy..val_end_wy outside {VALIDATION_WINDOW} at {', '.join(bad.set_id)}")
     return s
 
 
@@ -171,7 +200,8 @@ def training_record_taf(entity_id: str, data_dir: str | Path = "data") -> pd.Ser
 
 def score_run(run_dir: str | Path, data_dir: str | Path = "data") -> tuple[pd.DataFrame, pd.DataFrame, dict]:
     """Score one run.  Returns (metrics, monthly, panels): metrics has one row per
-    set x reference kind x window (``WY1950-84`` and the entity's own ``train`` window);
+    set x reference kind x window (``WY1950-84``, the entity's own ``train`` window, and
+    ``trimmed`` where the set table's val_start_wy..val_end_wy differ from the full window);
     monthly holds the aligned sim/ref TAF series over the simulated record; panels holds
     the per-set series used by :func:`location_figure`."""
     sets = load_sets(data_dir)
@@ -206,6 +236,9 @@ def score_run(run_dir: str | Path, data_dir: str | Path = "data") -> tuple[pd.Da
             refs["arcsum_covered"] = _arcsum(inflow, covered)
         t0, t1 = train_win[ent]
         windows = {VALIDATION_WINDOW: WINDOWS[VALIDATION_WINDOW], "train": (str(t0), str(t1))}
+        trim = (f"{int(st.val_start_wy) - 1}-10", f"{int(st.val_end_wy)}-09")
+        if trim != WINDOWS[VALIDATION_WINDOW]:
+            windows[TRIMMED_WINDOW] = trim
         for kind, ref in refs.items():
             for wname, (m0, m1) in windows.items():
                 idx = pd.period_range(m0, m1, freq="M")
@@ -347,6 +380,19 @@ def summarize(metrics: pd.DataFrame, window: str = VALIDATION_WINDOW) -> str:
             "beta", "seas_mismatch", "ct_diff", "sim_taf_yr", "ref_taf_yr"]
     with pd.option_context("display.width", 200, "display.max_rows", 100):
         lines.append(m[cols].round(3).to_string(index=False))
+    t = metrics[(metrics.window == TRIMMED_WINDOW) & metrics.volume_scored
+                & metrics.ref_kind.isin(["anchor", "arcsum"])]
+    if len(t) and window == VALIDATION_WINDOW:
+        # the same aggregate with the trimmed window taking the place of the full one where a location has one
+        g = pd.concat([v[~v.set_id.isin(t.set_id)], t])
+        lines.append(f"tier 1 with the trimmed window at the {len(t)} locations that have one (listed below), "
+                     f"the full window at the other {len(g) - len(t)}: "
+                     f"KGE mean {g.kge.mean():.3f} median {g.kge.median():.3f} | NSE mean {g.nse.mean():.3f} | "
+                     f"|pbias| median {g.pbias.abs().median():.1f}% | "
+                     f"sum of the locations' mean annual volumes, each over its own window, "
+                     f"{g.sim_taf_yr.sum():,.0f} vs {g.ref_taf_yr.sum():,.0f} TAF/yr")
+        with pd.option_context("display.width", 200, "display.max_rows", 100):
+            lines.append(t[["set_id", "ref_kind", "win_start", "win_end"] + cols[3:]].round(3).to_string(index=False))
     return "\n".join(lines)
 
 
