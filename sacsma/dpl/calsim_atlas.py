@@ -154,7 +154,7 @@ def run_recipe(run_dir: Path, data_dir: str | Path, trained=None) -> dict | None
 
 def _recipe_sentence(rc: dict) -> str:
     fams = ", ".join(f"{n} {f}" for f, n in rc["counts"].items())
-    shares = ", ".join(f"{f.split('_')[0]} {100 * s:.0f}%" for f, s in rc["share"].items())
+    shares = ", ".join(f"{f.split('_')[0]} {100 * s:.3g}%" for f, s in rc["share"].items())
     return (f"Trained on {rc['n']} entities ({fams}) with --mt-family-weight {rc['spec']}: "
             f"nominal share of the loss {shares}.")
 
@@ -1050,7 +1050,7 @@ def write_html(sets, metrics, out: Path, label: str, window: str, maps: list[Pat
         parts.append("<h2>Training recipe</h2><table><tr><th>family</th><th>entities</th>"
                      "<th>nominal share of the loss</th></tr>")
         parts += [f"<tr><td class='l'>{e(f)} — {e(FAMILY_LABEL.get(f, f))}</td><td>{n}</td>"
-                  f"<td>{100 * recipe['share'][f]:.0f}%</td></tr>" for f, n in recipe["counts"].items()]
+                  f"<td>{100 * recipe['share'][f]:.3g}%</td></tr>" for f, n in recipe["counts"].items()]
         tail = "; ".join(x for x in (
             f"checkpoint = epoch {recipe['epoch']}" if recipe["epoch"] is not None else "",
             f"selected by {recipe['select']}" if recipe["select"] else "",

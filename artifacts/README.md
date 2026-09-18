@@ -89,7 +89,7 @@ Result: SAC-SMA median KGE **0.870**, VIC **0.767**, BCM **0.656**, SAC-SMA best
 
 ## CalSim3 validation of multifamily dPL runs (tier 1, tier 2, atlas)
 
-Three tools score a trained `multifamily` run against CalSim3 over **WY1950–84**, which precedes the training window of every CDEC and DWR-unimpaired target; two more set the trimmed validation windows and put two scored runs side by side. USGS creek records do reach into those years; the atlas reports, per location, which creeks overlap it and how much of the window they cover. The two published runs and their atlases are under `dpl/multifamily/` (entries in [`dpl/RUNS.md`](dpl/RUNS.md)). The three scoring tools write into the run folder (`<run>` = the `--out` of `sacsma dpl train`, holding `checkpoints/best.pt` and the evaluator's `sim_daily_mm.npz`):
+Three tools score a trained `multifamily` run against CalSim3 over **WY1950–84**, which precedes the training window of every CDEC and DWR-unimpaired target; two more set the trimmed validation windows and put two scored runs side by side. USGS creek records do reach into those years; the atlas reports, per location, which creeks overlap it and how much of the window they cover. The published runs and their atlases are under `dpl/multifamily/` (entries in [`dpl/RUNS.md`](dpl/RUNS.md)). The three scoring tools write into the run folder (`<run>` = the `--out` of `sacsma dpl train`, holding `checkpoints/best.pt` and the evaluator's `sim_daily_mm.npz`):
 
 ```bash
 python -m sacsma.dpl.calsim_tier1 <run>              # -> <run>/tier1/
