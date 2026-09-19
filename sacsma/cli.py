@@ -116,6 +116,7 @@ def _dpl_train(args: argparse.Namespace) -> int:
         fracp_floor=args.fracp_floor, dtype=args.dtype, device=args.device,
         loss=args.loss, log_loss_lambda=args.log_lambda,
         var_loss_lambda=args.var_lambda, bias_loss_lambda=args.bias_lambda,
+        var_gate_frac=args.var_gate_frac, var_huber_cap=args.var_huber_cap,
         et_loss_lambda=args.et_loss_lambda,
         et_level_lambda=args.et_level_lambda,
         swe_loss_lambda=args.swe_loss_lambda,
@@ -129,6 +130,7 @@ def _dpl_train(args: argparse.Namespace) -> int:
         spinup_start=args.spinup_start, patience=args.patience,
         hidden=args.hidden, embed=args.embed, dropout=args.dropout,
         grouped_heads=args.grouped_heads, fourier_k=args.fourier_k,
+        flowlen_feature=not args.no_flowlen_feature,
         gnn_k=args.gnn_k,
         spatial_reg_lambda=args.spatial_reg_lambda,
         spatial_reg_k=args.spatial_reg_k,
@@ -146,7 +148,7 @@ def _dpl_train(args: argparse.Namespace) -> int:
                         if args.dynamic_params else ()),
         dynamic_amp=args.dynamic_amp, dynamic_window=args.dynamic_window,
         mt_family_weight=args.mt_family_weight,
-        train_chunk_days=args.train_chunk_days,
+        train_chunk_days=args.train_chunk_days, chunk_grid=args.chunk_grid,
         nograd_window=args.nograd_window,
         train_graph_segments=args.train_graph_segments,
         seed=args.seed, use_cuda_graphs=not args.no_graphs,
@@ -359,11 +361,12 @@ def main(argv: list[str] | None = None) -> int:
                     help="multi-timescale family weighting: none = every "
                          "valid daily entity weighs equally and the monthly "
                          "term adds with coefficient 1 (baseline); equal = "
-                         "usgs/cdec/uf families carry equal thirds of the "
-                         "loss; or numeric shares 'usgs=0.27,cdec=0.54,uf=0.19' "
-                         "(renormalized over the families present, entities "
-                         "equal within a family; selection uses the same "
-                         "share-weighted family mean) (multifamily domain only)")
+                         "shares 1:1:1 over the families the run trains "
+                         "(selection = mean of the family means); or numeric "
+                         "shares 'usgs=0.27,cdec=0.54,uf=0.19' (renormalized "
+                         "over the families present, entities equal within a "
+                         "family; selection uses the same share-weighted family "
+                         "mean) (multifamily domain only)")
     tr.add_argument("--et", default="sac", choices=["sac", "noah"],
                     help="ET scheme: sac = frozen Hamon PET (scorable via "
                          "run_basin); noah = Noah canopy-resistance ET (NEW "
@@ -425,10 +428,17 @@ def main(argv: list[str] | None = None) -> int:
                     help="low-flow log-space loss weight (0 disables)")
     tr.add_argument("--var-lambda", type=float, default=1.0,
                     help="per-chunk variance-matching weight on alpha = std ratio: "
-                         "(alpha-1)^2 up to |alpha-1| = 1, linear beyond, skipped "
-                         "for a basin-chunk under 0.1%% of the basin's record "
-                         "variance; counters squared-error variance damping "
-                         "(0 disables)")
+                         "(alpha-1)^2 up to |alpha-1| = --var-huber-cap, linear "
+                         "beyond, skipped for a basin-chunk under --var-gate-frac "
+                         "of the basin's record variance; counters squared-error "
+                         "variance damping (0 disables)")
+    tr.add_argument("--var-gate-frac", type=float, default=1e-3,
+                    help="share of the basin's record variance a chunk must carry "
+                         "for the variance term to apply (0 = only the 1e-8 floor)")
+    tr.add_argument("--var-huber-cap", type=float, default=1.0,
+                    help="|alpha-1| beyond which the variance term grows linearly; "
+                         "<= 0 = quadratic throughout (with --var-gate-frac 0 the "
+                         "loss of the pre-2026-09 canonical runs)")
     tr.add_argument("--bias-lambda", type=float, default=0.0,
                     help="per-chunk bias penalty (mean ratio - 1)^2; the KGE beta "
                          "term the MSE/NNSE loss lacks (0 disables)")
@@ -473,6 +483,11 @@ def main(argv: list[str] | None = None) -> int:
     tr.add_argument("--fourier-k", type=int, default=0,
                     help="net-v2: spatial Fourier feature order (4k extra "
                          "features; low-frequency regional fields; 0 = off)")
+    tr.add_argument("--no-flowlen-feature", action="store_true",
+                    help="leave the cell's flow length to its basin outlet out of "
+                         "the parameter net's inputs (the routing still uses it): "
+                         "on the multifamily domain a cell in several nested "
+                         "entities then keeps one parameter set")
     tr.add_argument("--grouped-heads", action="store_true",
                     help="net-v2: separate output heads per physics group "
                          "(PET/SMA/snow/routing)")
@@ -540,6 +555,13 @@ def main(argv: list[str] | None = None) -> int:
                     help="TBPTT chunk length in days (366 = one water year; "
                          "shorter chunks cut the backward's VRAM peak at the "
                          "cost of a shorter gradient horizon)")
+    tr.add_argument("--chunk-grid", default="fixed", choices=["fixed", "water_year"],
+                    help="fixed = --train-chunk-days each from the window start "
+                         "(the boundary drifts and splits a calendar month most "
+                         "years, which the monthly-flow term then skips); "
+                         "water_year = one chunk per water year, 1 Oct to 1 Oct, "
+                         "every month whole (the graphs capture 365 days; a leap "
+                         "year's last day continues eagerly)")
     tr.add_argument("--nograd-window", type=int, default=512,
                     help="CUDA-graph replay window (days) for the no-grad "
                          "spinup/selection streams; numerics-neutral (256 "

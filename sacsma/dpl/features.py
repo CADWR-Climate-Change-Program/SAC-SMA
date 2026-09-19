@@ -2,9 +2,10 @@
 
 Two variants (the study's ablation):
 
-* ``static`` — physical statics only: elev, lat, lon, flowlen (z-scored) plus
-  one-hot ``soil_class`` / ``veg_class`` (the same information class the GA's
-  soil/veg zonal regionalization used);
+* ``static`` — physical statics only: elev, lat, lon, flowlen (z-scored; the
+  flow length is optional, ``DplConfig.flowlen_feature``) plus one-hot
+  ``soil_class`` / ``veg_class`` (the same information class the GA's soil/veg
+  zonal regionalization used);
 * ``climate`` — statics PLUS forcing-derived climatology, computed per HRU
   from its grid cell over a configurable ``(product, window)``.
 
@@ -76,6 +77,9 @@ class FeatureSet:
     #: (lat_min, lat_max, lon_min, lon_max) normalization extent for the
     #: Fourier terms (None when fourier_k == 0)
     coord_bounds: tuple[float, float, float, float] | None = None
+    #: the continuous statics the matrix opens with (a checkpoint without the
+    #: field, from before ``flowlen_feature``, carries the full tuple)
+    statics: tuple[str, ...] = CONTINUOUS_STATICS
 
 
 def climate_indices(
@@ -173,16 +177,22 @@ def build_features(
     fourier_k: int = 0,
     physical_path: str | Path | None = None,
     stats: FeatureSet | None = None,
+    statics: tuple[str, ...] | None = None,
 ) -> FeatureSet:
     """Assemble the (N, F) matrix.  Pass a previous :class:`FeatureSet` as
-    ``stats`` to reuse its categories, z-scoring, and Fourier extent
-    (checkpoint evaluation)."""
+    ``stats`` to reuse its categories, z-scoring, Fourier extent and statics
+    (checkpoint evaluation).  ``statics`` (default :data:`CONTINUOUS_STATICS`)
+    picks the continuous statics of a new set, e.g. without ``flowlen``."""
     if variant not in ("static", "climate", "physical", "physical_climate"):
         raise ValueError(f"variant {variant!r}")
 
+    if stats is not None:
+        st = tuple(getattr(stats, "statics", CONTINUOUS_STATICS))
+    else:
+        st = tuple(statics) if statics is not None else CONTINUOUS_STATICS
     cols: list[np.ndarray] = []
     names: list[str] = []
-    for c in CONTINUOUS_STATICS:
+    for c in st:
         cols.append(hrus[c].to_numpy(np.float64))
         names.append(c)
     if variant in ("climate", "physical_climate"):
@@ -254,4 +264,4 @@ def build_features(
                       soil_categories=soil_cats, veg_categories=veg_cats,
                       variant=variant, climate_window=climate_window,
                       climate_product=climate_product,
-                      fourier_k=fk, coord_bounds=bounds)
+                      fourier_k=fk, coord_bounds=bounds, statics=st)

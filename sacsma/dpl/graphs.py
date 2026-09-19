@@ -23,7 +23,10 @@ Both thread carried state through static ping-pong buffers
 state exactly as TBPTT requires.  Remainder days (segment length not a
 multiple of the window) run eagerly through the same
 :func:`sacsma.dpl.forward.run_window` — identical numerics, so graph on/off
-changes performance only.
+changes performance only.  State moves between graph objects (the two chunk
+lengths of a water-year grid) and eager chunks through ``get_state()`` /
+``set_state()``: detached value copies, routing history included, so the
+hand-off is length-agnostic.
 """
 
 from __future__ import annotations
@@ -128,9 +131,10 @@ class _WindowBase:
         assert self.state_out is not None
         # value copy only: TrainChunk's state_out carries autograd history from
         # the capture pass; copying it WITH grad would attach that history to the
-        # static state_in buffers, and an eager chunk started from get_state()
-        # (the multi-timescale tail) would then backward into the freed capture
-        # graph ("Trying to backward through the graph a second time").
+        # static state_in buffers, and an eager chunk or another graph object
+        # started from get_state() (the multi-timescale tail, the other chunk
+        # length of a water-year grid) would then backward into the freed
+        # capture graph ("Trying to backward through the graph a second time").
         with torch.no_grad():
             for i_buf, o_buf in zip(_state_tensors(self.state_in),
                                     _state_tensors(self.state_out), strict=True):
@@ -291,6 +295,8 @@ class TrainChunk(_WindowBase):
                                      log_lambda=cfg.log_loss_lambda,
                                      log_eps=cfg.log_loss_eps,
                                      var_lambda=cfg.var_loss_lambda,
+                                     var_gate_frac=cfg.var_gate_frac,
+                                     var_huber_cap=cfg.var_huber_cap,
                                      bias_lambda=cfg.bias_loss_lambda,
                                      weight=self.weight)
             k = 2
@@ -327,19 +333,33 @@ class TrainChunk(_WindowBase):
             torch.autograd.graph.set_warn_on_accumulate_grad_stream_mismatch(False)
         except AttributeError:
             pass
+        # A first capture lets backward ALLOCATE the .grad tensors inside the
+        # capture, so they are static.  A later capture (a second chunk length
+        # under the water-year grid) must NOT drop them: that would re-point
+        # p.grad at its own pool and the first graph's replays would write into
+        # orphaned memory (silent zero gradients).  It keeps the existing
+        # tensors and records an in-place accumulate into them instead — both
+        # graphs then land in the same static .grad, which the trainer never
+        # deallocates (zero_grad(set_to_none=False)).
+        own = all(p.grad is None for p in net.parameters())
+
+        def _drop_grads():
+            if own:
+                for p in net.parameters():
+                    p.grad = None
+            else:
+                net.zero_grad(set_to_none=False)
+
         side = torch.cuda.Stream()
         side.wait_stream(torch.cuda.current_stream())
         with torch.cuda.stream(side):
             for _ in range(3):
                 loss, _ = _step()
                 loss.backward()
-                for p in net.parameters():
-                    p.grad = None
+                _drop_grads()
         torch.cuda.current_stream().wait_stream(side)
 
-        # grads must be ALLOCATED inside the capture so .grad tensors are static
-        for p in net.parameters():
-            p.grad = None
+        _drop_grads()
         self.graph = torch.cuda.CUDAGraph()
         with torch.cuda.graph(self.graph):
             self.loss, self.state_out = _step()

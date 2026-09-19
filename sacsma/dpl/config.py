@@ -213,10 +213,18 @@ class DplConfig:
     log_loss_lambda: float = 0.15
     log_loss_eps: float = 0.01  # mm/day
     #: per-chunk variance-matching penalty on alpha = std-ratio: (alpha - 1)^2 up
-    #: to |alpha - 1| = 1, linear beyond, skipped for a basin-chunk under 0.1% of
-    #: the basin's record variance — counters the squared-error variance damping
-    #: (alpha -> r); NOT chunked KGE.
+    #: to |alpha - 1| = var_huber_cap, linear beyond, skipped for a basin-chunk
+    #: under var_gate_frac of the basin's record variance — counters the
+    #: squared-error variance damping (alpha -> r); NOT chunked KGE.
     var_loss_lambda: float = 1.0
+    #: the gate: a chunk's observed variance must exceed this share of the basin's
+    #: full-record variance (an absolute floor of 1e-8 stays fixed in loss.py) for
+    #: the term to apply.  0.0 = no gate beyond the floor.
+    var_gate_frac: float = 1e-3
+    #: the Huber cap on |alpha - 1|: quadratic up to it, linear beyond; <= 0 keeps
+    #: (alpha - 1)^2 throughout.  Together, 0.0 and 0.0 are the loss the runs
+    #: before 2026-09 (the 15cdec canonical set) trained with.
+    var_huber_cap: float = 1.0
     #: per-chunk BIAS penalty (mean-ratio beta - 1)^2 — the KGE beta term the
     #: MSE/NNSE loss lacks (it penalizes correlation + variance but NOT volume
     #: bias, so the optimizer can trade wet-basin over-evaporation for dry-basin
@@ -284,18 +292,18 @@ class DplConfig:
     et_products: tuple[str, ...] = ()
     #: multi-timescale family weighting (multifamily domain only): "none" =
     #: every valid daily entity weighs equally in the chunk mean and the
-    #: monthly term adds with coefficient 1 (the baseline); "equal" = the
-    #: three families carry equal thirds of the loss — usgs_daily and
-    #: cdec_daily each get half the daily mean's mass (per-entity weight
-    #: 1/n_family) and the daily/monthly terms are scaled 2/3 and 1/3.
-    #: Numeric shares, e.g. "usgs=0.27,cdec=0.54,uf=0.19": each family's
-    #: share of the loss (renormalized over the families present, entities
-    #: equal within a family); the daily term is scaled by the daily
-    #: families' shares and the monthly term by the monthly family's, and
-    #: checkpoint selection is the same share-weighted mean of the family
-    #: means.  Guards against combining with adaptive_loss (both drive the
-    #: same per-basin weight vector).  Ignored outside the multi-timescale
-    #: domain.
+    #: monthly term adds with coefficient 1 (the baseline); "equal" = shares
+    #: 1:1:1 over the families the run trains (three families: thirds, the
+    #: daily term x 2/3 and the monthly x 1/3; a subset without a family
+    #: renormalizes over the rest).  Numeric shares, e.g.
+    #: "usgs=0.27,cdec=0.54,uf=0.19": each family's share of the loss
+    #: (renormalized over the families present, entities equal within a
+    #: family); the daily term is scaled by the daily families' shares and
+    #: the monthly term by the monthly family's, and checkpoint selection is
+    #: the same share-weighted mean of the family means ("equal": the plain
+    #: mean of the family means).  Guards against combining with
+    #: adaptive_loss (both drive the same per-basin weight vector).  Ignored
+    #: outside the multi-timescale domain.
     mt_family_weight: str = "none"
     #: warm-start checkpoint path: the net's weights are loaded strict=False
     #: BEFORE training (heads absent from the donor — e.g. a fresh seasonal
@@ -321,6 +329,13 @@ class DplConfig:
     dropout: float = 0.1
     grouped_heads: bool = False     # per-physics-group output heads
     fourier_k: int = 0              # spatial Fourier feature order (0 = off)
+    #: whether the cell's flow length to its basin outlet is one of the net's
+    #: continuous static inputs (features.CONTINUOUS_STATICS).  On a domain of
+    #: nested entities (multifamily) the same cell then gets a different
+    #: parameter set in every entity it belongs to, so False keeps the
+    #: parameter field per cell; the routing reads flowlen from the HRU table
+    #: either way.  True = the 15cdec canonical checkpoints' feature set.
+    flowlen_feature: bool = True
     #: learned spatial smoother (net-v2): ONE weighted-mean message-passing
     #: round over within-basin geographic k-NN neighborhoods, zero-init mixing
     #: (exact v1 at init).  0 = off.  The learned counterpart of spatial_reg.
@@ -425,6 +440,17 @@ class DplConfig:
     spinup_start: str = "1978-10-01"
     train_chunk_days: int = 366     # TBPTT chunk (fixed length; last chunk's
                                     # post-CAL_END days are NaN-masked in the loss)
+    #: how the TBPTT chunks tile the calibration window.  "fixed": train_chunk_days
+    #: each from the window start, so the boundary drifts ~0.75 day/yr and cuts a
+    #: calendar month almost every year — a month split between chunks never
+    #: reaches the monthly-flow term (29 of the 360 DWR months on the multifamily
+    #: domain).  "water_year": one chunk per water year, 1 Oct to 1 Oct (365 or
+    #: 366 days; the last runs to the record end), every chunk holding twelve
+    #: complete months.  The segmented graphs capture the 365-day length and a
+    #: leap year's last day continues eagerly from the graphed state; the
+    #: whole-chunk graph path captures each length.  Needs train_chunk_days ==
+    #: 366 and a window that starts on 1 Oct.
+    chunk_grid: str = "fixed"
     eval_every: int = 2             # full-cal no-grad KGE selection cadence
     patience: int = 10              # early stop after this many stale selections
     #: CUDA-graph capture of the day-stepped pipeline (eager is dispatch-bound:
@@ -477,6 +503,17 @@ class DplConfig:
             # SILENTLY (et_chunk_target caps at maxm without error)
             raise ValueError(f"train_chunk_days {self.train_chunk_days} "
                              "outside [30, 366]")
+        if self.chunk_grid not in ("fixed", "water_year"):
+            raise ValueError(f"chunk_grid {self.chunk_grid!r}")
+        if self.chunk_grid == "water_year" and self.train_chunk_days != 366:
+            # the water-year grid sets its own lengths; a different value would be
+            # ignored silently
+            raise ValueError("chunk_grid 'water_year' takes whole water years: leave "
+                             f"train_chunk_days at 366 (got {self.train_chunk_days})")
+        if not (math.isfinite(self.var_gate_frac) and self.var_gate_frac >= 0.0):
+            raise ValueError(f"var_gate_frac {self.var_gate_frac} must be finite and >= 0")
+        if not math.isfinite(self.var_huber_cap):
+            raise ValueError(f"var_huber_cap {self.var_huber_cap} must be finite (<= 0 = uncapped)")
         if isinstance(self.et_products, str):   # tolerate a bare CLI string
             self.et_products = tuple(p for p in self.et_products.split(",") if p)
         if (len(self.et_products) == 1
@@ -563,6 +600,9 @@ def pick_device(requested: str = "cuda"):
 
 
 FAMILY_KEYS = {"usgs": "usgs_daily", "cdec": "cdec_daily", "uf": "uf_monthly"}
+#: what ``mt_family_weight="equal"`` resolves to: shares 1:1:1, renormalized by the
+#: trainer over the families the run holds (the trainer's numeric-shares path)
+EQUAL_FAMILY_SHARES = {f: 1.0 for f in FAMILY_KEYS.values()}
 
 
 def family_shares(spec: str) -> dict[str, float] | None:
