@@ -795,8 +795,10 @@ over the envelope: the physics channel a hybrid reads), `tier1/tier1_metrics.csv
 (self-contained; download it to view). Everything else in a run folder is git-ignored and
 regenerates: `sacsma dpl evaluate <run>/checkpoints/best.pt` (metrics, parameters,
 `sim_daily_mm.npz`, figures), `python -m sacsma.dpl.calsim_tier1 <run>`, `python -m
-sacsma.dpl.calsim_tier2 <run>` (a forward pass; `--figures-only` redraws maps and figures from the
-CSVs) and `python -m sacsma.dpl.calsim_atlas <run>`.
+sacsma.dpl.calsim_tier2 <run>` (a forward pass; `--figures-only` redraws the maps from the tracked
+CSV and, after a full tier-2 run has left `tier2_monthly.csv` in the folder, the regime figures)
+and `python -m sacsma.dpl.calsim_atlas <run>`.  The atlases and `sim_daily_mm.npz` are git-LFS
+files (`git lfs pull` after a clone).
 
 **What the numbers are.** Entity metrics are calibration-window skill at each entity's native
 timescale, scored by the torch pipeline (no frozen re-score, no held-out flow period). Validation

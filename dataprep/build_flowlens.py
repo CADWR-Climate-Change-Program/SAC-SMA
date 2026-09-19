@@ -111,17 +111,40 @@ def _fetch(url: str, dst: Path, want: int) -> None:
                 f.write(chunk)
 
 
+def _marker(tile: Path) -> Path:
+    """``<tile>.ok`` — holds the server's byte size once the tile matched it."""
+    return tile.with_suffix(tile.suffix + ".ok")
+
+
+def validated_local(tile: Path) -> bool:
+    """True when ``tile`` exists and its size equals the one its ``.ok`` marker
+    recorded at download (:func:`ensure_tiles`) — no network needed."""
+    m = _marker(tile)
+    if not (tile.exists() and m.exists()):
+        return False
+    try:
+        return tile.stat().st_size == int(m.read_text().strip())
+    except ValueError:
+        return False
+
+
 def ensure_tiles(tiles_dir: Path) -> None:
-    """Download any missing/partial DIR+ACC tile (size-validated)."""
+    """Download any missing/partial DIR+ACC tile (size-validated against the
+    server) and record the validated size in each tile's ``.ok`` marker."""
     tiles_dir.mkdir(parents=True, exist_ok=True)
     for p in ("DIR", "ACC"):
         for t in TILES:
             url = URL.format(p=p, t=t)
             dst = tiles_dir / url.rsplit("/", 1)[1]
+            if validated_local(dst):
+                continue
             want = remote_size(url)
+            ok = _marker(dst)
             if dst.exists() and dst.stat().st_size == want:
+                ok.write_text(str(want))
                 continue
             print(f"fetching {dst.name} ({want/1e6:.0f} MB)", flush=True)
+            ok.unlink(missing_ok=True)
             for attempt in range(8):
                 try:
                     _fetch(url, dst, want)
@@ -131,21 +154,24 @@ def ensure_tiles(tiles_dir: Path) -> None:
                 if dst.exists() and dst.stat().st_size == want:
                     break
             assert dst.stat().st_size == want, (dst, dst.stat().st_size, want)
+            ok.write_text(str(want))
 
 
 class Mosaic:
     """Windowed reader over the four 10-degree tiles of one product.
 
-    Opens the local tile when it is complete (size-validated against the
-    server); otherwise reads the remote COG — a partially downloaded
-    local file must never be read."""
+    Opens the local tile when it is complete: its size matches the one its
+    ``.ok`` marker recorded at download (no network), else the server's
+    (one HEAD request).  Otherwise it reads the remote COG — a partially
+    downloaded local file must never be read."""
 
     def __init__(self, tiles_dir: Path, prod: str):
         self.srcs = {}
         for t in TILES:
             url = URL.format(p=prod, t=t)
             local = tiles_dir / url.rsplit("/", 1)[1]
-            if local.exists() and local.stat().st_size == remote_size(url):
+            if validated_local(local) or (
+                    local.exists() and local.stat().st_size == remote_size(url)):
                 self.srcs[t] = rasterio.open(local)
             else:
                 self.srcs[t] = rasterio.open("/vsicurl/" + url)
@@ -294,6 +320,42 @@ def trace_entity(dirr, tr, cells, acc_m, outlet=None, exit_mask=None,
                                        "start_lat", "start_lon"])
 
 
+def trace_cells_to_exit(cells_csv: Path, out_csv: Path, tiles_dir: Path) -> None:
+    """Flow length of every row of ``cells_csv`` (``[basin, key, lat, lon, elev, ...]``)
+    to where its flow path leaves its basin's cell footprint — the exit-of-footprint
+    mode tier 2 uses for the CalSim3 arcs no trained entity lists.  Untraceable cells
+    take their basin's median traced length; a basin with nothing traced gets straight
+    line x 1.5 to its lowest cell.  Writes ``[basin, key, flowlen_m, method]``.  Needs
+    rasterio and pandas only, so it can run in a GDAL environment of its own."""
+    cells = pd.read_csv(cells_csv)
+    dir_m, acc_m = Mosaic(Path(tiles_dir), "DIR"), Mosaic(Path(tiles_dir), "ACC")
+    frames = []
+    for basin, sub in cells.groupby("basin", sort=False):
+        sub = sub.reset_index(drop=True)
+        m = 0.10
+        dirr, tr = dir_m.read(sub.lat.min() - m, sub.lat.max() + m,
+                              sub.lon.min() - m, sub.lon.max() + m)
+        exit_mask = np.zeros(dirr.shape, dtype=bool)
+        inv = ~tr
+        for cr in sub.itertuples():
+            c0, r0 = inv * (cr.lon - HALF, cr.lat + HALF)
+            c1, r1 = inv * (cr.lon + HALF, cr.lat - HALF)
+            exit_mask[max(int(r0), 0):int(r1) + 1, max(int(c0), 0):int(c1) + 1] = True
+        res = trace_entity(dirr, tr, sub, acc_m, None, exit_mask, None)
+        ok = res.flowlen_m.notna() & (res.method != "fallback")
+        if ok.any():
+            res.loc[~ok, "flowlen_m"] = res.flowlen_m[ok].median()
+        else:
+            j = int(sub["elev"].idxmin())
+            res["flowlen_m"] = haversine_m(sub.lat, sub.lon, sub.lat[j], sub.lon[j]) * 1.5
+        res.insert(0, "basin", basin)
+        frames.append(res[["basin", "key", "flowlen_m", "method"]])
+        print(f"trace {basin:11s} cells {len(sub):3d} traced {int(ok.sum()):3d}", flush=True)
+    dir_m.close()
+    acc_m.close()
+    pd.concat(frames, ignore_index=True).to_csv(out_csv, index=False)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--data-dir", default=Path("data"), type=Path)
@@ -306,8 +368,14 @@ def main() -> None:
                     help="also write flowlen_starts.csv (per-cell start "
                          "pixel) and flowlen_outlets.csv (snapped outlets) "
                          "to this directory")
+    ap.add_argument("--trace-cells", nargs=2, metavar=("CELLS_CSV", "OUT_CSV"), default=None,
+                    help="exit-of-footprint mode for an arbitrary cell table (tier 2's "
+                         "extrapolated arcs): trace CELLS_CSV, write OUT_CSV, and stop")
     args = ap.parse_args()
 
+    if args.trace_cells:
+        trace_cells_to_exit(Path(args.trace_cells[0]), Path(args.trace_cells[1]), args.tiles_dir)
+        return
     if not args.only:  # test runs may not have complete local tiles yet
         ensure_tiles(args.tiles_dir)
     ent = pd.read_csv(args.data_dir / "multifamily" / "entities.csv",

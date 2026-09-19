@@ -19,10 +19,9 @@ outputs (:mod:`sacsma.dpl.calsim_tier2`), the folder ``<run>/atlas/`` beside ``t
   the scores over both and the USGS creek coverage that remains inside the trimmed one;
 * ``atlas/atlas.md`` — the tier-1 content as Markdown with image links.
 
-One input is optional and user-supplied: a ``tier2_extrapolated_trained_cover.csv`` in the
-tier-2 folder (``basin, trained_cell_frac, ...``: the share of each extrapolated arc's cell
-weight that lies on cells some trained entity uses) adds a "trained cells" column to the
-unconstrained-arcs table; no tool here writes it, and the page is complete without it.
+The unconstrained-arcs tab reads ``trained_cell_frac`` from ``tier2_metrics.csv`` (the share of
+each arc's area on cells the run trained on, written by tier 2) to tell the arcs on ground the
+loss never saw from those that overlap a trained creek footprint.
 
 Usage::
 
@@ -44,7 +43,7 @@ import numpy as np
 import pandas as pd
 
 from ..calsim.catchments import MERGED_LAYER, load_catchments, series_arc
-from .calsim_tier1 import TRIMMED_WINDOW, VALIDATION_WINDOW, load_sets
+from .calsim_tier1 import TRIMMED_WINDOW, VALIDATION_WINDOW, arc_to_set, load_sets
 
 
 def _rim(data_dir):
@@ -136,11 +135,11 @@ def run_recipe(run_dir: Path, data_dir: str | Path, trained=None) -> dict | None
         share = {f: d * counts[f] / n_daily for f in daily} | {f: 1.0 - d if daily else 1.0 for f in monthly}
         how = ("no family weighting: every daily entity weighs equally in the daily term, and the daily "
                "and monthly terms add with equal weight")
-    elif spec == "equal":                   # daily families split the daily term; daily x 2/3, monthly x 1/3
-        d = 2.0 / 3.0 if monthly else 1.0
-        share = {f: d / len(daily) for f in daily} | {f: 1.0 - d if daily else 1.0 for f in monthly}
-        how = ("equal family weighting: the daily families split the daily term equally, the daily term "
-               "counts 2/3 and the monthly term 1/3; entities weigh equally within a family")
+    elif spec == "equal":                   # shares 1:1:1 over the families trained
+        share = {f: 1.0 / len(counts) for f in counts}
+        how = (f"equal family weighting: the {len(counts)} families trained carry equal shares of the loss "
+               f"(daily term x {sum(share[f] for f in daily):.2f}, monthly term x "
+               f"{sum(share[f] for f in monthly):.2f}); entities weigh equally within a family")
     else:                                   # numeric shares, renormalized over the families trained
         s = family_shares(spec) or {}
         tot = sum(s.get(f, 0.0) for f in counts) or 1.0
@@ -951,18 +950,28 @@ def _t2_table(rows, e, *, show_set: bool, show_cover: bool) -> list[str]:
 
 
 def _not_counted_note(sets, v, fmt: str) -> str:
-    """One sentence naming the locations that are shown but left out of the run's summary
-    figures (mean and median KGE, volumes), with the set table's reason; empty if none."""
+    """The sentences naming the locations that are shown but left out of the run's summary
+    figures (mean and median KGE, volumes), with the set table's reason, and the nested
+    locations that enter the skill statistics but not the volume totals; empty if none."""
     out = [s for s in sets.itertuples(index=False) if s.set_id in v.index and not s.volume_scored]
-    if not out:
+    nested = [s for s in sets.itertuples(index=False)
+              if s.set_id in v.index and s.volume_scored and str(getattr(s, "nested_in", "") or "")]
+    texts = []
+    if out:
+        n = int(sum(1 for s in sets.itertuples(index=False) if s.set_id in v.index and s.volume_scored))
+        def reason(s):
+            note = str(s.note or "")
+            return note[len("not volume-scored: "):] if note.startswith("not volume-scored: ") else note
+        parts = [f"{s.set_id} ({s.name})" + (f": {reason(s)}" if s.note else "") for s in out]
+        texts.append(f"The run's summary figures (mean and median KGE, volumes) cover the {n} volume-scored "
+                     "locations. Shown but not counted: " + "; ".join(parts) + ".")
+    if nested:
+        parts = [f"{s.set_id} lies inside {s.nested_in}" for s in nested]
+        texts.append("; ".join(parts) + ": nested locations enter the skill statistics but not the volume "
+                     "totals, which would otherwise count their water twice.")
+    if not texts:
         return ""
-    n = int(sum(1 for s in sets.itertuples(index=False) if s.set_id in v.index and s.volume_scored))
-    def reason(s):
-        note = str(s.note or "")
-        return note[len("not volume-scored: "):] if note.startswith("not volume-scored: ") else note
-    parts = [f"{s.set_id} ({s.name})" + (f": {reason(s)}" if s.note else "") for s in out]
-    text = (f"The run's summary figures (mean and median KGE, volumes) cover the {n} volume-scored locations. "
-            f"Shown but not counted: " + "; ".join(parts) + ".")
+    text = " ".join(texts)
     if fmt == "p":
         return f"<p class='note'>{html.escape(text)}</p>"
     return text
@@ -1149,19 +1158,31 @@ def write_html(sets, metrics, out: Path, label: str, window: str, maps: list[Pat
         ext = t2[t2.basis == "extrapolated"]
         if len(ext):
             n_in_set = int((ext.tier1_set.astype(str) != "").sum()) if "tier1_set" in ext.columns else 0
-            parts.append("<section id='unconstrained'><h2>Unconstrained arcs: the regionalization test</h2>")
-            parts.append(f"<p class='note'>{len(ext)} arc(s), {ext.ref_taf_yr.sum():,.0f} TAF/yr of CalSim3 rim "
-                         f"inflow ({100 * ext.ref_taf_yr.sum() / max(t2.ref_taf_yr.sum(), 1):.1f}% of the total). "
-                         "These lie outside every trained entity footprint: their cells are taken from the region "
-                         "grid, given flow lengths traced to the polygon exit, and simulated with the trained "
-                         "parameter network. Nothing in the loss ever touched them, so they test the "
-                         "regionalization alone. The trained-cells column, where present, is the share of each "
-                         "arc's cell weight that nonetheless lies inside a trained footprint, which happens where a "
-                         "gauged creek overlaps the arc."
-                         + (f" {n_in_set} of them belong to a tier-1 set and also appear on its tab." if n_in_set else "")
-                         + f" With the {len(t2) - len(ext) + n_in_set} arcs on the set tabs these cover all "
-                           f"{len(t2)} scored rim arcs.</p>")
-            parts += _t2_table(ext, e, show_set=True, show_cover="trained_cell_frac" in ext.columns)
+            has_cover = "trained_cell_frac" in ext.columns
+            parts.append("<section id='unconstrained'><h2>Unconstrained arcs: no trained entity lists them</h2>")
+            text = (f"{len(ext)} arc(s), {ext.ref_taf_yr.sum():,.0f} TAF/yr of CalSim3 rim "
+                    f"inflow ({100 * ext.ref_taf_yr.sum() / max(t2.ref_taf_yr.sum(), 1):.1f}% of the total). "
+                    "No trained entity's arc list holds them, so their cells are taken from the region grid, "
+                    "given flow lengths traced to the polygon exit, and simulated with the trained parameter "
+                    "network.")
+            if has_cover:
+                cf = ext.trained_cell_frac.astype(float)
+                n_unseen, n_seen = int((cf <= 0).sum()), int((cf > 0).sum())
+                unseen, seen = ext[cf <= 0], ext[cf > 0]
+                text += (f" The trained-cells column is the share of each arc's area on cells the run trained on. "
+                         f"{n_unseen} arc(s) sit entirely on ground the loss never saw"
+                         + (f" (median KGE {unseen.kge.median():.3f})" if unseen.kge.notna().any() else "")
+                         + ": those test the regionalization alone."
+                         + (f" The other {n_seen} overlap a trained creek footprint"
+                            f"{' or lie wholly within one' if (cf >= 0.999).any() else ''}"
+                            + (f" (median KGE {seen.kge.median():.3f})" if seen.kge.notna().any() else "")
+                            + ": their cells were fitted through the creek gauge and only the routing to the "
+                              "CalSim3 arc is new." if n_seen else ""))
+            text += (f" {n_in_set} of them belong to a tier-1 set and also appear on its tab." if n_in_set else "")
+            text += (f" With the {len(t2) - len(ext) + n_in_set} arcs on the set tabs these cover all "
+                     f"{len(t2)} scored rim arcs.")
+            parts.append(f"<p class='note'>{text}</p>")
+            parts += _t2_table(ext, e, show_set=True, show_cover=has_cover)
             if t2_dir is not None:
                 fig = t2_dir / "figures" / f"tier2_regime_unconstrained_{window}.png"
                 if fig.exists():
@@ -1298,13 +1319,12 @@ def main(argv=None) -> None:
             keep = [c for c in ("arc", "method_class", "record_frac", "record_owner") if c in pd.read_csv(deriv, nrows=0).columns]
             d = pd.read_csv(deriv)[keep]
             t2 = t2.merge(d, on="arc", how="left")
-        # every set's arcs belong to that set's tab, whatever the tier-2 parent assignment was
-        s_of = {arc: st.set_id for st in sets.itertuples(index=False) for arc in st.arcs}
-        t2["tier1_set"] = t2["arc"].map(s_of).fillna("")
-        cov = t2_dir / "tier2_extrapolated_trained_cover.csv"
-        if cov.exists():
-            c = pd.read_csv(cov).rename(columns={"basin": "arc"})[["arc", "trained_cell_frac"]]
-            t2 = t2.merge(c, on="arc", how="left")
+        # every set's arcs belong to that set's tab, whatever the tier-2 parent assignment was;
+        # the smallest set names an arc that several list (Shasta's I_SHSTA)
+        t2["tier1_set"] = t2["arc"].map(arc_to_set(sets)).fillna("")
+        if "trained_cell_frac" not in t2.columns:
+            print("atlas: tier2_metrics.csv has no trained_cell_frac column (older tier-2 output) — "
+                  "the unconstrained tab cannot tell arcs on trained cells from unseen ones")
         print(f"atlas: tier-2 block from {t2_dir} ({len(t2)} arcs"
               + (", with derivation classes)" if deriv.exists() else ")"))
     else:

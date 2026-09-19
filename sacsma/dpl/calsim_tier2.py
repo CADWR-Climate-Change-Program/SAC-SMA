@@ -11,7 +11,10 @@ HydroSHEDS grid (the entity builder's exit-of-footprint mode, run in a subproces
 the raster and vector GDAL stacks must not share a process), the trained parameter network
 maps their attributes to parameters, and they are simulated and scored like the others,
 flagged ``basis = extrapolated``.  ``--no-extend`` restricts tier 2 to the trained
-footprints.
+footprints.  ``basis`` says how an arc was simulated, not whether the loss saw its cells: a
+USGS creek gauge has no arc list, so an arc on its footprint is extrapolated by construction
+although its cells were fitted.  ``trained_cell_frac`` (the share of each arc's area on cells
+the run trained on) tells those apart; the regionalization test proper is the arcs at 0.
 
 Each arc's monthly volume (mean depth over its covered cells x the polygon ``SQ_MI``) is
 scored against its CalSim3 ``INFLOW`` series over WY1950-84, and over the parent entity's
@@ -22,19 +25,25 @@ Usage::
 
     python -m sacsma.dpl.calsim_tier2 <run_dir | checkpoint.pt> [--out DIR] [--data-dir data]
                                   [--device cpu|cuda] [--no-maps] [--no-extend]
-                                  [--tiles-dir tmp/hydrosheds] [--figures-only] [--label NAME]
+                                  [--tiles-dir tmp/hydrosheds] [--trace-python PY] [--figures-only]
+                                  [--label NAME]
 
 Writes ``tier2_metrics.csv`` (one row per arc x window), ``tier2_monthly.csv``,
-``tier2_arcs.csv`` (coverage and parent entity per arc), ``tier2_not_simulated.csv``,
-``tier2_extension_cells.csv``, ``tier2_sim_daily.npz``, the KGE / bias maps and the regime
-figures under ``figures/``, and prints the summary.  When the run folder holds
-``sim_daily_mm.npz`` the re-run's entity aggregates are checked against it.
+``tier2_arcs.csv`` (coverage, parent entity and trained-cell share per arc),
+``tier2_not_simulated.csv``, ``tier2_extension_cells.csv``, ``tier2_sim_daily.npz``, the KGE /
+bias maps and the regime figures under ``figures/``, and prints the summary.  When the run
+folder holds ``sim_daily_mm.npz`` the re-run's entity aggregates are checked against it.
+``--figures-only`` redraws from the CSVs already in ``--out``: the maps from the tracked
+``tier2_metrics.csv``, the regime figures only where the untracked ``tier2_monthly.csv`` of a
+previous full run is present.
 
-Needs the ``dpl`` extra (torch) and a source checkout: the extrapolated arcs import the
-tracer of ``dataprep/build_flowlens.py``, which needs ``rasterio`` and the HydroSHEDS v2
-tiles (read from ``--tiles-dir`` when complete, otherwise streamed from the HydroSHEDS
-server; the size check needs network either way); without them those arcs fall back to
-straight-line x 1.5 lengths, and ``--no-extend`` needs neither.
+Needs the ``dpl`` extra (torch) and a source checkout: the extrapolated arcs run the tracer
+of ``dataprep/build_flowlens.py`` (``--trace-cells``) in a subprocess, which needs
+``rasterio`` and the HydroSHEDS v2 tiles (read from ``--tiles-dir`` when complete, otherwise
+streamed from the HydroSHEDS server; the size check needs network, or a local tile's
+``.ok`` marker); ``--trace-python`` names an interpreter that has rasterio when this one
+does not (the ``sacsma-gis`` env).  Without them those arcs fall back to straight-line x 1.5
+lengths, which the log states; ``--no-extend`` needs neither.
 """
 
 from __future__ import annotations
@@ -52,8 +61,8 @@ import torch
 from ..metrics import center_of_timing, kge, nse, pbias, pearson, seasonal_mismatch
 from ..calsim.catchments import (_EQ_CRS, _GRID_STEP_DEG, EXCLUDE_ARCS, MERGED_LAYER,
                          _square_cell_overlap, load_catchments, load_crosswalk, series_arc)
-from .calsim_tier1 import (AF_PER_MM_MI2, VALIDATION_WINDOW, WINDOWS, load_references, load_sets,
-                    registry_arcs, registry_windows)
+from .calsim_tier1 import (AF_PER_MM_MI2, VALIDATION_WINDOW, WINDOWS, arc_to_set, load_references,
+                    load_sets, registry_arcs, registry_windows)
 
 
 def rim_polygons(data_dir: str | Path = "data"):
@@ -115,69 +124,75 @@ def arc_weights(dom, catch, mapping: pd.DataFrame, parent: dict[str, str]):
     return W, pd.DataFrame(rows)
 
 
-def uncovered_arc_cells(catch, parent: dict[str, str], data_dir: str | Path = "data") -> pd.DataFrame:
+def region_arc_overlap(catch, data_dir: str | Path = "data") -> pd.DataFrame:
+    """Square-cell x rim-polygon overlap of the whole region grid, ``[key, lat, lon, arc,
+    area_mi2]``: every arc's cells whether or not the run trained on them."""
+    grid = pd.read_csv(Path(data_dir) / "region" / "grid_cells.csv", usecols=["key", "lat", "lon"])
+    mapping, _ = _square_cell_overlap(grid, catch[["cid", "node", "geometry"]].to_crs(_EQ_CRS),
+                                      "EPSG:4326", _GRID_STEP_DEG)
+    mapping["arc"] = mapping["node"].map(series_arc)
+    g = grid.set_index("key")
+    mapping["lat"] = mapping["key"].map(g["lat"])
+    mapping["lon"] = mapping["key"].map(g["lon"])
+    return mapping[["key", "lat", "lon", "arc", "area_mi2"]].reset_index(drop=True)
+
+
+def trained_cell_share(region_map: pd.DataFrame, trained_keys) -> pd.Series:
+    """Per arc (the index), the share of its overlap area on cells the run trained on: 1 for
+    an arc wholly inside trained footprints, 0 for one the loss never saw.  An arc no trained
+    entity lists can still sit on trained cells where a USGS creek gauge covers it — its
+    parameters were fitted through that gauge and only the routing to the arc is new."""
+    on = region_map["key"].isin(set(trained_keys))
+    tot = region_map.groupby("arc")["area_mi2"].sum()
+    hit = region_map[on].groupby("arc")["area_mi2"].sum().reindex(tot.index).fillna(0.0)
+    return (hit / tot).rename("trained_cell_frac")
+
+
+def uncovered_arc_cells(catch, parent: dict[str, str], data_dir: str | Path = "data",
+                        region_map: pd.DataFrame | None = None) -> pd.DataFrame:
     """HRU rows for the rim polygons no trained entity lists: every region grid cell whose
     square overlaps the polygon, weight = overlap area, elevation from the region statics.
-    Columns ``[basin, key, lat, lon, area_weight, elev]`` (basin = the arc id)."""
+    Columns ``[basin, key, lat, lon, area_weight, elev]`` (basin = the arc id).  Pass the
+    :func:`region_arc_overlap` table to reuse it."""
     from ..io import soilveg_path
-    grid = pd.read_csv(Path(data_dir) / "region" / "grid_cells.csv", usecols=["key", "lat", "lon"])
-    unc = catch[~catch["arc"].isin(parent)]
+    if region_map is None:
+        region_map = region_arc_overlap(catch, data_dir)
+    unc = region_map[~region_map["arc"].isin(parent)]
     if unc.empty:
         return pd.DataFrame(columns=["basin", "key", "lat", "lon", "area_weight", "elev"])
-    mapping, _ = _square_cell_overlap(grid, unc[["cid", "node", "geometry"]].to_crs(_EQ_CRS),
-                                      "EPSG:4326", _GRID_STEP_DEG)
-    mapping["basin"] = mapping["node"].map(series_arc)
     sv = pd.read_csv(soilveg_path(data_dir, "multifamily"), usecols=["key", "dem_elev"]).set_index("key")["dem_elev"]
-    g = grid.set_index("key")
-    out = pd.DataFrame({"basin": mapping["basin"], "key": mapping["key"],
-                        "lat": mapping["key"].map(g["lat"]), "lon": mapping["key"].map(g["lon"]),
-                        "area_weight": mapping["area_mi2"], "elev": mapping["key"].map(sv)})
+    out = pd.DataFrame({"basin": unc["arc"], "key": unc["key"], "lat": unc["lat"], "lon": unc["lon"],
+                        "area_weight": unc["area_mi2"], "elev": unc["key"].map(sv)})
     out = out[out["elev"].notna()].sort_values(["basin", "key"]).reset_index(drop=True)
     return out
 
 
+_BUILD_FLOWLENS = Path(__file__).resolve().parents[2] / "dataprep" / "build_flowlens.py"
+
+
 def trace_arc_cells(cells_csv: str | Path, out_csv: str | Path, tiles_dir: str | Path = "tmp/hydrosheds") -> None:
     """Flow length of every row of ``cells_csv`` to where its HydroSHEDS flow path leaves its
-    arc's cell footprint (the entity builder's exit-of-footprint mode); untraceable cells take
-    the arc's median traced length.  Runs in its own process (rasterio only, no geopandas)."""
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "dataprep"))
+    arc's cell footprint (``build_flowlens.trace_cells_to_exit``).  Kept for the in-process
+    case; :func:`_flowlens_for` runs the tracer as ``dataprep/build_flowlens.py --trace-cells``
+    in a subprocess, which needs rasterio and pandas only."""
+    sys.path.insert(0, str(_BUILD_FLOWLENS.parent))
     import build_flowlens as bf  # noqa: E402
-    cells = pd.read_csv(cells_csv)
-    dir_m, acc_m = bf.Mosaic(Path(tiles_dir), "DIR"), bf.Mosaic(Path(tiles_dir), "ACC")
-    frames = []
-    for arc, sub in cells.groupby("basin", sort=False):
-        sub = sub.reset_index(drop=True)
-        m = 0.10
-        dirr, tr = dir_m.read(sub.lat.min() - m, sub.lat.max() + m, sub.lon.min() - m, sub.lon.max() + m)
-        exit_mask = np.zeros(dirr.shape, dtype=bool)
-        inv = ~tr
-        for cr in sub.itertuples():
-            c0, r0 = inv * (cr.lon - bf.HALF, cr.lat + bf.HALF)
-            c1, r1 = inv * (cr.lon + bf.HALF, cr.lat - bf.HALF)
-            exit_mask[max(int(r0), 0):int(r1) + 1, max(int(c0), 0):int(c1) + 1] = True
-        res = bf.trace_entity(dirr, tr, sub, acc_m, None, exit_mask, None)
-        ok = res.flowlen_m.notna() & (res.method != "fallback")
-        if ok.any():
-            res.loc[~ok, "flowlen_m"] = res.flowlen_m[ok].median()
-        else:  # nothing traced: straight line to the lowest cell x a typical sinuosity
-            j = int(sub["elev"].idxmin())
-            res["flowlen_m"] = bf.haversine_m(sub.lat, sub.lon, sub.lat[j], sub.lon[j]) * 1.5
-        res.insert(0, "basin", arc)
-        frames.append(res[["basin", "key", "flowlen_m", "method"]])
-        print(f"trace {arc:11s} cells {len(sub):3d} traced {int(ok.sum()):3d}", flush=True)
-    dir_m.close()
-    acc_m.close()
-    pd.concat(frames, ignore_index=True).to_csv(out_csv, index=False)
+    bf.trace_cells_to_exit(Path(cells_csv), Path(out_csv), Path(tiles_dir))
 
 
-def _flowlens_for(cells: pd.DataFrame, tiles_dir: str | Path) -> pd.DataFrame:
+def _flowlens_for(cells: pd.DataFrame, tiles_dir: str | Path,
+                  trace_python: str | None = None) -> pd.DataFrame:
     """Add ``flowlen`` (m) and ``flowlen_method`` to the extension HRU rows, tracing in a
-    subprocess; falls back to straight-line x 1.5 to each arc's lowest cell if tracing fails."""
+    subprocess (``dataprep/build_flowlens.py --trace-cells`` under ``trace_python``, default
+    this interpreter — an environment with rasterio; the raster and vector GDAL stacks must
+    not share a process); falls back to straight-line x 1.5 to each arc's lowest cell if
+    tracing fails, and says so."""
     with tempfile.TemporaryDirectory() as td:
         cin, cout = Path(td) / "cells.csv", Path(td) / "flowlens.csv"
         cells.to_csv(cin, index=False)
-        r = subprocess.run([sys.executable, "-m", "sacsma.dpl.calsim_tier2", "--trace-only", str(cin),
-                            str(cout), "--tiles-dir", str(tiles_dir)], capture_output=True, text=True)
+        r = subprocess.run([trace_python or sys.executable, str(_BUILD_FLOWLENS), "--trace-cells",
+                            str(cin), str(cout), "--tiles-dir", str(tiles_dir)],
+                           capture_output=True, text=True)
         if r.returncode == 0 and cout.exists():
             fl = pd.read_csv(cout)
             out = cells.merge(fl, on=["basin", "key"], how="left")
@@ -350,7 +365,8 @@ def _score(months: pd.PeriodIndex, sim: np.ndarray, ref: np.ndarray) -> dict:
 
 
 def score_run(ckpt: str | Path, data_dir: str | Path = "data", *, device=None, run_dir=None,
-              extend: bool = True, tiles_dir: str | Path = "tmp/hydrosheds", out: Path | None = None):
+              extend: bool = True, tiles_dir: str | Path = "tmp/hydrosheds", out: Path | None = None,
+              trace_python: str | None = None):
     """Returns (metrics, monthly, arcs, not_sim, entity_check).  ``extend`` simulates the
     arcs outside every trained footprint on their own region cells (``basis = extrapolated``)."""
     from .evaluate import load_net_from_checkpoint
@@ -360,6 +376,10 @@ def score_run(ckpt: str | Path, data_dir: str | Path = "data", *, device=None, r
     parent = parent_entities(dom.basins, data_dir)
     W_arc, arcs = arc_weights(dom, catch, mapping, parent)
     arcs["basis"] = "trained entity"
+    # every arc's share of area on the cells this run trained on, from the full region grid
+    region_map = region_arc_overlap(catch, data_dir)
+    share = trained_cell_share(region_map, dom.hrus["key"].unique())
+    arcs["trained_cell_frac"] = arcs["arc"].map(share).fillna(0.0)
     print(f"tier2: {len(catch)} rim polygons; {len(arcs)} arcs inside the {len(dom.basins)} trained "
           f"entities; {len(dom.hrus)} HRU rows on {dom.device.type}", flush=True)
     print("tier2: streaming the envelope ...", flush=True)
@@ -367,9 +387,9 @@ def score_run(ckpt: str | Path, data_dir: str | Path = "data", *, device=None, r
     sim_arc, arcs["n_nan_cells"], arcs["nan_weight_frac"] = _drop_bad_cells(sim_arc, W_arc, bad, dom.hrus, "trained-footprint")
     dates = dom.dates[t0:t1]
     if extend:
-        ext = uncovered_arc_cells(catch, parent, data_dir)
+        ext = uncovered_arc_cells(catch, parent, data_dir, region_map=region_map)
         if len(ext):
-            ext = _flowlens_for(ext, tiles_dir)
+            ext = _flowlens_for(ext, tiles_dir, trace_python)
             if out is not None:
                 ext.to_csv(out / "tier2_extension_cells.csv", index=False)
             net2, x2, dom2, cfg2 = _net_for_hrus(ckpt, ext, data_dir, device=device)
@@ -383,7 +403,8 @@ def score_run(ckpt: str | Path, data_dir: str | Path = "data", *, device=None, r
             cov = ext.groupby("basin")["area_weight"].sum()
             rows = [dict(arc=a, node=a[2:], entity="", sq_mi=float(sq_mi[a]), covered_mi2=float(cov[a]),
                          cover_frac=float(cov[a] / sq_mi[a]), n_cells=int((ext.basin == a).sum()),
-                         basis="extrapolated", n_nan_cells=int(n_bad2[j]), nan_weight_frac=float(w_bad2[j]))
+                         basis="extrapolated", trained_cell_frac=float(share.get(a, 0.0)),
+                         n_nan_cells=int(n_bad2[j]), nan_weight_frac=float(w_bad2[j]))
                     for j, a in enumerate(dom2.basins)]
             arcs = pd.concat([arcs, pd.DataFrame(rows)], ignore_index=True)
             sim_arc = np.concatenate([sim_arc, sim_ext], axis=0)
@@ -408,7 +429,7 @@ def score_run(ckpt: str | Path, data_dir: str | Path = "data", *, device=None, r
     inflow, _ = load_references(data_dir)
     xw = load_crosswalk(data_dir).set_index("arc")
     sets = load_sets(data_dir)
-    in_set = {a: s.set_id for s in sets.itertuples(index=False) for a in s.arcs}
+    in_set = arc_to_set(sets)      # the smallest set names an arc that several list (I_SHSTA -> SHA)
     train_win = registry_windows(data_dir)
     taf = _monthly_taf(sim_arc, dates, arcs["sq_mi"].to_numpy())
     taf.columns = list(arcs["arc"])
@@ -423,6 +444,7 @@ def score_run(ckpt: str | Path, data_dir: str | Path = "data", *, device=None, r
             idx = pd.period_range(m0, m1, freq="M")
             met = _score(idx, taf[a.arc].reindex(idx).to_numpy(), ref.reindex(idx).to_numpy())
             rows.append(dict(arc=a.arc, node=a.node, entity=a.entity, basis=a.basis,
+                             trained_cell_frac=float(a.trained_cell_frac),
                              system=xw["system"].get(a.arc, ""), tier1_set=in_set.get(a.arc, ""),
                              sq_mi=a.sq_mi, cover_frac=a.cover_frac, n_cells=a.n_cells,
                              n_nan_cells=int(a.n_nan_cells), nan_weight_frac=float(a.nan_weight_frac),
@@ -463,6 +485,14 @@ def summarize(metrics: pd.DataFrame, not_sim: pd.DataFrame, window: str = VALIDA
     lines.append("  all scored:       " + _stat_line(m))
     for basis, g in m.groupby("basis"):
         lines.append(f"  {basis:17s} " + f"(n={len(g)}) " + _stat_line(g))
+    ext = m[m.basis == "extrapolated"]
+    if len(ext) and "trained_cell_frac" in ext.columns:
+        # the regionalization test is the arcs on cells the loss never saw; the others overlap a
+        # trained creek footprint and only their routing to the arc is new
+        for label, g in (("  on unseen cells ", ext[ext.trained_cell_frac <= 0]),
+                         ("  on trained cells", ext[ext.trained_cell_frac > 0])):
+            if len(g):
+                lines.append(f"  {label:17s} " + f"(n={len(g)}) " + _stat_line(g))
     m = m[m.basis == "trained entity"]
     g = m.groupby("entity").agg(n=("arc", "size"), kge_med=("kge", "median"), kge_min=("kge", "min"),
                                 pbias_med=("pbias", "median"), sim=("sim_taf_yr", "sum"), ref=("ref_taf_yr", "sum"))
@@ -477,8 +507,10 @@ def summarize(metrics: pd.DataFrame, not_sim: pd.DataFrame, window: str = VALIDA
         e = metrics[(metrics.window == window) & metrics.has_series & metrics.kge.notna()
                     & (metrics.basis == "extrapolated")]
         if len(e):
-            lines.append("  extrapolated arcs (outside every trained footprint), by reference volume:")
-            lines.append(e.sort_values("ref_taf_yr", ascending=False)[cols].round(3).to_string(index=False))
+            ecols = cols[:6] + (["trained_cell_frac"] if "trained_cell_frac" in e.columns else []) + cols[6:]
+            lines.append("  extrapolated arcs (no trained entity lists them; trained_cell_frac = share of the "
+                         "arc's area on cells the run trained on), by reference volume:")
+            lines.append(e.sort_values("ref_taf_yr", ascending=False)[ecols].round(3).to_string(index=False))
         if len(not_sim):
             lines.append("  not simulated:")
             lines.append(not_sim.sort_values("ref_taf_yr", ascending=False).round(1).to_string(index=False))
@@ -508,6 +540,11 @@ def regime_figures(out: Path, data_dir: str | Path = "data", label: str = "",
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    if not (out / "tier2_monthly.csv").exists():
+        # the monthly table is not tracked: a fresh clone holds the metrics only
+        print(f"tier2: no {out / 'tier2_monthly.csv'} (written by the forward pass, not tracked) — "
+              "regime figures skipped", flush=True)
+        return []
     metrics = pd.read_csv(out / "tier2_metrics.csv")
     monthly = pd.read_csv(out / "tier2_monthly.csv")
     inflow, _ = load_references(data_dir)
@@ -515,7 +552,11 @@ def regime_figures(out: Path, data_dir: str | Path = "data", label: str = "",
     sq_mi = catch.groupby("arc")["sq_mi"].sum()
     xw = load_crosswalk(data_dir).set_index("arc")["system"].fillna("")
     sets = load_sets(data_dir)
-    in_set = {a: s.set_id for s in sets.itertuples(index=False) for a in s.arcs}
+    # every set that lists an arc gets it on its figure (Shasta's I_SHSTA is on SHA's and Red Bluff's)
+    sets_of: dict[str, list[str]] = {}
+    for s in sets.itertuples(index=False):
+        for a in s.arcs:
+            sets_of.setdefault(a, []).append(s.set_id)
     set_name = {s.set_id: s.name for s in sets.itertuples(index=False)}
     set_system = {s.set_id: s.system for s in sets.itertuples(index=False)}
     m0, m1 = WINDOWS[window]
@@ -535,12 +576,14 @@ def regime_figures(out: Path, data_dir: str | Path = "data", label: str = "",
         return np.array([np.nanmean(s[wm == k]) if np.isfinite(s[wm == k]).any() else np.nan
                          for k in range(12)])
 
-    # group every rim arc: its tier-1 set, else its crosswalk system, else unconstrained
+    # group every rim arc: its tier-1 set(s), else its crosswalk system, else unconstrained
     groups: dict[str, list[str]] = {}
     for arc in sq_mi.index:
-        if arc in in_set:
-            g = in_set[arc]
-        elif xw.get(arc, ""):
+        if arc in sets_of:
+            for g in sets_of[arc]:
+                groups.setdefault(g, []).append(arc)
+            continue
+        if xw.get(arc, ""):
             g = next((s for s, sy in set_system.items() if sy == xw[arc]), xw[arc])
         else:
             g = "unconstrained"
@@ -611,6 +654,9 @@ def main(argv=None) -> None:
     p.add_argument("--no-extend", action="store_true",
                    help="do not simulate the arcs outside every trained footprint")
     p.add_argument("--tiles-dir", default="tmp/hydrosheds", help="HydroSHEDS DIR/ACC tiles")
+    p.add_argument("--trace-python", default=None,
+                   help="interpreter for the flow-length tracer subprocess (an environment "
+                        "with rasterio, e.g. the sacsma-gis env; default: this one)")
     p.add_argument("--figures-only", action="store_true",
                    help="only (re)draw the maps and the per-set regime figures from the CSVs "
                         "already in --out (no forward pass)")
@@ -630,7 +676,8 @@ def main(argv=None) -> None:
     label = a.label or run_dir.name
     if not a.figures_only:
         metrics, monthly, arcs, not_sim, _ = score_run(ckpt, a.data_dir, device=a.device, run_dir=run_dir,
-                                                       extend=not a.no_extend, tiles_dir=a.tiles_dir, out=out)
+                                                       extend=not a.no_extend, tiles_dir=a.tiles_dir, out=out,
+                                                       trace_python=a.trace_python)
         metrics.to_csv(out / "tier2_metrics.csv", index=False)
         monthly.to_csv(out / "tier2_monthly.csv", index=False)
         arcs.to_csv(out / "tier2_arcs.csv", index=False)
