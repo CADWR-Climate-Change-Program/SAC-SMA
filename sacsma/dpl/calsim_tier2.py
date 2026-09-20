@@ -49,6 +49,7 @@ lengths, which the log states; ``--no-extend`` needs neither.
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 import tempfile
@@ -180,19 +181,35 @@ def trace_arc_cells(cells_csv: str | Path, out_csv: str | Path, tiles_dir: str |
     bf.trace_cells_to_exit(Path(cells_csv), Path(out_csv), Path(tiles_dir))
 
 
+def _tracer_env(trace_python: str | None) -> dict[str, str] | None:
+    """Environment for the tracer subprocess: unchanged for this interpreter; for another
+    one, PATH without this environment's own directories (``pick_device`` prepends
+    ``sys.prefix/Library/bin``, whose ``gdal.dll`` rasterio in the child would pick up)."""
+    if not trace_python or Path(trace_python).resolve() == Path(sys.executable).resolve():
+        return None
+    env = dict(os.environ)
+    prefix = os.path.normcase(os.path.abspath(sys.prefix)) + os.sep
+    env["PATH"] = os.pathsep.join(
+        p for p in env.get("PATH", "").split(os.pathsep)
+        if not (os.path.normcase(os.path.abspath(p)) + os.sep).startswith(prefix))
+    return env
+
+
 def _flowlens_for(cells: pd.DataFrame, tiles_dir: str | Path,
                   trace_python: str | None = None) -> pd.DataFrame:
     """Add ``flowlen`` (m) and ``flowlen_method`` to the extension HRU rows, tracing in a
     subprocess (``dataprep/build_flowlens.py --trace-cells`` under ``trace_python``, default
     this interpreter — an environment with rasterio; the raster and vector GDAL stacks must
     not share a process); falls back to straight-line x 1.5 to each arc's lowest cell if
-    tracing fails, and says so."""
+    tracing fails, and says so.  Another interpreter gets a PATH without this environment's
+    own directories: ``pick_device`` puts this env's ``Library/bin`` (its GDAL) on PATH for
+    NVRTC, and rasterio in the child would bind to that ``gdal.dll`` instead of its own."""
     with tempfile.TemporaryDirectory() as td:
         cin, cout = Path(td) / "cells.csv", Path(td) / "flowlens.csv"
         cells.to_csv(cin, index=False)
         r = subprocess.run([trace_python or sys.executable, str(_BUILD_FLOWLENS), "--trace-cells",
                             str(cin), str(cout), "--tiles-dir", str(tiles_dir)],
-                           capture_output=True, text=True)
+                           capture_output=True, text=True, env=_tracer_env(trace_python))
         if r.returncode == 0 and cout.exists():
             fl = pd.read_csv(cout)
             out = cells.merge(fl, on=["basin", "key"], how="left")
