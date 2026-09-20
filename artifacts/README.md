@@ -93,7 +93,7 @@ Three tools score a trained `multifamily` run against CalSim3 over **WY1950–84
 
 ```bash
 python -m sacsma.dpl.calsim_tier1 <run>              # -> <run>/tier1/
-python -m sacsma.dpl.calsim_tier2 <run> [--no-extend]   # -> <run>/tier2/   (re-runs the checkpoint forward)
+python -m sacsma.dpl.calsim_tier2 <run> [--no-extend] [--trace-python <python with rasterio>]   # -> <run>/tier2/   (re-runs the checkpoint forward)
 python -m sacsma.dpl.calsim_atlas <run>              # -> <run>/atlas/calsim_validation_atlas.html
 python -m sacsma.dpl.calsim_windows                  # the trimmed-window rule against data/calsim/tier1_sets.csv (--write stores it; then re-run calsim_tier1)
 python -m sacsma.dpl.calsim_compare <run_a> <run_b>  # tier 1 of two scored runs side by side -> tier1_comparison.md/.html/.csv under --out (default: the current folder)

@@ -73,10 +73,11 @@ The multi-timescale domain trains through the same command with `--domain multif
 
 ```
 sacsma dpl train physical_climate --domain multifamily --et noah --noah-pet priestley_taylor --canopy-lite \
+    --chunk-grid water_year --no-flowlen-feature \
     [--basins <entity ids>] [--mt-family-weight none|equal|usgs=..,cdec=..,uf=..] --out <run>
 sacsma dpl evaluate <run>/checkpoints/best.pt     # per-entity metrics + sim_daily_mm.npz
 python -m sacsma.dpl.calsim_tier1 <run>           # the twenty training locations
-python -m sacsma.dpl.calsim_tier2 <run> [--no-extend] # every rim INFLOW arc
+python -m sacsma.dpl.calsim_tier2 <run> [--no-extend] [--trace-python <python with rasterio>] # every rim INFLOW arc
 python -m sacsma.dpl.calsim_atlas <run>           # the HTML validation atlas -> <run>/atlas/
 python -m sacsma.dpl.calsim_windows               # derive / check the trimmed validation windows (val_start_wy, val_end_wy)
 python -m sacsma.dpl.calsim_compare <run_a> <run_b>  # tier 1 of two scored runs side by side
