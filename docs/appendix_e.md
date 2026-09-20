@@ -49,7 +49,7 @@ Note: the per-basin WGEN/LTO volume-difference percentages of Part I's Warming s
 | Canonical physics runs | `artifacts/dpl/{hamon, pt, noah}/`, each with `metrics_<run>.csv`, `params_dpl.csv`, `figures/` (`noah` also `params_canopy.csv`; `noah` is the climate-adaptive variant) |
 | Hybrid physics channel | `artifacts/dpl/noah/frozen_sim_noah.csv` (the current ensembles' physics input channel, exported from the differentiable pipeline) |
 | Hybrid ensembles (current) | `artifacts/dpl/hybrid/`, `artifacts/dpl/hybrid_dt/`, `artifacts/dpl/lstm/` (ensemble-mean `metrics_hybrid.csv` + per-seed checkpoints) |
-| Multi-timescale (multifamily) runs + CalSim3 validation | `artifacts/dpl/multifamily/{noah_cdec_uf_usgs, noah_cdec_uf_usgs_areaw, noah_cdec_uf}/`, each with `checkpoints/best.pt`, `metrics_entities.csv`, `params_dpl.csv`, `params_canopy.csv`, `sim_daily_mm.npz`, `tier1/tier1_metrics.csv`, `tier2/tier2_metrics.csv` and the self-contained `atlas/calsim_validation_atlas.html` |
+| Multi-timescale (multifamily) runs + CalSim3 validation | `artifacts/dpl/multifamily/{noah_cdec_uf_usgs, noah_cdec_uf_usgs_areaw, noah_cdec_uf}/`, each with `checkpoints/best.pt`, `train_log.csv`, `metrics_entities.csv`, `params_dpl.csv`, `params_canopy.csv`, `sim_daily_mm.npz` (git LFS), `tier1/tier1_metrics.csv`, `tier2/tier2_metrics.csv`, `tier2/tier2_arcs.csv` and the self-contained `atlas/calsim_validation_atlas.html` (git LFS) |
 | (Δp, ΔT) response surfaces | `sacsma.dpl.noah_ca_hybrids` (family) / `sacsma.dpl.adaptive_physics` (physics-only `Noah` vs `Noah (climate-adaptive)`) / `sacsma.dpl.dtdp_response` (shared response-window + regime-aggregation engine; its own frozen-noah-predecessor comparison output was retired, `hybrid`/`hybrid_regimes` cover the current family); `artifacts/dpl/figures/{hybrid,hybrid_regimes,hybrid_summary.png,hybrids_metrics.csv,hybrid_progression.{csv,png},noah_climate_adaptive*}` |
 | GA → dPL → hybrid comparison | `artifacts/dpl/figures/compare_ga_dpl_hybrid.csv` |
 | Fidelity benchmark | `artifacts/dpl/noah/fidelity/fidelity_benchmark.csv` + figure |
@@ -73,10 +73,11 @@ The multi-timescale domain trains through the same command with `--domain multif
 
 ```
 sacsma dpl train physical_climate --domain multifamily --et noah --noah-pet priestley_taylor --canopy-lite \
+    --chunk-grid water_year --no-flowlen-feature \
     [--basins <entity ids>] [--mt-family-weight none|equal|usgs=..,cdec=..,uf=..] --out <run>
 sacsma dpl evaluate <run>/checkpoints/best.pt     # per-entity metrics + sim_daily_mm.npz
 python -m sacsma.dpl.calsim_tier1 <run>           # the twenty training locations
-python -m sacsma.dpl.calsim_tier2 <run> [--no-extend] # every rim INFLOW arc
+python -m sacsma.dpl.calsim_tier2 <run> [--no-extend] [--trace-python <python with rasterio>] # every rim INFLOW arc
 python -m sacsma.dpl.calsim_atlas <run>           # the HTML validation atlas -> <run>/atlas/
 python -m sacsma.dpl.calsim_windows               # derive / check the trimmed validation windows (val_start_wy, val_end_wy)
 python -m sacsma.dpl.calsim_compare <run_a> <run_b>  # tier 1 of two scored runs side by side

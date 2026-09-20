@@ -179,17 +179,20 @@ def monthly_chunk_target(
 
     Wraps :func:`sacsma.dpl.data.et_chunk_target` — a calendar month gets a
     slot only when it lies completely inside both the chunk and the cal
-    window, so split/partial months never enter the loss — and recovers each
-    slot's absolute month, so the simulated monthly sum lands in the right
-    ``obs_monthly`` column regardless of where the chunk grid cuts.  Returns
-    numpy ``(bucket (length, maxm), cols (maxm,), mask (maxm,))``; masked
-    slots have ``cols`` 0 (gate on ``mask`` before comparing).
+    window, so split/partial months never enter the loss (a fixed 366-day grid
+    from 1 Oct 1949 splits one month most years; the water-year grid,
+    ``DplConfig.chunk_grid``, splits none) — and recovers each slot's absolute
+    month, so the simulated monthly sum lands in the right ``obs_monthly``
+    column regardless of where the chunk grid cuts.  Returns numpy ``(bucket
+    (length, maxm), cols (maxm,), mask (maxm,))``; masked slots have ``cols``
+    0 (gate on ``mask`` before comparing).
     """
     bucket, _, mask = et_chunk_target(dates, c0, length, cal_t0, cal_t1)
     if mask.sum() >= bucket.shape[1]:
         # all slots used ⇒ a further complete month may have been dropped
         # silently (et_chunk_target caps at maxm without error); DplConfig
-        # bounds train_chunk_days <= 366 exactly to keep this unreachable
+        # bounds train_chunk_days <= 366 exactly to keep this unreachable (a
+        # 1-Oct-aligned 365/366-day chunk holds twelve complete months)
         raise ValueError(f"monthly bucket slots exhausted for a {length}-day "
                          "chunk — shorten the chunk")
     cols = np.zeros(bucket.shape[1], np.int64)

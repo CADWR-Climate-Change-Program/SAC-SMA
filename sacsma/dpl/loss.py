@@ -16,8 +16,9 @@ Optional low-flow emphasis: ``+ lambda * (log(sim+eps) - log(obs+eps))^2``.
 
 Optional variance matching: ``+ var_lambda * rho(std(sim)/std(obs) - 1)`` per
 basin over the chunk's finite-obs days, with ``rho(d) = d^2`` up to
-``|d| = 1`` and ``2|d| - 1`` beyond (Huber), skipped for a basin-chunk whose
-observed variance is under 0.1% of the basin's record variance.  Squared
+``|d| = var_huber_cap`` and linear beyond (Huber; ``var_huber_cap <= 0`` keeps
+``d^2`` throughout), skipped for a basin-chunk whose observed variance is under
+``var_gate_frac`` of the basin's record variance (defaults 1.0 and 1e-3).  Squared
 error alone is variance-damping — its optimum is ``alpha = r < 1`` (the classic NSE peak-flattening),
 which the 2026-07-10 static run showed directly (mean cal alpha 0.88 vs the
 GA's 1.08, costing ~0.1 KGE on the strong basins).  A chunk std over ~366
@@ -44,6 +45,8 @@ def masked_basin_loss(
     log_lambda: float = 0.0,
     log_eps: float = 0.01,
     var_lambda: float = 0.0,
+    var_gate_frac: float = 1e-3,
+    var_huber_cap: float = 1.0,
     bias_lambda: float = 0.0,
     weight: torch.Tensor | None = None,
     min_days: int = 90,
@@ -53,6 +56,9 @@ def masked_basin_loss(
     ``weight`` (B,), if given, reweights the per-basin mean (adaptive per-basin
     training weights) — renormalized by its own sum, so unit-mean weights leave
     the loss scale unchanged.  ``weight=None`` is byte-identical to no weighting.
+    ``var_gate_frac`` is the share of the basin's record variance a chunk must
+    carry for the variance term to apply; ``var_huber_cap`` the ``|alpha - 1|``
+    beyond which that term grows linearly (``<= 0``: quadratic throughout).
     """
     finite = torch.isfinite(obs)
     n_fin = finite.sum(dim=1)                                   # (B,)
@@ -84,15 +90,21 @@ def masked_basin_loss(
         # gauges), and an absolute floor alone still passes near-flat
         # chunks whose tiny denominator lets this one term hijack the
         # gradient.  The gate is therefore RELATIVE — the chunk must carry
-        # >= 0.1% of the basin's full-record variance (absolute floor kept
-        # for ~flat records) — and the penalty is Huber-capped (quadratic
-        # to |alpha - 1| = 1, linear beyond) so no surviving chunk
-        # contributes unboundedly.  Skipped chunks keep their NNSE/log
-        # terms.  Branch-free.
-        has_var = (vo > torch.clamp(1e-3 * obs_var, min=1e-8)).to(per_basin.dtype)
+        # >= var_gate_frac of the basin's full-record variance (the 1e-8
+        # absolute floor stays a literal, for ~flat records) — and the
+        # penalty is Huber-capped (quadratic to |alpha - 1| = var_huber_cap,
+        # linear beyond) so no surviving chunk contributes unboundedly.
+        # Skipped chunks keep their NNSE/log terms.  Branch-free on the
+        # tensors; the cap is a Python-level choice (a torch.where against
+        # an infinite cap would put NaN through the unselected branch).
+        has_var = (vo > torch.clamp(var_gate_frac * obs_var, min=1e-8)).to(per_basin.dtype)
         alpha = vs.clamp_min(1e-12).sqrt() / vo.clamp_min(1e-12).sqrt()
         d = alpha - 1.0
-        pen = torch.where(d.abs() <= 1.0, d * d, 2.0 * d.abs() - 1.0)
+        if var_huber_cap > 0.0:
+            c = float(var_huber_cap)
+            pen = torch.where(d.abs() <= c, d * d, 2.0 * c * d.abs() - c * c)
+        else:
+            pen = d * d
         per_basin = per_basin + var_lambda * has_var * pen
 
     if bias_lambda > 0.0:

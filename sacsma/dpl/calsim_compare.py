@@ -26,7 +26,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from .calsim_tier1 import TRIMMED_WINDOW, VALIDATION_WINDOW, load_sets
+from .calsim_tier1 import TRIMMED_WINDOW, VALIDATION_WINDOW, load_sets, volume_rows
 
 _MAIN = ["anchor", "arcsum"]
 
@@ -81,11 +81,13 @@ def compare(run_a: str | Path, run_b: str | Path, data_dir: str | Path = "data",
 
     def agg(m: pd.DataFrame, other: pd.DataFrame) -> dict:
         anchors, arcs = m[m.ref_kind == "anchor"], m[m.ref_kind == "arcsum"]
+        u = volume_rows(m.reset_index())     # the volume totals leave out the nested locations
         return {"locations": len(m), "KGE mean": m.kge.mean(), "KGE median": m.kge.median(),
                 "KGE mean, FLOW-UNIMPAIRED anchors": anchors.kge.mean(), "KGE mean, arc sums": arcs.kge.mean(),
                 "NSE mean": m.nse.mean(), "absolute bias median, %": m.pbias.abs().median(), "absolute bias mean, %": m.pbias.abs().mean(),
-                "sum of the locations' mean annual volumes, simulated TAF/yr": m.sim_taf_yr.sum(), "sum of the locations' mean annual volumes, CalSim3 TAF/yr": m.ref_taf_yr.sum(),
-                "volume-weighted bias, %": 100.0 * (m.sim_taf_yr.sum() / m.ref_taf_yr.sum() - 1.0),
+                "locations in the volume totals (nested ones left out)": len(u),
+                "sum of the locations' mean annual volumes, simulated TAF/yr": u.sim_taf_yr.sum(), "sum of the locations' mean annual volumes, CalSim3 TAF/yr": u.ref_taf_yr.sum(),
+                "volume-weighted bias, %": 100.0 * (u.sim_taf_yr.sum() / u.ref_taf_yr.sum() - 1.0),
                 "seasonal mismatch mean": m.seas_mismatch.mean(),
                 "locations with the higher KGE": int((m.kge.to_numpy() > other.kge.to_numpy()).sum()),
                 "locations with the smaller absolute bias": int((m.pbias.abs().to_numpy() < other.pbias.abs().to_numpy()).sum())}

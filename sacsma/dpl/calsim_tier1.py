@@ -15,7 +15,11 @@ scored against the tier-1 reference as defined *and* against the sum of the arcs
 simulate (``ref_kind = arcsum_covered``), and the covered area fraction is reported.
 Cache Creek is counted like the others although its
 arcs are lake inflows while its training record is the routed outflow; the set table's
-``volume_scored`` flag is what includes or excludes a location from the aggregate.
+``volume_scored`` flag is what includes or excludes a location from the aggregate.  A set
+whose arcs all belong to a larger set (Shasta's ``I_SHSTA`` is one of Red Bluff's nine)
+is *nested*: it keeps its own row and enters the skill statistics, but the volume totals
+sum the unnested sets only, or Shasta's water would be counted twice.  Nesting is
+derived from the arc lists (``nested_in`` column), never flagged by hand.
 
 The ten anchored locations coincide with the monthly training targets, so their
 1950-1984 scores are a temporal holdout of the training target rather than an
@@ -97,7 +101,44 @@ def load_sets(data_dir: str | Path = "data") -> pd.DataFrame:
     bad = s[(s.val_start_wy < bounds["val_start_wy"]) | (s.val_end_wy > bounds["val_end_wy"]) | (s.val_start_wy > s.val_end_wy)]
     if len(bad):
         raise ValueError(f"tier1_sets.csv: val_start_wy..val_end_wy outside {VALIDATION_WINDOW} at {', '.join(bad.set_id)}")
+    s["nested_in"] = s["set_id"].map(nested_sets(s)).fillna("")
     return s
+
+
+def nested_sets(sets: pd.DataFrame) -> dict[str, str]:
+    """``{set_id: parent set_id}`` for every set whose arcs are a proper subset of another
+    set's (the smallest such parent).  Two sets that share arcs with neither containing the
+    other would make the volume total ambiguous, so that is an error."""
+    arcs = {s.set_id: set(s.arcs) for s in sets.itertuples(index=False)}
+    area = dict(zip(sets.set_id, sets.area_mi2, strict=True))
+    out: dict[str, str] = {}
+    for a, sa in arcs.items():
+        parents = [b for b, sb in arcs.items() if b != a and sa and sa < sb]
+        if parents:
+            out[a] = min(parents, key=lambda b: (float(area[b]), b))
+        for b, sb in arcs.items():
+            if b > a and (sa & sb) and not (sa <= sb or sb <= sa):
+                raise ValueError(f"tier1_sets.csv: {a} and {b} share arcs {sorted(sa & sb)} "
+                                 "but neither contains the other")
+    return out
+
+
+def arc_to_set(sets: pd.DataFrame) -> dict[str, str]:
+    """``{arc: set_id}`` for every arc a tier-1 set lists — the smallest set where an arc
+    belongs to several (Shasta's ``I_SHSTA`` goes to SHA, not to Red Bluff)."""
+    out: dict[str, str] = {}
+    for s in sets.sort_values("area_mi2", ascending=False).itertuples(index=False):
+        for a in s.arcs:
+            out[a] = s.set_id
+    return out
+
+
+def volume_rows(metrics: pd.DataFrame) -> pd.DataFrame:
+    """The rows a volume total sums: volume-scored, main reference kind, not nested."""
+    keep = metrics.volume_scored & metrics.ref_kind.isin(["anchor", "arcsum"])
+    if "nested_in" in metrics.columns:
+        keep &= metrics["nested_in"].fillna("").astype(str) == ""
+    return metrics[keep]
 
 
 def arc_areas(data_dir: str | Path = "data") -> dict[str, float]:
@@ -167,8 +208,16 @@ def _score(months: pd.PeriodIndex, sim: np.ndarray, ref: np.ndarray) -> dict:
     return out
 
 
-def _arcsum(inflow: pd.DataFrame, arcs: list[str]) -> pd.Series:
+def _arcsum(inflow: pd.DataFrame, arcs: list[str], label: str = "") -> pd.Series:
+    """Sum of the listed arcs' INFLOW series, NaN in any month one of them lacks.  Arcs
+    without a series (valley nodes such as ``I_SRBB_VAL``) are left out and named once."""
     have = [a for a in arcs if a in inflow.columns]
+    absent = [a for a in arcs if a not in inflow.columns]
+    if absent:
+        print(f"tier1: {label or 'arc sum'}: no CalSim3 series for {', '.join(absent)} — summing "
+              f"the other {len(have)}", flush=True)
+    if not have:
+        return pd.Series(np.nan, index=inflow.index)
     return inflow[have].sum(axis=1, min_count=len(have))
 
 
@@ -231,9 +280,9 @@ def score_run(run_dir: str | Path, data_dir: str | Path = "data") -> tuple[pd.Da
         if st.ref_kind == "anchor":
             refs["anchor"] = unimp[st.system]
         else:
-            refs["arcsum"] = _arcsum(inflow, st.arcs)
+            refs["arcsum"] = _arcsum(inflow, st.arcs, st.set_id)
         if missing:
-            refs["arcsum_covered"] = _arcsum(inflow, covered)
+            refs["arcsum_covered"] = _arcsum(inflow, covered, f"{st.set_id} (covered arcs)")
         t0, t1 = train_win[ent]
         windows = {VALIDATION_WINDOW: WINDOWS[VALIDATION_WINDOW], "train": (str(t0), str(t1))}
         trim = (f"{int(st.val_start_wy) - 1}-10", f"{int(st.val_end_wy)}-09")
@@ -247,6 +296,7 @@ def score_run(run_dir: str | Path, data_dir: str | Path = "data") -> tuple[pd.Da
                                  system=st.system if kind == "anchor" else "", window=wname,
                                  win_start=m0, win_end=m1,
                                  volume_scored=bool(st.volume_scored) and kind != "arcsum_covered",
+                                 nested_in=st.nested_in,
                                  area_set_mi2=a_set, area_sim_mi2=a_sim, cover_frac=cover_frac,
                                  n_arcs=len(st.arcs), n_arcs_missing=len(missing), **met,
                                  note=st.note))
@@ -361,21 +411,36 @@ def location_figure(panel: dict, out: Path, run_label: str = "") -> None:
     plt.close(fig)
 
 
+def _volume_text(g: pd.DataFrame) -> str:
+    """``sim vs ref TAF/yr (bias)`` over the unnested rows of ``g``."""
+    u = volume_rows(g)
+    if not len(u) or not u.ref_taf_yr.sum():
+        return "volume n/a"
+    s, r = u.sim_taf_yr.sum(), u.ref_taf_yr.sum()
+    return f"volume {s:,.0f} vs {r:,.0f} TAF/yr ({100.0 * (s / r - 1.0):+.1f}%)"
+
+
 def summarize(metrics: pd.DataFrame, window: str = VALIDATION_WINDOW) -> str:
-    """Text summary: the volume-scored aggregate for ``window`` and the per-set table."""
+    """Text summary: the volume-scored aggregate for ``window`` and the per-set table.  The
+    skill statistics cover every volume-scored location; the volume totals leave out the
+    nested ones (:func:`volume_rows`)."""
     lines = []
     m = metrics[(metrics.window == window)]
     v = m[m.volume_scored & m.ref_kind.isin(["anchor", "arcsum"])]
+    nested = v[v["nested_in"].fillna("").astype(str) != ""] if "nested_in" in v.columns else v.iloc[0:0]
     lines.append(f"tier 1, {window}: {len(v)} volume-scored locations "
                  f"({(v.ref_kind == 'anchor').sum()} FLOW-UNIMPAIRED anchors, "
                  f"{(v.ref_kind == 'arcsum').sum()} arc sums)")
+    if len(nested):
+        lines.append("  volume totals exclude " + ", ".join(
+            f"{r.set_id} (inside {r.nested_in})" for r in nested.itertuples(index=False))
+            + ": nested, its water is already in the parent's")
     for label, g in (("all", v), ("anchors", v[v.ref_kind == "anchor"]),
                      ("arc sums", v[v.ref_kind == "arcsum"])):
         if len(g):
             lines.append(f"  {label:9s} KGE mean {g.kge.mean():.3f} median {g.kge.median():.3f} | "
                          f"NSE mean {g.nse.mean():.3f} | |pbias| median {g.pbias.abs().median():.1f}% | "
-                         f"seasonal mismatch mean {g.seas_mismatch.mean():.3f} | "
-                         f"volume {g.sim_taf_yr.sum():,.0f} vs {g.ref_taf_yr.sum():,.0f} TAF/yr")
+                         f"seasonal mismatch mean {g.seas_mismatch.mean():.3f} | " + _volume_text(g))
     cols = ["set_id", "ref_kind", "cover_frac", "n_months", "kge", "nse", "pbias", "r", "alpha",
             "beta", "seas_mismatch", "ct_diff", "sim_taf_yr", "ref_taf_yr"]
     with pd.option_context("display.width", 200, "display.max_rows", 100):
@@ -389,8 +454,7 @@ def summarize(metrics: pd.DataFrame, window: str = VALIDATION_WINDOW) -> str:
                      f"the full window at the other {len(g) - len(t)}: "
                      f"KGE mean {g.kge.mean():.3f} median {g.kge.median():.3f} | NSE mean {g.nse.mean():.3f} | "
                      f"|pbias| median {g.pbias.abs().median():.1f}% | "
-                     f"sum of the locations' mean annual volumes, each over its own window, "
-                     f"{g.sim_taf_yr.sum():,.0f} vs {g.ref_taf_yr.sum():,.0f} TAF/yr")
+                     f"sum of the locations' mean annual volumes, each over its own window, " + _volume_text(g))
         with pd.option_context("display.width", 200, "display.max_rows", 100):
             lines.append(t[["set_id", "ref_kind", "win_start", "win_end"] + cols[3:]].round(3).to_string(index=False))
     return "\n".join(lines)

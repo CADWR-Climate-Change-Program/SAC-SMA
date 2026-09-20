@@ -23,18 +23,23 @@ Protocol (per epoch):
 3. **TBPTT** — fixed-length chunks (366 days) covering WY1989-2003, state and
    the 106-day routing-tail history carried detached across chunk boundaries;
    one AdamW step per chunk on the chunk-additive NNSE loss (post-CAL_END
-   days of the last chunk are NaN-masked).
+   days of the last chunk are NaN-masked).  ``cfg.chunk_grid="water_year"``
+   tiles the window with whole water years instead (365/366 days; the
+   graphs capture 365 and a leap year's last day continues eagerly from the
+   graphed state), so no calendar month is ever split.
 
 For the multi-timescale domain (``domain="multifamily"``) the same protocol
 runs over the training entities on the registry envelope (WY1950-2018): each
 daily entity joins the chunk NNSE window-masked (NaN outside its own
 ``train_start``/``train_end``), the monthly entities add a chunk-additive
 monthly NNSE term (simulated daily flow bucketed to complete calendar
-months), and selection scores per-entity KGE at each entity's native
-timescale — pooled mean by default; with ``mt_family_weight="equal"`` the
-selection scalar is the family-mean-of-means, and with numeric family
-shares ("usgs=0.27,cdec=0.54,uf=0.19") the share-weighted family mean, so
-checkpoint choice follows the training objective.  
+months — under the fixed grid a month the chunk boundary cuts never enters
+it), and selection scores per-entity KGE at each entity's native
+timescale — pooled mean by default; with ``mt_family_weight="equal"`` (loss
+shares 1:1:1 over the families present) the selection scalar is the
+family-mean-of-means, and with numeric family shares
+("usgs=0.27,cdec=0.54,uf=0.19") the share-weighted family mean, so
+checkpoint choice follows the training objective.
 
 On CUDA the day-stepped pipeline runs as captured CUDA graphs
 (:mod:`sacsma.dpl.graphs`) — eager execution is dispatch-bound.  Graph
@@ -57,6 +62,7 @@ from ..io import MULTI_TIMESCALE_DOMAIN, load_params, soilveg_path
 from .config import (
     CANOPY_LEARNED_PARAMS,
     CANOPY_LITE_LEARNED,
+    EQUAL_FAMILY_SHARES,
     DplConfig,
     family_shares,
     pick_device,
@@ -72,7 +78,7 @@ from .data import (
     shape_chunk_targets,
     water_balance_anchor,
 )
-from .features import FeatureSet, build_features
+from .features import CONTINUOUS_STATICS, FeatureSet, build_features
 from .forward import PipelineState, initial_state, routing_uh, run_window
 from .loss import kge_torch, level_hinge_loss, masked_basin_loss, shape_pull_loss
 from .multi_timescale import (
@@ -157,6 +163,40 @@ def _obs_chunk(calobs: CalObs, c0: int, c1: int) -> torch.Tensor:
     if hi > lo:
         out[:, lo - c0:hi - c0] = calobs.obs[:, lo - calobs.t0:hi - calobs.t0]
     return out
+
+
+def _chunk_grid(dates: pd.DatetimeIndex, t0: int, t1: int, n_time: int, *,
+                mode: str, chunk: int) -> list[tuple[int, int]]:
+    """The TBPTT chunks as ``(c0, ce)`` record-day pairs covering ``[t0, t1)``.
+
+    ``fixed``: ``chunk`` days each from ``t0`` (the last one cut at the record end,
+    ``n_time``) — the historical grid.  ``water_year``: from ``t0`` (which must be a
+    1 Oct) to each following 1 Oct, so 365 or 366 days, the last chunk running to
+    ``t1`` or the record end, whichever comes first — every calendar month whole."""
+    if mode == "fixed":
+        n = math.ceil((t1 - t0) / chunk)
+        return [(t0 + k * chunk, min(t0 + (k + 1) * chunk, n_time)) for k in range(n)]
+    if mode != "water_year":
+        raise ValueError(f"chunk_grid {mode!r}")
+    d0 = dates[t0]
+    if (d0.month, d0.day) != (10, 1):
+        raise ValueError(f"chunk_grid 'water_year' needs a window starting on 1 Oct, not {d0.date()}")
+    starts, year = [t0], d0.year + 1
+    while True:
+        i = int(dates.searchsorted(pd.Timestamp(year=year, month=10, day=1)))
+        if i >= t1:
+            ends = starts[1:] + [min(t1, n_time)]
+            return list(zip(starts, ends, strict=True))
+        starts.append(i)
+        year += 1
+
+
+def _grid_summary(grid: list[tuple[int, int]]) -> str:
+    """``70 chunks: 52 x 365 + 17 x 366 + 1 x 92`` — lengths by count."""
+    from collections import Counter
+    counts = Counter(ce - c0 for c0, ce in grid)
+    parts = [f"{n} x {length}" for length, n in sorted(counts.items(), key=lambda kv: -kv[1])]
+    return f"{len(grid)} chunks: " + " + ".join(parts)
 
 
 def _cal_kge(sim: torch.Tensor, obs: torch.Tensor,
@@ -274,11 +314,13 @@ def train(
               flush=True)
     else:
         calobs = load_cal_obs(dom, data_dir, cal_start=cfg.cal_start)
-    # family weighting (multi-timescale only): "equal" gives the three
-    # families equal thirds — usgs/cdec split the daily chunk mean's mass
-    # (per-entity weight 1/n_family, renormalized inside masked_basin_loss so
-    # a family with no valid entities in a chunk drops out cleanly) and the
-    # daily/monthly terms scale 2/3 / 1/3.  "none" = the unweighted baseline.
+    # family weighting (multi-timescale only): each family's share of the
+    # loss, renormalized over the families this run trains; entities weigh
+    # equally within a family.  The daily term carries the daily families'
+    # shares (their ratio set through the per-entity weights, the sum through
+    # daily_scale) and the monthly term the monthly family's share.  "equal"
+    # is shares 1:1:1 through the same path (three families: thirds, daily
+    # x 2/3, monthly x 1/3); "none" = the unweighted baseline.
     fam_w = None
     daily_scale = monthly_scale = 1.0
     if eobs is not None and cfg.adaptive_loss:
@@ -288,31 +330,10 @@ def train(
         raise ValueError("adaptive_loss is not wired for the multi-timescale "
                          "domain (the monthly term takes no per-entity "
                          "weights)")
-    if eobs is not None and cfg.mt_family_weight == "equal":
-        fam = np.array(eobs.family)
-        w_np = np.zeros(len(fam))
-        for f in ("usgs_daily", "cdec_daily"):
-            msk = fam == f
-            if msk.any():
-                w_np[msk] = 1.0 / msk.sum()
-        # unit-MEAN scale over the daily entities (masked_basin_loss's
-        # documented weight contract): the weighted mean itself is scale-
-        # invariant, but tiny absolute weights would trip the loss's
-        # clamp_min(1.0) denominator guard in sparse early chunks and
-        # silently deflate the term (bound in 38/70 envelope chunks at raw
-        # 1/n_family scale)
-        w_np *= (w_np > 0).sum() / w_np.sum()
-        fam_w = torch.as_tensor(w_np, device=dev, dtype=dtype)
-        daily_scale, monthly_scale = 2.0 / 3.0, 1.0 / 3.0
-        print("train: family weighting EQUAL — usgs/cdec split the daily "
-              "mean's mass; daily x 2/3, monthly x 1/3", flush=True)
-    # numeric shares: each family's share of the loss, renormalized over the
-    # families this run trains; entities weigh equally within a family.  The
-    # daily term carries the daily families' shares (their ratio set through
-    # the per-entity weights, the sum through daily_scale) and the monthly
-    # term the monthly family's share.
-    shares = (family_shares(cfg.mt_family_weight)
-              if eobs is not None else None)
+    shares = None
+    if eobs is not None:
+        shares = (dict(EQUAL_FAMILY_SHARES) if cfg.mt_family_weight == "equal"
+                  else family_shares(cfg.mt_family_weight))
     if shares is not None:
         fam = np.array(eobs.family)
         present = [f for f in shares if (fam == f).any()]
@@ -332,14 +353,22 @@ def train(
             if msk.any():
                 w_np[msk] = shares[f] / msk.sum()
         if (w_np > 0).any():
-            w_np *= (w_np > 0).sum() / w_np.sum()      # unit mean, as above
+            # unit-MEAN scale over the daily entities (masked_basin_loss's
+            # documented weight contract): the weighted mean itself is scale-
+            # invariant, but tiny absolute weights would trip the loss's
+            # clamp_min(1.0) denominator guard in sparse early chunks and
+            # silently deflate the term (bound in 38/70 envelope chunks at raw
+            # 1/n_family scale); a run without daily entities keeps fam_w None
+            w_np *= (w_np > 0).sum() / w_np.sum()
             fam_w = torch.as_tensor(w_np, device=dev, dtype=dtype)
         daily_scale = sum(shares.get(f, 0.0) for f in ("usgs_daily", "cdec_daily"))
         monthly_scale = shares.get("uf_monthly", 0.0)
         print("train: family weighting by SHARES — "
               + ", ".join(f"{f.split('_')[0]} {s:.3f}" for f, s in shares.items())
               + f"; daily x {daily_scale:.3f}, monthly x {monthly_scale:.3f}; "
-              "selection = share-weighted family mean", flush=True)
+              + ("selection = mean of the family means (equal shares)"
+                 if cfg.mt_family_weight == "equal" else
+                 "selection = share-weighted family mean"), flush=True)
     # truncated spinup start (clamped to the record start; == 0 restores the
     # exact frozen full-prefix convention)
     spin_req = int(dom.dates.searchsorted(pd.Timestamp(cfg.spinup_start)))
@@ -387,6 +416,8 @@ def train(
     # the loaded weights start from a perturbed copy of the donor field.
     ick = None
     donor_stats = None
+    statics = tuple(c for c in CONTINUOUS_STATICS
+                    if cfg.flowlen_feature or c != "flowlen")
     if cfg.init_from:
         if resume:
             raise ValueError("init_from and resume are mutually exclusive "
@@ -405,6 +436,11 @@ def train(
                     f"init_from checkpoint was trained with fourier_k="
                     f"{donor_stats.fourier_k}; this run asks for "
                     f"{cfg.fourier_k}")
+            if tuple(donor_stats.statics) != statics:
+                raise ValueError(
+                    f"init_from checkpoint was trained on statics "
+                    f"{tuple(donor_stats.statics)}; this run asks for {statics} "
+                    "(flowlen_feature) — the first layer would not load")
     fs = build_features(
         dom.hrus, variant=variant,
         forcing=dom.forcing if _needs_climate else None,
@@ -418,6 +454,7 @@ def train(
         physical_path=(soilveg_path(data_dir, domain)
                        if _needs_physical else None),
         stats=donor_stats,
+        statics=statics,
     )
     x = torch.as_tensor(fs.x).to(dev, dtype)
 
@@ -600,8 +637,23 @@ def train(
     swe_w = (torch.as_tensor(sweobs.basin_w, device=dev, dtype=dtype)
              if sweobs is not None else None)
 
-    # -- CUDA-graph capture (falls back to eager) ---------------------------
-    nograd_g = train_g = seg_g = None
+    # -- the chunk grid and the CUDA-graph capture (falls back to eager) -----
+    # The water-year grid is set by the calendar and names the lengths to
+    # capture (365 and 366, the most frequent first; the short tail replays
+    # eagerly).  The fixed grid follows the captured length — an OOM may halve
+    # it — so it is built after capture.
+    fixed = cfg.chunk_grid == "fixed"
+    grid: list[tuple[int, int]] | None = None
+    if fixed:
+        cap_lens = [cfg.train_chunk_days, cfg.train_chunk_days // 2]
+    else:
+        from collections import Counter
+        grid = _chunk_grid(dom.dates, calobs.t0, calobs.t1, dom.n_time,
+                           mode=cfg.chunk_grid, chunk=cfg.train_chunk_days)
+        cap_lens = [L for L, _ in Counter(ce - c0 for c0, ce in grid[:-1]).most_common()]
+    nograd_g = None
+    train_gs: dict = {}     # whole-chunk graphs by chunk length
+    seg_gs: dict = {}       # segmented graphs by chunk length
     if cfg.use_cuda_graphs and dev.type == "cuda":
         from .graphs import NoGradWindow, TrainChunk
         try:
@@ -621,50 +673,85 @@ def train(
             # segmented train-chunk graphs (drivers that fault on whole-year
             # captures): graphed run_window with autograd across segments;
             # net/routing/loss stay eager, so the chunk loop below takes its
-            # eager branch with run_window swapped (same TBPTT gradient)
+            # eager branch with run_window swapped (same TBPTT gradient).  The
+            # water-year grid captures its SHORTEST length only (365): a leap
+            # year runs the graphed 365 days and its last day eagerly from the
+            # graphed state, autograd through both — a second graph pool would
+            # double the activation memory (it pushed an 8 GB GPU into paging).
+            # No halving (the fixed grid keeps its length and runs eager on
+            # failure, as before).
             from .graphs import SegmentedTrainWindow
             if etobs is not None or sweobs is not None:
                 raise ValueError("train_graph_segments > 1 does not support "
                                  "the ET/SWE auxiliary losses")
-            try:
-                seg_g = SegmentedTrainWindow(
-                    dom, cfg, cfg.train_chunk_days, cfg.train_graph_segments,
-                    params0, uh0, canopy_params=canopy0, sample_c0=calobs.t0)
-                print(f"train: segmented train-chunk graphs -- "
-                      f"{cfg.train_graph_segments} x {seg_g.lens} days "
-                      "(fwd+bwd captured per segment; net/routing/loss eager)",
-                      flush=True)
-            except Exception as e:  # noqa: BLE001
-                print(f"train: segmented capture failed ({e!r}); eager chunks",
-                      flush=True)
-                seg_g = None
+            for clen in (cap_lens[:1] if fixed else [min(cap_lens)] if cap_lens else []):
+                try:
+                    seg_gs[clen] = SegmentedTrainWindow(
+                        dom, cfg, clen, cfg.train_graph_segments,
+                        params0, uh0, canopy_params=canopy0, sample_c0=calobs.t0)
+                    print(f"train: segmented train-chunk graphs ({clen} days) -- "
+                          f"{cfg.train_graph_segments} x {seg_gs[clen].lens} days "
+                          "(fwd+bwd captured per segment; net/routing/loss eager)",
+                          flush=True)
+                except torch.cuda.OutOfMemoryError:
+                    n_len = sum(1 for c0, ce in (grid or []) if ce - c0 == clen)
+                    print(f"train: segmented capture OOM at {clen} days — "
+                          + ("eager chunks" if fixed else
+                             f"the {n_len} chunks of that length run eager"), flush=True)
+                    torch.cuda.empty_cache()
+                except Exception as e:  # noqa: BLE001
+                    print(f"train: segmented capture failed ({e!r}); eager chunks",
+                          flush=True)
+                    break
         elif nograd_g is not None:
-            # whole-chunk fwd+bwd capture is the VRAM peak: on OOM, halve the
-            # chunk once (TBPTT detaches mid-water-year) before giving up.
-            # The multi-timescale monthly term is captured too (static target
+            # whole-chunk fwd+bwd capture is the VRAM peak: on OOM the fixed
+            # grid halves the chunk once (TBPTT detaches mid-water-year) before
+            # giving up; the water-year grid captures each of its lengths and
+            # runs the chunks of a length that will not fit eagerly.  The
+            # multi-timescale monthly term is captured too (static target
             # buffers, mask-zero at capture); its short TAIL chunk — the
             # envelope ends at the forcing record — replays eagerly below.
-            for clen in (cfg.train_chunk_days, cfg.train_chunk_days // 2):
+            for clen in cap_lens:
                 try:
-                    train_g = TrainChunk(
+                    train_gs[clen] = TrainChunk(
                         net, dom, cfg, clen, x, calobs.obs_var,
                         weight=fam_w if fam_w is not None else basin_w,
                         swe_basin_w=swe_w,
                         mt_rows=m_rows if eobs is not None else None,
                         mt_var=eobs.var_monthly if eobs is not None else None,
                         daily_scale=daily_scale, monthly_scale=monthly_scale)
-                    break
+                    if fixed:
+                        break           # the first length that fits is the grid's
                 except torch.cuda.OutOfMemoryError:
+                    n_len = sum(1 for c0, ce in (grid or []) if ce - c0 == clen)
                     print(f"train: chunk capture OOM at {clen} days — "
-                          "halving", flush=True)
+                          + ("halving" if fixed else
+                             f"the {n_len} chunks of that length run eager"), flush=True)
                     torch.cuda.empty_cache()
+                    if not train_gs:
+                        # nothing captured yet: drop the grads the failed attempt
+                        # allocated (a captured graph's static grads must stay)
+                        for p in net.parameters():
+                            p.grad = None
                 except Exception as e:  # noqa: BLE001
                     print(f"train: chunk capture failed ({e!r}); "
                           "eager chunks", flush=True)
                     break
-        if train_g is None:
+        if not train_gs:
             for p in net.parameters():
                 p.grad = None
+    if grid is None:
+        chunk = next(iter(train_gs)) if train_gs else cfg.train_chunk_days
+        grid = _chunk_grid(dom.dates, calobs.t0, calobs.t1, dom.n_time,
+                           mode="fixed", chunk=chunk)
+    graphed = sorted(set(train_gs) | set(seg_gs))
+    other = sorted({ce - c0 for c0, ce in grid[:-1]} - set(graphed))
+    if graphed and other:
+        if seg_gs:
+            print(f"train: chunks of {other} days run the graphed {min(seg_gs)} days and the rest "
+                  "eagerly from the graphed state", flush=True)
+        else:
+            print(f"train: chunk lengths without a graph run eager: {other}", flush=True)
 
     def _mt_kge(sim: torch.Tensor) -> tuple[torch.Tensor, float]:
         """Pooled per-entity cal KGE at each entity's NATIVE timescale: daily
@@ -757,8 +844,7 @@ def train(
                     "et_mode": cfg.et_mode,
                     "features": _feature_stats(fs)}, path)
 
-    chunk = train_g.length if train_g is not None else cfg.train_chunk_days
-    n_chunks = math.ceil((calobs.t1 - calobs.t0) / chunk)
+    n_chunks = len(grid)
 
     # per-chunk obs targets — fixed given the chunk grid, so build once.  For
     # each chunk: the day->month bucket, the normalized-shape mu/sig (per-chunk
@@ -770,10 +856,9 @@ def train(
         et_targets = [] if etobs is not None else None
         swe_targets = [] if sweobs is not None else None
         n_slots_total = 0
-        for k in range(n_chunks):
-            c0 = calobs.t0 + k * chunk
+        for c0, ce in grid:
             bucket, cmon0, mask = et_chunk_target(
-                dom.dates, c0, chunk, calobs.t0, calobs.t1)
+                dom.dates, c0, ce - c0, calobs.t0, calobs.t1)
             bucket_t = torch.as_tensor(bucket, device=dev, dtype=dtype)
             mask_t = torch.as_tensor(mask, device=dev, dtype=dtype)
             if etobs is not None:
@@ -812,38 +897,39 @@ def train(
               f"(ET {'on' if etobs is not None else 'off'}, "
               f"SWE {'on' if sweobs is not None else 'off'})", flush=True)
     # per-chunk MONTHLY-FLOW targets (multi-timescale domain): fixed given the
-    # chunk grid — the day->month bucket (trimmed to the last, short chunk),
-    # each entity's observed months gathered to the chunk's slots, and the
-    # finite-slot mask.  Simulated flow multiplies the bucket per chunk.
+    # chunk grid — the day->month bucket, each entity's observed months gathered
+    # to the chunk's slots, and the finite-slot mask.  Simulated flow multiplies
+    # the bucket per chunk.  A month the chunk boundary cuts gets no slot: under
+    # the fixed grid that is one month most years, under the water-year grid none.
     mt_targets: list | None = None
     if eobs is not None:
         mt_targets = []
         n_ms = 0
-        for k in range(n_chunks):
-            c0 = calobs.t0 + k * chunk
+        for c0, ce in grid:
             bucket, cols, mask = monthly_chunk_target(
-                dom.dates, c0, chunk, calobs.t0, calobs.t1, eobs.month_code)
-            ce = min(c0 + chunk, dom.n_time)     # last chunk ends the record
+                dom.dates, c0, ce - c0, calobs.t0, calobs.t1, eobs.month_code)
             tgt = eobs.obs_monthly[:, torch.as_tensor(cols, device=dev)]
             fin = (torch.isfinite(tgt)
                    & (torch.as_tensor(mask, device=dev) > 0).unsqueeze(0))
             mt_targets.append((
-                torch.as_tensor(bucket[:ce - c0], device=dev, dtype=dtype),
+                torch.as_tensor(bucket, device=dev, dtype=dtype),
                 torch.where(fin, tgt, torch.zeros_like(tgt)),
                 fin.to(dtype)))
             n_ms += int(fin.sum())
+        n_obs_months = int(torch.isfinite(eobs.obs_monthly).sum())
         print(f"train: monthly flow targets = {n_ms} entity-months over "
-              f"{n_chunks} chunks", flush=True)
+              f"{n_chunks} chunks ({n_obs_months} observed; "
+              f"{n_obs_months - n_ms} cut by a chunk boundary)", flush=True)
     # a chunk carrying NO scoreable observation must not step the optimizer:
     # zero grads still move parameters through AdamW momentum + weight decay
-    # (the multi-timescale envelope's 40-day tail — every daily entity fails
-    # min_days there and no monthly entity reaches Dec 2018).  Existing
-    # domains never produce a dead chunk; their behavior is untouched.
+    # (the multi-timescale envelope's tail — 40 days on the fixed grid, Oct-Dec
+    # 2018 on the water-year grid — where every daily entity may fail min_days
+    # and no monthly entity reaches Dec 2018).  Existing domains never produce
+    # a dead chunk; their behavior is untouched.
     if eobs is not None:
         chunk_live = []
-        for k in range(n_chunks):
-            c0 = calobs.t0 + k * chunk
-            obs_c = _obs_chunk(calobs, c0, min(c0 + chunk, dom.n_time))
+        for k, (c0, ce) in enumerate(grid):
+            obs_c = _obs_chunk(calobs, c0, ce)
             live = bool((torch.isfinite(obs_c).sum(dim=1) >= 90).any())
             if mt_targets is not None:
                 live = live or bool(mt_targets[k][2].sum() > 0)
@@ -858,11 +944,11 @@ def train(
           f"{x.shape[1]} features | cal days {calobs.t0}..{calobs.t1} "
           f"(spinup from day {spin_t0}"
           f"{' = record start' if spin_t0 == 0 else f' = {dom.dates[spin_t0].date()}'}) "
-          f"({n_chunks} x {chunk}-day chunks) | {cfg.loss} loss "
+          f"({cfg.chunk_grid} grid: {_grid_summary(grid)}) | {cfg.loss} loss "
           f"(log lambda {cfg.log_loss_lambda}) | n_inc={cfg.n_inc} "
           f"perc={cfg.perc_mode} {cfg.dtype} on {dev.type}"
-          + (' [cuda-graphs]' if train_g is not None else
-             f' [cuda-graphs x{cfg.train_graph_segments} segments]' if seg_g is not None
+          + (f' [cuda-graphs {sorted(train_gs)}]' if train_gs else
+             f' [cuda-graphs x{cfg.train_graph_segments} segments {sorted(seg_gs)}]' if seg_gs
              else ' [eager]'),
           flush=True)
 
@@ -952,16 +1038,17 @@ def train(
         if not stop:
             assert state_spin is not None   # first epoch always spins up
             net.train()
+            # the carried state lives in the Python variable between chunks:
+            # a graphed chunk takes it through set_state and hands it back
+            # through get_state (a detached clone, routing history and canopy
+            # included), so graph objects of different lengths and eager
+            # chunks interleave freely
             state = state_spin
-            if train_g is not None:
-                train_g.set_state(state_spin)
-            for k in range(n_chunks):
-                c0 = calobs.t0 + k * chunk
+            for k, (c0, ce) in enumerate(grid):
                 # the multi-timescale cal window ends AT the forcing record,
-                # so its LAST chunk is short; every other domain has forcing
-                # headroom past cal_end (ce == c0 + chunk, and the fixed-size
-                # graph path only runs for those domains)
-                ce = min(c0 + chunk, dom.n_time)
+                # so its LAST chunk is short (ce < c0 + the captured length)
+                # and replays eagerly; every other domain has forcing headroom
+                # past cal_end
                 pr, ta, doy, leap = dom.chunk(c0, ce)
                 tn, tx = dom.chunk_tmm(c0, ce)
                 lai_c = dom.chunk_lai(c0, ce)
@@ -969,46 +1056,67 @@ def train(
                 obs_c = _obs_chunk(calobs, c0, ce)
                 et_tgt = et_targets[k] if et_targets is not None else None
                 swe_tgt = swe_targets[k] if swe_targets is not None else None
-                # the graph replays fixed-length chunks only; the multi-
-                # timescale tail chunk (ce < c0 + chunk) falls through to eager
-                if train_g is not None and ce - c0 == chunk:
-                    loss = train_g.run(pr, ta, doy, leap, obs_c, tn, tx, lai_c,
-                                       st_c, et_target=et_tgt, swe_target=swe_tgt,
-                                       mt_target=(mt_targets[k]
-                                                  if mt_targets is not None
-                                                  else None))
+                g = train_gs.get(ce - c0)
+                if g is not None:
+                    g.set_state(state)
+                    loss = g.run(pr, ta, doy, leap, obs_c, tn, tx, lai_c,
+                                 st_c, et_target=et_tgt, swe_target=swe_tgt,
+                                 mt_target=(mt_targets[k]
+                                            if mt_targets is not None
+                                            else None))
+                    state = g.get_state()
                 else:
-                    # mixed mode (the multi-timescale tail chunk after graph
-                    # replays): grads must STAY allocated — set_to_none would
-                    # invalidate the captured graph — and the carried state
-                    # lives in the graph's ping-pong buffers, not `state`
-                    opt.zero_grad(set_to_none=train_g is None)
-                    if train_g is not None:
-                        state = train_g.get_state()
+                    # mixed mode (an eager chunk beside captured graphs): grads
+                    # must STAY allocated — set_to_none would invalidate the
+                    # captured graphs
+                    opt.zero_grad(set_to_none=not train_gs)
                     params, cp = _split_out(net(x), cfg.et_mode)
                     uh = routing_uh(params, dom.flowlen)
-                    if seg_g is not None and ce - c0 == chunk:
-                        # segmented CUDA graphs: graphed run_window, autograd
-                        # across the segments (graphs.SegmentedTrainWindow)
-                        res = seg_g.forward(c0, params, uh, cp, state)
+                    # segmented CUDA graphs: graphed run_window over the longest
+                    # captured length that fits, autograd across the segments
+                    # (graphs.SegmentedTrainWindow); the days beyond it (a leap
+                    # year's last day on the water-year grid) continue eagerly
+                    # from the graphed state, autograd through both
+                    n_g = max((L for L in seg_gs if L <= ce - c0), default=0)
+                    if n_g:
+                        flow_g, state_g = seg_gs[n_g].forward(c0, params, uh, cp, state)
                     else:
-                        res = run_window(
-                            pr, ta, doy, leap, dom.lat_rad, dom.elev, params, uh,
-                            state, n_inc=cfg.n_inc, perc_mode=cfg.perc_mode,
+                        flow_g, state_g = None, state
+
+                    def _eager(d0: int):
+                        sl = slice(d0, None)
+                        return run_window(
+                            pr[:, sl], ta[:, sl], doy[sl], leap[sl], dom.lat_rad, dom.elev,
+                            params, uh, state_g, n_inc=cfg.n_inc, perc_mode=cfg.perc_mode,
                             fracp_floor=cfg.fracp_floor, ninc_mode="fixed",
-                            et_mode=cfg.et_mode, canopy_params=cp, tmin=tn, tmax=tx,
-                            veg_frac=dom.veg_frac, lai=lai_c, noah_pet=cfg.noah_pet,
+                            et_mode=cfg.et_mode, canopy_params=cp,
+                            tmin=None if tn is None else tn[:, sl],
+                            tmax=None if tx is None else tx[:, sl],
+                            veg_frac=dom.veg_frac,
+                            lai=None if lai_c is None else lai_c[:, sl],
+                            noah_pet=cfg.noah_pet,
                             sac_pet=cfg.sac_pet, pt_snow_albedo=cfg.pt_snow_albedo,
                             pt_dewpoint_depression=cfg.pt_dewpoint_depression,
                             canopy_lite=cfg.canopy_lite,
-                            state_idx=st_c, return_tet=et_tgt is not None,
+                            state_idx=None if st_c is None else st_c[:, sl],
+                            return_tet=et_tgt is not None,
                             return_swe=swe_tgt is not None)
+
+                    if n_g == ce - c0:
+                        res = (flow_g, state_g)
+                    elif n_g:
+                        res_e = _eager(n_g)
+                        res = (torch.cat([flow_g, res_e[0]], dim=1), res_e[1], *res_e[2:])
+                    else:
+                        res = _eager(0)
                     flow, state = res[0], res[1]
                     basin_flow = dom.W @ flow
                     loss_t = daily_scale * masked_basin_loss(
                         basin_flow, obs_c, calobs.obs_var, kind=cfg.loss,
                         log_lambda=cfg.log_loss_lambda, log_eps=cfg.log_loss_eps,
                         var_lambda=cfg.var_loss_lambda,
+                        var_gate_frac=cfg.var_gate_frac,
+                        var_huber_cap=cfg.var_huber_cap,
                         bias_lambda=cfg.bias_loss_lambda,
                         weight=fam_w if fam_w is not None else basin_w)
                     if mt_targets is not None:
