@@ -20,6 +20,7 @@ Keys are normalized 5-decimal `<lat>_<lon>`; per-cell flags `in_<domain>` and `i
 | ET obs: gleam, fluxcom | `local_obs_region.py` | `et_obs/*.npz` | done (verified to 1e-7) |
 | ET/SWE obs: terraclimate/fldas/era5land/daymet | `gee_obs_region.py` | `et_obs/*.npz`, `swe_obs/*.npz` | done (GEE spec v2, 2026-07-16) |
 | ET referees: openet, modis | `gee_obs_region.py --products openet modis` | `et_obs/{openet,modis}_*.npz` | done (benchmark-only, 2026-07-17) |
+| ET referee: Reitz 2023 historical ET (annual WY1896–2018, monthly 1990-01..2018-09) | `reitz_et.py` (`--cut`, `--ingest`; `sacsma-gis` env; 7-Zip for the monthly zips' Deflate64) | `et_obs/reitz2023_cell_annual.npz` (1.9 MB) + `et_obs/reitz2023_cell_monthly.npz` (5.1 MB); CA-cut rasters local only (`tmp/reitz2023_et/ca`, 1.6 GB for 43 GB raw) | annual done (2026-09-18); monthly 1990–2018 done (2026-09-23). The `*_monthly.zip` sources are ScienceBase cloud files (login / captcha request); the nine zips before 1990 are not fetched |
 | AlphaEarth satellite embeddings (64-d, multi-year mean 2017–2025) | `gee_aef_region.py` (`sacsma` env, Earth Engine) | `aef/aef_cell_mean.npz` (1.1 MB LFS); per-year cell means local only (`tmp/aef_parts`) | done (2026-09-22): 4410 cells × 9 years, `--check` passed on 2017/2021/2025 |
 | daily forcing master (raw) | `wgen_forcing.py` | local only (not in repo) | done |
 | raw GIS rasters (soil/veg/terrain/LAI staging) | `download_gis.py` | local only (~89 GB, `D:\sacsma-data\raw_gis`) | staged + verified complete (2026-07-29); re-fetch is resumable |
