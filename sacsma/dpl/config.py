@@ -336,6 +336,12 @@ class DplConfig:
     #: parameter field per cell; the routing reads flowlen from the HRU table
     #: either way.  True = the 15cdec canonical checkpoints' feature set.
     flowlen_feature: bool = True
+    #: per-parameter override of the head's bounds box, ``{name: (lo, hi)}`` in
+    #: physical units, inside ``BOUNDS``; ``lo == hi`` pins the parameter (its
+    #: sigmoid is scaled by zero, so the value is exact and its head gets no
+    #: gradient).  Applied to the net's ``_lo``/``_hi`` buffers after every load,
+    #: so a checkpoint carries it and evaluation needs nothing further.
+    param_box: dict = field(default_factory=dict)
     #: learned spatial smoother (net-v2): ONE weighted-mean message-passing
     #: round over within-basin geographic k-NN neighborhoods, zero-init mixing
     #: (exact v1 at init).  0 = off.  The learned counterpart of spatial_reg.
@@ -418,6 +424,14 @@ class DplConfig:
     #: only CANOPY_LITE_LEARNED off the SHARED trunk (no separate encoder).
     #: Requires et_mode="noah"; noah_pet still selects Hamon | Priestley-Taylor.
     canopy_lite: bool = False
+    #: Noah ET replaces only the reference E1-E3 withdrawals; with this set the
+    #: rest of the reference ET block runs after them as in ``sma._sacsma_core``:
+    #: the upper free -> tension rebalance, the lower free -> tension resupply
+    #: (``rserv``) and the ADIMP ET(5), with Noah's upper-tension withdrawal as
+    #: ET1.  Off (the runs so far), the external-ET path skips all three, which
+    #: leaves the riparian ``riva`` channel ET as the only sink for lower free
+    #: water.  Requires the Noah-lite path (canopy_lite).
+    noah_sac_exchanges: bool = False
     lr: float = 1e-3
     lr_min: float = 1e-5        # cosine-annealed floor
     lr_warmup_epochs: int = 3   # linear warmup protects the GA-prior init
@@ -438,6 +452,20 @@ class DplConfig:
     #: window FAILS it (MIL 0.99933, d(lztwc) 363 mm).  Clamped to the record
     #: start — set <= "1915-01-01" for the exact frozen full-prefix convention.
     spinup_start: str = "1978-10-01"
+    #: how the trainer's no-grad spinup reaches the state at the cal-window start
+    #: (:mod:`sacsma.dpl.spinup`).  "window": stream from ``spinup_start`` (the
+    #: multifamily domain: the ten water years before its envelope) — needs forcing
+    #: before the window.  "cycle": timing-independent — loop the window's own first
+    #: ``spinup_years`` years from the cold start ``spinup_passes`` times (the
+    #: trainer's first spinup; each later one continues from the previous state for
+    #: at least ``spinup_warm_passes`` passes and until a pass moves no basin's
+    #: annual flow by more than ``spinup_warm_tol``, at most ``spinup_passes``).  The
+    #: multifamily evaluators score with "cycle" whatever the training mode.
+    spinup_mode: str = "window"
+    spinup_years: int = 10
+    spinup_passes: int = 20
+    spinup_warm_passes: int = 2
+    spinup_warm_tol: float = 1e-3
     train_chunk_days: int = 366     # TBPTT chunk (fixed length; last chunk's
                                     # post-CAL_END days are NaN-masked in the loss)
     #: how the TBPTT chunks tile the calibration window.  "fixed": train_chunk_days
@@ -453,6 +481,24 @@ class DplConfig:
     chunk_grid: str = "fixed"
     eval_every: int = 2             # full-cal no-grad KGE selection cadence
     patience: int = 10              # early stop after this many stale selections
+    #: early stopping is armed from this epoch on: a stale streak that ends
+    #: before it never stops the run (0 = armed from the start)
+    min_stop_epoch: int = 0
+    #: multi-timescale chunks with no scoreable observation (a 26-entity run's
+    #: WY1950-84) run their forward without autograd — no backward, and no
+    #: optimizer step either way.  The train-mode net(x) is still drawn once per
+    #: chunk (same dropout stream) and the segmented graphs replay the same
+    #: forward, so the carried state and every later chunk are unchanged.
+    #: Segmented/eager chunk path only (the whole-chunk graph keeps its backward).
+    dead_chunk_nograd: bool = False
+    #: numerics-neutral training diagnostics: chunk_log.csv (per chunk: entities
+    #: and loss by family — the family split on the segmented/eager chunk path
+    #: only — and the pre-clip gradient norm), eval_terms.csv (selection epochs:
+    #: the eval-mode chunk loss by family and term) and per-epoch net snapshots
+    #: with an EMA shadow (``ema_decay`` per optimizer step; restarted from the
+    #: net on a resume) under checkpoints/snapshots/.
+    diagnostics: bool = False
+    ema_decay: float = 0.995
     #: CUDA-graph capture of the day-stepped pipeline (eager is dispatch-bound:
     #: ~300 tiny kernels/day).  Falls back to eager on CPU or capture failure.
     use_cuda_graphs: bool = True
@@ -514,6 +560,33 @@ class DplConfig:
             raise ValueError(f"var_gate_frac {self.var_gate_frac} must be finite and >= 0")
         if not math.isfinite(self.var_huber_cap):
             raise ValueError(f"var_huber_cap {self.var_huber_cap} must be finite (<= 0 = uncapped)")
+        if self.spinup_mode not in ("window", "cycle"):
+            raise ValueError(f"spinup_mode {self.spinup_mode!r}")
+        if (self.spinup_years < 1 or not 2 <= self.spinup_warm_passes <= self.spinup_passes
+                or not self.spinup_warm_tol > 0.0):
+            raise ValueError("spinup_years >= 1, 2 <= spinup_warm_passes <= spinup_passes "
+                             "and spinup_warm_tol > 0 are required")
+        if self.min_stop_epoch < 0:
+            raise ValueError(f"min_stop_epoch {self.min_stop_epoch} < 0")
+        if not 0.0 < self.ema_decay < 1.0:
+            raise ValueError(f"ema_decay {self.ema_decay} outside (0, 1)")
+        box = {}
+        for name, lohi in dict(self.param_box).items():
+            if name not in FREE_PARAMS:
+                raise ValueError(f"param_box: {name!r} is not a learned parameter "
+                                 f"({', '.join(FREE_PARAMS)})")
+            lo, hi = (float(v) for v in lohi)
+            blo, bhi = BOUNDS[name]
+            if not blo <= lo <= hi <= bhi:
+                raise ValueError(f"param_box: {name} ({lo}, {hi}) must satisfy "
+                                 f"{blo} <= lo <= hi <= {bhi}")
+            box[name] = (lo, hi)
+        self.param_box = box
+        clash = sorted(set(box) & (set(self.seasonal_params) | set(self.dynamic_params)))
+        if clash:
+            # forward._seasonal clamps a time-varying parameter to BOUNDS, not the box
+            raise ValueError(f"param_box {clash}: a boxed parameter cannot also be "
+                             "seasonal or dynamic")
         if isinstance(self.et_products, str):   # tolerate a bare CLI string
             self.et_products = tuple(p for p in self.et_products.split(",") if p)
         if (len(self.et_products) == 1
@@ -556,6 +629,9 @@ class DplConfig:
             # lite emits only soil_chi off the shared trunk (the separate canopy
             # encoder existed to protect the SAC pathway from the 6 dropped params)
             self.canopy_separate_trunk = False
+        if self.noah_sac_exchanges and not self.canopy_lite:
+            raise ValueError("noah_sac_exchanges requires the Noah-lite path "
+                             "(et_mode='noah' with canopy_lite)")
 
 
 def _ensure_conda_dlls_on_path() -> None:

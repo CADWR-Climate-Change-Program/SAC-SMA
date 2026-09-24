@@ -240,7 +240,7 @@ def _net_for_hrus(ckpt: str | Path, hrus: pd.DataFrame, data_dir: str | Path, de
     import sacsma.dpl.data as D
     from .config import DplConfig
     from .data import load_domain_tensors
-    from .features import FeatureSet, build_features
+    from .features import FeatureSet, aef_store, build_features
     from .parameter_net import ParameterNet
     from ..io import soilveg_path
     ck = torch.load(ckpt, map_location="cpu", weights_only=False)
@@ -269,6 +269,7 @@ def _net_for_hrus(ckpt: str | Path, hrus: pd.DataFrame, data_dir: str | Path, de
                         climate_window=stats.climate_window, climate_product=stats.climate_product,
                         physical_path=(soilveg_path(data_dir, ck["domain"])
                                        if variant in ("physical", "physical_climate") else None),
+                        aef_path=aef_store(data_dir) if variant == "aef" else None,
                         stats=stats)
     x = torch.as_tensor(fs.x).to(dev, torch.float64)
     net = ParameterNet(x.shape[1], hidden=nc.get("hidden", 64), embed=nc.get("embed", 32),
@@ -285,54 +286,39 @@ def _net_for_hrus(ckpt: str | Path, hrus: pd.DataFrame, data_dir: str | Path, de
     return net, x, dom, cfg
 
 
-def stream(net, x, dom, cfg, W_arc: np.ndarray):
-    """Stream the trained field over the envelope (the evaluator's protocol) and return
-    (arc depth (A, T), entity depth (B, T), t0, t1, bad_rows) in mm/day.  A cell whose
-    physics returns NaN (extrapolated parameters at their bounds) is zeroed and flagged in
-    ``bad_rows`` so it cannot blank every aggregate that carries a zero weight on it."""
-    from .forward import initial_state, routing_uh, run_window
+def stream(net, x, dom, cfg, W_arc: np.ndarray, *, spinup: str = "cycle"):
+    """Stream the trained field over the envelope (the evaluator's protocol, including its
+    ``spinup``: :func:`sacsma.dpl.spinup.spin_state`) and return (arc depth (A, T), entity
+    depth (B, T), t0, t1, bad_rows) in mm/day.  A cell whose physics returns NaN
+    (extrapolated parameters at their bounds) is zeroed and flagged in ``bad_rows`` so it
+    cannot blank every aggregate that carries a zero weight on it."""
+    from .forward import routing_uh
     from .multi_timescale import ENVELOPE_END, ENVELOPE_START
+    from .spinup import spin_state, stream_rows
 
     t0 = int(dom.dates.searchsorted(pd.Timestamp(ENVELOPE_START)))
     t1 = int(dom.dates.searchsorted(pd.Timestamp(ENVELOPE_END))) + 1
-    spin_req = int(dom.dates.searchsorted(pd.Timestamp(cfg.spinup_start)))
-    if spin_req >= t0:
-        spin_req = int(dom.dates.searchsorted(dom.dates[t0] - pd.DateOffset(years=10)))
-    spin = max(min(spin_req, t0), 0)
     Wa = torch.as_tensor(W_arc).to(dom.device, dom.dtype)
+    bad = torch.zeros(dom.n_hru, dtype=torch.bool, device=dom.device)
+
+    def agg(flow: torch.Tensor) -> torch.Tensor:
+        nan_rows = torch.isnan(flow).any(dim=1)
+        if nan_rows.any():
+            bad.logical_or_(nan_rows)
+            flow = torch.nan_to_num(flow, nan=0.0)
+        return torch.cat([Wa @ flow, dom.W @ flow])
+
     net.eval()
     with torch.no_grad():
         out = net(x)
         canopy = out.pop("_canopy", None)
         uh = routing_uh(out, dom.flowlen)
-        state = initial_state(dom.n_hru, dom.device, dom.dtype,
-                              init_mode=cfg.init_mode, params=out, et_mode=cfg.et_mode)
-        arcs, ents = [], []
-        bad = torch.zeros(dom.n_hru, dtype=torch.bool, device=dom.device)
-        t = spin
-        while t < t1:
-            te = min(t + 512, t1)
-            pr, ta, doy, leap = dom.chunk(t, te)
-            tn, tx = dom.chunk_tmm(t, te)
-            flow, state = run_window(
-                pr, ta, doy, leap, dom.lat_rad, dom.elev, out, uh, state,
-                n_inc=cfg.n_inc, perc_mode=cfg.perc_mode, fracp_floor=cfg.fracp_floor,
-                ninc_mode="fixed", et_mode=cfg.et_mode, canopy_params=canopy, tmin=tn, tmax=tx,
-                veg_frac=dom.veg_frac, lai=dom.chunk_lai(t, te), noah_pet=cfg.noah_pet,
-                sac_pet=cfg.sac_pet, pt_snow_albedo=cfg.pt_snow_albedo,
-                pt_dewpoint_depression=cfg.pt_dewpoint_depression,
-                canopy_lite=cfg.canopy_lite, state_idx=dom.chunk_state(t, te))
-            nan_rows = torch.isnan(flow).any(dim=1)
-            if nan_rows.any():
-                bad |= nan_rows
-                flow = torch.nan_to_num(flow, nan=0.0)
-            if te > t0:
-                k = max(t0 - t, 0)
-                arcs.append((Wa @ flow)[:, k:].cpu())
-                ents.append((dom.W @ flow)[:, k:].cpu())
-            t = te
-    return (torch.cat(arcs, dim=1).double().numpy(), torch.cat(ents, dim=1).double().numpy(),
-            t0, t1, bad.cpu().numpy())
+        state, how = spin_state(dom, cfg, out, uh, canopy, t0, mode=spinup,
+                                agg=lambda f: dom.W @ torch.nan_to_num(f, nan=0.0))
+        print(f"tier2: {how}", flush=True)
+        rows, _ = stream_rows(dom, cfg, out, uh, canopy, t0, t1, state, lambda f: agg(f).cpu())
+    rows = rows.double().numpy()
+    return rows[:len(W_arc)], rows[len(W_arc):], t0, t1, bad.cpu().numpy()
 
 
 def _drop_bad_cells(sim: np.ndarray, W: np.ndarray, bad: np.ndarray, hrus: pd.DataFrame,
@@ -383,9 +369,10 @@ def _score(months: pd.PeriodIndex, sim: np.ndarray, ref: np.ndarray) -> dict:
 
 def score_run(ckpt: str | Path, data_dir: str | Path = "data", *, device=None, run_dir=None,
               extend: bool = True, tiles_dir: str | Path = "tmp/hydrosheds", out: Path | None = None,
-              trace_python: str | None = None):
+              trace_python: str | None = None, spinup: str = "cycle"):
     """Returns (metrics, monthly, arcs, not_sim, entity_check).  ``extend`` simulates the
-    arcs outside every trained footprint on their own region cells (``basis = extrapolated``)."""
+    arcs outside every trained footprint on their own region cells (``basis = extrapolated``);
+    ``spinup`` is the evaluator's (:func:`stream`)."""
     from .evaluate import load_net_from_checkpoint
     net, x, dom, cfg, ck = load_net_from_checkpoint(ckpt, data_dir, device=device)
     catch = rim_polygons(data_dir)
@@ -400,7 +387,7 @@ def score_run(ckpt: str | Path, data_dir: str | Path = "data", *, device=None, r
     print(f"tier2: {len(catch)} rim polygons; {len(arcs)} arcs inside the {len(dom.basins)} trained "
           f"entities; {len(dom.hrus)} HRU rows on {dom.device.type}", flush=True)
     print("tier2: streaming the envelope ...", flush=True)
-    sim_arc, sim_ent, t0, t1, bad = stream(net, x, dom, cfg, W_arc)
+    sim_arc, sim_ent, t0, t1, bad = stream(net, x, dom, cfg, W_arc, spinup=spinup)
     sim_arc, arcs["n_nan_cells"], arcs["nan_weight_frac"] = _drop_bad_cells(sim_arc, W_arc, bad, dom.hrus, "trained-footprint")
     dates = dom.dates[t0:t1]
     if extend:
@@ -413,7 +400,7 @@ def score_run(ckpt: str | Path, data_dir: str | Path = "data", *, device=None, r
             print(f"tier2: extrapolating {len(dom2.basins)} uncovered arcs on {len(dom2.hrus)} region "
                   f"cells ...", flush=True)
             W2 = dom2.W.cpu().numpy()
-            sim_ext, _, t0e, t1e, bad2 = stream(net2, x2, dom2, cfg2, W2)
+            sim_ext, _, t0e, t1e, bad2 = stream(net2, x2, dom2, cfg2, W2, spinup=spinup)
             assert (t0e, t1e) == (t0, t1)
             sim_ext, n_bad2, w_bad2 = _drop_bad_cells(sim_ext, W2, bad2, dom2.hrus, "extrapolated")
             sq_mi = catch.groupby("arc")["sq_mi"].sum()
@@ -674,6 +661,10 @@ def main(argv=None) -> None:
     p.add_argument("--trace-python", default=None,
                    help="interpreter for the flow-length tracer subprocess (an environment "
                         "with rasterio, e.g. the sacsma-gis env; default: this one)")
+    p.add_argument("--spinup", default="cycle", choices=["cycle", "window"],
+                   help="state at the envelope start: cycle = loop its first ten water years "
+                        "20 times from the cold start (timing-independent, default); window = "
+                        "the legacy ten water years before it")
     p.add_argument("--figures-only", action="store_true",
                    help="only (re)draw the maps and the per-set regime figures from the CSVs "
                         "already in --out (no forward pass)")
@@ -694,7 +685,8 @@ def main(argv=None) -> None:
     if not a.figures_only:
         metrics, monthly, arcs, not_sim, _ = score_run(ckpt, a.data_dir, device=a.device, run_dir=run_dir,
                                                        extend=not a.no_extend, tiles_dir=a.tiles_dir, out=out,
-                                                       trace_python=a.trace_python)
+                                                       trace_python=a.trace_python,
+                                                       spinup=a.spinup)
         metrics.to_csv(out / "tier2_metrics.csv", index=False)
         monthly.to_csv(out / "tier2_monthly.csv", index=False)
         arcs.to_csv(out / "tier2_arcs.csv", index=False)

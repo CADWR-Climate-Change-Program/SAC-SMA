@@ -810,6 +810,26 @@ last tab sets the full-window scores against each location's trimmed window, the
 water years in which the creeks covered the least of it (`window = trimmed` in
 `tier1/tier1_metrics.csv`; rule in `sacsma.dpl.calsim_windows`).
 
+**Scoring spinup (2026-09-23).** The evaluator and tier 2 used to start the envelope from the ten
+water years before it (WY1940–49). That left the slow lower-zone stores of trained fields far from
+equilibrium: these fields put `lztwm` at its 5,000 mm ceiling, and under Noah-lite that store
+loses water to ET only above a 5 % wilting fraction, so it takes centuries to settle. Both now
+start from the timing-independent cycle spinup of `sacsma.dpl.spinup` (the envelope's first ten
+water years looped 20 times from the frozen cold start; rule and evidence in
+`artifacts/README.md`), which reads nothing before the envelope and so serves climate-perturbed
+and stochastic forcing alike. Every score in the run entries and the table below is re-scored that
+way. The parameters, the selected epochs and the selection scalars are training-time quantities
+and do not change. For the three current runs (riva ≈ 0.85–0.9, lower-zone stores near empty) the
+shift is small: tier-1 mean KGE +0.011 / +0.012 / +0.004, volume deficit 0.4 points smaller. For
+the superseded riva = 0 `noah_cdec_uf`, whose stores fill, it is large: 0.810 → 0.856. As first
+reported with the window spinup: `noah_cdec_uf_usgs` family means usgs 0.592 / cdec 0.772 / uf
+0.859, tier-1 KGE mean 0.801 / median 0.812 (anchors 0.810, arc sums 0.791), median |bias| 7.2 %,
+volume −1.9 %, trimmed 0.795 / 0.793 and −3.1 %, tier-2 median 0.601 (0.642 trained entities, 0.188
+extrapolated); `noah_cdec_uf_usgs_areaw` 0.598 / 0.776 / 0.879, tier 1 0.813 / 0.822 (0.817 /
+0.808), 7.2 %, −1.7 %, trimmed 0.808 / 0.805 and −2.9 %, tier 2 0.608 (0.644 / 0.224);
+`noah_cdec_uf` cdec 0.788 / uf 0.891, tier 1 0.790 / 0.787 (0.791 / 0.789), 8.0 %, −3.2 %, trimmed
+0.785 / 0.787 and −4.5 %, tier 2 0.573 (0.611 / 0.186).
+
 Common recipe: `sacsma dpl train physical_climate --domain multifamily --et noah --noah-pet
 priestley_taylor --canopy-lite --patience 10 --warmup-epochs 4 --chunk-grid water_year
 --no-flowlen-feature`, seed 0, no `--calsim-footprint` (no effect on this domain). The chunks
@@ -821,51 +841,62 @@ CUDA-graph capture for GPU drivers that fault on whole-year graphs; the gradient
 Training code at `cfa0fb3`; tier 2 at `fdd754e` (the extrapolated arcs' flow lengths traced on
 the HydroSHEDS grid, 539 of 539 extension cells in each run).
 
+Trainer options added 2026-09-22, all off by default (the three runs below predate them):
+`--spinup-mode cycle` trains from the rule the evaluators score with (20 passes at the first
+spinup, then from the previous state until a pass moves no basin's annual flow by more than
+0.1 %); `--param-box name=lo:hi` narrows or pins a parameter's box (`riva=0:0`);
+`--min-stop-epoch` arms the early stop no earlier than that epoch; `--dead-chunk-nograd` runs the
+chunks that hold no scoreable observation forward only (bit-exact, epoch 352 → 201 s on the
+26-entity set); `--diagnostics` writes a per-chunk loss and gradient log, the per-family terms of
+each selection pass and per-selection snapshots with an EMA copy of the net. Feature variants `aef`
+(AlphaEarth satellite embeddings: 16 principal components of the unit directions plus the vector
+length, in place of every other input) and `aef_random` (its control, 17 random values per cell).
+
 - **`multifamily/noah_cdec_uf_usgs`** — all three families, 95 entities; family shares by observed
   water volume, `--mt-family-weight usgs=0.27,cdec=0.54,uf=0.19`, `--epochs 120`. Selected epoch
   80 (early stop at 102); selection cal KGE 0.7400 (share-weighted family mean). Family mean cal
-  KGE: usgs 0.592 / cdec 0.772 / uf 0.859. CalSim3 WY1950–84: tier-1 KGE mean 0.801 / median
-  0.812 (anchors 0.810, arc sums 0.791), median |bias| 7.2 %, volume 31,514 vs 32,115 TAF/yr
-  (−1.9 %) over the 19 locations of the totals (SHA sits inside UF6 and is scored, not summed);
-  trimmed windows: KGE mean 0.795 / median 0.793, volume −3.1 %. Tier-2 median KGE 0.601 over 196
-  arcs: 0.642 on the 155 arcs of trained entities, 0.188 on the 41 extrapolated arcs — 34 of
-  those lie on cells USGS creeks trained on (median 0.203), 7 on cells no entity used (−0.325,
+  KGE: usgs 0.587 / cdec 0.786 / uf 0.859. CalSim3 WY1950–84: tier-1 KGE mean 0.812 / median
+  0.832 (anchors 0.826, arc sums 0.799), median |bias| 6.6 %, volume 31,629 vs 32,115 TAF/yr
+  (−1.5 %) over the 19 locations of the totals (SHA sits inside UF6 and is scored, not summed);
+  trimmed windows: KGE mean 0.807 / median 0.821, volume −2.8 %. Tier-2 median KGE 0.598 over 196
+  arcs: 0.634 on the 155 arcs of trained entities, 0.200 on the 41 extrapolated arcs — 34 of
+  those lie on cells USGS creeks trained on (median 0.209), 7 on cells no entity used (−0.324,
   the regionalization test).
 - **`multifamily/noah_cdec_uf_usgs_areaw`** — the same 95 entities and recipe as
   `noah_cdec_uf_usgs` with the family shares by footprint area (the sum of the entities' footprints
   per family) instead of observed water volume,
   `--mt-family-weight usgs=0.216,cdec=0.558,uf=0.226`, `--epochs 120`. Selected epoch 78 (early
   stop at 100); selection cal KGE 0.7610 (the family mean weighted by these shares, so not the
-  statistic behind the 0.7400 of `noah_cdec_uf_usgs`). Family mean cal KGE: usgs 0.598 / cdec
-  0.776 / uf 0.879. CalSim3 WY1950–84: tier-1 KGE mean 0.813 / median 0.822 (anchors 0.817, arc
-  sums 0.808), median |bias| 7.2 %, volume 31,581 vs 32,115 TAF/yr (−1.7 %); trimmed windows: KGE
-  mean 0.808 / median 0.805, volume −2.9 %. Tier-2 median KGE 0.608 over 196 arcs: 0.644 on the
-  155 arcs of trained entities, 0.224 on the 41 extrapolated arcs (34 on trained cells 0.241, 7 on
-  unseen cells −0.298).
+  statistic behind the 0.7400 of `noah_cdec_uf_usgs`). Family mean cal KGE: usgs 0.592 / cdec
+  0.791 / uf 0.879. CalSim3 WY1950–84: tier-1 KGE mean 0.825 / median 0.839 (anchors 0.835, arc
+  sums 0.816), median |bias| 6.5 %, volume 31,702 vs 32,115 TAF/yr (−1.3 %); trimmed windows: KGE
+  mean 0.822 / median 0.835, volume −2.5 %. Tier-2 median KGE 0.599 over 196 arcs: 0.643 on the
+  155 arcs of trained entities, 0.233 on the 41 extrapolated arcs (34 on trained cells 0.251, 7 on
+  unseen cells −0.297).
 - **`multifamily/noah_cdec_uf`** — CDEC + DWR-unimpaired only, 26 entities through `--basins` (the
   17 `cdec_*` and 9 `uf_*` ids), `--mt-family-weight none` (one daily and one monthly family, so
   the two loss terms weigh equally), `--epochs 90`. Selected epoch 56 (early stop at 78);
-  selection cal KGE 0.8241 (pooled). Family mean cal KGE: cdec 0.788 / uf 0.891. CalSim3 WY1950–84:
-  tier-1 KGE mean 0.790 / median 0.787 (anchors 0.791, arc sums 0.789), median |bias| 8.0 %,
-  volume 31,079 vs 32,115 TAF/yr (−3.2 %); trimmed windows: KGE mean 0.785 / median 0.787, volume
-  −4.5 %. Tier-2 median KGE 0.573 over 196 arcs: 0.611 on the 155 arcs of trained entities, 0.186
-  on the 41 extrapolated arcs (25 on trained cells 0.113, 16 on unseen cells 0.244 — without the
+  selection cal KGE 0.8241 (pooled). Family mean cal KGE: cdec 0.790 / uf 0.893. CalSim3 WY1950–84:
+  tier-1 KGE mean 0.794 / median 0.792 (anchors 0.793, arc sums 0.796), median |bias| 8.0 %,
+  volume 31,200 vs 32,115 TAF/yr (−2.8 %); trimmed windows: KGE mean 0.790 / median 0.796, volume
+  −4.1 %. Tier-2 median KGE 0.576 over 196 arcs: 0.619 on the 155 arcs of trained entities, 0.194
+  on the 41 extrapolated arcs (25 on trained cells 0.117, 16 on unseen cells 0.252 — without the
   creeks more of them are unseen).
 
 **The two family weightings.** `noah_cdec_uf_usgs` and `noah_cdec_uf_usgs_areaw` differ in the
 family shares only (usgs / cdec / uf: 0.27 / 0.54 / 0.19 by water volume, 0.216 / 0.558 / 0.226 by
 footprint), with the same entities, seed and schedule. The footprint run selects two epochs earlier
-and scores a little higher throughout: tier-1 mean KGE 0.813 against 0.801, higher at 18 of the 20
-locations, by at most 0.057 (UF20, 0.651 against 0.593); volume −1.7 % against −1.9 %; tier-2
-median 0.608 against 0.601. Both are single-seed, so the pair does not rank the two weightings.
+and scores a little higher throughout: tier-1 mean KGE 0.825 against 0.812, higher at 17 of the 20
+locations, by at most 0.057 (UF20, 0.657 against 0.599); volume −1.3 % against −1.5 %; tier-2
+median 0.599 against 0.598. Both are single-seed, so the pair does not rank the two weightings.
 
 **Reading the pair with and without the creeks.** `noah_cdec_uf_usgs` and `noah_cdec_uf` differ in
 three things at once (the USGS family, the family weighting and the epoch cap), so their difference
 is not a single-factor result, and the two selection scalars are not comparable (different entity
 sets and statistics). Both are single-seed, so differences of a few hundredths in mean KGE are not
-resolved (0.801 against 0.790, the run with the creeks higher at 12 of 20 locations). The
-total-volume deficit is the clearer contrast: −1.9 % with the creeks against −3.2 % without, and at
-the trimmed windows −3.1 % against −4.5 %.
+resolved (0.812 against 0.794, the run with the creeks higher at 13 of 20 locations). The
+total-volume deficit is the clearer contrast: −1.5 % with the creeks against −2.8 % without, and at
+the trimmed windows −2.8 % against −4.1 %.
 
 **Superseded 2026-09-20.** The first runs under these names (code `92eefeb` / `c2faf29` /
 `b147579`, merged at `eae478c`) had `flowlen` among the network inputs (27 features) and a fixed
@@ -883,34 +914,43 @@ uf 0.884, tier-1 0.810 / 0.820 (trimmed 0.803 / 0.822), volume 29,272 vs 32,115 
 −0.008 / +0.005 / −0.020 and the volume deficit from −2.9 / −2.9 / −8.9 % to −1.9 / −1.7 / −3.2 %:
 skill about even, the volume bias smaller, most at the run without the creeks. The largest
 single-location moves in the usgs run were CLE (0.773 → 0.701), UF7 (0.886 → 0.822) and UF4
-(0.699 → 0.748).
+(0.699 → 0.748). All of that was scored with the window spinup. Re-scored with the cycle spinup
+(2026-09-23, the checkpoints kept locally in `_old_eae478c/`): `noah_cdec_uf_usgs` family means
+usgs 0.621 / cdec 0.798 / uf 0.863, tier-1 0.816 / 0.818 (trimmed 0.814 / 0.813), volume −2.6 %,
+tier-2 0.598 (0.637 / 0.236); `noah_cdec_uf_usgs_areaw` 0.619 / 0.798 / 0.867, tier 1 0.816 /
+0.818 (0.813 / 0.814), −2.6 %, tier 2 0.604 (0.640 / 0.223); `noah_cdec_uf` cdec 0.812 / uf 0.883,
+tier 1 0.856 / 0.863 (0.861 / 0.869), −4.6 %, tier 2 0.598 (0.661 / 0.157). On that basis
+retraining moved the tier-1 mean KGE by −0.004 / +0.009 / −0.062. The run without the creeks lost
+the most because it changed regime: the superseded field sits at riva = 0 (median pfree 0.48),
+the retrained one at riva ≈ 0.85 with pfree 0.99, early in timing at 20 of 20 locations and with
+median α 0.84 against 0.95. The window spinup had hidden the difference.
 
-Tier 1 by location, CalSim3 WY1950–84 (from the three `tier1/tier1_metrics.csv`; the UF9 second row
-scores the Yuba against the arcs its entity simulates):
+Tier 1 by location, CalSim3 WY1950–84, cycle spinup (from the three `tier1/tier1_metrics.csv`; the
+UF9 second row scores the Yuba against the arcs its entity simulates):
 
 | location | reference | CalSim3 TAF/yr | KGE `noah_cdec_uf_usgs` | bias % | KGE `noah_cdec_uf_usgs_areaw` | bias % | KGE `noah_cdec_uf` | bias % |
 |---|---|---:|---:|---:|---:|---:|---:|---:|
-| SHA: Sacramento R. at Shasta | FLOW-UNIMPAIRED | 6,323 | 0.871 | -7.0 | 0.873 | -7.0 | 0.861 | -3.5 |
-| CLE: Trinity R. at Trinity Dam | FLOW-UNIMPAIRED | 1,416 | 0.701 | +21.0 | 0.702 | +21.5 | 0.716 | +19.2 |
-| UF6: Sacramento R. near Red Bluff | FLOW-UNIMPAIRED | 9,210 | 0.904 | -6.3 | 0.907 | -6.2 | 0.844 | -8.1 |
-| UF7: Sacramento Valley east-side minor streams | arc sum | 1,328 | 0.822 | -1.8 | 0.823 | -3.0 | 0.814 | -3.5 |
-| UF8: Feather R. near Oroville | FLOW-UNIMPAIRED | 4,941 | 0.829 | +0.1 | 0.831 | +0.6 | 0.782 | -4.8 |
-| UF4: Stony Creek at Black Butte | arc sum | 505 | 0.748 | -13.7 | 0.740 | -13.8 | 0.692 | -19.6 |
-| UF11: American R. at Fair Oaks | FLOW-UNIMPAIRED | 2,922 | 0.759 | -3.0 | 0.783 | -1.9 | 0.749 | -4.0 |
-| UF9: Yuba R. at Smartville | FLOW-UNIMPAIRED | 2,546 | 0.757 | -1.0 | 0.773 | -0.4 | 0.771 | +5.2 |
-| UF9: Yuba R. at Smartville | arc sum, covered arcs | 2,515 | 0.787 | +0.2 | 0.802 | +0.9 | 0.796 | +6.5 |
-| UF10: Bear R. near Wheatland | arc sum | 384 | 0.850 | -8.5 | 0.893 | -7.0 | 0.872 | -6.3 |
-| UF3: Cache Creek above Rumsey | arc sum | 718 | 0.859 | -7.4 | 0.864 | -8.5 | 0.774 | -18.6 |
-| UF2: Putah Creek near Winters | arc sum | 425 | 0.885 | -5.9 | 0.876 | -7.5 | 0.948 | -4.5 |
-| UF13: Cosumnes R. at Michigan Bar | arc sum | 421 | 0.737 | -3.8 | 0.748 | -3.1 | 0.774 | -5.0 |
-| UF14: Mokelumne R. at Pardee | arc sum | 811 | 0.803 | +8.0 | 0.804 | +8.4 | 0.702 | +10.2 |
-| UF16: Stanislaus R. at Melones | FLOW-UNIMPAIRED | 1,231 | 0.816 | +12.3 | 0.820 | +12.8 | 0.743 | +10.2 |
-| UF15: Calaveras R. at Jenny Lind | arc sum | 178 | 0.830 | -14.1 | 0.862 | -11.8 | 0.806 | -17.2 |
-| UF18: Tuolumne R. at Don Pedro | FLOW-UNIMPAIRED | 2,001 | 0.808 | -7.4 | 0.814 | -7.3 | 0.812 | -8.7 |
-| UF19: Merced R. at Exchequer | FLOW-UNIMPAIRED | 1,025 | 0.861 | +7.8 | 0.874 | +7.3 | 0.844 | +10.9 |
-| UF20: Chowchilla R. at Buchanan | arc sum | 78 | 0.593 | -27.3 | 0.651 | -23.9 | 0.684 | -19.2 |
-| UF22: San Joaquin R. at Millerton | FLOW-UNIMPAIRED | 1,879 | 0.793 | -5.0 | 0.795 | -5.3 | 0.791 | -5.6 |
-| UF21: Fresno R. near Daulton | arc sum | 95 | 0.787 | -3.6 | 0.825 | -0.4 | 0.825 | +8.0 |
+| SHA: Sacramento R. at Shasta | FLOW-UNIMPAIRED | 6,323 | 0.875 | -6.6 | 0.877 | -6.6 | 0.867 | -3.0 |
+| CLE: Trinity R. at Trinity Dam | FLOW-UNIMPAIRED | 1,416 | 0.703 | +21.3 | 0.703 | +21.8 | 0.710 | +19.8 |
+| UF6: Sacramento R. near Red Bluff | FLOW-UNIMPAIRED | 9,210 | 0.907 | -5.9 | 0.910 | -5.9 | 0.856 | -7.6 |
+| UF7: Sacramento Valley east-side minor streams | arc sum | 1,328 | 0.845 | -1.5 | 0.846 | -2.7 | 0.826 | -3.0 |
+| UF8: Feather R. near Oroville | FLOW-UNIMPAIRED | 4,941 | 0.830 | +0.5 | 0.831 | +1.0 | 0.784 | -4.4 |
+| UF4: Stony Creek at Black Butte | arc sum | 505 | 0.751 | -13.5 | 0.742 | -13.7 | 0.697 | -19.4 |
+| UF11: American R. at Fair Oaks | FLOW-UNIMPAIRED | 2,922 | 0.765 | -2.9 | 0.790 | -1.9 | 0.749 | -4.0 |
+| UF9: Yuba R. at Smartville | FLOW-UNIMPAIRED | 2,546 | 0.761 | -0.8 | 0.777 | -0.1 | 0.771 | +5.4 |
+| UF9: Yuba R. at Smartville | arc sum, covered arcs | 2,515 | 0.791 | +0.4 | 0.807 | +1.1 | 0.796 | +6.7 |
+| UF10: Bear R. near Wheatland | arc sum | 384 | 0.862 | -8.0 | 0.907 | -6.3 | 0.881 | -5.8 |
+| UF3: Cache Creek above Rumsey | arc sum | 718 | 0.864 | -6.9 | 0.867 | -8.2 | 0.790 | -17.6 |
+| UF2: Putah Creek near Winters | arc sum | 425 | 0.887 | -5.5 | 0.879 | -7.2 | 0.963 | -3.3 |
+| UF13: Cosumnes R. at Michigan Bar | arc sum | 421 | 0.738 | -3.8 | 0.749 | -3.0 | 0.775 | -4.9 |
+| UF14: Mokelumne R. at Pardee | arc sum | 811 | 0.816 | +8.2 | 0.820 | +8.7 | 0.702 | +10.4 |
+| UF16: Stanislaus R. at Melones | FLOW-UNIMPAIRED | 1,231 | 0.826 | +12.7 | 0.831 | +13.2 | 0.743 | +10.5 |
+| UF15: Calaveras R. at Jenny Lind | arc sum | 178 | 0.835 | -13.6 | 0.867 | -11.3 | 0.811 | -16.8 |
+| UF18: Tuolumne R. at Don Pedro | FLOW-UNIMPAIRED | 2,001 | 0.866 | -6.7 | 0.882 | -6.4 | 0.814 | -8.4 |
+| UF19: Merced R. at Exchequer | FLOW-UNIMPAIRED | 1,025 | 0.881 | +8.4 | 0.895 | +7.9 | 0.841 | +11.3 |
+| UF20: Chowchilla R. at Buchanan | arc sum | 78 | 0.599 | -26.6 | 0.657 | -23.2 | 0.689 | -18.5 |
+| UF22: San Joaquin R. at Millerton | FLOW-UNIMPAIRED | 1,879 | 0.842 | -4.3 | 0.850 | -4.7 | 0.793 | -5.2 |
+| UF21: Fresno R. near Daulton | arc sum | 95 | 0.789 | -2.9 | 0.826 | +0.3 | 0.824 | +8.7 |
 
 ## Open items
 - **Rename (2026-07-21):** the climate-adaptive physics and hybrid family

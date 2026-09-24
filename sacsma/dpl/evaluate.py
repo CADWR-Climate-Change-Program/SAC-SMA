@@ -76,6 +76,10 @@ def export_canopy_params(net: torch.nn.Module, dom: DomainTensors,
         df["veg_frac_obs"] = dom.veg_frac.double().cpu().numpy()
     if dom.lai_lut is not None:
         df["lai_obs_mean"] = dom.lai_lut[dom.cell_idx].mean(axis=1)
+    if getattr(net, "noah_sac_exchanges", False):
+        # the frozen Noah-lite path (model._resolve_canopy) reads it per HRU;
+        # absent = the default external-ET physics
+        df["sac_exchanges"] = 1
     return df
 
 #: named numerics configs — (ninc, perc_mode, fracp_floor, dtype)
@@ -328,7 +332,7 @@ def _noah_stream(net: torch.nn.Module, x: torch.Tensor, dom: DomainTensors,
                 fracp_floor=cfg.fracp_floor, ninc_mode=cfg.ninc_mode,
                 et_mode="noah", canopy_params=cp, tmin=tn, tmax=tx,
                 veg_frac=dom.veg_frac, lai=dom.chunk_lai(t0, t1),
-                noah_pet=cfg.noah_pet, canopy_lite=cfg.canopy_lite,
+                noah_pet=cfg.noah_pet, canopy_lite=cfg.canopy_lite, sac_exchanges=cfg.noah_sac_exchanges,
                 pt_snow_albedo=cfg.pt_snow_albedo,
                 pt_dewpoint_depression=cfg.pt_dewpoint_depression,
                 state_idx=dom.chunk_state(t0, t1),
@@ -502,7 +506,7 @@ def load_net_from_checkpoint(
     import numpy as _np
 
     from ..io import soilveg_path
-    from .features import FeatureSet, build_features
+    from .features import FeatureSet, aef_store, build_features
     from .parameter_net import ParameterNet
 
     ck = torch.load(ckpt_path, map_location="cpu", weights_only=False)
@@ -546,6 +550,7 @@ def load_net_from_checkpoint(
                         physical_path=(soilveg_path(data_dir, domain)
                                        if variant in ("physical",
                                        "physical_climate") else None),
+                        aef_path=aef_store(data_dir) if variant == "aef" else None,
                         stats=stats)
     x = torch.as_tensor(fs.x).to(dev, torch.float64)
     gnn_k = nc.get("gnn_k", 0)
@@ -565,6 +570,9 @@ def load_net_from_checkpoint(
                        dynamic_amp=nc.get("dynamic_amp", 0.5),
                        ).to(dev, torch.float64)
     net.load_state_dict(ck["net"])   # restores baked neighbor buffers too
+    # the physics switch rides on the net so every canopy export carries it
+    # (export_canopy_params), whichever caller builds the table
+    net.noah_sac_exchanges = bool(cfg.noah_sac_exchanges)
     return net, x, dom, cfg, ck
 
 

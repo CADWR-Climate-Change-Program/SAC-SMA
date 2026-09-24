@@ -107,6 +107,20 @@ def _dpl_benchmark(args: argparse.Namespace) -> int:
     return 0
 
 
+def _param_box(spec: str | None) -> dict[str, tuple[float, float]]:
+    """``"riva=0:0,lzsk=0.01:0.5"`` -> ``{"riva": (0.0, 0.0), "lzsk": (0.01, 0.5)}``."""
+    box: dict[str, tuple[float, float]] = {}
+    for item in (spec or "").split(","):
+        if not item.strip():
+            continue
+        name, _, rng = item.partition("=")
+        lo, sep, hi = rng.partition(":")
+        if not sep:
+            raise SystemExit(f"--param-box {item!r}: expected name=lo:hi")
+        box[name.strip()] = (float(lo), float(hi))
+    return box
+
+
 def _dpl_train(args: argparse.Namespace) -> int:
     from .dpl.config import DplConfig
     from .dpl.train import train
@@ -128,9 +142,13 @@ def _dpl_train(args: argparse.Namespace) -> int:
         lr_warmup_epochs=args.warmup_epochs, n_epochs=args.epochs,
         spinup_refresh_every=args.spinup_refresh,
         spinup_start=args.spinup_start, patience=args.patience,
+        spinup_mode=args.spinup_mode, spinup_years=args.spinup_years,
+        min_stop_epoch=args.min_stop_epoch,
+        dead_chunk_nograd=args.dead_chunk_nograd, diagnostics=args.diagnostics,
         hidden=args.hidden, embed=args.embed, dropout=args.dropout,
         grouped_heads=args.grouped_heads, fourier_k=args.fourier_k,
         flowlen_feature=not args.no_flowlen_feature,
+        param_box=_param_box(args.param_box),
         gnn_k=args.gnn_k,
         spatial_reg_lambda=args.spatial_reg_lambda,
         spatial_reg_k=args.spatial_reg_k,
@@ -143,6 +161,7 @@ def _dpl_train(args: argparse.Namespace) -> int:
         pt_snow_albedo=args.pt_snow_albedo,
         pt_dewpoint_depression=args.pt_dewpoint_depression,
         canopy_lite=args.canopy_lite,
+        noah_sac_exchanges=args.noah_sac_exchanges,
         calsim_footprint=args.calsim_footprint,
         dynamic_params=(tuple(args.dynamic_params.split(","))
                         if args.dynamic_params else ()),
@@ -174,7 +193,8 @@ def _dpl_evaluate(args: argparse.Namespace) -> int:
                              "multi-timescale domain")
         evaluate_checkpoint_mt(args.checkpoint, data_dir=args.data_dir,
                                out_dir=args.out,
-                               hydrographs=args.hydrographs)
+                               hydrographs=args.hydrographs,
+                               spinup=args.spinup)
         return 0
     evaluate_checkpoint(args.checkpoint, data_dir=args.data_dir,
                         out_dir=args.out, parallel=not args.serial,
@@ -338,11 +358,15 @@ def main(argv: list[str] | None = None) -> int:
              "-> artifacts/dpl/<variant>/",
     )
     tr.add_argument("variant",
-                    choices=["static", "climate", "physical", "physical_climate"],
+                    choices=["static", "climate", "physical", "physical_climate",
+                             "aef", "aef_random"],
                     help="feature ablation arm (physical = continuous "
                          "soil/veg/terrain/LAI in place of one-hot soil/veg; "
                          "physical_climate = physical + the 4 climate indices, "
-                         "so the learned params ADAPT under a perturbed climate)")
+                         "so the learned params ADAPT under a perturbed climate; "
+                         "aef = AlphaEarth embeddings only (16 PCs of the unit "
+                         "directions + the vector length, region grid only); "
+                         "aef_random = its control, 17 random values per cell)")
     tr.add_argument("--data-dir", default="data", help="organized data/ store")
     tr.add_argument("--domain", default="15cdec",
                     choices=["15cdec", "15cdec_grid", "multifamily"],
@@ -395,6 +419,11 @@ def main(argv: list[str] | None = None) -> int:
                          "with ONE learned exponent (soil_chi); drops the Jarvis "
                          "resistance, froot, redist_k and the separate canopy trunk "
                          "(needs --et noah; --noah-pet still selects the potential)")
+    tr.add_argument("--noah-sac-exchanges", action="store_true",
+                    help="Noah ET replaces only the SAC E1-E3 withdrawals: keep the "
+                         "upper free->tension rebalance, the lower free->tension "
+                         "resupply (rserv) and the ADIMP ET(5) of the reference ET "
+                         "block (off: the external-ET path skips all three; needs --canopy-lite)")
     tr.add_argument("--calsim-footprint", action="store_true",
                     help="re-foot basin aggregation onto the CalSim3 catchments "
                          "(overlap weights) to correct the coarse-grid footprint "
@@ -536,6 +565,24 @@ def main(argv: list[str] | None = None) -> int:
                     help="early-stop after this many stale cal-KGE selections "
                          "(lower = stop sooner at plateau; selection cadence is "
                          "every 2 epochs)")
+    tr.add_argument("--min-stop-epoch", type=int, default=0,
+                    help="arm early stopping only from this epoch on (a stale "
+                         "streak before it never stops the run)")
+    tr.add_argument("--dead-chunk-nograd", action="store_true",
+                    help="run chunks with no scoreable observation (a "
+                         "26-entity multifamily run's WY1950-84) forward-only, "
+                         "without autograd; the carried state and every later "
+                         "chunk are unchanged (segmented/eager chunk path)")
+    tr.add_argument("--diagnostics", action="store_true",
+                    help="write chunk_log.csv (per chunk: loss by family, "
+                         "pre-clip gradient norm), eval_terms.csv (selection "
+                         "epochs: eval-mode loss by family and term) and "
+                         "per-epoch net snapshots with an EMA shadow under "
+                         "checkpoints/snapshots/; numerics unchanged")
+    tr.add_argument("--param-box", default=None,
+                    help="narrow learned parameters' bounds, name=lo:hi[,...] "
+                         "in physical units inside the GA box; lo == hi pins "
+                         "the parameter (riva=0:0 turns riparian ET off)")
     tr.add_argument("--spinup-refresh", type=int, default=1,
                     help="re-run the no-grad spinup every k epochs (k=2 "
                          "reuses one-epoch-stale state on odd epochs — same "
@@ -549,6 +596,16 @@ def main(argv: list[str] | None = None) -> int:
                          "the full prefix 1.000000; clamped to the record "
                          "start, so pass 1915-01-01 for the exact frozen "
                          "full-prefix convention)")
+    tr.add_argument("--spinup-mode", default="window", choices=["window", "cycle"],
+                    help="window = spin up over --spinup-start .. the cal window (the "
+                         "multifamily domain: the ten water years before it); cycle = "
+                         "timing-independent: loop the window's own first "
+                         "--spinup-years years from the cold start 20 times, then "
+                         "from the previous state until a pass moves no basin's "
+                         "annual flow by more than 0.1%% (reads nothing before the "
+                         "window)")
+    tr.add_argument("--spinup-years", type=int, default=10,
+                    help="length of the looped block for --spinup-mode cycle")
     tr.add_argument("--lr", type=float, default=1e-3)
     tr.add_argument("--seed", type=int, default=0)
     tr.add_argument("--train-chunk-days", type=int, default=366,
@@ -601,6 +658,11 @@ def main(argv: list[str] | None = None) -> int:
                     help="multi-timescale checkpoints only: which per-entity "
                          "diagnostics figures to draw (review = the cdec_daily "
                          "+ uf_monthly set; all adds the 69 USGS entities)")
+    ev.add_argument("--spinup", default="cycle", choices=["cycle", "window"],
+                    help="multi-timescale checkpoints only: state at the envelope "
+                         "start — cycle = loop its first ten water years 20 times "
+                         "from the cold start (timing-independent, default); window "
+                         "= the legacy ten water years before it")
     ev.set_defaults(func=_dpl_evaluate)
 
     hy = dpl_sub.add_parser(

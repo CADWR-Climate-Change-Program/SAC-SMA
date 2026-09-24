@@ -49,6 +49,7 @@ numerics.
 
 from __future__ import annotations
 
+import contextlib
 import math
 import time
 from dataclasses import asdict
@@ -78,7 +79,7 @@ from .data import (
     shape_chunk_targets,
     water_balance_anchor,
 )
-from .features import CONTINUOUS_STATICS, FeatureSet, build_features
+from .features import CONTINUOUS_STATICS, FeatureSet, aef_store, build_features
 from .forward import PipelineState, initial_state, routing_uh, run_window
 from .loss import kge_torch, level_hinge_loss, masked_basin_loss, shape_pull_loss
 from .multi_timescale import (
@@ -93,8 +94,27 @@ from .regularize import (
     param_norm_scales,
     spatial_smoothness,
 )
+from .spinup import (
+    annual_totals,
+    block_end,
+    cycle_spinup,
+    describe,
+    cold_state,
+    year_index,
+)
 
 _DTYPES = {"float32": torch.float32, "float64": torch.float64}
+
+#: diagnostics file columns (cfg.diagnostics).  chunk_log.csv: one row per chunk
+#: per epoch — ``n_`` live entities, ``c_`` coefficient mass and ``l_`` loss
+#: contribution by family (the ``l_`` sum to ``loss``), ``gnorm`` the pre-clip
+#: gradient norm.  eval_terms.csv: one row per selection epoch — the eval-mode
+#: loss on the training grid by family and term, averaged over the live chunks.
+_CHUNK_LOG_COLS = ("epoch", "k", "start", "days", "live", "nograd", "stepped",
+                   "loss", "gnorm", "n_usgs", "n_cdec", "n_uf", "c_usgs",
+                   "c_cdec", "c_uf", "l_usgs", "l_cdec", "l_uf")
+_EVAL_TERM_COLS = ("epoch", "eval_loss", "usgs_nnse", "usgs_log", "usgs_var",
+                   "cdec_nnse", "cdec_log", "cdec_var", "uf_monthly")
 
 
 def _split_out(out: dict, et_mode: str):
@@ -148,6 +168,7 @@ def _stream_nograd(
                                      pt_snow_albedo=cfg.pt_snow_albedo,
                                      pt_dewpoint_depression=cfg.pt_dewpoint_depression,
                                      canopy_lite=cfg.canopy_lite,
+                                     sac_exchanges=cfg.noah_sac_exchanges,
                                      state_idx=dom.chunk_state(t, te))
             if collect:
                 outs.append(dom.W @ flow)
@@ -283,8 +304,8 @@ def train(
             raise ValueError(
                 "the multi-timescale domain has no zonal soil_class/"
                 "veg_class (they exist only where the original zonal "
-                "regionalization was drawn) — use the physical variants, "
-                "whose continuous statics cover the whole region grid")
+                "regionalization was drawn) — use the physical or embedding "
+                "variants, whose inputs cover the whole region grid")
         eobs = load_entity_obs(dom, data_dir)
         d_rows = torch.as_tensor(eobs.daily_rows, device=dev)
         m_rows = torch.as_tensor(eobs.monthly_rows, device=dev)
@@ -372,7 +393,7 @@ def train(
     # truncated spinup start (clamped to the record start; == 0 restores the
     # exact frozen full-prefix convention)
     spin_req = int(dom.dates.searchsorted(pd.Timestamp(cfg.spinup_start)))
-    if eobs is not None and spin_req >= calobs.t0:
+    if cfg.spinup_mode == "window" and eobs is not None and spin_req >= calobs.t0:
         # the default spinup_start (set for the 15cdec calibration window) sits
         # inside this cal window — keep the ten-water-year spinup convention
         # relative to the window
@@ -381,6 +402,19 @@ def train(
         print(f"train: spinup_start {cfg.spinup_start} is inside the cal "
               f"window — spinning up from {ts.date()}", flush=True)
     spin_t0 = min(spin_req, calobs.t0)
+    # timing-independent spinup (cfg.spinup_mode "cycle"): the window's own first
+    # spinup_years years, looped to convergence from the last converged state
+    spin_t1 = block_end(dom.dates, calobs.t0, cfg.spinup_years)
+    spin_cache: dict = {}
+    spin_yidx = None
+    if cfg.spinup_mode == "cycle":
+        spin_yidx = year_index(dom.dates, calobs.t0, spin_t1)
+        print(f"train: cycle spinup — {dom.dates[calobs.t0].date()}.."
+              f"{dom.dates[spin_t1 - 1].date()} looped {cfg.spinup_passes} times from "
+              f"the cold start, then from the previous state until a pass moves no "
+              f"basin's annual flow by more than {cfg.spinup_warm_tol:g} "
+              f"({cfg.spinup_warm_passes}..{cfg.spinup_passes} passes); nothing before "
+              "the window is read", flush=True)
     etobs = sweobs = anchor_monthly = None
     if cfg.et_loss_lambda > 0.0 or cfg.et_level_lambda > 0.0:
         etobs = load_et_obs(dom, cal_start=cfg.cal_start,
@@ -455,6 +489,7 @@ def train(
                        if _needs_physical else None),
         stats=donor_stats,
         statics=statics,
+        aef_path=aef_store(data_dir) if variant == "aef" else None,
     )
     x = torch.as_tensor(fs.x).to(dev, dtype)
 
@@ -537,7 +572,7 @@ def train(
         priors = ga_priors(pdf, hrus_p)
     else:
         priors = ga_priors(load_params(data_dir, domain=domain), dom.hrus)
-    net.init_from_priors(priors)
+    net.init_from_priors(priors, box=cfg.param_box)
     donor_kge = float("nan")
     # ep0-donor gate mode: "same" compares the selection scalar directly
     # (same entity set, same statistic); "subset" recomputes the donor's own
@@ -595,12 +630,26 @@ def train(
                   f"entities are not a subset of this run's {len(dom.basins)}",
                   flush=True)
         donor_kge = float(ick.get("cal_kge", float("nan")))
-        if cfg.init_gate == "abort" and (donor_gate is None
-                                         or not math.isfinite(donor_kge)):
-            raise RuntimeError(
-                f"init_from: the ep0-donor gate cannot be armed (mode "
-                f"{donor_gate!r}, donor sel cal KGE {donor_kge}); "
-                "--init-gate abort requires a gate")
+    if cfg.param_box:
+        # after the priors and any warm start (a donor's buffers carry the
+        # donor's box); re-applied after a resume below
+        lo0, hi0 = net._lo.clone(), net._hi.clone()
+        net.set_box(cfg.param_box)
+        print("train: parameter box — " + ", ".join(
+            f"{p} pinned at {lo:g}" if lo == hi else f"{p} in [{lo:g}, {hi:g}]"
+            for p, (lo, hi) in cfg.param_box.items()), flush=True)
+        if donor_gate is not None and not (torch.equal(lo0, net._lo)
+                                           and torch.equal(hi0, net._hi)):
+            # the boxed net deliberately departs from the donor's field
+            print("train: ep0-donor gate off — --param-box changes the donor's "
+                  "parameter box", flush=True)
+            donor_gate = None
+    if ick is not None and cfg.init_gate == "abort" and (
+            donor_gate is None or not math.isfinite(donor_kge)):
+        raise RuntimeError(
+            f"init_from: the ep0-donor gate cannot be armed (mode "
+            f"{donor_gate!r}, donor sel cal KGE {donor_kge}); "
+            "--init-gate abort requires a gate")
     opt = torch.optim.AdamW(net.parameters(), lr=cfg.lr,
                             weight_decay=cfg.weight_decay)
     warm = max(int(cfg.lr_warmup_epochs), 0)
@@ -627,6 +676,8 @@ def train(
                 f"basins but this run loads {len(dom.basins)} — repeat the "
                 "same --basins subset")
         net.load_state_dict(ck["net"])
+        if cfg.param_box:
+            net.set_box(cfg.param_box)
         opt.load_state_dict(ck["opt"])
         sched.load_state_dict(ck["sched"])
         start_epoch, best_kge, stale = ck["epoch"] + 1, ck["best_kge"], ck["stale"]
@@ -806,43 +857,71 @@ def train(
             nograd_g.set_params(pe, ue, canopy_params=cp_e)
         st0 = initial_state(dom.n_hru, dev, dtype, init_mode=cfg.init_mode,
                             params=pe, et_mode=cfg.et_mode)
-        _, st = _stream_nograd(dom, cfg, pe, ue, spin_t0, calobs.t0, st0,
-                               graph=nograd_g, canopy_params=cp_e)
+        if cfg.spinup_mode == "cycle":
+            from .graphs import _clone_state
+            # the cold start and spinup_passes the first time; then from the previous
+            # state until a pass moves no basin by more than spinup_warm_tol,
+            # tracking the fixed point as the parameters move
+            def _basins(a: int, b: int, s: PipelineState):
+                sim_b, s = _stream_nograd(dom, cfg, pe, ue, a, b, s, graph=nograd_g,
+                                          collect=True, canopy_params=cp_e)
+                return annual_totals(sim_b, spin_yidx), s
+
+            first = "state" not in spin_cache
+            st, n_pass, change = cycle_spinup(
+                _basins, calobs.t0, spin_t1,
+                cold_state(dom, cfg, pe) if first else spin_cache["state"], cfg.spinup_passes,
+                min_passes=None if first else cfg.spinup_warm_passes,
+                until=None if first else cfg.spinup_warm_tol)
+            spin_cache.update(state=_clone_state(st), cycles=n_pass, change=change)
+            if first:
+                print("train: " + describe(dom.dates, calobs.t0, spin_t1, n_pass, change),
+                      flush=True)
+        else:
+            _, st = _stream_nograd(dom, cfg, pe, ue, spin_t0, calobs.t0, st0,
+                                   graph=nograd_g, canopy_params=cp_e)
         pooled, per_basin = float("nan"), None
         if do_eval:
             sim, _ = _stream_nograd(dom, cfg, pe, ue, calobs.t0, calobs.t1, st,
                                     graph=nograd_g, collect=True, canopy_params=cp_e)
             per_basin, pooled = (_mt_kge(sim) if eobs is not None
                                  else _cal_kge(sim, calobs.obs))
+            if cfg.diagnostics:
+                eval_sim["sim"] = sim
         return pooled, per_basin, st
 
+    eval_sim: dict[str, torch.Tensor] = {}   # the last selection pass's flow (diagnostics)
+
     def _save(path: Path, *, epoch: int, kge: float) -> None:
-        torch.save({"net": net.state_dict(), "opt": opt.state_dict(),
-                    "sched": sched.state_dict(), "epoch": epoch,
-                    "best_kge": best_kge, "stale": stale, "cal_kge": kge,
-                    "mt_select": ((("family_mean"
-                                    if cfg.mt_family_weight == "equal" else
-                                    "family_weighted" if shares is not None
-                                    else "pooled"))
-                                  if eobs is not None else None),
-                    "cfg": asdict(cfg), "variant": variant, "domain": domain,
-                    "basins": list(dom.basins),
-                    "net_config": {"hidden": cfg.hidden, "embed": cfg.embed,
-                                   "dropout": cfg.dropout,
-                                   "grouped_heads": cfg.grouped_heads,
-                                   "gnn_k": cfg.gnn_k,
-                                   "seasonal_params": cfg.seasonal_params,
-                                   "seasonal_amp": cfg.seasonal_amp,
-                                   "seasonal_amp_frac": cfg.seasonal_amp_frac,
-                                   "canopy": cfg.canopy,
-                                   "canopy_separate_trunk":
-                                       cfg.canopy_separate_trunk,
-                                   "canopy_lite": cfg.canopy_lite,
-                                   "dynamic_params": cfg.dynamic_params,
-                                   "dynamic_amp": cfg.dynamic_amp,
-                                   "dynamic_window": cfg.dynamic_window},
-                    "et_mode": cfg.et_mode,
-                    "features": _feature_stats(fs)}, path)
+        torch.save({**_payload(epoch=epoch, kge=kge), "opt": opt.state_dict(),
+                    "sched": sched.state_dict()}, path)
+
+    def _payload(*, epoch: int, kge: float) -> dict:
+        return {"net": net.state_dict(), "epoch": epoch,
+                "best_kge": best_kge, "stale": stale, "cal_kge": kge,
+                "mt_select": ((("family_mean"
+                                if cfg.mt_family_weight == "equal" else
+                                "family_weighted" if shares is not None
+                                else "pooled"))
+                              if eobs is not None else None),
+                "cfg": asdict(cfg), "variant": variant, "domain": domain,
+                "basins": list(dom.basins),
+                "net_config": {"hidden": cfg.hidden, "embed": cfg.embed,
+                               "dropout": cfg.dropout,
+                               "grouped_heads": cfg.grouped_heads,
+                               "gnn_k": cfg.gnn_k,
+                               "seasonal_params": cfg.seasonal_params,
+                               "seasonal_amp": cfg.seasonal_amp,
+                               "seasonal_amp_frac": cfg.seasonal_amp_frac,
+                               "canopy": cfg.canopy,
+                               "canopy_separate_trunk":
+                                   cfg.canopy_separate_trunk,
+                               "canopy_lite": cfg.canopy_lite,
+                               "dynamic_params": cfg.dynamic_params,
+                               "dynamic_amp": cfg.dynamic_amp,
+                               "dynamic_window": cfg.dynamic_window},
+                "et_mode": cfg.et_mode,
+                "features": _feature_stats(fs)}
 
     n_chunks = len(grid)
 
@@ -940,11 +1019,131 @@ def train(
                   flush=True)
     else:
         chunk_live = [True] * n_chunks
+    skip_dead = cfg.dead_chunk_nograd and not all(chunk_live)
+    if skip_dead:
+        if reg_lambda > 0.0:
+            # the penalty's own train-mode net(x) draws dropout in every chunk
+            raise ValueError("dead_chunk_nograd does not combine with spatial_reg_lambda")
+        n_dead = chunk_live.count(False)
+        print(f"train: the {n_dead} dead chunk(s) run forward-only, without autograd "
+              "(dead_chunk_nograd; segmented/eager chunk path)", flush=True)
+
+    # -- diagnostics (cfg.diagnostics; numerics-neutral) ---------------------
+    diag = cfg.diagnostics
+    chunk_log_path, eval_terms_path = out / "chunk_log.csv", out / "eval_terms.csv"
+    snapdir = ckdir / "snapshots"
+    params_list = list(net.parameters())
+    ema: list[torch.Tensor] = []
+    if not resume:
+        # a fresh run keeps no diagnostics of an earlier run in this folder
+        for p in (chunk_log_path, eval_terms_path, *snapdir.glob("e*.pt")):
+            p.unlink(missing_ok=True)
+    if diag:
+        snapdir.mkdir(exist_ok=True)
+        if resume:
+            # the resumed run rewrites the interrupted epoch: drop its rows
+            for p in (chunk_log_path, eval_terms_path):
+                if p.exists():
+                    d = pd.read_csv(p)
+                    d[d["epoch"] < start_epoch].to_csv(p, index=False)
+        # the EMA shadow restarts from the current net (also on a resume)
+        ema = [p.detach().clone() for p in params_list]
+        if train_gs:
+            print("train: diagnostics — whole-chunk graphs: chunk_log.csv carries "
+                  "loss and gradient norm only (the family split needs the "
+                  "segmented/eager path)", flush=True)
+        print(f"train: diagnostics on — {chunk_log_path.name}, "
+              f"{eval_terms_path.name}, per-epoch snapshots + EMA shadow "
+              f"(decay {cfg.ema_decay}) under {snapdir}", flush=True)
+    fam_np = np.array(eobs.family) if eobs is not None else None
+
+    def _snapshot(epoch: int, kge: float) -> None:
+        """The net as selection scores it at this epoch (pre-update) plus the EMA
+        shadow of the optimizer steps so far (``net_ema``, same keys) —
+        loadable wherever best.pt is (no optimizer state)."""
+        ema_sd = dict(net.state_dict())
+        for (name, _), e in zip(net.named_parameters(), ema, strict=True):
+            ema_sd[name] = e
+        torch.save({**_payload(epoch=epoch, kge=kge), "net_ema": ema_sd},
+                   snapdir / f"e{epoch:03d}.pt")
+
+    def _loss_split(basin_flow: torch.Tensor, obs_c: torch.Tensor, k: int, *,
+                    terms: bool = False) -> dict[str, float]:
+        """The multi-timescale chunk loss as trained, split into additive
+        contributions by family — ``l_<fam>`` (or, ``terms``, ``<fam>_nnse`` /
+        ``_log`` / ``_var`` and ``uf_monthly``) — with each family's live entity
+        count ``n_<fam>`` and coefficient mass ``c_<fam>`` (its share of the
+        chunk's daily-term weight times daily_scale; monthly_scale for uf)."""
+        res: dict[str, float] = {}
+        with torch.no_grad():
+            n_fin = torch.isfinite(obs_c).sum(dim=1)
+            w_all = (fam_w if fam_w is not None
+                     else torch.ones(len(dom.basins), device=dev, dtype=dtype))
+            ok = n_fin >= 90                     # masked_basin_loss's min_days
+            w_tot = max(float((w_all * ok).sum()), 1.0)
+            for f in ("usgs_daily", "cdec_daily"):
+                tag = f.split("_")[0]
+                msk = torch.as_tensor(fam_np == f, device=dev)
+                wf = w_all * msk
+                w_f = float((wf * ok).sum())
+                res[f"n_{tag}"] = int((ok & msk).sum())
+                res[f"c_{tag}"] = daily_scale * w_f / w_tot
+                sc = daily_scale * max(w_f, 1.0) / w_tot
+
+                def _l(log_l: float, var_l: float, bias_l: float) -> float:
+                    return float(masked_basin_loss(
+                        basin_flow, obs_c, calobs.obs_var, kind=cfg.loss,
+                        log_lambda=log_l, log_eps=cfg.log_loss_eps,
+                        var_lambda=var_l, var_gate_frac=cfg.var_gate_frac,
+                        var_huber_cap=cfg.var_huber_cap, bias_lambda=bias_l,
+                        weight=wf))
+
+                full = _l(cfg.log_loss_lambda, cfg.var_loss_lambda, cfg.bias_loss_lambda)
+                if terms:
+                    nnse = _l(0.0, 0.0, 0.0)
+                    nl = _l(cfg.log_loss_lambda, 0.0, 0.0)
+                    res[f"{tag}_nnse"] = sc * nnse
+                    res[f"{tag}_log"] = sc * (nl - nnse)
+                    res[f"{tag}_var"] = sc * (full - nl)
+                else:
+                    res[f"l_{tag}"] = sc * full
+            if mt_targets is not None:
+                mb, mtgt, mfin = mt_targets[k]
+                n_m = int((mfin.sum(dim=1) >= 1).sum())
+                res["n_uf"] = n_m
+                res["c_uf"] = monthly_scale if n_m else 0.0
+                res["uf_monthly" if terms else "l_uf"] = monthly_scale * float(
+                    monthly_nnse_loss(basin_flow[m_rows] @ mb, mtgt, mfin,
+                                      eobs.var_monthly))
+        return res
+
+    def _eval_terms(epoch: int) -> None:
+        """Eval-mode loss of the selection pass, chunk by chunk on the training
+        grid, averaged over the live chunks like the logged training loss."""
+        sim = eval_sim.pop("sim")
+        acc: dict[str, float] = {}
+        n = 0
+        for k, (c0, ce) in enumerate(grid):
+            if not chunk_live[k]:
+                continue
+            d = _loss_split(sim[:, c0 - calobs.t0:ce - calobs.t0],
+                            _obs_chunk(calobs, c0, ce), k, terms=True)
+            d = {key: v for key, v in d.items() if not key.startswith(("n_", "c_"))}
+            d["eval_loss"] = sum(d.values())
+            for key, v in d.items():
+                acc[key] = acc.get(key, 0.0) + v
+            n += 1
+        row = {"epoch": epoch, **{key: v / max(n, 1) for key, v in acc.items()}}
+        pd.DataFrame([row]).reindex(columns=_EVAL_TERM_COLS).to_csv(
+            eval_terms_path, mode="a", index=False,
+            header=not eval_terms_path.exists())
+
     print(f"train[{variant}]: {dom.n_hru} HRUs, {len(dom.basins)} basins, "
           f"{x.shape[1]} features | cal days {calobs.t0}..{calobs.t1} "
-          f"(spinup from day {spin_t0}"
-          f"{' = record start' if spin_t0 == 0 else f' = {dom.dates[spin_t0].date()}'}) "
-          f"({cfg.chunk_grid} grid: {_grid_summary(grid)}) | {cfg.loss} loss "
+          + ("(cycle spinup) " if cfg.spinup_mode == "cycle" else
+             f"(spinup from day {spin_t0}"
+             f"{' = record start' if spin_t0 == 0 else f' = {dom.dates[spin_t0].date()}'}) ")
+          + f"({cfg.chunk_grid} grid: {_grid_summary(grid)}) | {cfg.loss} loss "
           f"(log lambda {cfg.log_loss_lambda}) | n_inc={cfg.n_inc} "
           f"perc={cfg.perc_mode} {cfg.dtype} on {dev.type}"
           + (f' [cuda-graphs {sorted(train_gs)}]' if train_gs else
@@ -1026,14 +1225,19 @@ def train(
                 _save(ckdir / "best.pt", epoch=epoch, kge=pooled)
             else:
                 stale += 1
-            if stale > cfg.patience:
+            if stale > cfg.patience and epoch >= cfg.min_stop_epoch:
                 print(f"train: early stop at epoch {epoch} "
                       f"({stale} stale selections)", flush=True)
                 stop = True
+        if diag:
+            _snapshot(epoch, pooled)
+            if do_eval and eobs is not None:
+                _eval_terms(epoch)
 
         # -- TBPTT chunks (one optimizer step per chunk) --------------------
         losses: list[float] = []
         reg_losses: list[float] = []
+        chunk_rows: list[dict] = []
         skipped = 0
         if not stop:
             assert state_spin is not None   # first epoch always spins up
@@ -1057,6 +1261,8 @@ def train(
                 et_tgt = et_targets[k] if et_targets is not None else None
                 swe_tgt = swe_targets[k] if swe_targets is not None else None
                 g = train_gs.get(ce - c0)
+                split: dict[str, float] = {}
+                dead_nograd = skip_dead and not chunk_live[k] and g is None
                 if g is not None:
                     g.set_state(state)
                     loss = g.run(pr, ta, doy, leap, obs_c, tn, tx, lai_c,
@@ -1069,47 +1275,62 @@ def train(
                     # mixed mode (an eager chunk beside captured graphs): grads
                     # must STAY allocated — set_to_none would invalidate the
                     # captured graphs
-                    opt.zero_grad(set_to_none=not train_gs)
-                    params, cp = _split_out(net(x), cfg.et_mode)
-                    uh = routing_uh(params, dom.flowlen)
-                    # segmented CUDA graphs: graphed run_window over the longest
-                    # captured length that fits, autograd across the segments
-                    # (graphs.SegmentedTrainWindow); the days beyond it (a leap
-                    # year's last day on the water-year grid) continue eagerly
-                    # from the graphed state, autograd through both
-                    n_g = max((L for L in seg_gs if L <= ce - c0), default=0)
-                    if n_g:
-                        flow_g, state_g = seg_gs[n_g].forward(c0, params, uh, cp, state)
-                    else:
-                        flow_g, state_g = None, state
+                    if not dead_nograd:
+                        opt.zero_grad(set_to_none=not train_gs)
+                    # a dead chunk under dead_chunk_nograd: the same train-mode
+                    # net(x) (one dropout draw) and the same graphed forward,
+                    # without autograd
+                    with torch.no_grad() if dead_nograd else contextlib.nullcontext():
+                        params, cp = _split_out(net(x), cfg.et_mode)
+                        uh = routing_uh(params, dom.flowlen)
+                        # segmented CUDA graphs: graphed run_window over the longest
+                        # captured length that fits, autograd across the segments
+                        # (graphs.SegmentedTrainWindow); the days beyond it (a leap
+                        # year's last day on the water-year grid) continue eagerly
+                        # from the graphed state, autograd through both
+                        n_g = max((L for L in seg_gs if L <= ce - c0), default=0)
+                        if n_g:
+                            flow_g, state_g = seg_gs[n_g].forward(c0, params, uh, cp, state)
+                        else:
+                            flow_g, state_g = None, state
 
-                    def _eager(d0: int):
-                        sl = slice(d0, None)
-                        return run_window(
-                            pr[:, sl], ta[:, sl], doy[sl], leap[sl], dom.lat_rad, dom.elev,
-                            params, uh, state_g, n_inc=cfg.n_inc, perc_mode=cfg.perc_mode,
-                            fracp_floor=cfg.fracp_floor, ninc_mode="fixed",
-                            et_mode=cfg.et_mode, canopy_params=cp,
-                            tmin=None if tn is None else tn[:, sl],
-                            tmax=None if tx is None else tx[:, sl],
-                            veg_frac=dom.veg_frac,
-                            lai=None if lai_c is None else lai_c[:, sl],
-                            noah_pet=cfg.noah_pet,
-                            sac_pet=cfg.sac_pet, pt_snow_albedo=cfg.pt_snow_albedo,
-                            pt_dewpoint_depression=cfg.pt_dewpoint_depression,
-                            canopy_lite=cfg.canopy_lite,
-                            state_idx=None if st_c is None else st_c[:, sl],
-                            return_tet=et_tgt is not None,
-                            return_swe=swe_tgt is not None)
+                        def _eager(d0: int):
+                            sl = slice(d0, None)
+                            return run_window(
+                                pr[:, sl], ta[:, sl], doy[sl], leap[sl], dom.lat_rad, dom.elev,
+                                params, uh, state_g, n_inc=cfg.n_inc, perc_mode=cfg.perc_mode,
+                                fracp_floor=cfg.fracp_floor, ninc_mode="fixed",
+                                et_mode=cfg.et_mode, canopy_params=cp,
+                                tmin=None if tn is None else tn[:, sl],
+                                tmax=None if tx is None else tx[:, sl],
+                                veg_frac=dom.veg_frac,
+                                lai=None if lai_c is None else lai_c[:, sl],
+                                noah_pet=cfg.noah_pet,
+                                sac_pet=cfg.sac_pet, pt_snow_albedo=cfg.pt_snow_albedo,
+                                pt_dewpoint_depression=cfg.pt_dewpoint_depression,
+                                canopy_lite=cfg.canopy_lite,
+                                sac_exchanges=cfg.noah_sac_exchanges,
+                                state_idx=None if st_c is None else st_c[:, sl],
+                                return_tet=et_tgt is not None,
+                                return_swe=swe_tgt is not None)
 
-                    if n_g == ce - c0:
-                        res = (flow_g, state_g)
-                    elif n_g:
-                        res_e = _eager(n_g)
-                        res = (torch.cat([flow_g, res_e[0]], dim=1), res_e[1], *res_e[2:])
-                    else:
-                        res = _eager(0)
-                    flow, state = res[0], res[1]
+                        if n_g == ce - c0:
+                            res = (flow_g, state_g)
+                        elif n_g:
+                            res_e = _eager(n_g)
+                            res = (torch.cat([flow_g, res_e[0]], dim=1), res_e[1], *res_e[2:])
+                        else:
+                            res = _eager(0)
+                        flow, state = res[0], res[1]
+                    if dead_nograd:
+                        # no loss, no backward, no step: the carried state is the
+                        # one a full dead chunk leaves
+                        if diag:
+                            chunk_rows.append({"epoch": epoch, "k": k,
+                                               "start": str(dom.dates[c0].date()),
+                                               "days": ce - c0, "live": False,
+                                               "nograd": True, "stepped": False})
+                        continue
                     basin_flow = dom.W @ flow
                     loss_t = daily_scale * masked_basin_loss(
                         basin_flow, obs_c, calobs.obs_var, kind=cfg.loss,
@@ -1141,6 +1362,8 @@ def train(
                             basin_w=swe_w)
                     loss_t.backward()
                     loss, state = float(loss_t.detach()), state.detach()
+                    if diag and eobs is not None:
+                        split = _loss_split(basin_flow, obs_c, k)
                 # spatial-smoothness penalty: an eager net(x) whose gradient
                 # ACCUMULATES onto the data-loss grads already in .grad (works
                 # for both the graph and eager paths) — the CUDA graph is never
@@ -1153,16 +1376,33 @@ def train(
                     reg_losses.append(float(reg_t.detach()))
                 norm = torch.nn.utils.clip_grad_norm_(net.parameters(),
                                                       cfg.grad_clip)
+                stepped = False
                 if not chunk_live[k]:
                     pass       # dead chunk: state advanced, no update
                 elif math.isfinite(loss) and bool(torch.isfinite(norm)):
                     opt.step()
+                    stepped = True
+                    if diag:
+                        with torch.no_grad():
+                            for e, p in zip(ema, params_list, strict=True):
+                                e.lerp_(p, 1.0 - cfg.ema_decay)
                 else:
                     skipped += 1
                 opt.zero_grad(set_to_none=False)
                 if chunk_live[k]:
                     losses.append(loss)
+                if diag:
+                    # gnorm = the pre-clip total gradient norm
+                    chunk_rows.append({"epoch": epoch, "k": k,
+                                       "start": str(dom.dates[c0].date()),
+                                       "days": ce - c0, "live": chunk_live[k],
+                                       "nograd": False, "stepped": stepped,
+                                       "loss": loss, "gnorm": float(norm), **split})
             sched.step()
+        if chunk_rows:
+            pd.DataFrame(chunk_rows).reindex(columns=_CHUNK_LOG_COLS).to_csv(
+                chunk_log_path, mode="a", index=False,
+                header=not chunk_log_path.exists())
 
         vram = (torch.cuda.max_memory_allocated(dev) / 2**20
                 if dev.type == "cuda" else 0.0)
@@ -1175,6 +1415,11 @@ def train(
         if reg_lambda > 0.0:
             row["reg"] = (sum(reg_losses) / len(reg_losses)
                           if reg_losses else float("nan"))
+        if cfg.spinup_mode == "cycle":
+            # passes of this epoch's spinup (0: the state was reused) and the last
+            # pass's largest basin annual-flow change (relative)
+            row["spin_cycles"] = spin_cache.pop("cycles", 0)
+            row["spin_change"] = spin_cache.pop("change", float("nan"))
         pd.DataFrame([row]).to_csv(log_path, mode="a", index=False,
                                    header=not log_path.exists())
         if not stop:
@@ -1184,15 +1429,23 @@ def train(
               f"lr {row['lr']:.1e}  spin {spin_s:.0f}s  "
               f"epoch {row['epoch_s']:.0f}s  vram {row['peak_vram_mb']}MB"
               + (f"  reg {row['reg']:.4f}" if reg_lambda > 0.0 else "")
+              + (f"  spin x{row['spin_cycles']}" if cfg.spinup_mode == "cycle" else "")
               + (f"  skipped {skipped}" if skipped else ""), flush=True)
         if stop:
             break
 
-    # final selection on the post-training net (loop evals are pre-update)
-    pooled, _, _ = _spinup_and_maybe_eval(True)
-    if pooled > best_kge:
-        best_kge = pooled
-        _save(ckdir / "best.pt", epoch=cfg.n_epochs, kge=pooled)
+    # final selection on the post-training net (loop evals are pre-update).  An
+    # early stop comes before the stop epoch's training, so that epoch's
+    # selection (a stale score, in ``pooled``) already scored the final net.
+    if not stop:
+        pooled, _, _ = _spinup_and_maybe_eval(True)
+        if diag:
+            _snapshot(cfg.n_epochs, pooled)
+            if eobs is not None:
+                _eval_terms(cfg.n_epochs)
+        if pooled > best_kge:
+            best_kge = pooled
+            _save(ckdir / "best.pt", epoch=cfg.n_epochs, kge=pooled)
     print(f"train[{variant}]: done — best selection cal KGE {best_kge:.4f} "
           f"(final {pooled:.4f}) -> {ckdir / 'best.pt'}", flush=True)
     return out

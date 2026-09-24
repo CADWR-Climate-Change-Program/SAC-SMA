@@ -69,11 +69,11 @@ sacsma calsim                        # cross-compare -> artifacts/calsim/compare
 
 dPL training and evaluation run through `sacsma.dpl` (see `artifacts/dpl/RUNS.md` for the exact command line of every canonical run); `sacsma dpl evaluate <checkpoint> --temp-delta 2.0` dumps a temperature-perturbed teacher simulation, one input to the hybrid's response-consistency loss. The cross-model climatology and temperature-sensitivity figures regenerate through `sacsma dpl climatology` and `sacsma.dpl.forcing_sensitivity` into `artifacts/dpl/figures/`; the (Δp, ΔT) response surfaces regenerate through `python -m sacsma.dpl.noah_ca_hybrids`.
 
-The multi-timescale domain trains through the same command with `--domain multifamily`, and a trained run is scored against CalSim3 over WY1950–84 by three modules, with two helpers for the trimmed validation windows and for comparing two scored runs (file tables in `artifacts/README.md`):
+The multi-timescale domain trains through the same command with `--domain multifamily`, and a trained run is scored against CalSim3 over WY1950–84 by three modules, with two helpers for the trimmed validation windows and for comparing two scored runs (file tables in `artifacts/README.md`). The evaluator and tier 2 start the simulation from the timing-independent cycle spinup (the envelope's first ten water years looped 20 times from the frozen cold start; `sacsma.dpl.spinup`), and `--spinup-mode cycle` trains from the same rule:
 
 ```
 sacsma dpl train physical_climate --domain multifamily --et noah --noah-pet priestley_taylor --canopy-lite \
-    --chunk-grid water_year --no-flowlen-feature \
+    --chunk-grid water_year --no-flowlen-feature --spinup-mode cycle \
     [--basins <entity ids>] [--mt-family-weight none|equal|usgs=..,cdec=..,uf=..] --out <run>
 sacsma dpl evaluate <run>/checkpoints/best.pt     # per-entity metrics + sim_daily_mm.npz
 python -m sacsma.dpl.calsim_tier1 <run>           # the twenty training locations

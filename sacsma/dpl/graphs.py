@@ -173,7 +173,7 @@ class NoGradWindow(_WindowBase):
                 veg_frac=dom.veg_frac, lai=self.lai, noah_pet=cfg.noah_pet,
                 sac_pet=cfg.sac_pet, pt_snow_albedo=cfg.pt_snow_albedo,
                 pt_dewpoint_depression=cfg.pt_dewpoint_depression,
-                canopy_lite=cfg.canopy_lite, state_idx=self.state_idx)
+                canopy_lite=cfg.canopy_lite, sac_exchanges=cfg.noah_sac_exchanges, state_idx=self.state_idx)
             return dom.W @ flow, st
 
         side = torch.cuda.Stream()
@@ -286,7 +286,7 @@ class TrainChunk(_WindowBase):
                 veg_frac=dom.veg_frac, lai=self.lai, noah_pet=cfg.noah_pet,
                 sac_pet=cfg.sac_pet, pt_snow_albedo=cfg.pt_snow_albedo,
                 pt_dewpoint_depression=cfg.pt_dewpoint_depression,
-                canopy_lite=cfg.canopy_lite, state_idx=self.state_idx,
+                canopy_lite=cfg.canopy_lite, sac_exchanges=cfg.noah_sac_exchanges, state_idx=self.state_idx,
                 return_tet=self.et, return_swe=self.swe)
             flow, st = (res[0], res[1])
             basin = dom.W @ flow
@@ -546,7 +546,7 @@ class SegmentedTrainWindow:
                 lai=buf["lai"], noah_pet=cfg.noah_pet, sac_pet=cfg.sac_pet,
                 pt_snow_albedo=cfg.pt_snow_albedo,
                 pt_dewpoint_depression=cfg.pt_dewpoint_depression,
-                canopy_lite=cfg.canopy_lite, state_idx=buf["state_idx"])[:2]
+                canopy_lite=cfg.canopy_lite, sac_exchanges=cfg.noah_sac_exchanges, state_idx=buf["state_idx"])[:2]
             # graphed callables must not return their own inputs (static
             # buffers would alias); a pass-through state field gets a copy
             in_ptrs = {a.data_ptr() for a in args}

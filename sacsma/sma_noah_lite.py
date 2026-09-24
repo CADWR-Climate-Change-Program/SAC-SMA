@@ -17,8 +17,11 @@ channel adjustment).  Only the ET step differs:
   sm_root**chi`` on the pinned green fraction ``sig``, ONE learned exponent
   ``soil_chi`` — withdrawn from the SAC storages upstream of the water balance
   (``et_mode='external'``);
-* the lower-free -> lower-tension resupply and the ET(5) ADIMP withdrawal are
-  DROPPED (they live inside the frozen ET branch, skipped in external mode);
+* the upper free -> tension rebalance, the lower-free -> lower-tension resupply
+  and the ET(5) ADIMP withdrawal (they live inside the frozen ET branch) are
+  DROPPED by default; with ``sac_exchanges`` (``DplConfig.noah_sac_exchanges``)
+  they run after the Noah withdrawal as in the reference ET block, the upper
+  tension withdrawal standing in for ET1;
 * ``eused`` feeding the riparian ``et4 = (edmnd - eused)*riva`` is the Noah-lite
   soil ET actually withdrawn (``noah_lite_et_step``'s ``tet``), not E1-E3.
 
@@ -43,21 +46,25 @@ _EPS = 1e-6        # fractional-power base floor (parity with the torch clamp_mi
 
 
 @njit
-def _sacsma_noah_lite_core(pet, pr_eff, veg_frac, lai, soil_chi, par, state):
+def _sacsma_noah_lite_core(pet, pr_eff, veg_frac, lai, soil_chi, par, state,
+                           sac_exchanges):
     """Daily SAC-SMA with the Noah-lite external ET for one HRU.
 
     ``pet``/``pr_eff`` are (T,) mm/day (Kpet-scaled PET and Snow-17 outflow);
     ``veg_frac``/``soil_chi`` are scalars; ``lai`` is the (T,) daily observed LAI
     (per-day seasonal climatology, indexed by day-of-year upstream); ``par`` is
-    the 16 SMA params, ``state`` the 6-vector cold start.  Returns
-    ``(surf, base, tet, new_state)`` in mm/day — the frozen ``sac_sma`` contract.
+    the 16 SMA params, ``state`` the 6-vector cold start; ``sac_exchanges`` keeps
+    the reference UZ rebalance, LZ resupply and ET(5) after the Noah withdrawal.
+    Returns ``(surf, base, tet, new_state)`` in mm/day — the frozen ``sac_sma``
+    contract.
     """
     uztwm = par[0]; uzfwm = par[1]; lztwm = par[2]; lzfpm = par[3]; lzfsm = par[4]
     uzk = par[5]; lzpk = par[6]; lzsk = par[7]
     zperc = par[8]; rexp = par[9]; pfree = par[10]
     pctim = par[11]; adimp = par[12]; riva = par[13]; side = par[14]
-    # par[15] rserv is unused: the lower-free->tension resupply it governs lives
-    # inside the frozen ET branch, dropped in the external-ET (Noah-lite) path.
+    # par[15] rserv governs the lower-free -> tension resupply, which runs only
+    # with sac_exchanges (the default external-ET path drops it).
+    rserv = par[15]
 
     uztwc = state[0]; uzfwc = state[1]; lztwc = state[2]
     lzfsc = state[3]; lzfpc = state[4]; adimc = state[5]
@@ -129,6 +136,44 @@ def _sacsma_noah_lite_core(pet, pr_eff, veg_frac, lai, soil_chi, par, state):
         w_lo = et_lo if et_lo < lztwc else lztwc
         lztwc = lztwc - w_lo
         eused = w_upt + w_upf + w_lo    # Noah-lite soil ET (feeds et4)
+
+        # -- the rest of the reference ET block (sma._sacsma_core), sac_exchanges
+        #    only: the Noah withdrawal stands in for E1-E3, et1 = the UZ tension
+        #    withdrawal, red + et2 = edmnd - et1 (true on both reference branches)
+        et5 = 0.0
+        if sac_exchanges:
+            et1 = w_upt
+            if uztwc > 0.0:
+                if (uztwc / uztwm) < (uzfwc / uzfwm):
+                    uzrat = (uztwc + uzfwc) / (uztwm + uzfwm)
+                    uztwc = uztwm * uzrat
+                    uzfwc = uzfwm * uzrat
+                if uztwc < thres_zero:
+                    uztwc = 0.0
+                if uzfwc < thres_zero:
+                    uzfwc = 0.0
+
+            # resupply lower free -> lower tension
+            saved = rserv * (lzfpm + lzfsm)
+            ratlzt = lztwc / lztwm
+            ratlz = (lztwc + lzfpc + lzfsc - saved) / (lztwm + lzfpm + lzfsm - saved)
+            if ratlzt < ratlz:
+                dele = (ratlz - ratlzt) * lztwm
+                lztwc = lztwc + dele
+                lzfsc = lzfsc - dele
+                if lzfsc < 0.0:
+                    lzfpc = lzfpc + lzfsc
+                    lzfsc = 0.0
+            if lztwc < thres_zero:
+                lztwc = 0.0
+
+            # ET(5): ADIMP area
+            et5 = et1 + (edmnd - et1) * (adimc - et1 - uztwc) / (uztwm + lztwm)
+            adimc = adimc - et5
+            if adimc < 0.0:
+                et5 = et5 + adimc
+                adimc = 0.0
+            et5 = et5 * adimp
 
         # -- rainfall in excess of UZ tension (VERBATIM sma._sacsma_core) -----
         twx = pr + uztwc - uztwm
@@ -243,7 +288,7 @@ def _sacsma_noah_lite_core(pet, pr_eff, veg_frac, lai, soil_chi, par, state):
             if adimc < thres_zero:
                 adimc = 0.0
 
-        # -- aggregate channel inflow (eused = Noah-lite soil ET; et5 = 0) ----
+        # -- aggregate channel inflow (eused = Noah-lite soil ET) -------------
         sif = sif * parea
         tbf = sbf * parea
         bfcc = tbf * (1.0 / (1.0 + side))
@@ -271,7 +316,7 @@ def _sacsma_noah_lite_core(pet, pr_eff, veg_frac, lai, soil_chi, par, state):
                 surf = surf + base
                 base = 0.0
 
-        tet = eused * parea + et4    # et5 == 0 in the external-ET path
+        tet = eused * parea + et4 + et5    # et5 == 0 unless sac_exchanges
 
         surf_tot[i] = surf
         base_tot[i] = base
@@ -289,13 +334,15 @@ def sac_sma_noah_lite(
     soil_chi: float,
     par,
     init_state=None,
+    sac_exchanges: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Run the Noah-lite-ET SAC-SMA over a daily window (frozen-pipeline mirror
     of the torch ``canopy_lite`` path).  Returns ``(surf, base, tet, new_state)``
     in mm/day — same contract as :func:`sacsma.sma.sac_sma`.
 
     ``veg_frac``/``soil_chi`` are the per-HRU pinned green fraction and learned
-    moisture-limiter exponent; ``lai`` is the (T,) observed daily LAI.
+    moisture-limiter exponent; ``lai`` is the (T,) observed daily LAI;
+    ``sac_exchanges`` as in :func:`_sacsma_noah_lite_core`.
     """
     from .sma import DEFAULT_INIT_STATE
 
@@ -307,4 +354,4 @@ def sac_sma_noah_lite(
         init_state = DEFAULT_INIT_STATE.copy()
     init_state = np.asarray(init_state, dtype=float)
     return _sacsma_noah_lite_core(pet, pr_eff, float(veg_frac), lai,
-                                  float(soil_chi), par, init_state)
+                                  float(soil_chi), par, init_state, bool(sac_exchanges))

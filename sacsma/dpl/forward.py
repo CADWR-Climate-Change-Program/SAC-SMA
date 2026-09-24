@@ -125,6 +125,8 @@ def run_window(
     pt_dewpoint_depression: float = 0.0,   # >0: max arid dewpoint depression (degC)
                                            # on the PT net-longwave term; 0 = Tdew=Tmin
     canopy_lite: bool = False,             # minimal 1-param Noah ET (et_noah.noah_lite_et_step)
+    sac_exchanges: bool = False,           # Noah-lite: keep the reference UZ rebalance, LZ
+                                           # resupply and ADIMP ET(5) (DplConfig.noah_sac_exchanges)
     state_idx: torch.Tensor | None = None,  # (N, T) climate-state index (dynamic params)
     return_tet: bool = False,              # also return total ET (N, T) for closure
     return_swe: bool = False,              # also return Snow-17 SWE (N, T) (obs loss)
@@ -222,7 +224,7 @@ def run_window(
         noah = {"tavg": tavg, "tmin": tmin, "tmax": tmax, "doy": doy,
                 "lat_rad": lat_rad, "elev": elev, "cp": cp,
                 "veg_frac": veg_frac, "lai": lai, "canopy": state.canopy,
-                "lite": canopy_lite}
+                "lite": canopy_lite, "sac_exchanges": sac_exchanges}
     surf, base, tet, sac_state = run_sacsma(pet, eff_p, params, state=state.sac,
                                             n_inc=n_inc, perc_mode=perc_mode,
                                             fracp_floor=fracp_floor,

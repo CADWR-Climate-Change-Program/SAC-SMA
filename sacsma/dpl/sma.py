@@ -86,6 +86,8 @@ def sacsma_step(
     ninc_mode: str = "fixed",
     et_mode: str = "sac",
     eused_ext: torch.Tensor | None = None,
+    sac_exchanges: bool = False,
+    uztwc_pre: torch.Tensor | None = None,
 ) -> tuple[SacState, torch.Tensor, torch.Tensor, torch.Tensor]:
     """One daily step; returns (new_state, surf, base, tet) in mm/day.
 
@@ -93,7 +95,11 @@ def sacsma_step(
     ``et_mode="external"`` skips it: the caller (Noah ET) has already applied
     the soil withdrawals to ``state`` and passes ``pr_t`` as canopy-throughfall
     effective precip; ``eused_ext`` (the soil ET actually withdrawn) feeds the
-    unchanged riparian ``et4`` channel adjustment.
+    unchanged riparian ``et4`` channel adjustment.  With ``sac_exchanges`` the
+    external withdrawals stand in for E1-E3 only and the rest of the reference
+    ET block runs after them: the upper free -> tension rebalance, the lower
+    free -> tension resupply and the ADIMP ET(5), whose ET1 is the upper-tension
+    withdrawal ``uztwc_pre - uztwc`` (``uztwc_pre`` = the content before it).
     """
     uztwm, uzfwm, lztwm = p["uztwm"], p["uzfwm"], p["lztwm"]
     lzfpm, lzfsm = p["lzfpm"], p["lzfsm"]
@@ -114,6 +120,40 @@ def sacsma_step(
         # ET applied upstream; no withdrawal here.  eused feeds et4 only.
         et1 = et2 = et3 = et5 = zero
         eused = eused_ext if eused_ext is not None else zero
+        if sac_exchanges:
+            if uztwc_pre is None:
+                raise ValueError("sac_exchanges needs uztwc_pre (the UZ tension "
+                                 "content before the external withdrawal)")
+            # the external withdrawal stands in for E1-E3; the reference branch
+            # below from the UZ rebalance on, with et1 = the UZ tension withdrawal
+            # and red + et2 = edmnd - et1 (true on both reference branches)
+            et1_ext = uztwc_pre - uztwc
+            exhausted = (uztwc <= 0.0).to(dtype)
+            do_rb = (1.0 - exhausted) * (uztwc / uztwm < uzfwc / uzfwm).to(dtype)
+            uzrat = (uztwc + uzfwc) / (uztwm + uzfwm)
+            uztwc = do_rb * (uztwm * uzrat) + (1.0 - do_rb) * uztwc
+            uzfwc = do_rb * (uzfwm * uzrat) + (1.0 - do_rb) * uzfwc
+            not_ex = 1.0 - exhausted
+            uztwc = torch.where((uztwc < _THRES) & (not_ex > 0), zero, uztwc)
+            uzfwc = torch.where((uzfwc < _THRES) & (not_ex > 0), zero, uzfwc)
+
+            # ---- resupply lower free -> lower tension (reference block) ----
+            saved = rserv * (lzfpm + lzfsm)
+            ratlzt = lztwc / lztwm
+            ratlz = (lztwc + lzfpc + lzfsc - saved) / (lztwm + lzfpm + lzfsm - saved)
+            resup = (ratlzt < ratlz).to(dtype)
+            dele = resup * (ratlz - ratlzt) * lztwm
+            lztwc = lztwc + dele
+            lzfsc_raw = lzfsc - dele
+            lzfpc = lzfpc + torch.minimum(lzfsc_raw, zero)
+            lzfsc = lzfsc_raw.clamp_min(0.0)
+            lztwc = _snap(lztwc)
+
+            # ---- ET(5): ADIMP area (reference form, no lower clamp) ----
+            et5_raw = et1_ext + (edmnd - et1_ext) * (adimc - et1_ext - uztwc) / (uztwm + lztwm)
+            et5 = torch.minimum(et5_raw, adimc)
+            adimc = adimc - et5
+            et5 = et5 * adimp
     else:
         # ---- ET(1): upper-zone tension (min == reference subtract-then-correct) ----
         et1 = torch.minimum(edmnd * uztwc / uztwm, uztwc)
@@ -341,7 +381,8 @@ def run_sacsma(
     per-day drivers and the canopy state::
 
         {"tavg","tmin","tmax": (N,T); "doy": (T,); "lat_rad","elev": (N,);
-         "cp": {canopy params}; "canopy": NoahCanopyState}
+         "cp": {canopy params}; "canopy": NoahCanopyState;
+         "lite": bool; "sac_exchanges": bool (see sacsma_step)}
 
     The updated canopy ``wc`` is written back into ``noah["canopy"]``.
     """
@@ -353,6 +394,11 @@ def run_sacsma(
         if noah is None:
             raise ValueError("et_mode='noah' requires the noah driver dict")
         lite = bool(noah.get("lite"))
+        sac_exchanges = bool(noah.get("sac_exchanges"))
+        if sac_exchanges and not lite:
+            # the full path moves water UZ<->LZ itself (redist_k), so the UZ tension
+            # change is not the withdrawal that stands in for ET1
+            raise ValueError("sac_exchanges is defined for the Noah-lite path only")
         cstate = noah.get("canopy") or NoahCanopyState.zeros(n, pet.device, pet.dtype)
         wc = cstate.wc
     grad = torch.is_grad_enabled() and (
@@ -393,16 +439,18 @@ def run_sacsma(
                     noah["tavg"][:, t], noah["tmin"][:, t], noah["tmax"][:, t],
                     doy_t, noah["lat_rad"], noah["elev"], params, cp_t,
                     noah["veg_frac"], noah["lai"][:, t])
+            uztwc_pre = state.uztwc
             state = SacState(uztwc=ns["uztwc"], uzfwc=ns["uzfwc"], lztwc=ns["lztwc"],
                              lzfsc=ns["lzfsc"], lzfpc=ns["lzfpc"], adimc=ns["adimc"])
             wc = ns["wc"]
             # pass the Noah ET as eused so the step's existing eused*parea term
             # reports it (pervious-area weighted) — no double count.  te is then
-            # tet_noah*parea + et4 (riparian channel).
+            # tet_noah*parea + et4 (riparian channel) [+ et5 with sac_exchanges].
             state, sf, bs, te = sacsma_step(
                 state, eff_p, pet[:, t], p_t, n_inc=n_inc, perc_mode=perc_mode,
                 fracp_floor=fracp_floor, ninc_mode=ninc_mode,
-                et_mode="external", eused_ext=et_soil)
+                et_mode="external", eused_ext=et_soil,
+                sac_exchanges=sac_exchanges, uztwc_pre=uztwc_pre)
         else:
             state, sf, bs, te = sacsma_step(
                 state, pr_eff[:, t], pet[:, t], p_t, n_inc=n_inc,
