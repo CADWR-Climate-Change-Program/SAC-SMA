@@ -94,6 +94,7 @@ Three tools score a trained `multifamily` run against CalSim3 over **WY1950–84
 ```bash
 python -m sacsma.dpl.calsim_tier1 <run>              # -> <run>/tier1/
 python -m sacsma.dpl.calsim_tier2 <run> [--no-extend] [--trace-python <python with rasterio>]   # -> <run>/tier2/   (re-runs the checkpoint forward)
+#   opt-in extras: [--dedup-cells] [--components [fastslow|parts]] [--temp-delta DT] [--precip-scale S] [--extension-cells CSV]
 python -m sacsma.dpl.calsim_atlas <run>              # -> <run>/atlas/calsim_validation_atlas.html
 python -m sacsma.dpl.calsim_windows                  # the trimmed-window rule against data/calsim/tier1_sets.csv (--write stores it; then re-run calsim_tier1)
 python -m sacsma.dpl.calsim_compare <run_a> <run_b>  # tier 1 of two scored runs side by side -> tier1_comparison.md/.html/.csv under --out (default: the current folder)
@@ -114,3 +115,5 @@ python -m sacsma.dpl.calsim_compare <run_a> <run_b>  # tier 1 of two scored runs
 | `tier1/figures/<set>.png` | Monthly series with the validation window shaded, and the two regimes. |
 | `tier2/tier2_metrics.csv`, `tier2_arcs.csv` | Per-arc scores; per-arc coverage, parent entity, basis and trained-cell share (`trained_cell_frac`). |
 | `tier2/tier2_{kge,pbias}_WY1950-84.png`, `tier2/figures/` | Arc maps and per-set regime figures. |
+| `tier2/tier2_components_monthly.csv` | Only with `--components`: per arc and month the routed fast and slow runoff (`fast_taf + slow_taf = total_taf = sim_taf`); `--components parts` adds `quick_taf` + `interflow_taf` (= fast) and `supplemental_taf` + `primary_taf` (= slow). All net of SAC-SMA's riparian et4 channel-ET deduction. |
+| `tier2/tier2_run_info.json` | Only when an extra or `--dedup-cells` is on: the extras, the dedup setting and the perturbation. `--temp-delta` / `--precip-scale` apply a uniform delta (°C added to tavg/tmin/tmax, precipitation multiplied, spin-up included), flagged `placeholder_perturbation`. |
