@@ -19,14 +19,17 @@ the run trained on) tells those apart; the regionalization test proper is the ar
 Each arc's monthly volume (mean depth over its covered cells x the polygon ``SQ_MI``) is
 scored against its CalSim3 ``INFLOW`` series over WY1950-84, and over the parent entity's
 own training window as the in-sample comparison.  The valley node ``I_SRBB_VAL`` is
-simulated for its volume but has no series to score against.
+simulated for its volume but has no series to score against.  The converse is ``I_RUB002``
+(the lower Rubicon accretion): it has a CalSim3 series but no merged-layer polygon, so tier
+2 does not simulate it, and ``tier2_not_simulated.csv`` (polygons only) does not list it.
 
 Usage::
 
     python -m sacsma.dpl.calsim_tier2 <run_dir | checkpoint.pt> [--out DIR] [--data-dir data]
                                   [--device cpu|cuda] [--no-maps] [--no-extend]
                                   [--tiles-dir tmp/hydrosheds] [--trace-python PY] [--figures-only]
-                                  [--label NAME] [--dedup-cells]
+                                  [--label NAME] [--dedup-cells] [--components [fastslow|parts]]
+                                  [--extension-cells CSV] [--temp-delta DT] [--precip-scale S]
 
 Writes ``tier2_metrics.csv`` (one row per arc x window), ``tier2_monthly.csv``,
 ``tier2_arcs.csv`` (coverage, parent entity and trained-cell share per arc),
@@ -36,6 +39,21 @@ folder holds ``sim_daily_mm.npz`` the re-run's entity aggregates are checked aga
 ``--figures-only`` redraws from the CSVs already in ``--out``: the maps from the tracked
 ``tier2_metrics.csv``, the regime figures only where the untracked ``tier2_monthly.csv`` of a
 previous full run is present.
+
+Opt-in extras, all off by default: ``--components`` also writes
+``tier2_components_monthly.csv`` (per arc and month the routed FAST and SLOW runoff
+components, ``fast_taf + slow_taf = total_taf = sim_taf``); ``--components parts`` adds the
+four routed runoff parts ``quick_taf`` (impervious + ADIMP direct + surface) and
+``interflow_taf`` (``quick + interflow = fast``), ``supplemental_taf`` and ``primary_taf``
+baseflow (``supplemental + primary = slow``).  Components and parts are NET of SAC-SMA's
+riparian et4 channel-ET deduction (the parts: the net inflow apportioned in proportion to
+their pre-deduction values).  ``--extension-cells`` reuses a previous run's
+``tier2_extension_cells.csv`` flow lengths instead of tracing; ``--temp-delta`` /
+``--precip-scale`` re-run under a PLACEHOLDER uniform climate perturbation (degC added to
+tavg/tmin/tmax, precip multiplied, spin-up included) — a stand-in until the WGEN daily
+scenario weather is supplied.  Any extra, and ``--dedup-cells``, also writes
+``tier2_run_info.json`` (the extras, the dedup setting, the perturbation and its PLACEHOLDER
+flag).
 
 Needs the ``dpl`` extra (torch) and a source checkout: the extrapolated arcs run the tracer
 of ``dataprep/build_flowlens.py`` (``--trace-cells``) in a subprocess, which needs
@@ -289,7 +307,27 @@ def _net_for_hrus(ckpt: str | Path, hrus: pd.DataFrame, data_dir: str | Path, de
     return net, x, dom, cfg
 
 
+#: the ``components`` modes of :func:`stream` / :func:`score_run` / ``--components``:
+#: ``fastslow`` = the routed FAST / SLOW pair; ``parts`` = that pair plus the four
+#: routed runoff PARTS (:data:`PART_COLUMNS`).
+COMPONENT_MODES = ("fastslow", "parts")
+#: the parts columns (TAF) of ``tier2_components_monthly.csv`` under ``--components parts``
+PART_COLUMNS = ("quick", "interflow", "supplemental", "primary")
+
+
+def _component_mode(components) -> str | None:
+    """Normalise ``components``: falsy -> None, True -> ``fastslow``, else a mode name."""
+    if not components:
+        return None
+    if components is True:
+        return "fastslow"
+    if components not in COMPONENT_MODES:
+        raise ValueError(f"components {components!r} (one of {COMPONENT_MODES})")
+    return components
+
+
 def stream(net, x, dom, cfg, W_arc: np.ndarray, *, spinup: str = "cycle",
+           components: bool | str = False, temp_delta: float = 0.0, precip_scale: float = 1.0,
            dedup_cells: bool = False):
     """Stream the trained field over the envelope (the evaluator's protocol, including its
     ``spinup``: :func:`sacsma.dpl.spinup.spin_state`) and return (arc depth (A, T), entity
@@ -297,18 +335,35 @@ def stream(net, x, dom, cfg, W_arc: np.ndarray, *, spinup: str = "cycle",
     (extrapolated parameters at their bounds) is zeroed and flagged in ``bad_rows`` so it
     cannot blank every aggregate that carries a zero weight on it.  ``dedup_cells``: the
     per-cell physics runs once per distinct cell (:func:`sacsma.dpl.data.with_cell_dedup`);
-    ``W_arc``, the flows and ``bad_rows`` stay per HRU row."""
+    ``W_arc``, the flows (components and parts included) and ``bad_rows`` stay per HRU row.
+
+    ``components`` (True / ``"fastslow"``) appends the arc depths of the routed fast and
+    slow runoff components ((A, T) each, ``fast + slow`` = the arc depth; NaN cell-days
+    zeroed in both, as in the total); ``"parts"`` appends after them the arc depths of the
+    four routed runoff parts, quick (impervious + ADIMP direct + surface), interflow,
+    supplemental and primary baseflow (``quick + interflow = fast``, ``supplemental +
+    primary = slow`` up to rounding), and streams the spin-up with the parts on so their
+    routing history is exact.  Components and parts are all NET of SAC-SMA's riparian et4
+    channel-ET deduction (and dry-channel clamp), which act before routing.
+    ``temp_delta`` / ``precip_scale`` are a PLACEHOLDER uniform climate perturbation (degC
+    added to tavg/tmin/tmax, precip multiplied), applied to the spin-up and the envelope
+    alike, until the WGEN daily scenario weather is supplied."""
     from .data import with_cell_dedup
     from .forward import routing_uh
     from .multi_timescale import ENVELOPE_END, ENVELOPE_START
     from .spinup import spin_state, stream_rows
 
+    mode = _component_mode(components)
+    parts = mode == "parts"
     t0 = int(dom.dates.searchsorted(pd.Timestamp(ENVELOPE_START)))
     t1 = int(dom.dates.searchsorted(pd.Timestamp(ENVELOPE_END))) + 1
     if dedup_cells:
         dom = with_cell_dedup(dom, x)
     Wa = torch.as_tensor(W_arc).to(dom.device, dom.dtype)
     bad = torch.zeros(dom.n_hru, dtype=torch.bool, device=dom.device)
+    pert = {}
+    if temp_delta or precip_scale != 1.0:
+        pert = dict(temp_delta=float(temp_delta), precip_scale=float(precip_scale))
 
     def agg(flow: torch.Tensor) -> torch.Tensor:
         nan_rows = torch.isnan(flow).any(dim=1)
@@ -317,17 +372,35 @@ def stream(net, x, dom, cfg, W_arc: np.ndarray, *, spinup: str = "cycle",
             flow = torch.nan_to_num(flow, nan=0.0)
         return torch.cat([Wa @ flow, dom.W @ flow])
 
+    def agg_parts(flow: torch.Tensor, *comps: torch.Tensor) -> torch.Tensor:
+        # the total exactly as agg() forms it; the components zeroed on the total's NaN days
+        nan = torch.isnan(flow)
+        if nan.any():
+            comps = tuple(c.masked_fill(nan, 0.0) for c in comps)
+        return torch.cat([agg(flow)] + [Wa @ c for c in comps])
+
     net.eval()
     with torch.no_grad():
         out = net(dom.phys_x(x))
         canopy = out.pop("_canopy", None)
         uh = routing_uh(out, dom.flowlen, row_cell=dom.row_cell)
+        skw = dict(pert, parts=True) if parts else pert
         state, how = spin_state(dom, cfg, out, uh, canopy, t0, mode=spinup,
-                                agg=lambda f: dom.W @ torch.nan_to_num(f, nan=0.0))
+                                agg=lambda f: dom.W @ torch.nan_to_num(f, nan=0.0), **skw)
         print(f"tier2: {how}", flush=True)
-        rows, _ = stream_rows(dom, cfg, out, uh, canopy, t0, t1, state, lambda f: agg(f).cpu())
+        if mode:
+            rows, _ = stream_rows(dom, cfg, out, uh, canopy, t0, t1, state,
+                                  lambda f, *c: agg_parts(f, *c).cpu(), components=True, **skw)
+        else:
+            rows, _ = stream_rows(dom, cfg, out, uh, canopy, t0, t1, state, lambda f: agg(f).cpu(),
+                                  **pert)
     rows = rows.double().numpy()
-    return rows[:len(W_arc)], rows[len(W_arc):], t0, t1, bad.cpu().numpy()
+    na, nb = len(W_arc), dom.W.shape[0]
+    res = (rows[:na], rows[na:na + nb], t0, t1, bad.cpu().numpy())
+    if mode:
+        n_comp = 2 + (len(PART_COLUMNS) if parts else 0)
+        res = res + tuple(rows[na + nb + k * na:na + nb + (k + 1) * na] for k in range(n_comp))
+    return res
 
 
 def _drop_bad_cells(sim: np.ndarray, W: np.ndarray, bad: np.ndarray, hrus: pd.DataFrame,
@@ -344,6 +417,42 @@ def _drop_bad_cells(sim: np.ndarray, W: np.ndarray, bad: np.ndarray, hrus: pd.Da
         sim[keep] = sim[keep] / (1.0 - w_bad[keep])[:, None]
         sim[~keep] = np.nan
     return sim, n_bad, w_bad
+
+
+def _renorm_like_bad(sim: np.ndarray, W: np.ndarray, bad: np.ndarray) -> np.ndarray:
+    """The renormalisation of :func:`_drop_bad_cells`, silently, for the component
+    aggregates (the same divisor per aggregate as their total)."""
+    if bad.any():
+        w_bad = W[:, bad].sum(axis=1)
+        keep = w_bad < 1.0
+        sim[keep] = sim[keep] / (1.0 - w_bad[keep])[:, None]
+        sim[~keep] = np.nan
+    return sim
+
+
+def _reuse_flowlens(cells: pd.DataFrame, path: str | Path) -> pd.DataFrame:
+    """Add ``flowlen`` / ``flowlen_method`` to the extension HRU rows from a previous run's
+    ``tier2_extension_cells.csv`` instead of tracing again; the two must hold the same
+    (arc, cell) rows at the same positions (the extension footprint is a pure function of
+    the polygons, the region grid and the trained entities), each (basin, key) once, and the
+    merge must keep the row count (a duplicated key would add HRU rows and change the
+    aggregation weights)."""
+    old = pd.read_csv(path, float_precision="round_trip")
+    got = cells.merge(old[["basin", "key", "flowlen", "flowlen_method"]], on=["basin", "key"], how="left")
+    same = (len(old) == len(cells)
+            and len(got) == len(cells)
+            and not old.duplicated(["basin", "key"]).any()
+            and not cells.duplicated(["basin", "key"]).any()
+            and (old["basin"].to_numpy() == cells["basin"].to_numpy()).all()
+            and (old["key"].to_numpy() == cells["key"].to_numpy()).all()
+            and np.allclose(old["area_weight"].to_numpy(), cells["area_weight"].to_numpy(), rtol=1e-9, atol=0))
+    if not same or got["flowlen"].isna().any():
+        raise ValueError(f"{path}: its extension rows do not match this run's "
+                         f"({len(old)} vs {len(cells)} rows, {len(got)} after the merge; duplicated "
+                         f"(basin, key): {int(old.duplicated(['basin', 'key']).sum())} there, "
+                         f"{int(cells.duplicated(['basin', 'key']).sum())} here) — trace again instead")
+    print(f"tier2: reused traced flow lengths for {len(got)} extension cells from {path}", flush=True)
+    return got
 
 
 def _monthly_taf(depth: np.ndarray, dates: pd.DatetimeIndex, area_mi2: np.ndarray) -> pd.DataFrame:
@@ -378,11 +487,40 @@ def _score(months: pd.PeriodIndex, sim: np.ndarray, ref: np.ndarray) -> dict:
 
 def score_run(ckpt: str | Path, data_dir: str | Path = "data", *, device=None, run_dir=None,
               extend: bool = True, tiles_dir: str | Path = "tmp/hydrosheds", out: Path | None = None,
-              trace_python: str | None = None, spinup: str = "cycle", dedup_cells: bool = False):
+              trace_python: str | None = None, spinup: str = "cycle",
+              components: bool | str = False, temp_delta: float = 0.0, precip_scale: float = 1.0,
+              extension_cells: str | Path | None = None, dedup_cells: bool = False):
     """Returns (metrics, monthly, arcs, not_sim, entity_check).  ``extend`` simulates the
     arcs outside every trained footprint on their own region cells (``basis = extrapolated``);
-    ``spinup`` and ``dedup_cells`` are the evaluator's (:func:`stream`)."""
+    ``spinup`` and ``dedup_cells`` are the evaluator's (:func:`stream`).
+
+    Opt-in extras (all off by default, leaving the outputs unchanged): ``components`` (True
+    / ``"fastslow"``) also returns, as a sixth element, the per-arc monthly routed FAST and
+    SLOW components (``[arc, month, fast_taf, slow_taf, total_taf]``, ``total_taf`` =
+    ``sim_taf``); ``"parts"`` adds the four routed runoff parts before them
+    (``quick_taf, interflow_taf, supplemental_taf, primary_taf``; ``quick + interflow =
+    fast``, ``supplemental + primary = slow``).  All are NET of the riparian et4 channel-ET
+    deduction (:func:`stream`).  ``temp_delta`` / ``precip_scale`` re-run under a
+    PLACEHOLDER uniform climate perturbation (:func:`stream`), which skips the archived
+    entity check; ``extension_cells`` reuses a previous run's ``tier2_extension_cells.csv``
+    flow lengths instead of tracing.  When any extra or ``dedup_cells`` is on and ``out`` is
+    given, ``tier2_run_info.json`` records them (the perturbation with its PLACEHOLDER flag),
+    so a perturbed folder cannot be mistaken for a baseline one."""
     from .evaluate import load_net_from_checkpoint
+    mode = _component_mode(components)
+    perturbed = bool(temp_delta) or precip_scale != 1.0
+    skw = {}
+    if mode:
+        skw["components"] = mode
+    if perturbed:
+        skw.update(temp_delta=float(temp_delta), precip_scale=float(precip_scale))
+        print(f"tier2: PLACEHOLDER climate perturbation — tavg/tmin/tmax {temp_delta:+g} degC, "
+              f"precip x{precip_scale:g}, spin-up included (uniform stand-in until the WGEN "
+              "daily scenario weather is supplied)", flush=True)
+    if out is not None and (mode or perturbed or extension_cells is not None or dedup_cells):
+        _write_run_info(out, ckpt=ckpt, data_dir=data_dir, spinup=spinup, extend=extend,
+                        dedup_cells=dedup_cells, components=mode, temp_delta=float(temp_delta),
+                        precip_scale=float(precip_scale), extension_cells=extension_cells)
     net, x, dom, cfg, ck = load_net_from_checkpoint(ckpt, data_dir, device=device)
     catch = rim_polygons(data_dir)
     mapping = cell_arc_overlap(dom.hrus, catch)
@@ -396,24 +534,32 @@ def score_run(ckpt: str | Path, data_dir: str | Path = "data", *, device=None, r
     print(f"tier2: {len(catch)} rim polygons; {len(arcs)} arcs inside the {len(dom.basins)} trained "
           f"entities; {len(dom.hrus)} HRU rows on {dom.device.type}", flush=True)
     print("tier2: streaming the envelope ...", flush=True)
-    sim_arc, sim_ent, t0, t1, bad = stream(net, x, dom, cfg, W_arc, spinup=spinup,
-                                           dedup_cells=dedup_cells)
+    sres = stream(net, x, dom, cfg, W_arc, spinup=spinup, dedup_cells=dedup_cells, **skw)
+    sim_arc, sim_ent, t0, t1, bad = sres[:5]
     sim_arc, arcs["n_nan_cells"], arcs["nan_weight_frac"] = _drop_bad_cells(sim_arc, W_arc, bad, dom.hrus, "trained-footprint")
+    if mode:   # [fast, slow] (+ [quick, interflow, supplemental, primary]) arc depths
+        comp_arc = [_renorm_like_bad(c, W_arc, bad) for c in sres[5:]]
     dates = dom.dates[t0:t1]
     if extend:
         ext = uncovered_arc_cells(catch, parent, data_dir, region_map=region_map)
         if len(ext):
-            ext = _flowlens_for(ext, tiles_dir, trace_python)
+            if extension_cells is not None:
+                ext = _reuse_flowlens(ext, extension_cells)
+            else:
+                ext = _flowlens_for(ext, tiles_dir, trace_python)
             if out is not None:
                 ext.to_csv(out / "tier2_extension_cells.csv", index=False)
             net2, x2, dom2, cfg2 = _net_for_hrus(ckpt, ext, data_dir, device=device)
             print(f"tier2: extrapolating {len(dom2.basins)} uncovered arcs on {len(dom2.hrus)} region "
                   f"cells ...", flush=True)
             W2 = dom2.W.cpu().numpy()
-            sim_ext, _, t0e, t1e, bad2 = stream(net2, x2, dom2, cfg2, W2, spinup=spinup,
-                                                dedup_cells=dedup_cells)
+            sres2 = stream(net2, x2, dom2, cfg2, W2, spinup=spinup, dedup_cells=dedup_cells, **skw)
+            sim_ext, _, t0e, t1e, bad2 = sres2[:5]
             assert (t0e, t1e) == (t0, t1)
             sim_ext, n_bad2, w_bad2 = _drop_bad_cells(sim_ext, W2, bad2, dom2.hrus, "extrapolated")
+            if mode:
+                comp_arc = [np.concatenate([c, _renorm_like_bad(c2, W2, bad2)], axis=0)
+                            for c, c2 in zip(comp_arc, sres2[5:], strict=True)]
             sq_mi = catch.groupby("arc")["sq_mi"].sum()
             cov = ext.groupby("basin")["area_weight"].sum()
             rows = [dict(arc=a, node=a[2:], entity="", sq_mi=float(sq_mi[a]), covered_mi2=float(cov[a]),
@@ -429,7 +575,10 @@ def score_run(ckpt: str | Path, data_dir: str | Path = "data", *, device=None, r
                             sim_mm=sim_arc.astype(np.float32))
 
     entity_check = None
-    if run_dir is not None and (Path(run_dir) / "sim_daily_mm.npz").exists():
+    if perturbed and run_dir is not None:
+        print("tier2: entity check against the archived sim_daily_mm.npz skipped (perturbed "
+              "forcing)", flush=True)
+    elif run_dir is not None and (Path(run_dir) / "sim_daily_mm.npz").exists():
         z = np.load(Path(run_dir) / "sim_daily_mm.npz")
         ref = pd.DataFrame(np.asarray(z["sim_mm"]).T.astype(float), columns=list(z["entity_id"]))
         mine = pd.DataFrame(sim_ent.T, columns=list(dom.basins))
@@ -479,7 +628,48 @@ def score_run(ckpt: str | Path, data_dir: str | Path = "data", *, device=None, r
         "system": [xw["system"].get(a, "") for a in missing],
         "sq_mi": [float(catch.loc[catch["arc"] == a, "sq_mi"].sum()) for a in missing],
         "ref_taf_yr": [12.0 * inflow[a].reindex(idx).mean() for a in missing]})
+    if mode:
+        area = arcs["sq_mi"].to_numpy()
+        names = ["fast", "slow"] + (list(PART_COLUMNS) if mode == "parts" else [])
+        tafs = dict(zip(names, (_monthly_taf(c, dates, area) for c in comp_arc), strict=True))
+        order = (list(PART_COLUMNS) if mode == "parts" else []) + ["fast", "slow"]
+        comp = pd.concat([pd.DataFrame({"arc": a, "month": taf.index.astype(str),
+                                        **{f"{n}_taf": tafs[n].iloc[:, j].to_numpy() for n in order},
+                                        "total_taf": taf[a].to_numpy()})
+                          for j, a in enumerate(arcs["arc"])], ignore_index=True)
+        return metrics, pd.concat(monthly, ignore_index=True), arcs, not_sim, entity_check, comp
     return metrics, pd.concat(monthly, ignore_index=True), arcs, not_sim, entity_check
+
+
+def _write_run_info(out: Path, **info) -> Path:
+    """``tier2_run_info.json``: the opt-in extras a tier-2 folder was made with.  A
+    perturbed run is flagged ``placeholder_perturbation`` (the uniform dT / precip-scale
+    stand-in for the WGEN scenario weather): its CSVs are still scored against HISTORICAL
+    CalSim3, so its skill columns are not a baseline."""
+    import json
+    from datetime import datetime, timezone
+    perturbed = bool(info["temp_delta"]) or info["precip_scale"] != 1.0
+    rec = dict(
+        tool="sacsma.dpl.calsim_tier2",
+        written_utc=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        checkpoint=str(info["ckpt"]), data_dir=str(info["data_dir"]), spinup=info["spinup"],
+        extend=bool(info["extend"]), dedup_cells=bool(info["dedup_cells"]),
+        components=info["components"],
+        component_columns=(None if not info["components"] else
+                           (list(PART_COLUMNS) if info["components"] == "parts" else [])
+                           + ["fast", "slow", "total"]),
+        components_note=("routed runoff components, all NET of SAC-SMA's riparian et4 "
+                         "channel-ET deduction and dry-channel clamp" if info["components"] else None),
+        extension_cells=None if info["extension_cells"] is None else str(info["extension_cells"]),
+        temp_delta_degC=info["temp_delta"], precip_scale=info["precip_scale"],
+        perturbed=perturbed, placeholder_perturbation=perturbed,
+        perturbation_note=("PLACEHOLDER uniform climate perturbation (degC added to "
+                           "tavg/tmin/tmax, precip multiplied, spin-up included) until the WGEN "
+                           "daily scenario weather is supplied; tier2_metrics/monthly still score "
+                           "against historical CalSim3" if perturbed else None))
+    path = Path(out) / "tier2_run_info.json"
+    path.write_text(json.dumps(rec, indent=1) + "\n")
+    return path
 
 
 def _stat_line(m: pd.DataFrame) -> str:
@@ -682,6 +872,24 @@ def main(argv=None) -> None:
     p.add_argument("--figures-only", action="store_true",
                    help="only (re)draw the maps and the per-set regime figures from the CSVs "
                         "already in --out (no forward pass)")
+    p.add_argument("--components", nargs="?", const="fastslow", default=None,
+                   choices=COMPONENT_MODES,
+                   help="also write tier2_components_monthly.csv: per arc and month the routed "
+                        "FAST (direct + surface + interflow, hillslope x channel UH) and SLOW "
+                        "(baseflow, channel UH) components, fast_taf + slow_taf = total_taf "
+                        "(= sim_taf); '--components parts' adds quick_taf (impervious + ADIMP "
+                        "direct + surface), interflow_taf (quick + interflow = fast), "
+                        "supplemental_taf and primary_taf (supplemental + primary = slow).  "
+                        "All are NET of the riparian et4 channel-ET deduction")
+    p.add_argument("--temp-delta", type=float, default=0.0,
+                   help="PLACEHOLDER climate perturbation: degC added uniformly to tavg/tmin/tmax "
+                        "(spin-up included) until the WGEN daily scenario weather is supplied")
+    p.add_argument("--precip-scale", type=float, default=1.0,
+                   help="PLACEHOLDER climate perturbation: multiplies precip uniformly "
+                        "(spin-up included) until the WGEN daily scenario weather is supplied")
+    p.add_argument("--extension-cells", default=None,
+                   help="reuse the flow lengths of a previous run's tier2_extension_cells.csv "
+                        "(same checkpoint's entity set) instead of tracing")
     p.add_argument("--trace-only", nargs=2, metavar=("CELLS_CSV", "OUT_CSV"), default=None,
                    help=argparse.SUPPRESS)   # the flow-length subprocess entry point
     a = p.parse_args(argv)
@@ -697,16 +905,27 @@ def main(argv=None) -> None:
     out.mkdir(parents=True, exist_ok=True)
     label = a.label or run_dir.name
     if not a.figures_only:
-        metrics, monthly, arcs, not_sim, _ = score_run(ckpt, a.data_dir, device=a.device, run_dir=run_dir,
-                                                       extend=not a.no_extend, tiles_dir=a.tiles_dir, out=out,
-                                                       trace_python=a.trace_python,
-                                                       spinup=a.spinup, dedup_cells=a.dedup_cells)
+        extra = {}
+        if a.components:
+            extra["components"] = a.components
+        if a.temp_delta or a.precip_scale != 1.0:
+            extra.update(temp_delta=a.temp_delta, precip_scale=a.precip_scale)
+        if a.extension_cells:
+            extra["extension_cells"] = a.extension_cells
+        res = score_run(ckpt, a.data_dir, device=a.device, run_dir=run_dir,
+                        extend=not a.no_extend, tiles_dir=a.tiles_dir, out=out,
+                        trace_python=a.trace_python,
+                        spinup=a.spinup, dedup_cells=a.dedup_cells, **extra)
+        metrics, monthly, arcs, not_sim, _ = res[:5]
         metrics.to_csv(out / "tier2_metrics.csv", index=False)
         monthly.to_csv(out / "tier2_monthly.csv", index=False)
         arcs.to_csv(out / "tier2_arcs.csv", index=False)
         not_sim.to_csv(out / "tier2_not_simulated.csv", index=False)
+        if a.components:
+            res[5].to_csv(out / "tier2_components_monthly.csv", index=False)
         print(summarize(metrics, not_sim))
-        print(f"wrote {out / 'tier2_metrics.csv'}, tier2_monthly.csv, tier2_arcs.csv, tier2_not_simulated.csv")
+        print(f"wrote {out / 'tier2_metrics.csv'}, tier2_monthly.csv, tier2_arcs.csv, tier2_not_simulated.csv"
+              + (", tier2_components_monthly.csv" if a.components else ""))
     else:
         metrics = pd.read_csv(out / "tier2_metrics.csv")
     if not a.no_maps:

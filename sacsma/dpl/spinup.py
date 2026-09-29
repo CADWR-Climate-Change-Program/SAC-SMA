@@ -132,12 +132,25 @@ def stream_rows(
     canopy: dict[str, torch.Tensor] | None,
     t0: int, t1: int, state: PipelineState,
     agg: Callable[[torch.Tensor], torch.Tensor] | None, *, window: int = 512,
+    components: bool = False, temp_delta: float = 0.0, precip_scale: float = 1.0,
+    parts: bool = False,
 ) -> tuple[torch.Tensor | None, PipelineState]:
     """Eager no-grad ``run_window`` over ``[t0, t1)`` in ``window``-day pieces;
     ``agg`` maps each piece's cell flow ``(N, T)`` to output rows ``(R, T)``
     (``None``: stream the state only).  Returns ``(rows (R, t1 - t0) or None, state)``.
-    Under cell dedup (``dom.dedup``) ``params``/``canopy`` and the state's physics
-    parts are per distinct cell; the flow handed to ``agg`` is per HRU row."""
+    Under cell dedup (``dom.dedup``) ``params``/``canopy`` and the state's snow / SAC /
+    canopy stores are per distinct cell; the flow handed to ``agg`` (with its
+    components and parts) is per HRU row.
+
+    ``components``: ``agg`` is called as ``agg(flow, fast, slow)`` with the routed
+    fast/slow runoff components of ``run_window`` (``flow = fast + slow``; both net
+    of the et4 channel-ET deduction).  ``parts``: the routed runoff parts
+    ``(quick, interflow, supplemental, primary)`` of ``run_window(return_parts=True)``
+    follow as further ``agg`` arguments (after ``fast, slow`` when ``components``),
+    and the state carries their routing history (``state.hist_parts``).
+    ``temp_delta`` (degC, added to tavg/tmin/tmax) and ``precip_scale`` (multiplies
+    precip) are a uniform climate perturbation of the forcing, the scalar path of
+    ``evaluate._noah_stream``; the defaults leave the forcing untouched."""
     out: list[torch.Tensor] = []
     with torch.no_grad():
         t = t0
@@ -145,7 +158,13 @@ def stream_rows(
             te = min(t + window, t1)
             pr, ta, doy, leap = dom.chunk(t, te)
             tn, tx = dom.chunk_tmm(t, te)
-            flow, state = run_window(
+            if precip_scale != 1.0:             # multiplicative precip perturbation
+                pr = pr * precip_scale
+            if temp_delta:                      # uniform warming perturbation
+                ta = ta + temp_delta
+                if tn is not None:
+                    tn, tx = tn + temp_delta, tx + temp_delta
+            res = run_window(
                 pr, ta, doy, leap, dom.phys_lat_rad, dom.phys_elev, params, uh, state,
                 n_inc=cfg.n_inc, perc_mode=cfg.perc_mode, fracp_floor=cfg.fracp_floor,
                 ninc_mode="fixed", et_mode=cfg.et_mode, canopy_params=canopy,
@@ -154,9 +173,11 @@ def stream_rows(
                 pt_snow_albedo=cfg.pt_snow_albedo,
                 pt_dewpoint_depression=cfg.pt_dewpoint_depression,
                 canopy_lite=cfg.canopy_lite, sac_exchanges=cfg.noah_sac_exchanges, state_idx=dom.chunk_state(t, te),
-                row_cell=dom.row_cell)
+                row_cell=dom.row_cell, return_components=components, return_parts=parts)
+            flow, state = res[0], res[1]
             if agg is not None:
-                out.append(agg(flow))
+                extra = [c for grp in res[2:] for c in grp]   # [fast, slow] + [parts]
+                out.append(agg(flow, *extra) if extra else agg(flow))
             t = te
     return (torch.cat(out, dim=1) if agg is not None else None), state
 
@@ -173,17 +194,32 @@ def spin_state(
     canopy: dict[str, torch.Tensor] | None,
     t0: int, *, mode: str = "cycle",
     agg: Callable[[torch.Tensor], torch.Tensor] | None = None,
+    temp_delta: float = 0.0, precip_scale: float = 1.0,
+    parts: bool = False,
 ) -> tuple[PipelineState, str]:
     """The state at record day ``t0`` under ``mode`` (eager): ``cycle`` from the cold
     start over the window's first ``cfg.spinup_years`` years, ``cfg.spinup_passes``
     times, with ``agg`` (cell flow -> rows) giving the rows of the convergence
     diagnostic; ``window`` from the frozen cold start (``cfg.init_mode``) over the
-    legacy preceding window.  Returns the state and a one-line description."""
+    legacy preceding window.  Returns the state and a one-line description.
+    ``temp_delta`` / ``precip_scale`` perturb the spin-up forcing as in
+    :func:`stream_rows` (defaults: none), so a perturbed pass spins up under its
+    own climate.  ``parts`` streams the spin-up with the runoff parts on, so the
+    returned state carries their routing history (``state.hist_parts``) for a
+    following ``stream_rows(parts=True)``; the SAC/snow/canopy states and the
+    diagnostic are unchanged."""
+    pert = {}
+    if temp_delta or precip_scale != 1.0:
+        pert = dict(temp_delta=temp_delta, precip_scale=precip_scale)
+    if parts:
+        pert["parts"] = True
+        if agg is not None:        # the diagnostic rows see the flow only
+            agg = (lambda f0: (lambda f, *_: f0(f)))(agg)
     if mode == "window":
         s = window_start(dom.dates, t0, cfg.spinup_start)
         st = initial_state(dom.n_phys, dom.device, dom.dtype, init_mode=cfg.init_mode,
                            params=params, et_mode=cfg.et_mode, n_rows=dom.n_hru)
-        _, st = stream_rows(dom, cfg, params, uh, canopy, s, t0, st, None)
+        _, st = stream_rows(dom, cfg, params, uh, canopy, s, t0, st, None, **pert)
         return st, f"window spinup from {dom.dates[s].date()}"
     if mode != "cycle":
         raise ValueError(f"spinup mode {mode!r} (one of {SPINUP_MODES})")
@@ -191,7 +227,7 @@ def spin_state(
     yidx = year_index(dom.dates, t0, te)
 
     def rows(a: int, b: int, s: PipelineState):
-        r, s = stream_rows(dom, cfg, params, uh, canopy, a, b, s, agg)
+        r, s = stream_rows(dom, cfg, params, uh, canopy, a, b, s, agg, **pert)
         return (annual_totals(r, yidx) if r is not None else None), s
 
     st, _, change = cycle_spinup(rows, t0, te, cold_state(dom, cfg, params), cfg.spinup_passes)

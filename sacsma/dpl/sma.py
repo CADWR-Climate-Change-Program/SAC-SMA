@@ -39,6 +39,57 @@ import torch
 _THRES = 1e-5    # reference thres_zero
 _BF_EPS = 1e-4   # reference baseflow depletion snap (0.0001 — a DIFFERENT constant)
 
+#: the runoff parts ``sacsma_step(return_parts=True)`` returns, in order: the four
+#: surface-side parts (impervious, ADIMP direct, surface, interflow) that sum to
+#: ``surf`` and the two baseflow parts (supplemental, primary) that sum to ``base``.
+PART_NAMES = ("roimp", "sdro", "ssur", "sif", "supplemental", "primary")
+
+
+def _split2(total: torch.Tensor, a: torch.Tensor, b: torch.Tensor):
+    """Split ``total`` (>= 0) into ``(x, y)`` in proportion to ``a, b >= 0`` so that
+    ``x + y == total`` EXACTLY in floating point and ``x, y >= 0``: the larger share is
+    ``total * w`` with ``w = max(a, b) / (a + b)`` in [0.5, 1], the smaller is the
+    remainder ``total - total * w``, which Sterbenz's lemma makes exact.  A zero
+    denominator (``a = b = 0``) gives equal halves.  NaN propagates."""
+    den = a + b
+    pos = den > 0
+    a_big = a >= b
+    big = torch.where(a_big, a, b)
+    w = torch.where(pos, big / torch.where(pos, den, torch.ones_like(den)),
+                    torch.full_like(den, 0.5))
+    hi = total * w
+    lo = total - hi
+    return torch.where(a_big, hi, lo), torch.where(a_big, lo, hi)
+
+
+def _apportion_parts(surf: torch.Tensor, base: torch.Tensor,
+                     roimp: torch.Tensor, sdro: torch.Tensor, ssur: torch.Tensor,
+                     sif: torch.Tensor, bf_sup: torch.Tensor, bf_pri: torch.Tensor):
+    """The FINAL (post-et4, post-dry-clamp) ``surf`` / ``base`` apportioned over their
+    parts in proportion to the parts' PRE-deduction values -> the six parts of
+    :data:`PART_NAMES`.
+
+    The weights are the pre-deduction values floored at 0 (the reference allows a
+    negative ADIMP surface term, ``ratio > 1``, and a storage overdraw can make a
+    baseflow part negative; such a part gets no share and the others carry the net
+    amount); when every weight of a side is 0 the side splits equally.  The split is
+    a tree of exact binary splits (:func:`_split2`) — ``surf -> (quick, sif)``,
+    ``quick -> (roimp + sdro, ssur)``, ``roimp + sdro -> (roimp, sdro)``; ``base ->
+    (supplemental, primary)`` — so, summed left to right, ``roimp + sdro + ssur + sif
+    == surf`` and ``supplemental + primary == base`` bitwise, and no part is negative."""
+    r, d, s, i = (v.clamp_min(0.0) for v in (roimp, sdro, ssur, sif))
+    none = (((r + d) + s) + i) <= 0.0
+    one = torch.ones_like(r)
+    r, d, s, i = (torch.where(none, one, v) for v in (r, d, s, i))
+    quick, sif_p = _split2(surf, (r + d) + s, i)
+    imp, ssur_p = _split2(quick, r + d, s)
+    roimp_p, sdro_p = _split2(imp, r, d)
+    bs, bp = bf_sup.clamp_min(0.0), bf_pri.clamp_min(0.0)
+    none_b = (bs + bp) <= 0.0
+    bs, bp = torch.where(none_b, one, bs), torch.where(none_b, one, bp)
+    sup_p, pri_p = _split2(base, bs, bp)
+    return roimp_p, sdro_p, ssur_p, sif_p, sup_p, pri_p
+
 
 @dataclass
 class SacState:
@@ -88,8 +139,20 @@ def sacsma_step(
     eused_ext: torch.Tensor | None = None,
     sac_exchanges: bool = False,
     uztwc_pre: torch.Tensor | None = None,
+    return_parts: bool = False,
 ) -> tuple[SacState, torch.Tensor, torch.Tensor, torch.Tensor]:
     """One daily step; returns (new_state, surf, base, tet) in mm/day.
+
+    ``return_parts`` (off by default; the four default outputs are unchanged either
+    way) appends the runoff PARTS, a tuple in :data:`PART_NAMES` order: ``roimp``
+    (impervious), ``sdro`` (ADIMP direct), ``ssur`` (surface), ``sif`` (interflow,
+    parea-weighted) of ``surf``, and ``supplemental`` / ``primary`` baseflow of
+    ``base`` (separate accumulators, each x ``parea / (1 + side)``).  The riparian
+    et4 channel-ET deduction and the dry-channel clamp act on the aggregate
+    ``surf`` / ``base``; the parts are the FINAL (net) ``surf`` / ``base``
+    apportioned in proportion to the parts' pre-deduction values
+    (:func:`_apportion_parts`), so ``roimp + sdro + ssur + sif == surf`` and
+    ``supplemental + primary == base`` bitwise.
 
     ``et_mode="sac"`` (default) runs the exact-parity E1-E5 cascade.
     ``et_mode="external"`` skips it: the caller (Noah ET) has already applied
@@ -217,6 +280,9 @@ def sacsma_step(
     ssur = torch.zeros_like(uztwc)
     sif = torch.zeros_like(uztwc)
     sdro = torch.zeros_like(uztwc)
+    if return_parts:   # primary / supplemental baseflow kept apart (sbf is unchanged)
+        sbf_p = torch.zeros_like(uztwc)
+        sbf_s = torch.zeros_like(uztwc)
 
     if ninc_mode == "dynamic":
         ninc = torch.floor(1.0 + 0.2 * (uzfwc + twx))
@@ -326,6 +392,9 @@ def sacsma_step(
             adimc = live * adimc_n + hold * adimc
         gate = 1.0 if live is None else live
         sbf = sbf + gate * (bf_p + bf_s)
+        if return_parts:
+            sbf_p = sbf_p + gate * bf_p
+            sbf_s = sbf_s + gate * bf_s
         sif = sif + gate * act * dele_if
         ssur = ssur + gate * act * (sur * parea + adsur * adimp)
         sdro = sdro + gate * (addro * adimp)
@@ -356,6 +425,13 @@ def sacsma_step(
 
     new_state = SacState(uztwc=uztwc, uzfwc=uzfwc, lztwc=lztwc,
                          lzfsc=lzfsc, lzfpc=lzfpc, adimc=adimc)
+    if return_parts:
+        # roimp/sdro/ssur/sif above are the pre-deduction surface parts; the
+        # baseflow parts get the same parea / (1 + side) factor as bfcc
+        parts = _apportion_parts(surf, base, roimp, sdro, ssur, sif,
+                                 sbf_s * parea / (1.0 + side),
+                                 sbf_p * parea / (1.0 + side))
+        return new_state, surf, base, tet, parts
     return new_state, surf, base, tet
 
 
@@ -372,8 +448,15 @@ def run_sacsma(
     et_mode: str = "sac",
     noah: dict | None = None,
     recession: dict[str, torch.Tensor] | None = None,
+    return_parts: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, SacState]:
     """Run SAC-SMA over a window; returns (surf, base, tet, final_state).
+
+    ``return_parts`` (off by default; the four default outputs are unchanged either
+    way) appends the per-day runoff parts of :func:`sacsma_step`, a tuple of six
+    (N, T) tensors in :data:`PART_NAMES` order — net of the et4 channel-ET
+    deduction, ``roimp + sdro + ssur + sif == surf`` and ``supplemental + primary
+    == base`` bitwise.
 
     ``et_mode="noah"`` runs the Noah canopy-resistance ET each day (interception
     reduces the precip that enters the SAC balance; the three ET components are
@@ -414,6 +497,8 @@ def run_sacsma(
         surf = torch.empty_like(pet)
         base = torch.empty_like(pet)
         tet = torch.empty_like(pet)
+    if return_parts:
+        parts_s: list[tuple[torch.Tensor, ...]] = []
     for t in range(t_len):
         # per-day params: override the seasonal recession rates when supplied
         # (the day-of-year harmonic experiment); otherwise the shared dict.
@@ -446,15 +531,20 @@ def run_sacsma(
             # pass the Noah ET as eused so the step's existing eused*parea term
             # reports it (pervious-area weighted) — no double count.  te is then
             # tet_noah*parea + et4 (riparian channel) [+ et5 with sac_exchanges].
-            state, sf, bs, te = sacsma_step(
+            step = sacsma_step(
                 state, eff_p, pet[:, t], p_t, n_inc=n_inc, perc_mode=perc_mode,
                 fracp_floor=fracp_floor, ninc_mode=ninc_mode,
                 et_mode="external", eused_ext=et_soil,
-                sac_exchanges=sac_exchanges, uztwc_pre=uztwc_pre)
+                sac_exchanges=sac_exchanges, uztwc_pre=uztwc_pre,
+                return_parts=return_parts)
         else:
-            state, sf, bs, te = sacsma_step(
+            step = sacsma_step(
                 state, pr_eff[:, t], pet[:, t], p_t, n_inc=n_inc,
-                perc_mode=perc_mode, fracp_floor=fracp_floor, ninc_mode=ninc_mode)
+                perc_mode=perc_mode, fracp_floor=fracp_floor, ninc_mode=ninc_mode,
+                return_parts=return_parts)
+        state, sf, bs, te = step[:4]
+        if return_parts:
+            parts_s.append(step[4])
         if grad:
             surf_s.append(sf)
             base_s.append(bs)
@@ -469,4 +559,8 @@ def run_sacsma(
         tet = torch.stack(tet_s, dim=-1)
     if et_mode == "noah":
         noah["canopy"] = NoahCanopyState(wc=wc)
+    if return_parts:
+        parts = tuple(torch.stack([p[k] for p in parts_s], dim=-1)
+                      for k in range(len(PART_NAMES)))
+        return surf, base, tet, state, parts
     return surf, base, tet, state

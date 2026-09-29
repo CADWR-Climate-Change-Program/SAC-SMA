@@ -293,6 +293,7 @@ def _pipeline_storage(st, row_cell: torch.Tensor | None = None) -> torch.Tensor:
 def _noah_stream(net: torch.nn.Module, x: torch.Tensor, dom: DomainTensors,
                  cfg: DplConfig, *, temp_delta: float | np.ndarray = 0.0,
                  precip_scale: float = 1.0, chunk_days: int = 4096,
+                 components: bool | str = False,
                  dedup_cells: bool = False) -> dict:
     """Stream the full record through the torch Noah pipeline -> the basin daily
     flow (``sim``, (B, T) ndarray mm/day) + per-HRU ET sums + water-balance
@@ -301,12 +302,24 @@ def _noah_stream(net: torch.nn.Module, x: torch.Tensor, dom: DomainTensors,
     detrending field) gathered to HRU rows via ``dom.cell_idx``.  ``precip_scale``
     MULTIPLIES precip (e.g. 1.1 for +10%): the precipitation-perturbation knob
     parallel to ``temp_delta``, applied before the model AND the closure sum so
-    the water balance stays consistent under the counterfactual.
+    the water balance stays consistent under the counterfactual.  ``components``
+    adds ``sim_fast`` / ``sim_slow`` ((B, T) each): the basin aggregates of the
+    routed fast (direct) and slow (baseflow) runoff components, ``sim_fast +
+    sim_slow`` = ``sim`` (off by default; ``sim`` is unchanged either way);
+    ``components="parts"`` also adds ``sim_quick`` / ``sim_interflow`` /
+    ``sim_supplemental`` / ``sim_primary``, the four routed runoff parts
+    (``quick + interflow = fast``, ``supplemental + primary = slow`` up to
+    rounding; :func:`sacsma.dpl.forward.run_window` ``return_parts``).  All are
+    NET of SAC-SMA's riparian et4 channel-ET deduction (and dry-channel clamp),
+    which act on the aggregate direct inflow / baseflow before routing.
 
     ``dedup_cells`` (or a ``dom`` already carrying ``dedup``): the per-cell
     physics runs once per distinct cell (:func:`sacsma.dpl.data.with_cell_dedup`,
     ``x`` = the per-row features, checked identical within each cell); the flow,
     ET sums and closure stay per HRU row."""
+    if components not in (False, True, "fastslow", "parts"):
+        raise ValueError(f"components {components!r} (False, True/'fastslow' or 'parts')")
+    parts = components == "parts"
     if dedup_cells:
         dom = with_cell_dedup(dom, x)
     net.eval()
@@ -321,6 +334,11 @@ def _noah_stream(net: torch.nn.Module, x: torch.Tensor, dom: DomainTensors,
                         params=params, et_mode="noah", n_rows=n)
     state = st0
     basin = torch.empty(len(dom.basins), tt, device=dom.device, dtype=dom.dtype)
+    if components:
+        basin_fast = torch.empty_like(basin)
+        basin_slow = torch.empty_like(basin)
+    if parts:
+        basin_parts = [torch.empty_like(basin) for _ in range(4)]
     sum_pr = torch.zeros(n, device=dom.device, dtype=dom.dtype)
     sum_fl = torch.zeros(n, device=dom.device, dtype=dom.dtype)
     sum_et = torch.zeros(n, device=dom.device, dtype=dom.dtype)
@@ -345,7 +363,7 @@ def _noah_stream(net: torch.nn.Module, x: torch.Tensor, dom: DomainTensors,
                 ta = ta + temp_delta
                 if tn is not None:
                     tn, tx = tn + temp_delta, tx + temp_delta
-            flow, state, tet = run_window(
+            res = run_window(
                 pr, ta, doy, leap, dom.phys_lat_rad, dom.phys_elev, params, uh, state,
                 n_inc=cfg.n_inc, perc_mode=cfg.perc_mode,
                 fracp_floor=cfg.fracp_floor, ninc_mode=cfg.ninc_mode,
@@ -355,8 +373,16 @@ def _noah_stream(net: torch.nn.Module, x: torch.Tensor, dom: DomainTensors,
                 pt_snow_albedo=cfg.pt_snow_albedo,
                 pt_dewpoint_depression=cfg.pt_dewpoint_depression,
                 state_idx=dom.chunk_state(t0, t1),
-                return_tet=True, row_cell=rc)
+                return_tet=True, return_components=bool(components),
+                return_parts=parts, row_cell=rc)
+            flow, state, tet = res[0], res[1], res[2]
             basin[:, t0:t1] = dom.W @ flow
+            if components:
+                basin_fast[:, t0:t1] = dom.W @ res[3][0]
+                basin_slow[:, t0:t1] = dom.W @ res[3][1]
+            if parts:
+                for k in range(4):
+                    basin_parts[k][:, t0:t1] = dom.W @ res[4][k]
             if rc is None:
                 sum_pr += pr.sum(1)
             else:                               # per-cell precip -> the cell's rows
@@ -370,8 +396,16 @@ def _noah_stream(net: torch.nn.Module, x: torch.Tensor, dom: DomainTensors,
     dS = _pipeline_storage(state, rc) - _pipeline_storage(st0, rc)
     resid = (sum_pr - sum_fl - sum_et - dS).abs()
     closure_rel = float((resid / sum_pr.clamp_min(1e-6)).max())
-    return dict(sim=basin.double().cpu().numpy(), sum_et=sum_et,
-                closure_rel=closure_rel)
+    out = dict(sim=basin.double().cpu().numpy(), sum_et=sum_et,
+               closure_rel=closure_rel)
+    if components:
+        out.update(sim_fast=basin_fast.double().cpu().numpy(),
+                   sim_slow=basin_slow.double().cpu().numpy())
+    if parts:
+        for name, b in zip(("quick", "interflow", "supplemental", "primary"), basin_parts,
+                           strict=True):
+            out[f"sim_{name}"] = b.double().cpu().numpy()
+    return out
 
 
 def score_noah_torch(net: torch.nn.Module, x: torch.Tensor, dom: DomainTensors,
