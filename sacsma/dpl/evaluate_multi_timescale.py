@@ -148,7 +148,8 @@ def evaluate_checkpoint_mt(
     print(f"wrote {out / 'params_dpl.csv'} ({len(dpl_df)} entity-cell rows, "
           f"sel cal KGE {ck.get('cal_kge', float('nan')):.4f})", flush=True)
 
-    eobs: EntityObs = load_entity_obs(dom, data_dir)
+    # scored against the run's own training target (its obs_mask, if any)
+    eobs: EntityObs = load_entity_obs(dom, data_dir, obs_mask=cfg.obs_mask)
     print(f"eval: streaming the envelope "
           f"({dom.n_hru} HRUs, {len(dom.basins)} entities, {cfg.dtype} "
           f"config scored in float64 on {dom.device.type}) ...", flush=True)
@@ -192,7 +193,8 @@ def evaluate_checkpoint_mt(
             "entity_id": eid, "family": r["family"],
             "timescale": r["timescale"], "site_id": r["site_id"],
             "name": r["name"], "area_mi2": r["area_mi2"],
-            "n_obs": int(r["n_obs"]), "n_scored": int(fin.sum()),
+            "n_obs": int(r["n_obs"]), "n_masked": int(eobs.n_masked[i]),
+            "n_scored": int(fin.sum()),
             "kge": kge(sf, of), "nse": nse(sf, of), "pbias": pbias(sf, of),
             "r": pearson(sf, of), "alpha": alpha, "beta": beta,
         })
@@ -205,7 +207,7 @@ def evaluate_checkpoint_mt(
                          pd.Timestamp(r["train_end"])))
 
     met = pd.DataFrame(rows)
-    bad = met[met["n_scored"] != met["n_obs"]]
+    bad = met[met["n_scored"] != met["n_obs"] - met["n_masked"]]
     if len(bad):
         raise AssertionError(f"scored counts diverge from the registry "
                              f"n_obs: {bad['entity_id'].tolist()[:5]}")

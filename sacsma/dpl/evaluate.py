@@ -40,7 +40,9 @@ def export_params(net: torch.nn.Module, dom: DomainTensors,
     ``ga_optimum.csv`` columns keyed by grid-cell ``key``, plus the per-basin
     ``basin`` column the model.py filter uses — the ~1835 cells shared between
     basins intentionally carry per-basin values.  Fixed parameters
-    (side/SCF/PXTEMP) come out at their GA constants.
+    (side/SCF/PXTEMP) come out at their GA constants — PXTEMP at its learned
+    per-cell value for a ``pxtemp_learn`` net (the frozen model applies the same
+    hard split at it).
     """
     net.eval()
     with torch.no_grad():
@@ -506,7 +508,7 @@ def load_net_from_checkpoint(
     import numpy as _np
 
     from ..io import soilveg_path
-    from .features import FeatureSet, aef_store, build_features
+    from .features import AEF_STORE_VARIANTS, FeatureSet, aef_store, build_features
     from .parameter_net import ParameterNet
 
     ck = torch.load(ckpt_path, map_location="cpu", weights_only=False)
@@ -550,7 +552,7 @@ def load_net_from_checkpoint(
                         physical_path=(soilveg_path(data_dir, domain)
                                        if variant in ("physical",
                                        "physical_climate") else None),
-                        aef_path=aef_store(data_dir) if variant == "aef" else None,
+                        aef_path=aef_store(data_dir) if variant in AEF_STORE_VARIANTS else None,
                         stats=stats)
     x = torch.as_tensor(fs.x).to(dev, torch.float64)
     gnn_k = nc.get("gnn_k", 0)
@@ -568,6 +570,9 @@ def load_net_from_checkpoint(
                        canopy_lite=nc.get("canopy_lite", False),
                        dynamic_params=dyn,
                        dynamic_amp=nc.get("dynamic_amp", 0.5),
+                       pxtemp_learn=nc.get("pxtemp_learn", False),
+                       pxtemp_box=tuple(nc.get("pxtemp_box", (-1.0, 3.0))),
+                       pxtemp_tau=nc.get("pxtemp_tau", 1.0),
                        ).to(dev, torch.float64)
     net.load_state_dict(ck["net"])   # restores baked neighbor buffers too
     # the physics switch rides on the net so every canopy export carries it

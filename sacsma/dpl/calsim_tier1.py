@@ -221,11 +221,13 @@ def _arcsum(inflow: pd.DataFrame, arcs: list[str], label: str = "") -> pd.Series
     return inflow[have].sum(axis=1, min_count=len(have))
 
 
-def training_record_taf(entity_id: str, data_dir: str | Path = "data") -> pd.Series | None:
+def training_record_taf(entity_id: str, data_dir: str | Path = "data",
+                        obs_mask: tuple[str, ...] = ()) -> pd.Series | None:
     """The entity's own observed record as monthly TAF (month PeriodIndex): the DWR
     monthly series for a ``uf_monthly`` entity, the daily depth store summed over complete
     months and converted with the registry's published ``area_mi2`` for a daily entity.
-    ``None`` for families without a monthly-comparable store."""
+    ``None`` for families without a monthly-comparable store.  ``obs_mask`` (the run's
+    ``DplConfig.obs_mask``) drops those days, so their months come out incomplete."""
     reg = pd.read_csv(Path(data_dir) / "multifamily" / "entities.csv",
                       dtype={"site_id": str}).set_index("entity_id")
     r = reg.loc[entity_id]
@@ -238,6 +240,9 @@ def training_record_taf(entity_id: str, data_dir: str | Path = "data") -> pd.Ser
         key = "basin" if "basin" in t.columns else "station"
         t = t[t[key].astype(str) == str(r["site_id"])].set_index("date")[col].sort_index()
         t = t.where(t >= 0)
+        drop = [pd.Timestamp(d) for e, _, d in (s.partition("|") for s in obs_mask)
+                if e == entity_id]
+        t = t.drop(drop, errors="ignore")
         m = t.resample("ME").sum(min_count=1)
         m[t.resample("ME").count().to_numpy() < m.index.days_in_month] = np.nan
         s = m * float(r["area_mi2"]) * AF_PER_MM_MI2 / 1000.0
@@ -255,6 +260,7 @@ def score_run(run_dir: str | Path, data_dir: str | Path = "data") -> tuple[pd.Da
     the per-set series used by :func:`location_figure`."""
     sets = load_sets(data_dir)
     depth = load_run_monthly_depth(run_dir)
+    obs_mask = _run_obs_mask(run_dir)
     inflow, unimp = load_references(data_dir)
     areas, ent_arcs, fp = arc_areas(data_dir), registry_arcs(data_dir), footprint_areas(data_dir)
     train_win = registry_windows(data_dir)
@@ -308,8 +314,19 @@ def score_run(run_dir: str | Path, data_dir: str | Path = "data") -> tuple[pd.Da
         panels[st.set_id] = dict(
             row=st, kind=main_kind, sim=sim, ref=refs[main_kind].reindex(span), train=(t0, t1),
             covered=refs["arcsum_covered"].reindex(span) if missing else None,
-            record=training_record_taf(ent, data_dir))
+            record=training_record_taf(ent, data_dir, obs_mask))
     return pd.DataFrame(rows), pd.concat(monthly, ignore_index=True), panels
+
+
+def _run_obs_mask(run_dir: str | Path) -> tuple[str, ...]:
+    """The run's ``DplConfig.obs_mask`` from its best checkpoint (``()`` if none)."""
+    ck = Path(run_dir) / "checkpoints" / "best.pt"
+    if not ck.exists():
+        return ()
+    import torch
+
+    cfg = torch.load(ck, map_location="cpu", weights_only=False).get("cfg") or {}
+    return tuple(cfg.get("obs_mask", ()))
 
 
 def location_figure(panel: dict, out: Path, run_label: str = "") -> None:

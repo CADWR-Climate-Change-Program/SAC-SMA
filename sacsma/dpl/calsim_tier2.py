@@ -240,7 +240,7 @@ def _net_for_hrus(ckpt: str | Path, hrus: pd.DataFrame, data_dir: str | Path, de
     import sacsma.dpl.data as D
     from .config import DplConfig
     from .data import load_domain_tensors
-    from .features import FeatureSet, aef_store, build_features
+    from .features import AEF_STORE_VARIANTS, FeatureSet, aef_store, build_features
     from .parameter_net import ParameterNet
     from ..io import soilveg_path
     ck = torch.load(ckpt, map_location="cpu", weights_only=False)
@@ -269,7 +269,7 @@ def _net_for_hrus(ckpt: str | Path, hrus: pd.DataFrame, data_dir: str | Path, de
                         climate_window=stats.climate_window, climate_product=stats.climate_product,
                         physical_path=(soilveg_path(data_dir, ck["domain"])
                                        if variant in ("physical", "physical_climate") else None),
-                        aef_path=aef_store(data_dir) if variant == "aef" else None,
+                        aef_path=aef_store(data_dir) if variant in AEF_STORE_VARIANTS else None,
                         stats=stats)
     x = torch.as_tensor(fs.x).to(dev, torch.float64)
     net = ParameterNet(x.shape[1], hidden=nc.get("hidden", 64), embed=nc.get("embed", 32),
@@ -281,7 +281,10 @@ def _net_for_hrus(ckpt: str | Path, hrus: pd.DataFrame, data_dir: str | Path, de
                        canopy_separate_trunk=nc.get("canopy_separate_trunk", True),
                        canopy_lite=nc.get("canopy_lite", False),
                        dynamic_params=tuple(nc.get("dynamic_params", ())),
-                       dynamic_amp=nc.get("dynamic_amp", 0.5)).to(dev, torch.float64)
+                       dynamic_amp=nc.get("dynamic_amp", 0.5),
+                       pxtemp_learn=nc.get("pxtemp_learn", False),
+                       pxtemp_box=tuple(nc.get("pxtemp_box", (-1.0, 3.0))),
+                       pxtemp_tau=nc.get("pxtemp_tau", 1.0)).to(dev, torch.float64)
     net.load_state_dict(ck["net"])
     return net, x, dom, cfg
 

@@ -65,6 +65,7 @@ from .config import (
     CANOPY_LITE_LEARNED,
     EQUAL_FAMILY_SHARES,
     DplConfig,
+    family_loss_refs,
     family_shares,
     pick_device,
 )
@@ -79,9 +80,11 @@ from .data import (
     shape_chunk_targets,
     water_balance_anchor,
 )
-from .features import CONTINUOUS_STATICS, FeatureSet, aef_store, build_features
+from .features import (AEF_STORE_VARIANTS, AEF_VARIANTS, CONTINUOUS_STATICS, FeatureSet,
+                       aef_store, build_features)
 from .forward import PipelineState, initial_state, routing_uh, run_window
-from .loss import kge_torch, level_hinge_loss, masked_basin_loss, shape_pull_loss
+from .loss import (PEAK_REF_FLOOR, jul_sep_window, kge_torch, level_hinge_loss,
+                   masked_basin_loss, record_references, shape_pull_loss)
 from .multi_timescale import (
     load_entity_obs,
     monthly_chunk_target,
@@ -107,14 +110,35 @@ _DTYPES = {"float32": torch.float32, "float64": torch.float64}
 
 #: diagnostics file columns (cfg.diagnostics).  chunk_log.csv: one row per chunk
 #: per epoch — ``n_`` live entities, ``c_`` coefficient mass and ``l_`` loss
-#: contribution by family (the ``l_`` sum to ``loss``), ``gnorm`` the pre-clip
-#: gradient norm.  eval_terms.csv: one row per selection epoch — the eval-mode
+#: contribution by family (the ``l_`` sum to ``loss``; ``lt_`` / ``lp_`` the timing
+#: and peak terms' parts of ``l_``), ``gnorm`` the pre-clip gradient norm.
+#: eval_terms.csv: one row per selection epoch — the eval-mode
 #: loss on the training grid by family and term, averaged over the live chunks.
 _CHUNK_LOG_COLS = ("epoch", "k", "start", "days", "live", "nograd", "stepped",
                    "loss", "gnorm", "n_usgs", "n_cdec", "n_uf", "c_usgs",
-                   "c_cdec", "c_uf", "l_usgs", "l_cdec", "l_uf")
+                   "c_cdec", "c_uf", "l_usgs", "l_cdec", "l_uf",
+                   "lt_usgs", "lp_usgs", "lt_cdec", "lp_cdec")
 _EVAL_TERM_COLS = ("epoch", "eval_loss", "usgs_nnse", "usgs_log", "usgs_var",
-                   "cdec_nnse", "cdec_log", "cdec_var", "uf_monthly")
+                   "usgs_timing", "usgs_peak", "cdec_nnse", "cdec_log", "cdec_var",
+                   "cdec_timing", "cdec_peak", "uf_monthly")
+#: DplConfig fields a --resume must repeat exactly (the objective and the TBPTT
+#: scheme); the check skips a field an older checkpoint does not record
+_RESUME_FIXED = ("loss", "log_loss_lambda", "log_loss_eps", "var_loss_lambda",
+                 "var_gate_frac", "var_huber_cap", "bias_loss_lambda",
+                 "timing_loss_lambda", "peak_loss_lambda", "peak_loss_frac",
+                 "shape_min_days", "timing_vol_gate",
+                 "mt_family_weight", "chunk_grid", "train_chunk_days",
+                 "tbptt_carry", "tbptt_window_years", "spinup_mode",
+                 "noah_sac_exchanges", "spatial_reg_lambda", "adaptive_loss",
+                 "et_loss_lambda", "et_level_lambda", "swe_loss_lambda",
+                 "obs_mask", "pxtemp_learn", "pxtemp_box", "pxtemp_tau",
+                 "mt_share_norm", "mt_loss_ref", "mt_loss_ref_power")
+#: fields added after checkpoints already existed, whose absence means the default:
+#: an older checkpoint is compared as if it recorded these (a pre-mask checkpoint
+#: resumed with --obs-mask must be refused, not skipped)
+_RESUME_DEFAULTED = {"obs_mask": (), "pxtemp_learn": False, "pxtemp_box": (-1.0, 3.0),
+                     "pxtemp_tau": 1.0, "mt_share_norm": "present", "mt_loss_ref": "",
+                     "mt_loss_ref_power": None}
 
 
 def _split_out(out: dict, et_mode: str):
@@ -174,6 +198,42 @@ def _stream_nograd(
                 outs.append(dom.W @ flow)
             t = te
     return (torch.cat(outs, dim=1) if collect else None), state
+
+
+def _relative_carry(state: PipelineState, params: dict[str, torch.Tensor], *,
+                    flux: bool = False) -> PipelineState:
+    """The state carried into a TBPTT chunk with each SAC content ``c`` rewritten as
+    ``c * (cap / cap.detach())`` (``DplConfig.tbptt_carry = "relative"``): the value is
+    unchanged (x / x == 1 exactly for the positive capacities), but the backward sees
+    the store's relative saturation as fixed, ``dc/dcap = c / cap``, instead of the
+    detached content treating a larger capacity as free deficit.  ADIMC is carried
+    against ``uztwm + lztwm``; snow, routing history and canopy water pass unchanged.
+
+    ``flux=True`` (``tbptt_carry = "flux"``) also multiplies the lower-zone free
+    contents by ``k.detach() / k`` of their drainage rates (lzfsc by lzsk, lzfpc by
+    lzpk): again the same value, but the backward holds the carried drainage flux
+    ``k * S`` fixed, ``dS/dk = -S/k`` — a faster store carries less water into the
+    next water year, the dependence the 1-water-year truncation cannot see."""
+    s = state.sac
+    adim_cap = params["uztwm"] + params["lztwm"]
+
+    def rel(c: torch.Tensor, cap: torch.Tensor) -> torch.Tensor:
+        # clone: the product saves c for its backward, and after a graphed chunk c
+        # is a view of the graph's static output buffer, which the next replay
+        # overwrites in place (no version bump) — the backward would read the
+        # END-of-chunk contents
+        return c.detach().clone() * (cap / cap.detach())
+
+    lzfsc = rel(s.lzfsc, params["lzfsm"])
+    lzfpc = rel(s.lzfpc, params["lzfpm"])
+    if flux:
+        lzfsc = lzfsc * (params["lzsk"].detach() / params["lzsk"])
+        lzfpc = lzfpc * (params["lzpk"].detach() / params["lzpk"])
+    sac = type(s)(uztwc=rel(s.uztwc, params["uztwm"]), uzfwc=rel(s.uzfwc, params["uzfwm"]),
+                  lztwc=rel(s.lztwc, params["lztwm"]), lzfsc=lzfsc,
+                  lzfpc=lzfpc, adimc=rel(s.adimc, adim_cap))
+    return PipelineState(snow=state.snow, sac=sac, hist_surf=state.hist_surf,
+                         hist_base=state.hist_base, canopy=state.canopy)
 
 
 def _obs_chunk(calobs: CalObs, c0: int, c1: int) -> torch.Tensor:
@@ -306,7 +366,10 @@ def train(
                 "veg_class (they exist only where the original zonal "
                 "regionalization was drawn) — use the physical or embedding "
                 "variants, whose inputs cover the whole region grid")
-        eobs = load_entity_obs(dom, data_dir)
+        eobs = load_entity_obs(dom, data_dir, obs_mask=cfg.obs_mask)
+        if cfg.obs_mask:
+            print(f"train: obs_mask — {len(cfg.obs_mask)} hand-confirmed daily "
+                  f"observation(s) masked: {', '.join(cfg.obs_mask)}", flush=True)
         d_rows = torch.as_tensor(eobs.daily_rows, device=dev)
         m_rows = torch.as_tensor(eobs.monthly_rows, device=dev)
         # daily entities ride the existing chunk NNSE as a CalObs whose
@@ -334,7 +397,30 @@ def train(
               "chunk loss = daily NNSE + monthly NNSE (complete months)",
               flush=True)
     else:
+        if cfg.obs_mask:
+            raise ValueError("obs_mask is wired for the multi-timescale domain only")
         calobs = load_cal_obs(dom, data_dir, cal_start=cfg.cal_start)
+    # the peak / timing terms' per-basin record constants, from the training obs
+    # once (like obs_var): the record mean of the yearly observed top-k mean and of
+    # the yearly mean flow, over the cal window's water years with shape_min_days
+    # valid days; every chunk-loss call below takes them through shape_kw, and the
+    # timing term's 1 Jul - 30 Sep day window as the chunk's slice of season_all
+    win_d = dom.dates[calobs.t0:calobs.t1]
+    pk_ref, v_ref = record_references(
+        calobs.obs.detach().cpu().numpy(),
+        np.asarray(win_d.year + (win_d.month >= 10)),
+        min_days=cfg.shape_min_days, peak_frac=cfg.peak_loss_frac)
+    shape_kw = dict(peak_frac=cfg.peak_loss_frac,
+                    peak_ref=torch.as_tensor(pk_ref, device=dev, dtype=dtype),
+                    vol_ref=torch.as_tensor(v_ref, device=dev, dtype=dtype),
+                    shape_min_days=cfg.shape_min_days,
+                    timing_vol_gate=cfg.timing_vol_gate)
+    season_all = jul_sep_window(dom.doy, dom.is_leap)       # (n_time,) record-indexed
+    if cfg.peak_loss_lambda > 0.0 or cfg.timing_loss_lambda > 0.0:
+        print(f"train: shape terms (summer-recession timing {cfg.timing_loss_lambda}, "
+              f"flood peak {cfg.peak_loss_lambda}) on basin-chunks with >= "
+              f"{cfg.shape_min_days} valid days; record constants for "
+              f"{int((pk_ref >= PEAK_REF_FLOOR).sum())} of {len(pk_ref)} basins", flush=True)
     # family weighting (multi-timescale only): each family's share of the
     # loss, renormalized over the families this run trains; entities weigh
     # equally within a family.  The daily term carries the daily families'
@@ -390,6 +476,47 @@ def train(
               + ("selection = mean of the family means (equal shares)"
                  if cfg.mt_family_weight == "equal" else
                  "selection = share-weighted family mean"), flush=True)
+    # mt_share_norm="all": fixed loss denominators, so every entity carries
+    # share_f / n_f in every chunk it is scored in (a chunk holding one family
+    # no longer hands it the whole term); "present" keeps the per-chunk
+    # renormalization (weight_total / mt_total None -> byte-identical)
+    w_total = mt_total = None
+    if shares is not None and cfg.mt_share_norm == "all":
+        if fam_w is not None:
+            w_total = float(fam_w.sum())
+        if eobs is not None and len(eobs.monthly_rows):
+            mt_total = float(len(eobs.monthly_rows))
+        print(f"train: family shares normalized over ALL entities (mt_share_norm=all) — "
+              f"daily denominator {w_total}, monthly {mt_total}: a chunk's family term "
+              "scales with the share of that family's entities it scores", flush=True)
+    # mt_loss_ref: the FROZEN per-family loss scale kappa_f = Lbar / L_ref_f.  Set
+    # once, before any graph capture, and never changed: the daily families' kappa
+    # goes into fam_w IN PLACE (the tensor every loss path and the captured
+    # TrainChunk read), AFTER w_total was taken from the unscaled weights (so the
+    # fixed denominator is unchanged and kappa is not normalized away); uf's goes
+    # into monthly_scale, a Python float the TrainChunk bakes at construction —
+    # correct only because it is constant for the run.  shares (selection) stay
+    # nominal.  _loss_split then logs kappa-scaled c_<fam> and l_<fam>: loss ==
+    # sum of l_<fam> and l_<fam> / c_<fam> is still the per-entity loss.
+    if cfg.mt_loss_ref and shares is not None:
+        refs = family_loss_refs(cfg.mt_loss_ref)
+        missing = [f for f in shares if f not in refs]
+        if missing:
+            raise ValueError(f"mt_loss_ref {cfg.mt_loss_ref!r} gives no reference level "
+                             f"to {missing} (trained in this run)")
+        pw = cfg.mt_loss_ref_power
+        lbar = sum(shares[f] * refs[f] ** pw for f in shares)
+        kappa = {f: lbar / refs[f] ** pw for f in shares}
+        if fam_w is not None:
+            fam_w.mul_(torch.as_tensor([kappa.get(f, 1.0) for f in fam],
+                                       device=dev, dtype=dtype))
+        monthly_scale *= kappa.get("uf_monthly", 1.0)
+        print("train: FROZEN family loss scale (mt_loss_ref) — reference per-entity levels "
+              + ", ".join(f"{f.split('_')[0]} {refs[f]:.4g}" for f in shares)
+              + f"; kappa = {lbar:.4g} / L_ref^{pw:g}: "
+              + ", ".join(f"{f.split('_')[0]} x {kappa[f]:.4f}" for f in shares)
+              + f" (monthly x {monthly_scale:.4f} in all); chunk_log c_/l_ carry kappa, "
+              "selection keeps the nominal shares", flush=True)
     # truncated spinup start (clamped to the record start; == 0 restores the
     # exact frozen full-prefix convention)
     spin_req = int(dom.dates.searchsorted(pd.Timestamp(cfg.spinup_start)))
@@ -450,8 +577,11 @@ def train(
     # the loaded weights start from a perturbed copy of the donor field.
     ick = None
     donor_stats = None
-    statics = tuple(c for c in CONTINUOUS_STATICS
-                    if cfg.flowlen_feature or c != "flowlen")
+    # the embedding variants take no statics (build_features drops them), so a
+    # warm-start donor's recorded statics are () too
+    statics = (() if variant in AEF_VARIANTS else
+               tuple(c for c in CONTINUOUS_STATICS
+                     if cfg.flowlen_feature or c != "flowlen"))
     if cfg.init_from:
         if resume:
             raise ValueError("init_from and resume are mutually exclusive "
@@ -489,7 +619,7 @@ def train(
                        if _needs_physical else None),
         stats=donor_stats,
         statics=statics,
-        aef_path=aef_store(data_dir) if variant == "aef" else None,
+        aef_path=aef_store(data_dir) if variant in AEF_STORE_VARIANTS else None,
     )
     x = torch.as_tensor(fs.x).to(dev, dtype)
 
@@ -529,7 +659,16 @@ def train(
                        canopy_lite=cfg.canopy_lite,
                        dynamic_params=cfg.dynamic_params,
                        dynamic_amp=cfg.dynamic_amp,
+                       pxtemp_learn=cfg.pxtemp_learn,
+                       pxtemp_box=cfg.pxtemp_box,
+                       pxtemp_tau=cfg.pxtemp_tau,
                        ).to(device=dev, dtype=dtype)
+    if cfg.pxtemp_learn:
+        print(f"train: LEARNED rain/snow threshold PXTEMP per cell in "
+              f"[{cfg.pxtemp_box[0]:g}, {cfg.pxtemp_box[1]:g}] degC — zero-init head "
+              f"(exactly the fixed 0 degC at init); hard split forward, "
+              f"straight-through sigmoid surrogate (tau {cfg.pxtemp_tau:g} degC)",
+              flush=True)
     if cfg.seasonal_params:
         print(f"train: seasonal (day-of-year harmonic) params {cfg.seasonal_params} "
               f"— 2 zero-init coeffs each, tanh-capped per-param at "
@@ -644,6 +783,23 @@ def train(
             print("train: ep0-donor gate off — --param-box changes the donor's "
                   "parameter box", flush=True)
             donor_gate = None
+    if cfg.pxtemp_learn:
+        # a warm start loads a pxtemp donor's _px_box/_px_tau buffers; the
+        # configured box and surrogate width win (as param_box does above)
+        want_box = torch.tensor(cfg.pxtemp_box, dtype=net._px_box.dtype,
+                                device=net._px_box.device)
+        want_tau = torch.tensor(cfg.pxtemp_tau, dtype=net._px_tau.dtype,
+                                device=net._px_tau.device)
+        if not (torch.equal(net._px_box, want_box) and torch.equal(net._px_tau, want_tau)):
+            with torch.no_grad():
+                net._px_box.copy_(want_box)
+                net._px_tau.copy_(want_tau)
+            print(f"train: PXTEMP box/tau set to the configured {cfg.pxtemp_box} / "
+                  f"{cfg.pxtemp_tau:g} (the donor carried others)", flush=True)
+            if donor_gate is not None:
+                print("train: ep0-donor gate off — the PXTEMP box changes the "
+                      "donor's field", flush=True)
+                donor_gate = None
     if ick is not None and cfg.init_gate == "abort" and (
             donor_gate is None or not math.isfinite(donor_kge)):
         raise RuntimeError(
@@ -675,6 +831,24 @@ def train(
                 f"resume: checkpoint was trained on {len(ck['basins'])} "
                 f"basins but this run loads {len(dom.basins)} — repeat the "
                 "same --basins subset")
+        # the objective and the TBPTT scheme come from the command line, not the
+        # checkpoint: a resume that dropped or changed one of these flags would
+        # continue silently on a different loss
+        ck_cfg, now = ck.get("cfg") or {}, asdict(cfg)
+        ck_eff = {**_RESUME_DEFAULTED, **ck_cfg}
+        changed = [f"{k}: {ck_eff[k]!r} -> {now[k]!r}" for k in _RESUME_FIXED
+                   if k in ck_eff and k in now and ck_eff[k] != now[k]]
+        if changed:
+            raise ValueError("resume: the loss / TBPTT settings differ from the "
+                             "checkpoint's (repeat its flags): " + "; ".join(changed))
+        if ((ck_cfg.get("timing_loss_lambda", 0.0) > 0.0
+             or ck_cfg.get("peak_loss_lambda", 0.0) > 0.0) and "shape_min_days" not in ck_cfg):
+            # the timing / peak terms of the checkpoint's code had different forms
+            # (whole-year timing, relative peak error): the same flags would now
+            # continue on a different loss
+            raise ValueError("resume: the checkpoint trained the timing / peak terms of "
+                             "the code before their 2026-09-27 revision; it cannot "
+                             "continue on the revised forms")
         net.load_state_dict(ck["net"])
         if cfg.param_box:
             net.set_box(cfg.param_box)
@@ -703,8 +877,25 @@ def train(
                            mode=cfg.chunk_grid, chunk=cfg.train_chunk_days)
         cap_lens = [L for L, _ in Counter(ce - c0 for c0, ce in grid[:-1]).most_common()]
     nograd_g = None
+    nograd_dead = None      # multi-year mode: forward-only window for dead chunks
+    rec_g = None            # activation-recompute train window (graph_recompute_days)
     train_gs: dict = {}     # whole-chunk graphs by chunk length
     seg_gs: dict = {}       # segmented graphs by chunk length
+    carry_grad = cfg.tbptt_carry in ("relative", "flux")
+    if (carry_grad and cfg.use_cuda_graphs and dev.type == "cuda"
+            and cfg.train_graph_segments == 1 and not cfg.graph_recompute_days):
+        # fail before any capture (the check after capture stays as a backstop)
+        raise ValueError(f"tbptt_carry={cfg.tbptt_carry!r} needs the segmented or eager "
+                         "chunk path (--train-graph-segments >= 2, or --no-graphs)")
+    n_win = cfg.tbptt_window_years
+    win2 = n_win > 1                 # multi-year TBPTT windows
+    if (win2 and cfg.use_cuda_graphs and dev.type == "cuda"
+            and cfg.train_graph_segments == 1 and not cfg.graph_recompute_days):
+        raise ValueError(f"tbptt_window_years {n_win} needs the segmented or eager chunk "
+                         "path (--train-graph-segments >= 2, or --no-graphs)")
+    if win2 and (etobs is not None or sweobs is not None):
+        raise ValueError(f"tbptt_window_years {n_win} does not support the ET/SWE "
+                         "auxiliary losses")
     if cfg.use_cuda_graphs and dev.type == "cuda":
         from .graphs import NoGradWindow, TrainChunk
         try:
@@ -720,7 +911,39 @@ def train(
             print(f"train: no-grad capture failed ({e!r}); running eager",
                   flush=True)
             nograd_g = None
-        if nograd_g is not None and cfg.train_graph_segments > 1:
+        if (nograd_g is not None and win2 and cfg.dead_chunk_nograd and cap_lens
+                and not cfg.graph_recompute_days):
+            # multi-year mode captures no 1-year train graph: dead chunks replay a
+            # forward-only window of the shortest chunk (static buffers only, no
+            # activations), a leap year's last day eager
+            try:
+                nograd_dead = NoGradWindow(dom, cfg, min(cap_lens), params0, uh0,
+                                           canopy_params=canopy0)
+            except Exception as e:  # noqa: BLE001 — fall back to the stream window
+                print(f"train: dead-chunk window capture failed ({e!r}); dead chunks "
+                      f"stream through the {cfg.nograd_window}-day window", flush=True)
+                torch.cuda.empty_cache()
+        if nograd_g is not None and cfg.graph_recompute_days > 0:
+            # activation recompute: ONE captured graph of graph_recompute_days days
+            # replayed over any window, live or dead (graphs.RecomputeTrainWindow) —
+            # the graph memory of one segment whatever the window length; replaces
+            # the segmented and whole-chunk train captures
+            from .graphs import RecomputeTrainWindow
+            if etobs is not None or sweobs is not None:
+                raise ValueError("graph_recompute_days does not support the ET/SWE "
+                                 "auxiliary losses")
+            try:
+                rec_g = RecomputeTrainWindow(dom, cfg, cfg.graph_recompute_days,
+                                             params0, uh0, canopy_params=canopy0,
+                                             sample_c0=calobs.t0)
+                print(f"train: activation-recompute train graph ({cfg.graph_recompute_days}"
+                      " days, fwd+bwd, replayed per segment; backward re-runs each "
+                      "segment from its stored state)", flush=True)
+            except Exception as e:  # noqa: BLE001
+                print(f"train: recompute capture failed ({e!r}); eager chunks",
+                      flush=True)
+                torch.cuda.empty_cache()
+        elif nograd_g is not None and cfg.train_graph_segments > 1:
             # segmented train-chunk graphs (drivers that fault on whole-year
             # captures): graphed run_window with autograd across segments;
             # net/routing/loss stay eager, so the chunk loop below takes its
@@ -735,19 +958,27 @@ def train(
             if etobs is not None or sweobs is not None:
                 raise ValueError("train_graph_segments > 1 does not support "
                                  "the ET/SWE auxiliary losses")
-            for clen in (cap_lens[:1] if fixed else [min(cap_lens)] if cap_lens else []):
+            # tbptt_window_years n > 1: the one captured length is the shortest
+            # n-year window (n x 365 days), in n times the segments (the same
+            # per-segment size); a longer window runs its leap days eagerly, as a
+            # leap year does on the 1-year path
+            for clen in (cap_lens[:1] if fixed else
+                         [n_win * min(cap_lens)] if win2 and cap_lens else
+                         [min(cap_lens)] if cap_lens else []):
+                n_seg = cfg.train_graph_segments * n_win
                 try:
                     seg_gs[clen] = SegmentedTrainWindow(
-                        dom, cfg, clen, cfg.train_graph_segments,
+                        dom, cfg, clen, n_seg,
                         params0, uh0, canopy_params=canopy0, sample_c0=calobs.t0)
                     print(f"train: segmented train-chunk graphs ({clen} days) -- "
-                          f"{cfg.train_graph_segments} x {seg_gs[clen].lens} days "
+                          f"{n_seg} x {seg_gs[clen].lens} days "
                           "(fwd+bwd captured per segment; net/routing/loss eager)",
                           flush=True)
                 except torch.cuda.OutOfMemoryError:
                     n_len = sum(1 for c0, ce in (grid or []) if ce - c0 == clen)
                     print(f"train: segmented capture OOM at {clen} days — "
                           + ("eager chunks" if fixed else
+                             f"the {n_win}-year windows run eager (slow)" if win2 else
                              f"the {n_len} chunks of that length run eager"), flush=True)
                     torch.cuda.empty_cache()
                 except Exception as e:  # noqa: BLE001
@@ -770,7 +1001,8 @@ def train(
                         swe_basin_w=swe_w,
                         mt_rows=m_rows if eobs is not None else None,
                         mt_var=eobs.var_monthly if eobs is not None else None,
-                        daily_scale=daily_scale, monthly_scale=monthly_scale)
+                        daily_scale=daily_scale, monthly_scale=monthly_scale,
+                        shape_kw=shape_kw, weight_total=w_total, mt_total=mt_total)
                     if fixed:
                         break           # the first length that fits is the grid's
                 except torch.cuda.OutOfMemoryError:
@@ -795,9 +1027,23 @@ def train(
         chunk = next(iter(train_gs)) if train_gs else cfg.train_chunk_days
         grid = _chunk_grid(dom.dates, calobs.t0, calobs.t1, dom.n_time,
                            mode="fixed", chunk=chunk)
+    if carry_grad and train_gs:
+        # the whole-chunk graphs own their state buffers (set_state copies values
+        # in), so the carried state cannot hold a gradient path to the capacities
+        raise ValueError(f"tbptt_carry={cfg.tbptt_carry!r} needs the segmented or eager "
+                         "chunk path (--train-graph-segments >= 2, or no CUDA graphs)")
     graphed = sorted(set(train_gs) | set(seg_gs))
     other = sorted({ce - c0 for c0, ce in grid[:-1]} - set(graphed))
-    if graphed and other:
+    if win2:
+        print(f"train: {n_win}-water-year TBPTT windows — each live chunk runs the "
+              f"previous {n_win - 1} water year(s) as a gradient-carrying burn-in, loss on "
+              "its own year only"
+              + (f"; graphed {graphed} days, a longer window's leap days eager"
+                 if seg_gs else f"; recompute graph of {cfg.graph_recompute_days} days"
+                 if rec_g is not None else "")
+              + "; dead chunks advance forward-only; the first "
+              "chunks and the envelope tail run shorter windows", flush=True)
+    elif graphed and other:
         if seg_gs:
             print(f"train: chunks of {other} days run the graphed {min(seg_gs)} days and the rest "
                   "eagerly from the graphed state", flush=True)
@@ -919,7 +1165,10 @@ def train(
                                "canopy_lite": cfg.canopy_lite,
                                "dynamic_params": cfg.dynamic_params,
                                "dynamic_amp": cfg.dynamic_amp,
-                               "dynamic_window": cfg.dynamic_window},
+                               "dynamic_window": cfg.dynamic_window,
+                               "pxtemp_learn": cfg.pxtemp_learn,
+                               "pxtemp_box": cfg.pxtemp_box,
+                               "pxtemp_tau": cfg.pxtemp_tau},
                 "et_mode": cfg.et_mode,
                 "features": _feature_stats(fs)}
 
@@ -1020,6 +1269,10 @@ def train(
     else:
         chunk_live = [True] * n_chunks
     skip_dead = cfg.dead_chunk_nograd and not all(chunk_live)
+    if win2 and not all(chunk_live) and not skip_dead:
+        raise ValueError(f"tbptt_window_years {n_win} needs --dead-chunk-nograd on a domain "
+                         "with dead chunks (a dead chunk would otherwise run a full-year "
+                         "eager forward and backward beside the multi-year graph)")
     if skip_dead:
         if reg_lambda > 0.0:
             # the penalty's own train-mode net(x) draws dropout in every chunk
@@ -1041,11 +1294,14 @@ def train(
     if diag:
         snapdir.mkdir(exist_ok=True)
         if resume:
-            # the resumed run rewrites the interrupted epoch: drop its rows
-            for p in (chunk_log_path, eval_terms_path):
+            # the resumed run rewrites the interrupted epoch: drop its rows; the kept
+            # rows take the current columns (a file from before a column was added
+            # would otherwise keep a header the appended rows no longer match)
+            for p, cols in ((chunk_log_path, _CHUNK_LOG_COLS),
+                            (eval_terms_path, _EVAL_TERM_COLS)):
                 if p.exists():
                     d = pd.read_csv(p)
-                    d[d["epoch"] < start_epoch].to_csv(p, index=False)
+                    d[d["epoch"] < start_epoch].reindex(columns=cols).to_csv(p, index=False)
         # the EMA shadow restarts from the current net (also on a resume)
         ema = [p.detach().clone() for p in params_list]
         if train_gs:
@@ -1071,16 +1327,21 @@ def train(
                     terms: bool = False) -> dict[str, float]:
         """The multi-timescale chunk loss as trained, split into additive
         contributions by family — ``l_<fam>`` (or, ``terms``, ``<fam>_nnse`` /
-        ``_log`` / ``_var`` and ``uf_monthly``) — with each family's live entity
-        count ``n_<fam>`` and coefficient mass ``c_<fam>`` (its share of the
-        chunk's daily-term weight times daily_scale; monthly_scale for uf)."""
+        ``_log`` / ``_var`` (variance + bias) / ``_timing`` / ``_peak`` and
+        ``uf_monthly``) — with each family's live entity count ``n_<fam>`` and
+        coefficient mass ``c_<fam>`` (its share of the chunk's daily-term weight
+        times daily_scale; monthly_scale for uf)."""
         res: dict[str, float] = {}
+        tw = season_all[grid[k][0]:grid[k][1]]      # the chunk's Jul-Sep day window
         with torch.no_grad():
             n_fin = torch.isfinite(obs_c).sum(dim=1)
             w_all = (fam_w if fam_w is not None
                      else torch.ones(len(dom.basins), device=dev, dtype=dtype))
             ok = n_fin >= 90                     # masked_basin_loss's min_days
-            w_tot = max(float((w_all * ok).sum()), 1.0)
+            # the chunk's daily denominator: the fixed all-entity weight under
+            # mt_share_norm="all", else the scored entities' weight
+            w_tot = (w_total if w_total is not None
+                     else max(float((w_all * ok).sum()), 1.0))
             for f in ("usgs_daily", "cdec_daily"):
                 tag = f.split("_")[0]
                 msk = torch.as_tensor(fam_np == f, device=dev)
@@ -1090,31 +1351,50 @@ def train(
                 res[f"c_{tag}"] = daily_scale * w_f / w_tot
                 sc = daily_scale * max(w_f, 1.0) / w_tot
 
-                def _l(log_l: float, var_l: float, bias_l: float) -> float:
+                def _l(log_l: float, var_l: float, bias_l: float,
+                       tim_l: float = 0.0, pk_l: float = 0.0) -> float:
                     return float(masked_basin_loss(
                         basin_flow, obs_c, calobs.obs_var, kind=cfg.loss,
                         log_lambda=log_l, log_eps=cfg.log_loss_eps,
                         var_lambda=var_l, var_gate_frac=cfg.var_gate_frac,
                         var_huber_cap=cfg.var_huber_cap, bias_lambda=bias_l,
-                        weight=wf))
+                        timing_lambda=tim_l, peak_lambda=pk_l, **shape_kw,
+                        timing_window=tw, weight=wf))
 
-                full = _l(cfg.log_loss_lambda, cfg.var_loss_lambda, cfg.bias_loss_lambda)
+                full = _l(cfg.log_loss_lambda, cfg.var_loss_lambda, cfg.bias_loss_lambda,
+                          cfg.timing_loss_lambda, cfg.peak_loss_lambda)
                 if terms:
                     nnse = _l(0.0, 0.0, 0.0)
                     nl = _l(cfg.log_loss_lambda, 0.0, 0.0)
+                    nlv = _l(cfg.log_loss_lambda, cfg.var_loss_lambda, cfg.bias_loss_lambda)
+                    nlvt = (_l(cfg.log_loss_lambda, cfg.var_loss_lambda,
+                               cfg.bias_loss_lambda, cfg.timing_loss_lambda)
+                            if cfg.timing_loss_lambda > 0.0 else nlv)
                     res[f"{tag}_nnse"] = sc * nnse
                     res[f"{tag}_log"] = sc * (nl - nnse)
-                    res[f"{tag}_var"] = sc * (full - nl)
+                    res[f"{tag}_var"] = sc * (nlv - nl)
+                    res[f"{tag}_timing"] = sc * (nlvt - nlv)
+                    res[f"{tag}_peak"] = sc * (full - nlvt)
                 else:
                     res[f"l_{tag}"] = sc * full
+                    # the shape terms' parts of l_<fam> (0 when off)
+                    tp = cfg.timing_loss_lambda > 0.0 or cfg.peak_loss_lambda > 0.0
+                    nlv = (_l(cfg.log_loss_lambda, cfg.var_loss_lambda, cfg.bias_loss_lambda)
+                           if tp else full)
+                    nlvt = (_l(cfg.log_loss_lambda, cfg.var_loss_lambda,
+                               cfg.bias_loss_lambda, cfg.timing_loss_lambda)
+                            if cfg.timing_loss_lambda > 0.0 else nlv)
+                    res[f"lt_{tag}"] = sc * (nlvt - nlv)
+                    res[f"lp_{tag}"] = sc * (full - nlvt)
             if mt_targets is not None:
                 mb, mtgt, mfin = mt_targets[k]
                 n_m = int((mfin.sum(dim=1) >= 1).sum())
                 res["n_uf"] = n_m
-                res["c_uf"] = monthly_scale if n_m else 0.0
+                res["c_uf"] = (monthly_scale * n_m / mt_total if mt_total is not None
+                               else monthly_scale if n_m else 0.0)
                 res["uf_monthly" if terms else "l_uf"] = monthly_scale * float(
                     monthly_nnse_loss(basin_flow[m_rows] @ mb, mtgt, mfin,
-                                      eobs.var_monthly))
+                                      eobs.var_monthly, n_total=mt_total))
         return res
 
     def _eval_terms(epoch: int) -> None:
@@ -1148,6 +1428,7 @@ def train(
           f"perc={cfg.perc_mode} {cfg.dtype} on {dev.type}"
           + (f' [cuda-graphs {sorted(train_gs)}]' if train_gs else
              f' [cuda-graphs x{cfg.train_graph_segments} segments {sorted(seg_gs)}]' if seg_gs
+             else f' [cuda-graphs recompute {cfg.graph_recompute_days} days]' if rec_g is not None
              else ' [eager]'),
           flush=True)
 
@@ -1247,22 +1528,45 @@ def train(
             # through get_state (a detached clone, routing history and canopy
             # included), so graph objects of different lengths and eager
             # chunks interleave freely
+            if dev.type == "cuda" and (win2 or rec_g is not None):
+                # hand the cached blocks of the spinup / selection forward back to
+                # the driver before the training chunks (no numerical effect): on
+                # an 8 GB WDDM card they would otherwise sit beside the train graph
+                # and push the process into paging
+                torch.cuda.empty_cache()
             state = state_spin
+            starts: list = []       # (state carried into a chunk, its c0), newest last
+            if win2:
+                from .graphs import _clone_state
             for k, (c0, ce) in enumerate(grid):
+                burn = starts[-(n_win - 1):] if win2 else []
+                # a multi-year window uses this start one or more chunks LATER: it
+                # must own its storage (a graphed window's end state is a view of
+                # the graph's static output buffers, which the next replay
+                # overwrites in place)
+                starts = (starts + [(_clone_state(state) if win2 else state, c0)]
+                          )[-max(n_win - 1, 1):]
+                g = train_gs.get(ce - c0)
+                dead_nograd = skip_dead and not chunk_live[k] and g is None
+                # tbptt_window_years n > 1: a live full-year chunk that follows
+                # n - 1 full-year chunks runs the window [their first c0, ce) from
+                # the state carried into that chunk, the loss on [c0, ce) only
+                two = (win2 and len(burn) == n_win - 1 and chunk_live[k]
+                       and not dead_nograd and g is None and ce - c0 >= 365
+                       and c0 - burn[0][1] >= 365 * (n_win - 1))
+                w0 = burn[0][1] if two else c0
                 # the multi-timescale cal window ends AT the forcing record,
                 # so its LAST chunk is short (ce < c0 + the captured length)
                 # and replays eagerly; every other domain has forcing headroom
                 # past cal_end
-                pr, ta, doy, leap = dom.chunk(c0, ce)
-                tn, tx = dom.chunk_tmm(c0, ce)
-                lai_c = dom.chunk_lai(c0, ce)
-                st_c = dom.chunk_state(c0, ce)
+                pr, ta, doy, leap = dom.chunk(w0, ce)
+                tn, tx = dom.chunk_tmm(w0, ce)
+                lai_c = dom.chunk_lai(w0, ce)
+                st_c = dom.chunk_state(w0, ce)
                 obs_c = _obs_chunk(calobs, c0, ce)
                 et_tgt = et_targets[k] if et_targets is not None else None
                 swe_tgt = swe_targets[k] if swe_targets is not None else None
-                g = train_gs.get(ce - c0)
                 split: dict[str, float] = {}
-                dead_nograd = skip_dead and not chunk_live[k] and g is None
                 if g is not None:
                     g.set_state(state)
                     loss = g.run(pr, ta, doy, leap, obs_c, tn, tx, lai_c,
@@ -1283,14 +1587,34 @@ def train(
                     with torch.no_grad() if dead_nograd else contextlib.nullcontext():
                         params, cp = _split_out(net(x), cfg.et_mode)
                         uh = routing_uh(params, dom.flowlen)
+                        if two:
+                            state = burn[0][0]      # the burn-in's carried state
+                        if carry_grad and not dead_nograd:
+                            state = _relative_carry(state, params,
+                                                    flux=cfg.tbptt_carry == "flux")
                         # segmented CUDA graphs: graphed run_window over the longest
                         # captured length that fits, autograd across the segments
                         # (graphs.SegmentedTrainWindow); the days beyond it (a leap
                         # year's last day on the water-year grid) continue eagerly
                         # from the graphed state, autograd through both
-                        n_g = max((L for L in seg_gs if L <= ce - c0), default=0)
-                        if n_g:
-                            flow_g, state_g = seg_gs[n_g].forward(c0, params, uh, cp, state)
+                        n_g = max((L for L in seg_gs if L <= ce - w0), default=0)
+                        if rec_g is not None:
+                            # activation recompute over the whole window (under
+                            # no_grad for a dead chunk: a plain graphed forward)
+                            n_g = -1
+                            flow_g, state_g = rec_g.forward(w0, ce - w0, params, uh, cp, state)
+                        elif dead_nograd and win2 and nograd_g is not None:
+                            # the multi-year mode captures no 1-year train graph:
+                            # a dead chunk replays the forward-only dead-chunk
+                            # window (the stream window if that capture failed)
+                            n_g = -1
+                            dg = nograd_dead if nograd_dead is not None else nograd_g
+                            dg.set_params(params, uh, canopy_params=cp)
+                            _, state_g = _stream_nograd(dom, cfg, params, uh, c0, ce, state,
+                                                        graph=dg, canopy_params=cp)
+                            flow_g = None
+                        elif n_g:
+                            flow_g, state_g = seg_gs[n_g].forward(w0, params, uh, cp, state)
                         else:
                             flow_g, state_g = None, state
 
@@ -1314,7 +1638,7 @@ def train(
                                 return_tet=et_tgt is not None,
                                 return_swe=swe_tgt is not None)
 
-                        if n_g == ce - c0:
+                        if n_g == -1 or n_g == ce - w0:
                             res = (flow_g, state_g)
                         elif n_g:
                             res_e = _eager(n_g)
@@ -1322,6 +1646,8 @@ def train(
                         else:
                             res = _eager(0)
                         flow, state = res[0], res[1]
+                        if two:
+                            flow = flow[:, c0 - w0:]    # the scored year only
                     if dead_nograd:
                         # no loss, no backward, no step: the carried state is the
                         # one a full dead chunk leaves
@@ -1339,12 +1665,16 @@ def train(
                         var_gate_frac=cfg.var_gate_frac,
                         var_huber_cap=cfg.var_huber_cap,
                         bias_lambda=cfg.bias_loss_lambda,
-                        weight=fam_w if fam_w is not None else basin_w)
+                        timing_lambda=cfg.timing_loss_lambda,
+                        peak_lambda=cfg.peak_loss_lambda, **shape_kw,
+                        timing_window=season_all[c0:ce],
+                        weight=fam_w if fam_w is not None else basin_w,
+                        weight_total=w_total)
                     if mt_targets is not None:
                         mb, mtgt, mfin = mt_targets[k]
                         loss_t = loss_t + monthly_scale * monthly_nnse_loss(
                             basin_flow[m_rows] @ mb, mtgt, mfin,
-                            eobs.var_monthly)
+                            eobs.var_monthly, n_total=mt_total)
                     ri = 2
                     if et_tgt is not None:
                         et_monthly = (dom.W @ res[ri]) @ et_tgt[0]

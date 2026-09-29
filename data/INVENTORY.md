@@ -16,10 +16,11 @@ referenced by package code; the cross-cutting stores are built and consumed by
 
 All tables are plain CSV (openable in Excel or a text editor); only the gridded
 forcing stores are NetCDF, tracked with git-LFS (`data/**/*.nc` in
-`.gitattributes`). Four files are hand-maintained sources of truth, never
+`.gitattributes`). Five files are hand-maintained sources of truth, never
 auto-overwritten: `calsim/calsim_crosswalk.csv` 🔒, `calsim/tier1_sets.csv`
 (apart from its two trimmed-window columns, which `dpl.calsim_windows --write` derives),
-`calsim/calsim3_arc_derivation.csv` and `dwr_unimpaired/uf_gauges.csv`.
+`calsim/calsim3_arc_derivation.csv`, `dwr_unimpaired/uf_gauges.csv` and
+`cdec_fnf/fnf_daily_mask.csv` (confirmed daily-target artifacts; see its README).
 
 All of it was derived once from the archived MATLAB-era study materials of Wi &
 Steinschneider (Cornell / UMass Amherst; CA DWR watershed studies) and from CalSim3

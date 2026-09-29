@@ -3,7 +3,9 @@
 Same ``_fix`` variant as the reference (HARD rain/snow split at ``PXTEMP``;
 the TTI mixture stays disabled).  Every reference branch is expressed as a
 ``torch.where``/mask blend whose FORWARD values match the reference exactly;
-only the gradients differ (subgradients at the branch points).
+only the gradients differ (subgradients at the branch points).  A learned
+per-cell PXTEMP (``params["PXTEMP_tau"]`` present) keeps the hard split in the
+forward and gets its gradient from a sigmoid surrogate (straight-through).
 
 Fidelity restorations vs the prior ``tmp/src_dpl`` port:
 
@@ -70,6 +72,13 @@ def snow17_step(
 
     # ---- form of precipitation (hard split at PXTEMP) ----
     is_snow = (tavg_t <= PXTEMP).to(dtype)
+    tau = p.get("PXTEMP_tau")
+    if tau is not None and torch.is_grad_enabled():
+        # learned threshold (DplConfig.pxtemp_learn): straight-through — the
+        # forward keeps the hard 0/1 split exactly (soft - soft.detach() == 0),
+        # the backward takes d(is_snow)/d(PXTEMP) from a sigmoid of width tau
+        soft = torch.sigmoid((PXTEMP - tavg_t) / tau)
+        is_snow = is_snow + (soft - soft.detach())
     rain = (1.0 - is_snow) * prcp_t
 
     # ---- accumulation ----

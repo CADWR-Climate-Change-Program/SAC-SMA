@@ -65,6 +65,9 @@ class EntityObs:
     month_code: np.ndarray             # (n_months,) year*12 + month0
     obs_monthly: torch.Tensor          # (M, n_months) mm/month, NaN-masked
     var_monthly: torch.Tensor          # (M,)
+    #: per dom.basins entry: observations removed by obs_mask (0 without one), so
+    #: scoring can check its counts against the registry n_obs
+    n_masked: tuple[int, ...] = ()
 
 
 def load_entity_obs(
@@ -73,10 +76,17 @@ def load_entity_obs(
     *,
     cal_start: str = ENVELOPE_START,
     cal_end: str = ENVELOPE_END,
+    obs_mask: tuple[str, ...] = (),
 ) -> EntityObs:
+    """``obs_mask`` (``DplConfig.obs_mask``, ``"entity_id|YYYY-MM-DD"``) drops those
+    daily observations.  An entry for a registry entity outside this run's basins
+    is skipped; an unknown entity, a monthly entity of this run (the mask is
+    daily-only), or a day that is not an observed in-window day raises (a stale
+    entry must not silently mask nothing)."""
     ddir = domain_dir(data_dir, MULTI_TIMESCALE_DOMAIN)
     reg = pd.read_csv(ddir / "entities.csv", dtype={"site_id": str},
                       parse_dates=["train_start", "train_end"])
+    known_ids = set(reg["entity_id"])
     reg = reg.set_index("entity_id").loc[list(dom.basins)]
 
     t0 = int(dom.dates.searchsorted(pd.Timestamp(cal_start)))
@@ -128,6 +138,25 @@ def load_entity_obs(
                for j in np.flatnonzero(n_fin != want)]
         raise ValueError(f"daily obs counts diverge from the registry n_obs: "
                          f"{bad[:5]}")
+    # hand-confirmed bad observations — applied after the n_obs check, which
+    # verifies the stores themselves
+    daily_ids = [dom.basins[i] for i in daily_rows]
+    n_masked = [0] * len(dom.basins)
+    for s in obs_mask:
+        eid, _, day = s.partition("|")
+        if eid not in known_ids:
+            raise ValueError(f"obs_mask {s!r}: unknown entity {eid!r}")
+        if eid not in dom.basins:
+            continue                            # the mask covers other runs too
+        if eid not in daily_ids:
+            raise ValueError(f"obs_mask {s!r}: {eid} is a monthly entity — the "
+                             "mask covers daily targets only")
+        j, k = daily_ids.index(eid), int(window.searchsorted(pd.Timestamp(day)))
+        if (k >= len(window) or window[k] != pd.Timestamp(day)
+                or not np.isfinite(obs_d[j, k])):
+            raise ValueError(f"obs_mask {s!r}: not an observed in-window day")
+        obs_d[j, k] = np.nan
+        n_masked[daily_rows[j]] += 1
     var_d = np.nanvar(obs_d, axis=1)
 
     # ---- monthly entities over the envelope's calendar months -----------
@@ -167,6 +196,7 @@ def load_entity_obs(
         month_code=month_code,
         obs_monthly=torch.as_tensor(obs_m).to(dom.device, dom.dtype),
         var_monthly=torch.as_tensor(var_m).to(dom.device, dom.dtype),
+        n_masked=tuple(n_masked),
     )
 
 
@@ -212,15 +242,20 @@ def monthly_nnse_loss(
     fin: torch.Tensor,           # (M, maxm) 1.0 on finite in-window slots
     var_monthly: torch.Tensor,   # (M,) fixed envelope variances
     min_months: int = 1,
+    n_total: float | None = None,
 ) -> torch.Tensor:
     """Chunk-additive NNSE over the monthly entities — the monthly mirror of
     :func:`sacsma.dpl.loss.masked_basin_loss`: per-entity mean squared error
     over the chunk's valid month slots, normalized by the FIXED per-entity
     variance (:attr:`EntityObs.var_monthly`, so summed chunk losses keep the
     NSE numerator/denominator structure), averaged over entities with at
-    least ``min_months`` valid slots.  Branch-free (no host sync)."""
+    least ``min_months`` valid slots.  Branch-free (no host sync).
+    ``n_total`` (``mt_share_norm="all"``): divide by this fixed entity count
+    instead of the chunk's valid count (``None`` = unchanged)."""
     n = fin.sum(dim=1)
     se = (sim_monthly - tgt) ** 2 * fin
     per = se.sum(dim=1) / n.clamp_min(1.0) / var_monthly.clamp_min(1e-12)
     valid = (n >= min_months).to(per.dtype)
+    if n_total is not None:
+        return (per * valid).sum() / float(n_total)
     return (per * valid).sum() / valid.sum().clamp_min(1.0)

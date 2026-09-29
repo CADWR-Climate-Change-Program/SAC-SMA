@@ -8,6 +8,7 @@ Built by `dataprep/cdec_fnf.py` (survey 2026-08-03). Re-run: bare = everything;
 | `stations.csv` | Every CDEC station with daily FNF (sensor 8, daily): id, name, lat/lon, advertised period. Classification of each station: the table below |
 | `fnf_daily.csv` | `station, date, flow_cfs` — daily FNF for the 4 pulled stations, verbatim cfs, through 2018-12-31 (forcing end) |
 | `fnf_daily_mm.csv` | `station, date, depth_mm` — derived depth companion for the two stations with a defined depth area (built by `dataprep/build_obs_depth.py`): CLE at 692.86 mi² (the `I_TRNTY` arc area) and CSN at the UF 13 arc-sum (539.1 mi²); negative-flow days dropped |
+| `fnf_daily_mask.csv` | **Hand-maintained.** `entity_id, date, value_mm, kind, partner_date, partner_mm, evidence` — daily-target observations confirmed as computation artifacts, for the dPL multi-timescale entities (any of the 17 `cdec_*`, whichever store they come from). Opt-in: `sacsma dpl train --obs-mask data/cdec_fnf/fnf_daily_mask.csv` masks them out of training and scoring (the checkpoint carries the list); the stores themselves stay as they are |
 
 ## Survey
 
@@ -71,6 +72,16 @@ most caution.
 - **`fnf_daily.csv` is cfs only, verbatim** — no depth column. Depth (mm/day) lives
   in the derived `fnf_daily_mm.csv`, for the two stations with a stated depth area
   (CLE and CSN, the CalSim3 arc areas in the table above).
+- **Artifact mask (`fnf_daily_mask.csv`, 2026-09-27).** Dropping a negative day
+  keeps its compensating positive partner — the day the reservoir-elevation error
+  reverses — as a spurious spike (CLE 1996-05-26: +102 mm after −92 mm, the
+  second-largest day of the Trinity record). A row is added only when the day is
+  confirmed against an independent record: the month's raw daily sum (negatives
+  kept) against CDEC's reconciled monthly FNF, and/or a nested USGS gauge showing
+  no rise. The 15 `gage.csv` basins already carry 22 such masks from the original
+  study; the five rows here are what that pass missed (CLE had none). The mask
+  does not fix the upward bias of low-flow targets from dropping negatives
+  (Aug–Sep store vs raw: CLE +40 %, FOL +48 %, NHG +97 %).
 - **Negative days kept** in `fnf_daily.csv` (the depth companion drops them) —
   mask `flow_cfs < 0` before use (negative flow is
   a computation artifact). Per the FNF report notes, daily

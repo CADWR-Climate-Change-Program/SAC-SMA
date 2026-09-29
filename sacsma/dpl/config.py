@@ -231,6 +231,37 @@ class DplConfig:
     #: gains invisibly).  0.0 disables (default = byte-identical baseline); a
     #: chunk mean over ~366 days is a stable statistic, like the std-ratio above.
     bias_loss_lambda: float = 0.0
+    #: per-chunk summer-RECESSION timing penalty: over 1 Jul - 30 Sep, the mean
+    #: squared difference of the normalized cumulative flow (share of the window's
+    #: volume passed by each day), sim vs obs — the recession shape, blind to volume,
+    #: with no pull on winter or the flood peaks (a whole-year curve pulled winter
+    #: volume against the other terms at most Sierra basins).  Daily entities only
+    #: (monthly rows have no daily obs).  0.0 disables (default = byte-identical
+    #: baseline).
+    timing_loss_lambda: float = 0.0
+    #: per-chunk FLOOD-PEAK penalty: the mean of the chunk's top peak_loss_frac
+    #: valid days, sim vs obs (each sorted on its own — the flow-duration curve's
+    #: high segment), their difference over the basin's RECORD mean of the yearly
+    #: observed top mean, Huber-capped at 1 — flood years carry it, drought years
+    #: weigh little.  Daily entities only.  0.0 disables (default = byte-identical
+    #: baseline).
+    peak_loss_lambda: float = 0.0
+    #: the share of a chunk's valid days the peak term averages (0.02: 7 days a year)
+    peak_loss_frac: float = 0.02
+    #: the timing and peak terms score a basin-chunk only with at least this many
+    #: valid observed days (whole water years; the short envelope tail and sparse
+    #: years drop out); their record constants come from the same years
+    shape_min_days: int = 300
+    #: the timing term skips a basin-chunk whose observed Jul-Sep mean flow is under
+    #: this share of the basin's record mean flow (a dry summer has no recession to
+    #: match); it also needs 60 valid Jul-Sep days
+    timing_vol_gate: float = 0.05
+    #: daily-target observations MASKED out of training and scoring, as
+    #: ``"entity_id|YYYY-MM-DD"`` strings (the CLI reads them from a hand-edited
+    #: CSV such as data/cdec_fnf/fnf_daily_mask.csv; the checkpoint carries the
+    #: list, so evaluation masks the identical days).  Multi-timescale domain
+    #: only.  Empty = the stores as-is (default).
+    obs_mask: tuple[str, ...] = ()
 
     # -- regularizers (opt-in; ALL default-off => byte-identical baseline) ----
     #: attribute-weighted geographic smoothness of the per-HRU parameter FIELD
@@ -305,6 +336,37 @@ class DplConfig:
     #: adaptive_loss (both drive the same per-basin weight vector).  Ignored
     #: outside the multi-timescale domain.
     mt_family_weight: str = "none"
+    #: how a chunk's loss normalizes the family-weighted entities (only with
+    #: mt_family_weight shares or "equal"): "present" (default) divides by the
+    #: weight of the entities scored in THAT chunk, so a chunk holding one
+    #: family gives it the whole daily term — on the 95-entity set the USGS
+    #: creeks train WY1950-84 and CDEC/uf from WY1985, and nominal shares
+    #: 0.216/0.558/0.226 come out ~0.57/0.34/0.10 over the chunks; "all"
+    #: divides by the weight of EVERY entity of the run (the monthly term by
+    #: the number of monthly entities), so each entity always carries
+    #: share_f / n_f and a family's term scales with how many of its entities
+    #: a chunk holds — summed over the chunks the shares hold as loss
+    #: COEFFICIENTS, approximately (each family's total scales with its mean
+    #: scored chunks per entity: 95-entity set 0.234/0.546/0.220).  They are
+    #: not the families' shares of the loss or gradient: the monthly NNSE runs
+    #: ~10x smaller per entity than the daily NNSE + log + var terms.
+    mt_share_norm: str = "present"
+    #: FROZEN per-family loss scale (needs mt_share_norm="all"): "usgs=a,cdec=b,
+    #: uf=c" = each family's per-entity chunk loss per unit coefficient (the
+    #: chunk_log's sum l_f / sum c_f) at a REFERENCE state.  Every family term
+    #: is multiplied by kappa_f = Lbar / L_ref_f^p, Lbar = sum_f share_f
+    #: L_ref_f^p (p = mt_loss_ref_power; only the ratios of the values matter),
+    #: fixed for the whole run: the objective stays linear.  p = 1: at the
+    #: reference each family's share of the LOSS equals its share (the total
+    #: loss there unchanged) — but not of the gradient: per unit loss the
+    #: monthly NNSE gradient runs 1.4-1.9x the daily one at trained states, and
+    #: p = 0.5 is what matches the optimizer-step shares there.  Selection keeps
+    #: the nominal shares.  "" (default) = off, byte-identical.
+    mt_loss_ref: str = ""
+    #: the exponent p of mt_loss_ref (0 < p <= 1) — REQUIRED with mt_loss_ref
+    #: (no default: p = 1 and p = 0.5 differ by 2x in the monthly weight), None
+    #: without it
+    mt_loss_ref_power: float | None = None
     #: warm-start checkpoint path: the net's weights are loaded strict=False
     #: BEFORE training (heads absent from the donor — e.g. a fresh seasonal
     #: head — keep their zero-init, so the run starts EXACTLY at the donor's
@@ -363,6 +425,16 @@ class DplConfig:
     #: differ by ~2x) gets a comparable RELATIVE day-of-year swing rather than the
     #: same additive one (0.10 -> Kpet +/-0.21, MFMAX/MFMIN +/-0.50, MBASE +/-0.50).
     seasonal_amp_frac: float = 0.10
+    #: LEARN the Snow-17 rain/snow threshold PXTEMP per cell (otherwise the GA
+    #: constant 0 degC of FIXED_PARAMS).  A separate zero-init head emits PXTEMP
+    #: inside ``pxtemp_box`` (exactly 0 at init, so the untrained forward is the
+    #: fixed-threshold one); the physics keeps the reference HARD split — forward
+    #: values unchanged — and trains the threshold through a straight-through
+    #: sigmoid surrogate of width ``pxtemp_tau`` degC.  The exported per-HRU
+    #: PXTEMP column runs as-is in the frozen run_basin (same hard split).
+    pxtemp_learn: bool = False
+    pxtemp_box: tuple[float, float] = (-1.0, 3.0)
+    pxtemp_tau: float = 1.0
     #: parameters made time-varying via a CLIMATE-STATE response (generalizes the
     #: seasonal harmonic): the net emits a bounded coeff b per param and the
     #: physics reconstructs param(t) = clamp(base + b*state(t), lo, hi), where
@@ -479,7 +551,46 @@ class DplConfig:
     #: whole-chunk graph path captures each length.  Needs train_chunk_days ==
     #: 366 and a window that starts on 1 Oct.
     chunk_grid: str = "fixed"
-    eval_every: int = 2             # full-cal no-grad KGE selection cadence
+    #: how the gradient sees the state carried into a TBPTT chunk.  "absolute": the
+    #: detached SAC contents (the gradient treats them as constants, so a larger
+    #: capacity looks like free deficit at every chunk start — the 1-water-year
+    #: truncation overweights the tension capacities' pull 5-170x against the full
+    #: sequence).  "relative": each incoming SAC content c is carried as
+    #: c * (cap / cap.detach()) — the same value (x/x == 1 exactly), but the backward
+    #: holds the relative saturation fixed, dc/dcap = c/cap (ADIMC against
+    #: uztwm + lztwm).  Snow, routing history and canopy water pass unchanged.
+    #: "flux": "relative" plus lzfsc * lzsk.detach()/lzsk and lzfpc * lzpk.detach()/lzpk
+    #: — the backward also holds each lower-zone free store's carried drainage flux
+    #: k*S fixed, dS/dk = -S/k: a faster store carries less water into the next water
+    #: year, which the 1-water-year truncation otherwise never sees (it flips the sign
+    #: of d loss / d lzsk at slow spring-fed basins such as Shasta).
+    #: Segmented-graph and eager chunk paths only.
+    tbptt_carry: str = "absolute"
+    #: TBPTT window in water years (``chunk_grid = "water_year"`` only; 1-3).  1: each
+    #: chunk backpropagates within its own water year.  2: overlapping windows — a
+    #: live chunk runs the PREVIOUS water year and its own with autograd through
+    #: both and the loss on its own year only (the previous year is a gradient-
+    #: carrying burn-in), so the gradient sees how a parameter shapes the water
+    #: carried into the scored year, which a 1-year chunk detaches.  The carried
+    #: state still advances one water year per step; dead chunks advance it
+    #: forward-only, and the first chunk and the short envelope tail keep 1-year
+    #: windows.  About twice the compute and activation memory per live chunk
+    #: (3: the previous two water years as the burn-in, about three times).  Needs
+    #: ``dead_chunk_nograd`` on a domain with dead chunks.  On a domain whose FIRST
+    #: chunk is live, the first n - 1 chunks run their 1-year windows eagerly beside
+    #: the n-year graph (slower, and peak memory about n + 1 years).
+    #: Segmented-graph and eager chunk paths only.
+    tbptt_window_years: int = 1
+    #: > 0: CUDA-graph ACTIVATION RECOMPUTE — ONE captured graph of this many days
+    #: (fwd + bwd) replayed over every training window (graphs.RecomputeTrainWindow):
+    #: the forward keeps only the segment-boundary states and the backward re-runs
+    #: each segment from its stored state, so graph memory is one segment's whatever
+    #: the window length (a multi-year ``tbptt_window_years`` window included), for
+    #: about one extra forward per segment.  Replaces the segmented / whole-chunk
+    #: train graphs (days past the last whole segment run eagerly); 73 divides 365,
+    #: 730 and 1095.  0 = off (the captures above).
+    graph_recompute_days: int = 0
+    eval_every: int = 2            # full-cal no-grad KGE selection cadence
     patience: int = 10              # early stop after this many stale selections
     #: early stopping is armed from this epoch on: a stale streak that ends
     #: before it never stops the run (0 = armed from the start)
@@ -538,6 +649,27 @@ class DplConfig:
             raise ValueError(f"init_gate {self.init_gate!r}")
         if self.mt_family_weight not in ("none", "equal"):
             family_shares(self.mt_family_weight)   # raises on a bad spec
+        if self.mt_share_norm not in ("present", "all"):
+            raise ValueError(f"mt_share_norm {self.mt_share_norm!r}: 'present' or 'all'")
+        if self.mt_share_norm == "all" and self.mt_family_weight == "none":
+            raise ValueError("mt_share_norm='all' normalizes family SHARES — it needs "
+                             "mt_family_weight shares or 'equal'")
+        if self.mt_loss_ref:
+            family_loss_refs(self.mt_loss_ref)          # raises on a bad spec
+            if self.mt_share_norm != "all":
+                # under "present" a chunk's daily denominator is its own scored
+                # weight (kappa included), cancelling kappa in every chunk that
+                # scores one daily family — the scale would not be the one logged
+                raise ValueError("mt_loss_ref scales the family terms of the fixed-"
+                                 "denominator loss — it needs mt_share_norm='all'")
+            if self.mt_loss_ref_power is None:
+                raise ValueError("mt_loss_ref needs an explicit mt_loss_ref_power "
+                                 "(0 < p <= 1)")
+            self.mt_loss_ref_power = float(self.mt_loss_ref_power)
+            if not 0.0 < self.mt_loss_ref_power <= 1.0:
+                raise ValueError(f"mt_loss_ref_power {self.mt_loss_ref_power} outside (0, 1]")
+        elif self.mt_loss_ref_power is not None:
+            raise ValueError("mt_loss_ref_power has no effect without mt_loss_ref")
         if self.train_graph_segments < 1:
             raise ValueError(f"train_graph_segments {self.train_graph_segments} < 1")
         if self.nograd_window < 1:
@@ -551,6 +683,16 @@ class DplConfig:
                              "outside [30, 366]")
         if self.chunk_grid not in ("fixed", "water_year"):
             raise ValueError(f"chunk_grid {self.chunk_grid!r}")
+        if self.tbptt_carry not in ("absolute", "relative", "flux"):
+            raise ValueError(f"tbptt_carry {self.tbptt_carry!r}")
+        if not 0 <= self.graph_recompute_days <= 366:
+            raise ValueError(f"graph_recompute_days {self.graph_recompute_days} "
+                             "outside [0, 366]")
+        if self.tbptt_window_years not in (1, 2, 3):
+            raise ValueError(f"tbptt_window_years {self.tbptt_window_years!r}: 1, 2 or 3")
+        if self.tbptt_window_years > 1 and self.chunk_grid != "water_year":
+            raise ValueError(f"tbptt_window_years {self.tbptt_window_years} needs chunk_grid "
+                             "'water_year' (the burn-in is the previous water-year chunks)")
         if self.chunk_grid == "water_year" and self.train_chunk_days != 366:
             # the water-year grid sets its own lengths; a different value would be
             # ignored silently
@@ -560,6 +702,21 @@ class DplConfig:
             raise ValueError(f"var_gate_frac {self.var_gate_frac} must be finite and >= 0")
         if not math.isfinite(self.var_huber_cap):
             raise ValueError(f"var_huber_cap {self.var_huber_cap} must be finite (<= 0 = uncapped)")
+        if not (math.isfinite(self.timing_loss_lambda) and self.timing_loss_lambda >= 0.0
+                and math.isfinite(self.peak_loss_lambda) and self.peak_loss_lambda >= 0.0):
+            raise ValueError("timing_loss_lambda and peak_loss_lambda must be finite and >= 0")
+        if not 0.0 < self.peak_loss_frac <= 0.5:
+            raise ValueError(f"peak_loss_frac {self.peak_loss_frac} outside (0, 0.5]")
+        if not 90 <= self.shape_min_days <= 366:
+            raise ValueError(f"shape_min_days {self.shape_min_days} outside [90, 366]")
+        if not 0.0 <= self.timing_vol_gate < 1.0:
+            raise ValueError(f"timing_vol_gate {self.timing_vol_gate} outside [0, 1)")
+        if ((self.timing_loss_lambda > 0.0 or self.peak_loss_lambda > 0.0)
+                and self.chunk_grid != "water_year"):
+            # the terms and their record constants are defined per water year; the
+            # fixed grid drifts off it by a day a year
+            raise ValueError("timing_loss_lambda / peak_loss_lambda need chunk_grid "
+                             "'water_year' (they score whole water years)")
         if self.spinup_mode not in ("window", "cycle"):
             raise ValueError(f"spinup_mode {self.spinup_mode!r}")
         if (self.spinup_years < 1 or not 2 <= self.spinup_warm_passes <= self.spinup_passes
@@ -587,6 +744,33 @@ class DplConfig:
             # forward._seasonal clamps a time-varying parameter to BOUNDS, not the box
             raise ValueError(f"param_box {clash}: a boxed parameter cannot also be "
                              "seasonal or dynamic")
+        plo, phi = (float(v) for v in self.pxtemp_box)
+        if not (math.isfinite(plo) and math.isfinite(phi) and plo <= 0.0 <= phi
+                and plo < phi):
+            # the zero-init head starts at exactly 0 degC (the GA constant), so the
+            # box must contain it
+            raise ValueError(f"pxtemp_box {self.pxtemp_box} must satisfy lo <= 0 <= hi, "
+                             "lo < hi")
+        self.pxtemp_box = (plo, phi)
+        if not (math.isfinite(self.pxtemp_tau) and self.pxtemp_tau > 0.0):
+            raise ValueError(f"pxtemp_tau {self.pxtemp_tau} must be finite and > 0")
+        if self.pxtemp_learn and "PXTEMP" in (set(self.seasonal_params)
+                                              | set(self.dynamic_params)):
+            raise ValueError("a learned PXTEMP cannot also be seasonal or dynamic")
+        if isinstance(self.obs_mask, str):      # tolerate a bare string
+            self.obs_mask = tuple(s for s in self.obs_mask.split(",") if s)
+        self.obs_mask = tuple(str(s) for s in self.obs_mask)
+        from datetime import date as _date
+        for s in self.obs_mask:
+            eid, sep, day = s.partition("|")
+            try:
+                _date.fromisoformat(day)
+            except ValueError:
+                sep = ""
+            if not (sep and eid):
+                raise ValueError(f"obs_mask entry {s!r}: expected 'entity_id|YYYY-MM-DD'")
+        if len(set(self.obs_mask)) != len(self.obs_mask):
+            raise ValueError("obs_mask has duplicate entries")
         if isinstance(self.et_products, str):   # tolerate a bare CLI string
             self.et_products = tuple(p for p in self.et_products.split(",") if p)
         if (len(self.et_products) == 1
@@ -709,4 +893,29 @@ def family_shares(spec: str) -> dict[str, float] | None:
         shares[fam] = share
     tot = sum(shares.values())
     return {f: v / tot for f, v in shares.items()}
+
+
+def family_loss_refs(spec: str) -> dict[str, float]:
+    """Parse an ``mt_loss_ref`` spec ("usgs=0.7368,cdec=0.4202,uf=0.0980") into
+    ``{family_id: L_ref}`` — each family's per-entity chunk loss per unit
+    coefficient at the reference state (unnormalized; only the ratios reach the
+    loss, through ``kappa_f = Lbar / L_ref_f``)."""
+    refs: dict[str, float] = {}
+    for item in spec.split(","):
+        if "=" not in item:
+            raise ValueError(f"mt_loss_ref {spec!r}: expected family=level items")
+        key, val = (t.strip() for t in item.split("=", 1))
+        fam = FAMILY_KEYS.get(key, key)
+        if fam not in FAMILY_KEYS.values():
+            raise ValueError(f"mt_loss_ref {spec!r}: unknown family {key!r} (usgs, cdec, uf)")
+        if fam in refs:
+            raise ValueError(f"mt_loss_ref {spec!r}: {key!r} repeated")
+        try:
+            v = float(val)
+        except ValueError as e:
+            raise ValueError(f"mt_loss_ref {spec!r}: level {val!r}") from e
+        if not (math.isfinite(v) and v > 0.0):
+            raise ValueError(f"mt_loss_ref {spec!r}: levels must be finite and > 0")
+        refs[fam] = v
+    return refs
 

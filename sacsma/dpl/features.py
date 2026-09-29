@@ -20,6 +20,10 @@ soil/veg, the one-hots), so their parameter field is climate-frozen:
   years).  The PCA is fit once on all 4410 region cells — no training data
   involved — and stored in the :class:`FeatureSet`, so an evaluation projects
   exactly as the training did;
+* ``aef64`` — the same store without the PCA: all :data:`AEF_DIMS` coordinates
+  of the unit direction plus the length, each z-scored on its own, so the
+  embedding keeps its own geometry (the ``aef`` PCs are z-scored one by one,
+  which gives a PC holding <1 % of the variance the input scale of PC1);
 * ``aef_random`` — its control: :data:`AEF_PCS` + 1 standard-normal values per
   cell, seeded by the cell key.  They carry the cell's identity and nothing
   about its land surface, so a gain the ``aef`` arm shares with this control is
@@ -80,7 +84,10 @@ PHYSICAL_FEATURES = (
 #: the AlphaEarth store under the data directory (dataprep/gee_aef_region.py)
 AEF_STORE = Path("region") / "aef" / "aef_cell_mean.npz"
 AEF_PCS = 16                       # principal components of the unit directions
-AEF_VARIANTS = ("aef", "aef_random")
+AEF_DIMS = 64                      # the embedding width (aef64 feeds all of it)
+AEF_VARIANTS = ("aef", "aef64", "aef_random")
+#: the variants that read the AlphaEarth store (callers pass ``aef_path``)
+AEF_STORE_VARIANTS = ("aef", "aef64")
 VARIANTS = ("static", "climate", "physical", "physical_climate") + AEF_VARIANTS
 
 
@@ -105,7 +112,7 @@ class FeatureSet:
     #: field, from before ``flowlen_feature``, carries the full tuple)
     statics: tuple[str, ...] = CONTINUOUS_STATICS
     #: ``aef``: the region-cell PCA of the unit embedding directions — mean
-    #: (64,) and components (AEF_PCS, 64)
+    #: (64,) and components (AEF_PCS, 64); ``aef64``: zeros and the identity
     aef_mean: np.ndarray | None = None
     aef_basis: np.ndarray | None = None
     #: ``aef_random``: the seed of the per-cell random vectors
@@ -216,9 +223,10 @@ def aef_pca(path: str | Path) -> tuple[np.ndarray, np.ndarray]:
 
 
 def aef_features(hrus: pd.DataFrame, path: str | Path, mean: np.ndarray,
-                 basis: np.ndarray) -> pd.DataFrame:
+                 basis: np.ndarray, prefix: str = "aef_pc") -> pd.DataFrame:
     """Per HRU row: the cell's unit embedding direction projected on ``basis``
-    (``aef_pc01``..) and the length of its mean vector (``aef_len``)."""
+    (``aef_pc01``.., or ``<prefix>01``..) and the length of its mean vector
+    (``aef_len``)."""
     z = np.load(path, allow_pickle=True)
     pos = {k: i for i, k in enumerate(z["keys"].astype(str))}
     keys = hrus["key"].astype(str).to_numpy()
@@ -229,7 +237,7 @@ def aef_features(hrus: pd.DataFrame, path: str | Path, mean: np.ndarray,
     e = z["emb"].astype(np.float64)[[pos[k] for k in keys]]
     n = np.linalg.norm(e, axis=1)
     pcs = (e / n[:, None] - mean) @ basis.T
-    out = {f"aef_pc{i + 1:02d}": pcs[:, i] for i in range(basis.shape[0])}
+    out = {f"{prefix}{i + 1:02d}": pcs[:, i] for i in range(basis.shape[0])}
     out["aef_len"] = n
     return pd.DataFrame(out, index=hrus.index)
 
@@ -297,14 +305,17 @@ def build_features(
             names.append(c)
     a_mean = a_basis = None
     a_seed = stats.aef_seed if stats is not None else aef_seed
-    if variant == "aef":
+    if variant in AEF_STORE_VARIANTS:
         if aef_path is None:
-            raise ValueError("aef variant needs aef_path (features.aef_store)")
+            raise ValueError(f"{variant} variant needs aef_path (features.aef_store)")
         if stats is not None:
             a_mean, a_basis = np.asarray(stats.aef_mean), np.asarray(stats.aef_basis)
-        else:
+        elif variant == "aef":
             a_mean, a_basis = aef_pca(aef_path)
-        emb = aef_features(hrus, aef_path, a_mean, a_basis)
+        else:                                     # aef64: the raw unit directions
+            a_mean, a_basis = np.zeros(AEF_DIMS), np.eye(AEF_DIMS)
+        emb = aef_features(hrus, aef_path, a_mean, a_basis,
+                           prefix="aef_pc" if variant == "aef" else "aef_d")
     elif variant == "aef_random":
         emb = random_features(hrus, a_seed, AEF_PCS + 1)
     if embed:
