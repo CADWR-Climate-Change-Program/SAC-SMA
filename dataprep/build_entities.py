@@ -22,6 +22,14 @@ Families:
   usgs_daily   69 reference gauges          (gauges.csv / flow_daily.nc)
   cdec_daily   17 = 15 committed + CLE + CSN  (cdec15/gage.csv, cdec_fnf/)
   obs11_monthly SHA + TNL built for lineage, both dropped (SIS/CLE daily twins)
+  calsim_monthly  196 CalSim3 rim INFLOW arcs — ONLY with --calsim-arcs, appended
+                after the 95 (whose rows stay byte-identical): one entity per arc
+                of data/calsim/calsim3_inflow_monthly_mm.csv, cs_<ARC>, the arc's
+                SQ_MI as area, n_obs = its trainable months under
+                data/calsim/arc_obs_mask.csv, tier/duplicate/training-USGS flags
+                from data/calsim/arc_hierarchy.csv (dataprep/build_calsim_arcs.py
+                builds all three).  No outlet coordinate: flow lengths trace to
+                the footprint exit, like uf_07.
 
 Outlet coordinates, one source per family:
   - UF entities: data/dwr_unimpaired/uf_gauges.csv (hand-maintained; rows
@@ -48,6 +56,7 @@ The uf_monthly family carries TWO area columns:
 
 Usage (sacsma conda env):
     python dataprep/build_entities.py [--data-dir data] [--out data/multifamily/entities.csv]
+        [--calsim-arcs]
 """
 
 from __future__ import annotations
@@ -135,6 +144,12 @@ DEDUP_DROPS = {
 # it is the only supervision of the Cache Creek cells; whether it trains is
 # the run's choice (``--basins``).  Add "uf_03" here to drop it at build time.
 TARGET_DROPS: tuple[str, ...] = ()
+
+#: the CalSim3 arc family (--calsim-arcs): training window = WY1950-2015 (the arc
+#: mask removes the WY1976-85 holdout and every non-record month)
+CALSIM_FAMILY = "calsim_monthly"
+CALSIM_TRAIN_START, CALSIM_TRAIN_END = "1949-10-01", "2015-09-30"
+CALSIM_OBS_STORE = "calsim/calsim3_inflow_monthly_mm.csv:depth_mm"
 
 
 def _entity(entity_id, family, timescale, site_id, name, delineation, arcs,
@@ -332,10 +347,49 @@ def build(data_dir: Path) -> pd.DataFrame:
               .reset_index(drop=True))
 
 
+def build_calsim(data_dir: Path) -> pd.DataFrame:
+    """The calsim_monthly rows: one per arc of the depth store (hierarchy order)."""
+    cdir = data_dir / "calsim"
+    hier = pd.read_csv(cdir / "arc_hierarchy.csv").set_index("arc")
+    depth = pd.read_csv(cdir / "calsim3_inflow_monthly_mm.csv", parse_dates=["date"])
+    mask = pd.read_csv(cdir / "arc_obs_mask.csv", parse_dates=["date"])
+    deriv = pd.read_csv(cdir / "calsim3_arc_derivation.csv").set_index("arc")
+    arcs = [a for a in hier.index if a in set(depth["arc"])]
+    fin = depth[depth["depth_mm"].notna()]
+    rec0 = fin.groupby("arc")["date"].min()
+    t0, t1 = pd.Timestamp(CALSIM_TRAIN_START), pd.Timestamp(CALSIM_TRAIN_END)
+    # trainable months: in the mask, finite in the store, inside the window
+    m = mask.merge(fin[["arc", "date"]], on=["arc", "date"])
+    m = m[(m["date"] >= t0) & (m["date"] <= t1)]
+    n_obs = m.groupby("arc").size()
+    rows = []
+    for arc in arcs:
+        h = hier.loc[arc]
+        flags = [f"tier_{h['tier']}"]
+        if bool(h["train_default"]):
+            flags.append("train_default")
+        if isinstance(h["duplicates_entity"], str) and h["duplicates_entity"]:
+            flags.append(f"duplicates_{h['duplicates_entity']}")
+        if isinstance(h["usgs_training_gauge"], str) and h["usgs_training_gauge"]:
+            flags += [f"training_usgs_{g}" for g in h["usgs_training_gauge"].split(";")]
+        name = (str(deriv.loc[arc, "name"]) if arc in deriv.index
+                else f"{arc} (CalSim3 rim inflow)")
+        rows.append(_entity(
+            f"cs_{arc}", CALSIM_FAMILY, "monthly", arc, name, "arcs", arc,
+            float(h["sq_mi"]), None, None, None, "",
+            rec0[arc].to_period("M").start_time.date().isoformat(),
+            CALSIM_TRAIN_START, CALSIM_TRAIN_END, int(n_obs.get(arc, 0)),
+            CALSIM_OBS_STORE, ";".join(flags)))
+    return pd.DataFrame(rows)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--data-dir", default="data", type=Path)
     ap.add_argument("--out", default=Path("data/multifamily/entities.csv"), type=Path)
+    ap.add_argument("--calsim-arcs", action="store_true",
+                    help="also append the calsim_monthly family (196 CalSim3 rim arcs) "
+                         "after the 95 base entities")
     args = ap.parse_args()
 
     df = build(args.data_dir)
@@ -358,6 +412,17 @@ def main() -> None:
     assert late.empty, late["entity_id"].tolist()
     missing = df[df["outlet_lat"].isna()]["entity_id"].tolist()
     assert missing == ["uf_07"], missing  # composite, null by design
+
+    if args.calsim_arcs:
+        cs = build_calsim(args.data_dir)
+        assert len(cs) == 196 and cs["entity_id"].is_unique, len(cs)
+        assert not set(cs["entity_id"]) & set(df["entity_id"])
+        n_default = int(cs["flags"].str.split(";").map(lambda f: "train_default" in f).sum())
+        assert n_default == 64, n_default
+        df = pd.concat([df, cs], ignore_index=True)
+        print(f"calsim_monthly: {len(cs)} arcs appended; {n_default} train_default; "
+              f"n_obs {int(cs['n_obs'].sum())} arc-months "
+              f"({int((cs['n_obs'] > 0).sum())} arcs with an own record)")
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(args.out, index=False)

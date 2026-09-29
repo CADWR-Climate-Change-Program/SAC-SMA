@@ -1,13 +1,27 @@
 # data/multifamily — multi-timescale training-entity registry
 
-`entities.csv`: 95 training entities — 9 `uf_monthly` + 69 `usgs_daily` +
-17 `cdec_daily` (15 + CLE + CSN). One row per (site × timescale × family);
-every target trains as an independent entity. Which entities a run trains
-on is chosen at launch (`dpl train --basins`); the registry is the superset.
+`entities.csv`: 291 entities — the 95 base training entities (9
+`uf_monthly` + 69 `usgs_daily` + 17 `cdec_daily`: 15 + CLE + CSN),
+followed by the opt-in `calsim_monthly` family of 196 CalSim3 rim arcs (see
+"The CalSim3 arc family" below). One row per (site × timescale × family); every target trains
+as an independent entity. Which entities a run trains on is chosen at launch
+(`dpl train --basins`; a run without it takes the 95 base entities); the
+registry is the superset.
 
-Generated file — do not edit. Regenerate (sacsma conda env):
-`python dataprep/build_entities.py`. UF pour points are hand-maintained in
-`data/dwr_unimpaired/uf_gauges.csv`.
+Generated files — do not edit. The committed `entities.csv`,
+`entity_cells.csv` and `flowlens.csv` are the `--calsim-arcs` build.
+Regenerate them in this order, from the repo root:
+
+    python dataprep/build_calsim_arcs.py                 # sacsma env; the three arc tables under calsim/
+    python dataprep/build_entities.py --calsim-arcs      # sacsma env
+    python dataprep/build_entity_cells.py --calsim-arcs  # sacsma env
+    python dataprep/build_flowlens.py --calsim-arcs      # needs rasterio; appends the arc rows
+
+Without `--calsim-arcs`, `build_entities.py` and `build_entity_cells.py`
+write the 95-entity base tables over the committed ones.
+`build_calsim_arcs.py` reads the registry's base rows, so starting without a
+registry, run `build_entities.py` once without the flag first. UF pour
+points are hand-maintained in `data/dwr_unimpaired/uf_gauges.csv`.
 
 A de-duplication rule is applied at build time: a watershed does not
 train at both daily and monthly timescales unless its daily record is short
@@ -29,6 +43,63 @@ evaporation into the runoff parameters the inflow arcs then reapply. The
 row is kept (flag `obs_routed_through_lakes`) so a run without the USGS
 family can still supervise the Cache Creek cells; a run with the in-basin
 USGS gauges can leave it out via `--basins`.
+
+## The CalSim3 arc family (`--calsim-arcs`, opt-in)
+
+The committed tables carry this family. Built with `--calsim-arcs` (build
+order above), the three builders append it after the 95 base entities, whose
+rows stay byte-identical (the builders gate it). Its inputs come from
+`python dataprep/build_calsim_arcs.py`: `calsim/arc_hierarchy.csv`,
+`calsim/arc_obs_mask.csv` and `calsim/calsim3_inflow_monthly_mm.csv`.
+Without the flag, `build_entities.py` writes only the 95 base rows and
+`build_entity_cells.py` ignores any `calsim_monthly` rows in the registry,
+so both rebuild the base tables byte for byte from either registry.
+`build_flowlens.py --calsim-arcs` traces only the arc entities and appends
+them to the existing store, whose base rows it copies byte for byte; a
+`build_flowlens.py` run without the flag re-traces every entity the
+registry holds.
+
+`calsim_monthly` — 196 entities, one per CalSim3 rim `INFLOW` arc with a
+series and a `CalSim3_Merged` polygon (the below-rim `EXCLUDE_ARCS` and the
+polygon-less `I_RUB002`, `I_JBP006`, `I_FSL012` have none):
+
+- `entity_id` `cs_<ARC>` (e.g. `cs_I_ALMNR`), `site_id` = the arc,
+  `delineation` `arcs`, `arcs` = the arc itself, `area_mi2` = its `SQ_MI`
+  (unrounded: the depth basis of the store), no outlet coordinate;
+- `obs_store` `calsim/calsim3_inflow_monthly_mm.csv:depth_mm`, kept only on the
+  months of `calsim/arc_obs_mask.csv` (the arc's own gauge record: listed
+  period minus the report's correlation-extension years, WY1950-75 +
+  WY1986-2015 only, so the WY1976-85 holdout never enters);
+  `train_start/end` 1949-10-01 / 2015-09-30; `n_obs` = the arc's mask months
+  (0 for donor-split, proportioned, reservoir-without-record and no-record
+  arcs — the loader refuses those if selected);
+- `flags`: `tier_<A-F|X>` (from `arc_hierarchy.csv`), `train_default` (tier
+  A and not an entity duplicate: 64 arcs, 25,523 arc-months),
+  `duplicates_<entity>` (the 7 arcs that are a single-arc training entity:
+  I_SHSTA, I_TRNTY, I_MLRTN, I_MCLRE, I_NHGAN, I_PTH070, I_ESTMN),
+  `training_usgs_<gid>` (built from a registry USGS gauge; 9 of the tier-A
+  arcs).
+
+Cells: the `arcs` path of the base entities (square-overlap of the arc's
+polygon; the 7 duplicates reproduce their entity's cells exactly). The
+overlap sum equals the polygon's true area to 1e-9 but departs from the
+`SQ_MI` attribute by -3.1% .. +1.5% for single arcs (55 of 196 beyond
+0.2%; the attribute error averages out in multi-arc entities). 3,842 rows,
+2,393 cells, 197 of them outside the 2,652-cell base basis.
+
+Flow lengths: no outlet coordinate, so every cell is traced to where its path
+leaves the arc's cell-square footprint — uf_07's mode (the builder re-traces
+uf_07 and asserts its stored rows are reproduced exactly) and tier 2's
+convention for arcs. Fallback weight 0.8%. These lengths run shorter than an
+outlet-snapped trace (the 7 duplicate arcs: mean 0.49-0.87 of their
+entity's length, r 0.06-0.71): paths along a footprint edge exit early.
+
+Loading: `load_domain_tensors(basins=None)` (a run without `--basins`) keeps
+the 95 base entities — the arc family loads only when named. Training on it
+(the fourth family's loss weight, anchor rescaling) is not wired yet: with
+`--mt-family-weight none` the monthly loss term would pool named `cs_*`
+entities with the `uf_monthly` ones, and a family-share run refuses them
+(`calsim_monthly` has no share key in `config.FAMILY_KEYS`).
 
 ## Columns
 
@@ -76,15 +147,18 @@ coverage is complete.
 
 ## entity_cells.csv — cell sets and weights
 
-One row per (entity, region grid cell): 5,849 rows, 95 entities, 2,652
-distinct cells of `data/region/grid_cells.csv`. Replaces the per-domain
-`hruinfo` tables as the aggregation basis for entity training.
+One row per (entity, region grid cell): 9,691 rows on 2,849 distinct cells
+of `data/region/grid_cells.csv`. The base set's 5,849 rows (95 entities,
+2,652 cells) come first, then the arc family's 3,842 (196 entities, 2,393
+cells, 197 of them outside the base set). Replaces the per-domain `hruinfo`
+tables as the aggregation basis for entity training.
 
 Flow lengths live in `flowlens.csv` (below), keyed identically; outlet
 coordinates live in the registry only.
 
 Generated file — do not edit. Regenerate (sacsma conda env):
-`python dataprep/build_entity_cells.py`.
+`python dataprep/build_entity_cells.py --calsim-arcs` (without the flag it
+writes the 5,849-row base table).
 
 | column | meaning |
 |---|---|
@@ -97,7 +171,7 @@ Weights come from square-overlap mapping of `CalSim3_Merged` polygons
 original SAC-SMA boundary polygons (`sacsma_15cdec_gis`, Tulare 4 —
 `data/cdec15/gis/SACSMA_15CDEC.geojson`; supersedes the inherited
 `cdec15_grid` weights, which the new mapping reproduces at r ≥ 0.99 on
-the common cells). Per-entity Σoverlap reproduces each footprint's
+the common cells). Per-entity Σoverlap reproduces each base footprint's
 reference area to +0.14% worst-case (uf_10; the build asserts <0.2%). The
 mapped sums equal the polygons' true geometric areas — the small positive
 residual is mostly the gpkg `SQ_MI` attributes running ~0.05–0.12% below
@@ -105,7 +179,7 @@ true geometric area, plus a once-per-arc count of arc-overlap slivers
 (largest pairwise overlap 1.4% of the smaller arc; ≤0.04% at entity
 level).
 
-Cell basis: the store's cell union is 2,652 distinct cells. The dropped
+Cell basis: the base set's cell union is 2,652 distinct cells. The dropped
 monthly twins contribute none of their own (their cells are their daily
 twins'; TNL's extra `I_LWSTN` cells are those of `usgs_11525500`); the
 Tulare polygons reach 8 edge cells beyond the `cdec15_grid` cell sets;
@@ -137,15 +211,20 @@ time.
 ## flowlens.csv — per-entity traced flow lengths
 
 One row per (entity, region grid cell), covering exactly the
-`entity_cells.csv` pairs (5,849 rows). `flowlen_m` is the along-network
-distance (m) from the cell to the entity outlet, traced on the
+`entity_cells.csv` pairs (9,691 rows: 5,849 base + 3,842 arc-family
+rows, the latter traced as "The CalSim3 arc family" describes).
+`flowlen_m` is the along-network distance (m) from the cell to the entity
+outlet, traced on the
 HydroSHEDS v2 1-arcsec flow-direction grid (TanDEM-X basis,
 hydrosheds.org; see `references.bib`).
 
 Generated file — do not edit. Regenerate (sacsma conda env + `pip
-install rasterio`): `python dataprep/build_flowlens.py` — auto-downloads
-the four DIR + ACC tiles to `tmp/hydrosheds/` (~6 GB, size-validated,
-not in git).
+install rasterio`): `python dataprep/build_flowlens.py --calsim-arcs`
+traces the arc family and appends it after the stored base rows, which it
+copies byte for byte (it reads the tiles already in `tmp/hydrosheds/`).
+The full re-trace, `python dataprep/build_flowlens.py` without the flag,
+traces every registry entity and auto-downloads the four DIR + ACC tiles
+to `tmp/hydrosheds/` (~6 GB, size-validated, not in git).
 
 | column | meaning |
 |---|---|
@@ -157,13 +236,13 @@ Conventions. The start pixel per cell is its **main-channel pixel**: the
 highest-accumulation pixel in the cell square (capped at 1.3× the entity
 area — a pixel carrying more water than the basin cannot drain to its
 outlet) whose path reaches the outlet; `center` marks cell-center starts
-(159 rows). The outlet is snapped to the nearest pixel (≤ ~2 km) whose
+(159 base rows). The outlet is snapped to the nearest pixel (≤ ~2 km) whose
 implied upstream area falls within [0.2×, 5×] of the registry
 `area_mi2` (snapped-ACC/area landed at 0.75–1.11, median ≈ 1.00).
 `uf_07` (multi-outlet composite) traces each cell to where its path
-exits the entity footprint. `fallback` (1,362 rows, **5.9% of total area
-weight**) = haversine × the entity's median traced sinuosity, for cells
-none of whose candidates drain through the outlet — below-outlet valley
+exits the entity footprint. `fallback` (1,362 base rows, **5.9% of the
+base set's area weight**) = haversine × the entity's median traced
+sinuosity, for cells none of whose candidates drain through the outlet — below-outlet valley
 cells, square-overlap edge slivers, and sub-cell basins; per-entity
 shares are printed by the builder (worst: a few 2–10-cell USGS basins,
 and uf_21 at 29% with its outlet at 0.75× area).

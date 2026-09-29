@@ -79,7 +79,8 @@ def daily_monthly_overlap(data_dir: str | Path, run_dir: Path | None):
     """Where a daily-family entity and a monthly-family entity of the run both train: the
     intersection of the two families' cell-footprint unions (1/16-degree cell squares from
     ``entity_cells.csv``).  The trained entities are read from the run's ``sim_daily_mm.npz``
-    when available, else every registry entity is assumed trained."""
+    when available, else every base registry entity is assumed trained (the opt-in
+    ``calsim_monthly`` arcs train only when named, as in ``load_domain_tensors``)."""
     from shapely import box
     from shapely.ops import unary_union
     reg = pd.read_csv(Path(data_dir) / "multifamily" / "entities.csv", dtype={"site_id": str})
@@ -88,6 +89,8 @@ def daily_monthly_overlap(data_dir: str | Path, run_dir: Path | None):
         trained = set(np.load(Path(run_dir) / "sim_daily_mm.npz")["entity_id"].tolist())
     if trained is not None:
         reg = reg[reg["entity_id"].isin(trained)]
+    else:
+        reg = reg[reg["family"] != "calsim_monthly"]
     cells = pd.read_csv(Path(data_dir) / "multifamily" / "entity_cells.csv")
     cells = cells[cells["entity_id"].isin(reg["entity_id"])]
     fam = reg.set_index("entity_id")["timescale"]
@@ -195,13 +198,16 @@ FAMILY_COLOR = {"cdec_daily": "tab:blue", "uf_monthly": "tab:green", "usgs_daily
 
 def _entity_footprints(data_dir: str | Path, entity_ids=None):
     """Per entity: the union of its 1/16-degree cell squares, as a GeoDataFrame with the
-    registry attributes (family, name, area, outlet)."""
+    registry attributes (family, name, area, outlet).  ``entity_ids=None``: the base
+    registry entities (the opt-in ``calsim_monthly`` arcs only when named)."""
     import geopandas as gpd
     from shapely import box
     from shapely.ops import unary_union
     reg = pd.read_csv(Path(data_dir) / "multifamily" / "entities.csv", dtype={"site_id": str})
     if entity_ids is not None:
         reg = reg[reg["entity_id"].isin(entity_ids)]
+    else:
+        reg = reg[reg["family"] != "calsim_monthly"]
     cells = pd.read_csv(Path(data_dir) / "multifamily" / "entity_cells.csv")
     cells = cells[cells["entity_id"].isin(reg["entity_id"])]
     h = 0.03125
@@ -1365,7 +1371,7 @@ def main(argv=None) -> None:
         trained = set(np.load(run_dir / "sim_daily_mm.npz")["entity_id"].tolist())
     fam_maps = family_maps(catch, a.data_dir, out, trained=trained, label=label)
     print("atlas: family footprint maps for " + ", ".join(f"{k} ({len(v[1])})" for k, v in fam_maps.items())
-          + ("" if trained else " (all registry entities: the run has no sim_daily_mm.npz)"))
+          + ("" if trained else " (all base registry entities: the run has no sim_daily_mm.npz)"))
     creeks = creek_overlap(sets, geoms, a.data_dir, trained=trained, window=VALIDATION_WINDOW)
     creeks_trained = trained is None or any(str(x).startswith("usgs_") for x in trained)
     n = 0

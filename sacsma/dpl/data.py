@@ -524,11 +524,13 @@ def load_domain_tensors(
     hrus = load_hru_table(data_dir, domain=domain)
     if basins is None:
         if domain == MULTI_TIMESCALE_DOMAIN:
-            # registry order — one "basin" per training entity
+            # registry order — one "basin" per training entity; the CalSim3 arc
+            # family (``build_entities.py --calsim-arcs``) is opt-in: its entities
+            # load only when named, so the full domain stays the 95 base entities
             reg = pd.read_csv(
                 domain_dir(data_dir, domain) / "entities.csv",
-                usecols=["entity_id"])
-            basins = tuple(reg["entity_id"])
+                usecols=["entity_id", "family"])
+            basins = tuple(reg.loc[reg["family"] != "calsim_monthly", "entity_id"])
         else:
             basins = tuple(BASINS)
     else:

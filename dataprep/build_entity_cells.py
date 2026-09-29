@@ -22,9 +22,14 @@ I_RUB002 (FOL's arc list) has no CalSim3_Merged polygon — its terrain was
 dissolved into MFA025, so the footprint stays complete and the arc id is the
 one allowed skip.
 
+``--calsim-arcs`` also maps the registry's ``calsim_monthly`` rows (one
+CalSim3 arc each, the ``arcs`` path above) and appends them after the 95 base
+entities, whose rows and gates are unchanged; without the flag those rows are
+ignored, so the base table rebuilds byte for byte from either registry.
+
 Usage (sacsma conda env, from the repo root):
     python dataprep/build_entity_cells.py [--data-dir data]
-        [--out data/multifamily/entity_cells.csv]
+        [--out data/multifamily/entity_cells.csv] [--calsim-arcs]
 """
 
 from __future__ import annotations
@@ -39,6 +44,8 @@ from shapely import make_valid
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from sacsma.calsim.catchments import (  # noqa: E402
+    _EQ_CRS,
+    _M2_PER_MI2,
     MERGED_LAYER,
     load_catchments,
     map_hrus_to_catchments,
@@ -63,10 +70,16 @@ def _map_weights(catch: gpd.GeoDataFrame, cells: pd.DataFrame,
     return mapping
 
 
-def build(data_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Return (entity_cells, checks) — checks has one gate row per entity."""
+CALSIM_FAMILY = "calsim_monthly"
+
+
+def build(data_dir: Path, calsim: bool = False) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Return (entity_cells, checks) — checks has one gate row per entity.
+    ``calsim``: also map the calsim_monthly rows (skipped otherwise)."""
     ent = pd.read_csv(data_dir / "multifamily" / "entities.csv",
                       dtype={"site_id": str})
+    if not calsim:
+        ent = ent[ent["family"] != CALSIM_FAMILY]
     cells = pd.read_csv(
         data_dir / "region" / "grid_cells.csv")[["key", "lat", "lon"]]
 
@@ -230,18 +243,67 @@ def gates(df: pd.DataFrame, checks: pd.DataFrame, grid_keys: set) -> None:
           f"FOL {named['cdec_FOL']:.2f}, BND {named['cdec_BND']:.2f} mi^2")
 
 
+def calsim_gates(df: pd.DataFrame, checks: pd.DataFrame, grid_keys: set,
+                  base_keys: set, geom_mi2: pd.Series) -> None:
+    """The calsim_monthly rows: one arc each, 196 entities; every cell a region
+    cell; per-arc overlap sum = the polygon's true geometric area.
+
+    Against the ``SQ_MI`` attribute (``geom_ref``, the arcs' volume basis) single
+    arcs do not reach the multi-arc entities' 0.2%: the attribute itself departs
+    from the polygon geometry by -3.1% .. +1.5% (worst I_ANG017, I_ALD002; ~54 of
+    the 196 beyond 0.2%) — errors that average out over a multi-arc entity.  The
+    deviations are reported, not gated; the geometric identity is gated."""
+    assert len(checks) == 196 and checks["entity_id"].is_unique, len(checks)
+    assert set(df["entity_id"]) == set(checks["entity_id"])
+    assert not df.duplicated(["entity_id", "key"]).any()
+    assert (df["overlap_mi2"] > 0).all()
+    assert df["key"].isin(grid_keys).all()
+    assert (checks["geom_ref"] - checks["area_mi2"]).abs().max() < 1e-6
+    arc = checks["entity_id"].str.removeprefix("cs_I_")
+    geo = (checks["overlap_sum"] / arc.map(geom_mi2).to_numpy() - 1).abs()
+    assert geo.max() < 1e-5, checks.loc[geo.idxmax()].to_dict()
+    dev = (checks["ratio"] - 1).abs()
+    off = checks[dev > 2e-3].sort_values("ratio")
+    if len(off):
+        print(f"calsim arcs whose SQ_MI departs from the polygon area by >0.2%: "
+              f"{len(off)} (overlap sum = geometric area to {geo.max():.1e})")
+        print(off[["entity_id", "n_cells", "overlap_sum", "geom_ref", "ratio"]]
+              .to_string(index=False))
+    new = set(df["key"]) - base_keys
+    print(f"calsim gates ok: {len(df)} rows, {df['key'].nunique()} distinct cells "
+          f"({len(new)} outside the 95-entity basis); overlap/SQ_MI "
+          f"{checks['ratio'].min():.4f}..{checks['ratio'].max():.4f} "
+          f"(within 0.2%: {int((dev <= 2e-3).sum())}/{len(checks)}); median cells per arc "
+          f"{checks['n_cells'].median():.0f}")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--data-dir", default=Path("data"), type=Path)
     ap.add_argument("--out",
                     default=Path("data/multifamily/entity_cells.csv"),
                     type=Path)
+    ap.add_argument("--calsim-arcs", action="store_true",
+                    help="also map the registry's calsim_monthly entities and "
+                         "append their rows after the 95 base entities")
     args = ap.parse_args()
 
-    df, checks = build(args.data_dir)
+    df, checks = build(args.data_dir, calsim=args.calsim_arcs)
     grid_keys = set(pd.read_csv(
         args.data_dir / "region" / "grid_cells.csv")["key"])
-    gates(df, checks, grid_keys)
+    if args.calsim_arcs:
+        is_cs = checks["family"] == CALSIM_FAMILY
+        cs_ids = set(checks.loc[is_cs, "entity_id"])
+        base, cs = df[~df["entity_id"].isin(cs_ids)], df[df["entity_id"].isin(cs_ids)]
+        # the base rows come first, in registry order, untouched
+        assert base.index.max() < cs.index.min()
+        gates(base, checks[~is_cs], grid_keys)
+        catch = load_catchments(args.data_dir, layer=MERGED_LAYER, rim_only=True)
+        geom = catch.to_crs(_EQ_CRS).geometry.area / _M2_PER_MI2
+        calsim_gates(cs, checks[is_cs], grid_keys, set(base["key"]),
+                     pd.Series(geom.to_numpy(), index=catch["node"].to_numpy()))
+    else:
+        gates(df, checks, grid_keys)
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(args.out, index=False)

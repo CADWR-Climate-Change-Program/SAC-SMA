@@ -20,6 +20,12 @@ Sources, per family (the registry's ``obs_store`` column):
   derived depth companion of the raw cfs store).
 * ``uf_monthly``  — ``data/dwr_unimpaired/uf_monthly_mm.csv`` (mm/month,
   month-end stamps; the derived depth companion of ``uf_monthly.csv``).
+* ``calsim_monthly`` — ``data/calsim/calsim3_inflow_monthly_mm.csv`` (the
+  CalSim3 rim INFLOW arcs as mm/month over each arc's ``SQ_MI``), kept only on
+  the arc-months of ``data/calsim/arc_obs_mask.csv`` (the arc's own gauge
+  record in the training water years; see :mod:`sacsma.dpl.calsim_arcs`).
+  Registry rows exist only when the registry was built with
+  ``--calsim-arcs``; they load only when a run names them (``--basins``).
 
 Every entity's finite in-window count is asserted against the registry's
 ``n_obs`` — the loader cannot silently drift from the audited store.
@@ -41,6 +47,18 @@ from .data import DomainTensors, et_chunk_target
 #: global training envelope (WY1950-2018; forcing ends 2018-12-31).
 ENVELOPE_START = "1949-10-01"
 ENVELOPE_END = "2018-12-31"
+#: the CalSim3 arc family (registry rows from ``build_entities.py --calsim-arcs``)
+CALSIM_FAMILY = "calsim_monthly"
+
+
+def _calsim_store(data_dir: str, obs_store: str) -> tuple[pd.DataFrame, dict]:
+    """The arc depth store (wide, monthly PeriodIndex x arc) and the arc mask."""
+    from .calsim_arcs import load_arc_mask
+    path, col = obs_store.rsplit(":", 1)
+    t = pd.read_csv(Path(data_dir) / path, parse_dates=["date"])
+    w = t.pivot(index="date", columns="arc", values=col)
+    w.index = pd.PeriodIndex(w.index, freq="M")
+    return w, load_arc_mask(data_dir)
 
 
 @dataclass
@@ -165,17 +183,33 @@ def load_entity_obs(
     months = pd.period_range(m_start, m_end, freq="M")
     month_code = (months.year * 12 + (months.month - 1)).to_numpy()
     obs_m = np.full((len(monthly_rows), len(months)), np.nan)
+    cs_store = None
     for j, i in enumerate(monthly_rows):
         eid = dom.basins[i]
         r = reg.loc[eid]
-        g = ufmm[ufmm["uf"] == int(r["site_id"].split()[1])]
-        per = pd.PeriodIndex(g["date"], freq="M")
-        s = pd.Series(g["depth_mm"].to_numpy(), index=per)
-        # months fully inside the entity window
-        keep = (months.start_time >= r["train_start"]) \
-            & (months.end_time <= r["train_end"] + pd.Timedelta(days=1))
-        vals = s.reindex(months).to_numpy(np.float64, copy=True)
-        vals[~keep] = np.nan
+        if r["family"] == CALSIM_FAMILY:
+            if cs_store is None:
+                cs_store = _calsim_store(data_dir, r["obs_store"])
+            depth, arc_mask = cs_store
+            arc = r["site_id"]
+            # months fully inside the entity window AND in the arc's own record
+            keep = ((months.start_time >= r["train_start"])
+                    & (months.end_time <= r["train_end"] + pd.Timedelta(days=1))
+                    & months.isin(arc_mask.get(arc, pd.PeriodIndex([], freq="M"))))
+            vals = depth[arc].reindex(months).to_numpy(np.float64, copy=True)
+            vals[~keep] = np.nan
+            if not np.isfinite(vals).any():
+                raise ValueError(f"{eid}: no observed arc-month under the arc mask "
+                                 "(not an own-record arc — see arc_hierarchy.csv tier)")
+        else:
+            g = ufmm[ufmm["uf"] == int(r["site_id"].split()[1])]
+            per = pd.PeriodIndex(g["date"], freq="M")
+            s = pd.Series(g["depth_mm"].to_numpy(), index=per)
+            # months fully inside the entity window
+            keep = (months.start_time >= r["train_start"]) \
+                & (months.end_time <= r["train_end"] + pd.Timedelta(days=1))
+            vals = s.reindex(months).to_numpy(np.float64, copy=True)
+            vals[~keep] = np.nan
         obs_m[j] = vals
         n = int(np.isfinite(vals).sum())
         if n != int(r["n_obs"]):

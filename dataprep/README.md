@@ -537,24 +537,46 @@ Needs `pypdf` (added to `environment.yml`).
     python dataprep/dwr_unimpaired.py --pdf <report.pdf>
     python dataprep/dwr_unimpaired.py --verify
 
-## Multi-timescale training inputs (`build_obs_depth.py`, `build_entities.py`, `build_entity_cells.py`, `build_flowlens.py`)
+## Multi-timescale training inputs (`build_obs_depth.py`, `build_calsim_arcs.py`, `build_entities.py`, `build_entity_cells.py`, `build_flowlens.py`)
 
 The inputs of the dPL `multifamily` domain (`data/multifamily/`, documented in that
-store's README). Four builders, run in this order from the repo root; each checks its
-own output against in-script gates and rewrites its table in full:
+store's README). Five builders, run in this order from the repo root; each checks its
+own output against in-script gates and rewrites its table in full, except
+`build_flowlens.py --calsim-arcs`, which appends (below):
 
 | script | writes | what |
 |---|---|---|
 | `build_obs_depth.py` | `data/dwr_unimpaired/uf_monthly_mm.csv`, `data/cdec_fnf/fnf_daily_mm.csv` | depth companions of the two volume/cfs stores, each series over its own stated area |
+| `build_calsim_arcs.py` | `data/calsim/arc_hierarchy.csv`, `arc_obs_mask.csv`, `calsim3_inflow_monthly_mm.csv` | the CalSim3 rim-arc target set: arc → anchor hierarchy, closure groups and record tiers; each arc's own observed months in the training water years (listed gauge period minus the report's extension years); the INFLOW series as depth over `SQ_MI`. Reads the registry's 95 base rows; run before the three registry builders when they get `--calsim-arcs` |
 | `build_entities.py` | `data/multifamily/entities.csv` | the registry: one row per training target, from `usgs/gauges.csv` + `usgs/flow_daily.nc` (LFS), `cdec15/`, `cdec_fnf/`, `dwr_unimpaired/uf_locations.csv` + `uf_monthly.csv`, the hand-maintained `uf_gauges.csv`, and `calsim/` (crosswalk, `gis/calsim3.gpkg`, `fnf_11obs_monthly.csv`) |
 | `build_entity_cells.py` | `data/multifamily/entity_cells.csv` | per-entity region-grid cell sets with cell-square overlap areas as weights |
 | `build_flowlens.py` | `data/multifamily/flowlens.csv` | per-cell path length to each entity outlet on the HydroSHEDS v2 flow directions |
 
-The first three need only committed stores (including the LFS files) and, in the
-`environment.yml` environment, reproduce their tables byte for byte.
+`--calsim-arcs` (all three registry builders; opt-in) appends the `calsim_monthly`
+family (196 CalSim3 rim arcs, `cs_<ARC>`) after the 95 base entities, whose rows stay
+byte-identical; `build_flowlens.py --calsim-arcs` traces only the new entities and
+appends them to the existing store, copying its base rows byte for byte. The committed
+`data/multifamily/` tables are this build (291 entities; 9,691 cell and flow-length
+rows), so the registry builders run with the flag:
+
+    python dataprep/build_obs_depth.py
+    python dataprep/build_calsim_arcs.py
+    python dataprep/build_entities.py --calsim-arcs
+    python dataprep/build_entity_cells.py --calsim-arcs
+    python dataprep/build_flowlens.py --calsim-arcs
+
+Without the flag, `build_entities.py` and `build_entity_cells.py` write the 95-entity
+base tables (5,849 cell rows) over the committed ones. `build_calsim_arcs.py` reads the
+registry's base rows, so starting without a registry, run `build_entities.py` once
+without the flag first (see `data/multifamily/README.md`).
+
+`build_obs_depth.py`, `build_calsim_arcs.py`, `build_entities.py` and
+`build_entity_cells.py` need only committed stores (including the LFS files) and, in the
+`environment.yml` environment, reproduce their tables byte for byte (the two registry
+builders with `--calsim-arcs`; without it, the base tables).
 `build_flowlens.py` needs `rasterio` (declared in `environment.yml`) and the DIR and ACC
 rasters of four 10-degree HydroSHEDS tiles (8 files, ~6 GB, downloaded on demand to
-`tmp/hydrosheds/`, not in git); it imports no
+`tmp/hydrosheds/`, not in git; `--calsim-arcs` reads the tiles already there); it imports no
 geopandas, because the two GDAL stacks must stay in separate processes.
 
 ## AlphaEarth embeddings (`gee_aef_region.py`)
