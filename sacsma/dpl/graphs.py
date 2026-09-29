@@ -27,6 +27,14 @@ changes performance only.  State moves between graph objects (the two chunk
 lengths of a water-year grid) and eager chunks through ``get_state()`` /
 ``set_state()``: detached value copies, routing history included, so the
 hand-off is length-agnostic.
+
+Under cell dedup (``DplConfig.dedup_cells``, ``dom.dedup``) the forcing buffers,
+parameters and snow/SAC/canopy states are sized to the distinct cells
+(``dom.n_phys``) and the routing histories to the HRU rows (``dom.n_hru``); the
+captured forward gathers each cell's runoff to its rows (``row_cell``) before the
+per-row routing.  :class:`TrainChunk` then takes the per-cell net input
+(``dom.phys_x(x)``).  These paths are exercised on CPU only through the eager
+closures (the CUDA capture itself needs a GPU).
 """
 
 from __future__ import annotations
@@ -71,7 +79,10 @@ class _WindowBase:
 
     def __init__(self, dom: DomainTensors, length: int, et_mode: str = "sac",
                  need_tmm: bool = False):
-        n, dev, dt = dom.n_hru, dom.device, dom.dtype
+        # physics buffers per physics row (the distinct cells under cell dedup),
+        # the routing histories per HRU row
+        n, dev, dt = dom.n_phys, dom.device, dom.dtype
+        n_rows = dom.n_hru
         self.dom = dom
         self.length = length
         self.et_mode = et_mode
@@ -99,8 +110,8 @@ class _WindowBase:
         self.state_in = PipelineState(
             snow=Snow17State.zeros(n, dev, dt),
             sac=SacState.reference_init(n, dev, dt),
-            hist_surf=torch.zeros(n, N_TAPS - 1, device=dev, dtype=dt),
-            hist_base=torch.zeros(n, N_TAPS - 1, device=dev, dtype=dt),
+            hist_surf=torch.zeros(n_rows, N_TAPS - 1, device=dev, dtype=dt),
+            hist_base=torch.zeros(n_rows, N_TAPS - 1, device=dev, dtype=dt),
             canopy=NoahCanopyState.zeros(n, dev, dt) if noah else None,
         )
         self.state_out: PipelineState | None = None   # captured outputs
@@ -164,16 +175,17 @@ class NoGradWindow(_WindowBase):
 
         def _fwd():
             flow, st = run_window(
-                self.pr, self.ta, self.doy, self.leap, dom.lat_rad, dom.elev,
+                self.pr, self.ta, self.doy, self.leap, dom.phys_lat_rad, dom.phys_elev,
                 self.params, self.uh, self.state_in,
                 n_inc=cfg.n_inc, perc_mode=cfg.perc_mode,
                 fracp_floor=cfg.fracp_floor, ninc_mode="fixed",
                 et_mode=cfg.et_mode, canopy_params=self.canopy_params,
                 tmin=self.tmin, tmax=self.tmax,
-                veg_frac=dom.veg_frac, lai=self.lai, noah_pet=cfg.noah_pet,
+                veg_frac=dom.phys_veg_frac, lai=self.lai, noah_pet=cfg.noah_pet,
                 sac_pet=cfg.sac_pet, pt_snow_albedo=cfg.pt_snow_albedo,
                 pt_dewpoint_depression=cfg.pt_dewpoint_depression,
-                canopy_lite=cfg.canopy_lite, sac_exchanges=cfg.noah_sac_exchanges, state_idx=self.state_idx)
+                canopy_lite=cfg.canopy_lite, sac_exchanges=cfg.noah_sac_exchanges, state_idx=self.state_idx,
+                row_cell=dom.row_cell)
             return dom.W @ flow, st
 
         side = torch.cuda.Stream()
@@ -232,7 +244,8 @@ class TrainChunk(_WindowBase):
         b = dom.W.shape[0]
         self.obs = torch.full((b, length), float("nan"),
                               device=dom.device, dtype=dom.dtype)
-        self.x = x                      # static net input (constant)
+        self.x = x                      # static net input (constant; the per-cell
+                                        # rows dom.phys_x(x) under cell dedup)
         self.obs_var = obs_var
         #: adaptive per-basin loss weights (static buffer, None = uniform); the
         #: SAME tensor is passed here and updated in place via set_weights, so
@@ -284,19 +297,19 @@ class TrainChunk(_WindowBase):
                 params = {k: v for k, v in out.items() if k != "_canopy"}
             else:
                 cp, params = None, out
-            uh = routing_uh(params, dom.flowlen)
+            uh = routing_uh(params, dom.flowlen, row_cell=dom.row_cell)
             res = run_window(
-                self.pr, self.ta, self.doy, self.leap, dom.lat_rad, dom.elev,
+                self.pr, self.ta, self.doy, self.leap, dom.phys_lat_rad, dom.phys_elev,
                 params, uh, self.state_in,
                 n_inc=cfg.n_inc, perc_mode=cfg.perc_mode,
                 fracp_floor=cfg.fracp_floor, ninc_mode="fixed",
                 et_mode=cfg.et_mode, canopy_params=cp,
                 tmin=self.tmin, tmax=self.tmax,
-                veg_frac=dom.veg_frac, lai=self.lai, noah_pet=cfg.noah_pet,
+                veg_frac=dom.phys_veg_frac, lai=self.lai, noah_pet=cfg.noah_pet,
                 sac_pet=cfg.sac_pet, pt_snow_albedo=cfg.pt_snow_albedo,
                 pt_dewpoint_depression=cfg.pt_dewpoint_depression,
                 canopy_lite=cfg.canopy_lite, sac_exchanges=cfg.noah_sac_exchanges, state_idx=self.state_idx,
-                return_tet=self.et, return_swe=self.swe)
+                return_tet=self.et, return_swe=self.swe, row_cell=dom.row_cell)
             flow, st = (res[0], res[1])
             basin = dom.W @ flow
             loss = masked_basin_loss(basin, self.obs, self.obs_var,
@@ -470,7 +483,10 @@ class SegmentedTrainWindow:
                  *, sample_c0: int | None = None):
         if segments < 1 or segments > length:
             raise ValueError(f"segments {segments} outside [1, {length}]")
-        n, dev, dt = dom.n_hru, dom.device, dom.dtype
+        # physics buffers/states per physics row (distinct cells under cell dedup),
+        # routing histories per HRU row
+        n, dev, dt = dom.n_phys, dom.device, dom.dtype
+        n_rows = dom.n_hru
         self.dom, self.cfg, self.length, self.segments = dom, cfg, length, segments
         self.noah = cfg.et_mode == "noah"
         self.need_tmm = cfg.sac_pet == "priestley_taylor" or self.noah
@@ -506,8 +522,8 @@ class SegmentedTrainWindow:
             st0 = PipelineState(
                 snow=Snow17State.zeros(n, dev, dt),
                 sac=SacState.reference_init(n, dev, dt),
-                hist_surf=torch.zeros(n, N_TAPS - 1, device=dev, dtype=dt),
-                hist_base=torch.zeros(n, N_TAPS - 1, device=dev, dtype=dt),
+                hist_surf=torch.zeros(n_rows, N_TAPS - 1, device=dev, dtype=dt),
+                hist_base=torch.zeros(n_rows, N_TAPS - 1, device=dev, dtype=dt),
                 canopy=NoahCanopyState.zeros(n, dev, dt) if self.noah else None)
             st_args = tuple(t.requires_grad_(True) for t in _state_tensors(st0))
             p_args = tuple(params[k].detach().clone().requires_grad_(True)
@@ -550,15 +566,17 @@ class SegmentedTrainWindow:
             i += 2
             cp = dict(zip(ck, args[i:i + len(ck)], strict=True)) if ck else None
             flow, st_out = run_window(
-                buf["pr"], buf["ta"], buf["doy"], buf["leap"], dom.lat_rad, dom.elev,
+                buf["pr"], buf["ta"], buf["doy"], buf["leap"], dom.phys_lat_rad,
+                dom.phys_elev,
                 params, uh, st, n_inc=cfg.n_inc, perc_mode=cfg.perc_mode,
                 fracp_floor=cfg.fracp_floor, ninc_mode="fixed",
                 et_mode=cfg.et_mode, canopy_params=cp,
-                tmin=buf["tmin"], tmax=buf["tmax"], veg_frac=dom.veg_frac,
+                tmin=buf["tmin"], tmax=buf["tmax"], veg_frac=dom.phys_veg_frac,
                 lai=buf["lai"], noah_pet=cfg.noah_pet, sac_pet=cfg.sac_pet,
                 pt_snow_albedo=cfg.pt_snow_albedo,
                 pt_dewpoint_depression=cfg.pt_dewpoint_depression,
-                canopy_lite=cfg.canopy_lite, sac_exchanges=cfg.noah_sac_exchanges, state_idx=buf["state_idx"])[:2]
+                canopy_lite=cfg.canopy_lite, sac_exchanges=cfg.noah_sac_exchanges, state_idx=buf["state_idx"],
+                row_cell=dom.row_cell)[:2]
             # graphed callables must not return their own inputs (static
             # buffers would alias); a pass-through state field gets a copy
             in_ptrs = {a.data_ptr() for a in args}
@@ -697,15 +715,15 @@ class RecomputeTrainWindow:
         pr, ta, doy, leap = dom.chunk(a, b)
         tn, tx = dom.chunk_tmm(a, b)
         flow, st_out = run_window(
-            pr, ta, doy, leap, dom.lat_rad, dom.elev, params, uh,
+            pr, ta, doy, leap, dom.phys_lat_rad, dom.phys_elev, params, uh,
             _unflatten_state(st, self.noah), n_inc=cfg.n_inc, perc_mode=cfg.perc_mode,
             fracp_floor=cfg.fracp_floor, ninc_mode="fixed", et_mode=cfg.et_mode,
-            canopy_params=cp, tmin=tn, tmax=tx, veg_frac=dom.veg_frac,
+            canopy_params=cp, tmin=tn, tmax=tx, veg_frac=dom.phys_veg_frac,
             lai=dom.chunk_lai(a, b), noah_pet=cfg.noah_pet, sac_pet=cfg.sac_pet,
             pt_snow_albedo=cfg.pt_snow_albedo,
             pt_dewpoint_depression=cfg.pt_dewpoint_depression,
             canopy_lite=cfg.canopy_lite, sac_exchanges=cfg.noah_sac_exchanges,
-            state_idx=dom.chunk_state(a, b))[:2]
+            state_idx=dom.chunk_state(a, b), row_cell=dom.row_cell)[:2]
         return flow, tuple(_state_tensors(st_out))
 
     def forward(self, c0: int, length: int, params: dict[str, torch.Tensor],

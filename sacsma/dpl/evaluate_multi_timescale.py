@@ -45,7 +45,8 @@ from .spinup import spin_state, stream_rows
 _REVIEW_FAMILIES = ("cdec_daily", "uf_monthly")
 
 
-def _entity_flow(net, x, dom, cfg, *, spinup: str = "cycle") -> tuple[np.ndarray, int, int]:
+def _entity_flow(net, x, dom, cfg, *, spinup: str = "cycle",
+                 dedup_cells: bool = False) -> tuple[np.ndarray, int, int]:
     """Stream the trained field over the envelope; returns the basin daily
     depth ``(B, t1-t0)`` (numpy float64) plus the envelope indices.
 
@@ -54,17 +55,22 @@ def _entity_flow(net, x, dom, cfg, *, spinup: str = "cycle") -> tuple[np.ndarray
     envelope's own first ``cfg.spinup_years`` years ``cfg.spinup_passes`` times
     from the cold start — nothing before the envelope is read; ``"window"`` is the
     legacy ten water years ahead of it (or ``cfg.spinup_start`` when earlier).  Eager ``run_window``
-    pieces (no CUDA graphs — a single full pass does not need them)."""
+    pieces (no CUDA graphs — a single full pass does not need them).
+    ``dedup_cells``: the per-cell physics once per distinct cell
+    (:func:`sacsma.dpl.data.with_cell_dedup`)."""
+    from .data import with_cell_dedup
     from .multi_timescale import ENVELOPE_END, ENVELOPE_START
 
     t0 = int(dom.dates.searchsorted(pd.Timestamp(ENVELOPE_START)))
     t1 = int(dom.dates.searchsorted(pd.Timestamp(ENVELOPE_END))) + 1
+    if dedup_cells:
+        dom = with_cell_dedup(dom, x)
 
     net.eval()
     with torch.no_grad():
-        out = net(x)
+        out = net(dom.phys_x(x))
         canopy = out.pop("_canopy", None)
-        uh = routing_uh(out, dom.flowlen)
+        uh = routing_uh(out, dom.flowlen, row_cell=dom.row_cell)
         state, how = spin_state(dom, cfg, out, uh, canopy, t0, mode=spinup,
                                 agg=lambda f: dom.W @ f)
         print(f"eval: {how}", flush=True)
@@ -124,6 +130,7 @@ def evaluate_checkpoint_mt(
     hydrographs: str = "review",   # review (cdec+uf) | all | none
     device: str | None = None,     # None = cuda if available
     spinup: str = "cycle",         # cycle (timing-independent) | window (legacy)
+    dedup_cells: bool = False,     # per-cell physics once per distinct cell
 ) -> pd.DataFrame:
     """Score a ``multifamily`` checkpoint per entity; returns the metrics."""
     if hydrographs not in ("review", "all", "none"):
@@ -153,7 +160,8 @@ def evaluate_checkpoint_mt(
     print(f"eval: streaming the envelope "
           f"({dom.n_hru} HRUs, {len(dom.basins)} entities, {cfg.dtype} "
           f"config scored in float64 on {dom.device.type}) ...", flush=True)
-    sim, t0, t1 = _entity_flow(net, x, dom, cfg, spinup=spinup)
+    sim, t0, t1 = _entity_flow(net, x, dom, cfg, spinup=spinup,
+                               dedup_cells=dedup_cells)
     assert (t0, t1) == (eobs.t0, eobs.t1)
     dates = dom.dates[t0:t1]
     np.savez_compressed(

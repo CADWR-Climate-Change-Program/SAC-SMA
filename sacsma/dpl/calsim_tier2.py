@@ -26,7 +26,7 @@ Usage::
     python -m sacsma.dpl.calsim_tier2 <run_dir | checkpoint.pt> [--out DIR] [--data-dir data]
                                   [--device cpu|cuda] [--no-maps] [--no-extend]
                                   [--tiles-dir tmp/hydrosheds] [--trace-python PY] [--figures-only]
-                                  [--label NAME]
+                                  [--label NAME] [--dedup-cells]
 
 Writes ``tier2_metrics.csv`` (one row per arc x window), ``tier2_monthly.csv``,
 ``tier2_arcs.csv`` (coverage, parent entity and trained-cell share per arc),
@@ -289,18 +289,24 @@ def _net_for_hrus(ckpt: str | Path, hrus: pd.DataFrame, data_dir: str | Path, de
     return net, x, dom, cfg
 
 
-def stream(net, x, dom, cfg, W_arc: np.ndarray, *, spinup: str = "cycle"):
+def stream(net, x, dom, cfg, W_arc: np.ndarray, *, spinup: str = "cycle",
+           dedup_cells: bool = False):
     """Stream the trained field over the envelope (the evaluator's protocol, including its
     ``spinup``: :func:`sacsma.dpl.spinup.spin_state`) and return (arc depth (A, T), entity
     depth (B, T), t0, t1, bad_rows) in mm/day.  A cell whose physics returns NaN
     (extrapolated parameters at their bounds) is zeroed and flagged in ``bad_rows`` so it
-    cannot blank every aggregate that carries a zero weight on it."""
+    cannot blank every aggregate that carries a zero weight on it.  ``dedup_cells``: the
+    per-cell physics runs once per distinct cell (:func:`sacsma.dpl.data.with_cell_dedup`);
+    ``W_arc``, the flows and ``bad_rows`` stay per HRU row."""
+    from .data import with_cell_dedup
     from .forward import routing_uh
     from .multi_timescale import ENVELOPE_END, ENVELOPE_START
     from .spinup import spin_state, stream_rows
 
     t0 = int(dom.dates.searchsorted(pd.Timestamp(ENVELOPE_START)))
     t1 = int(dom.dates.searchsorted(pd.Timestamp(ENVELOPE_END))) + 1
+    if dedup_cells:
+        dom = with_cell_dedup(dom, x)
     Wa = torch.as_tensor(W_arc).to(dom.device, dom.dtype)
     bad = torch.zeros(dom.n_hru, dtype=torch.bool, device=dom.device)
 
@@ -313,9 +319,9 @@ def stream(net, x, dom, cfg, W_arc: np.ndarray, *, spinup: str = "cycle"):
 
     net.eval()
     with torch.no_grad():
-        out = net(x)
+        out = net(dom.phys_x(x))
         canopy = out.pop("_canopy", None)
-        uh = routing_uh(out, dom.flowlen)
+        uh = routing_uh(out, dom.flowlen, row_cell=dom.row_cell)
         state, how = spin_state(dom, cfg, out, uh, canopy, t0, mode=spinup,
                                 agg=lambda f: dom.W @ torch.nan_to_num(f, nan=0.0))
         print(f"tier2: {how}", flush=True)
@@ -372,10 +378,10 @@ def _score(months: pd.PeriodIndex, sim: np.ndarray, ref: np.ndarray) -> dict:
 
 def score_run(ckpt: str | Path, data_dir: str | Path = "data", *, device=None, run_dir=None,
               extend: bool = True, tiles_dir: str | Path = "tmp/hydrosheds", out: Path | None = None,
-              trace_python: str | None = None, spinup: str = "cycle"):
+              trace_python: str | None = None, spinup: str = "cycle", dedup_cells: bool = False):
     """Returns (metrics, monthly, arcs, not_sim, entity_check).  ``extend`` simulates the
     arcs outside every trained footprint on their own region cells (``basis = extrapolated``);
-    ``spinup`` is the evaluator's (:func:`stream`)."""
+    ``spinup`` and ``dedup_cells`` are the evaluator's (:func:`stream`)."""
     from .evaluate import load_net_from_checkpoint
     net, x, dom, cfg, ck = load_net_from_checkpoint(ckpt, data_dir, device=device)
     catch = rim_polygons(data_dir)
@@ -390,7 +396,8 @@ def score_run(ckpt: str | Path, data_dir: str | Path = "data", *, device=None, r
     print(f"tier2: {len(catch)} rim polygons; {len(arcs)} arcs inside the {len(dom.basins)} trained "
           f"entities; {len(dom.hrus)} HRU rows on {dom.device.type}", flush=True)
     print("tier2: streaming the envelope ...", flush=True)
-    sim_arc, sim_ent, t0, t1, bad = stream(net, x, dom, cfg, W_arc, spinup=spinup)
+    sim_arc, sim_ent, t0, t1, bad = stream(net, x, dom, cfg, W_arc, spinup=spinup,
+                                           dedup_cells=dedup_cells)
     sim_arc, arcs["n_nan_cells"], arcs["nan_weight_frac"] = _drop_bad_cells(sim_arc, W_arc, bad, dom.hrus, "trained-footprint")
     dates = dom.dates[t0:t1]
     if extend:
@@ -403,7 +410,8 @@ def score_run(ckpt: str | Path, data_dir: str | Path = "data", *, device=None, r
             print(f"tier2: extrapolating {len(dom2.basins)} uncovered arcs on {len(dom2.hrus)} region "
                   f"cells ...", flush=True)
             W2 = dom2.W.cpu().numpy()
-            sim_ext, _, t0e, t1e, bad2 = stream(net2, x2, dom2, cfg2, W2, spinup=spinup)
+            sim_ext, _, t0e, t1e, bad2 = stream(net2, x2, dom2, cfg2, W2, spinup=spinup,
+                                                dedup_cells=dedup_cells)
             assert (t0e, t1e) == (t0, t1)
             sim_ext, n_bad2, w_bad2 = _drop_bad_cells(sim_ext, W2, bad2, dom2.hrus, "extrapolated")
             sq_mi = catch.groupby("arc")["sq_mi"].sum()
@@ -668,6 +676,9 @@ def main(argv=None) -> None:
                    help="state at the envelope start: cycle = loop its first ten water years "
                         "20 times from the cold start (timing-independent, default); window = "
                         "the legacy ten water years before it")
+    p.add_argument("--dedup-cells", action="store_true",
+                   help="run the per-cell physics once per distinct grid cell (routing and "
+                        "aggregation per row); same flows to float round-off, less compute")
     p.add_argument("--figures-only", action="store_true",
                    help="only (re)draw the maps and the per-set regime figures from the CSVs "
                         "already in --out (no forward pass)")
@@ -689,7 +700,7 @@ def main(argv=None) -> None:
         metrics, monthly, arcs, not_sim, _ = score_run(ckpt, a.data_dir, device=a.device, run_dir=run_dir,
                                                        extend=not a.no_extend, tiles_dir=a.tiles_dir, out=out,
                                                        trace_python=a.trace_python,
-                                                       spinup=a.spinup)
+                                                       spinup=a.spinup, dedup_cells=a.dedup_cells)
         metrics.to_csv(out / "tier2_metrics.csv", index=False)
         monthly.to_csv(out / "tier2_monthly.csv", index=False)
         arcs.to_csv(out / "tier2_arcs.csv", index=False)

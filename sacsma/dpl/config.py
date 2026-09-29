@@ -618,6 +618,19 @@ class DplConfig:
     #: graphs (forward + backward each, autograd across them) -- for drivers
     #: that fault on very large graphs; 1 = the single whole-chunk graph.
     train_graph_segments: int = 1
+    #: CELL-DEDUPLICATED forward (data.with_cell_dedup): on a domain whose HRU rows
+    #: repeat grid cells (multifamily: one row per (entity, cell), 5,849 rows on
+    #: 2,652 cells for the 95 entities) the parameter net, PET, Snow-17, Noah ET and
+    #: SAC-SMA — with their states and the learned PXTEMP — run once per DISTINCT
+    #: cell; each cell's surface/base runoff is gathered to its rows for the per-row
+    #: routing (flow length, unit hydrograph, routing history) and the aggregation W.
+    #: Refused unless every row of a cell carries identical net features and statics
+    #: (a flowlen_feature=True net has per-row parameters) and with gnn_k > 0.  The
+    #: eval-mode forward and its gradients equal the per-row forward's to float
+    #: round-off; in training with dropout > 0 a shared cell draws ONE dropout mask
+    #: per chunk instead of one per row, so the training noise (and RNG stream)
+    #: differ.  False (default) = one physics column per row, byte-identical.
+    dedup_cells: bool = False
     seed: int = 0
     extras: dict = field(default_factory=dict)
 
@@ -672,6 +685,8 @@ class DplConfig:
             raise ValueError("mt_loss_ref_power has no effect without mt_loss_ref")
         if self.train_graph_segments < 1:
             raise ValueError(f"train_graph_segments {self.train_graph_segments} < 1")
+        if self.dedup_cells and self.gnn_k > 0:
+            raise ValueError("dedup_cells needs a per-cell parameter net (gnn_k == 0)")
         if self.nograd_window < 1:
             raise ValueError(f"nograd_window {self.nograd_window} < 1")
         if not 30 <= self.train_chunk_days <= 366:

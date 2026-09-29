@@ -11,6 +11,7 @@ the device on demand.
 
 from __future__ import annotations
 
+import dataclasses
 import os
 from dataclasses import dataclass
 
@@ -22,6 +23,28 @@ from ..cdec15 import BASINS, CAL_END, load_gage
 from ..io import MULTI_TIMESCALE_DOMAIN, domain_dir, load_hru_table, load_params
 from ..model import DomainForcing, load_domain_forcing
 from .config import PARAM_ORDER, validate_ga_optimum
+
+
+@dataclass
+class CellDedup:
+    """The distinct-cell physics basis of a :class:`DomainTensors` whose HRU rows
+    repeat grid cells (``DplConfig.dedup_cells``; built by :func:`with_cell_dedup`).
+
+    On the multi-timescale domain one row is an (entity, cell) pair, so a cell that
+    several nested entities share appears once per entity, with identical forcing,
+    statics and parameter-net inputs.  With a ``CellDedup`` attached, the per-cell
+    physics — parameter net, PET, Snow-17, Noah ET, SAC-SMA and their states — runs
+    once per DISTINCT cell (``U`` of them); only the routing (per-row flow length,
+    unit hydrograph and routing-inflow history) and the aggregation ``W`` stay per
+    row, fed by gathering each cell's surface/base runoff to its rows (``row_cell``).
+    """
+
+    row_cell: torch.Tensor     # (N,) int64 on device: each HRU row's distinct-cell index
+    first_row: torch.Tensor    # (U,) int64 on device: the first HRU row of each cell
+    cell_idx: np.ndarray       # (U,) int rows into the forcing arrays
+    lat_rad: torch.Tensor      # (U,)
+    elev: torch.Tensor         # (U,)
+    veg_frac: torch.Tensor | None = None   # (U,) (Noah ET domains)
 
 
 @dataclass
@@ -56,6 +79,9 @@ class DomainTensors:
     #: leakage), clamped ~[-3,3] (CPU float32, like tmin).  None unless a dynamic
     #: run requested it (drought -> negative, wet -> positive).
     state: np.ndarray | None = None
+    #: distinct-cell physics basis (``DplConfig.dedup_cells``, :func:`with_cell_dedup`);
+    #: None = the per-row physics (every HRU row runs its own column — the default)
+    dedup: CellDedup | None = None
 
     @property
     def n_hru(self) -> int:
@@ -65,45 +91,85 @@ class DomainTensors:
     def n_time(self) -> int:
         return len(self.dates)
 
+    # -- the physics rows: the HRU rows, or the distinct cells under cell dedup.
+    # The chunk_* gathers below, the state vectors and the parameter net run on
+    # these; routing, the routing history, flowlen and W stay per HRU row.
+    @property
+    def n_phys(self) -> int:
+        """Rows of the per-cell physics: ``n_hru``, or the distinct cells (dedup)."""
+        return self.n_hru if self.dedup is None else len(self.dedup.cell_idx)
+
+    @property
+    def phys_idx(self) -> np.ndarray:
+        """Forcing-array rows of the physics rows."""
+        return self.cell_idx if self.dedup is None else self.dedup.cell_idx
+
+    @property
+    def phys_lat_rad(self) -> torch.Tensor:
+        return self.lat_rad if self.dedup is None else self.dedup.lat_rad
+
+    @property
+    def phys_elev(self) -> torch.Tensor:
+        return self.elev if self.dedup is None else self.dedup.elev
+
+    @property
+    def phys_veg_frac(self) -> torch.Tensor | None:
+        return self.veg_frac if self.dedup is None else self.dedup.veg_frac
+
+    @property
+    def row_cell(self) -> torch.Tensor | None:
+        """(N,) physics row of each HRU row under cell dedup, else None (the
+        ``row_cell`` argument of ``forward.run_window`` / ``routing_uh``)."""
+        return None if self.dedup is None else self.dedup.row_cell
+
+    def phys_x(self, x: torch.Tensor) -> torch.Tensor:
+        """The parameter-net input of the physics rows: ``x`` itself, or its first
+        row per distinct cell under cell dedup (rows of a cell are identical —
+        :func:`with_cell_dedup` asserts it)."""
+        return x if self.dedup is None else x.index_select(0, self.dedup.first_row)
+
     def chunk(self, t0: int, t1: int) -> tuple[torch.Tensor, torch.Tensor,
                                                torch.Tensor, torch.Tensor]:
-        """(prcp, tavg, doy, is_leap) for days [t0, t1) gathered to HRU rows."""
+        """(prcp, tavg, doy, is_leap) for days [t0, t1) gathered to the physics
+        rows (the HRU rows; the distinct cells under cell dedup)."""
+        idx = self.phys_idx
         pr = torch.as_tensor(
-            np.ascontiguousarray(self.forcing.prcp[self.cell_idx, t0:t1]),
+            np.ascontiguousarray(self.forcing.prcp[idx, t0:t1]),
         ).to(self.device, self.dtype)
         ta = torch.as_tensor(
-            np.ascontiguousarray(self.forcing.tavg[self.cell_idx, t0:t1]),
+            np.ascontiguousarray(self.forcing.tavg[idx, t0:t1]),
         ).to(self.device, self.dtype)
         return pr, ta, self.doy[t0:t1], self.is_leap[t0:t1]
 
     def chunk_tmm(self, t0: int, t1: int):
-        """(tmin, tmax) for days [t0, t1) gathered to HRU rows; (None, None) if
-        the domain has no per-cell Tmin/Tmax (Noah ET then uses the tavg fallback)."""
+        """(tmin, tmax) for days [t0, t1) gathered to the physics rows; (None, None)
+        if the domain has no per-cell Tmin/Tmax (Noah ET then uses the tavg fallback)."""
         if self.tmin is None or self.tmax is None:
             return None, None
+        idx = self.phys_idx
         tn = torch.as_tensor(
-            np.ascontiguousarray(self.tmin[self.cell_idx, t0:t1]),
+            np.ascontiguousarray(self.tmin[idx, t0:t1]),
         ).to(self.device, self.dtype)
         tx = torch.as_tensor(
-            np.ascontiguousarray(self.tmax[self.cell_idx, t0:t1]),
+            np.ascontiguousarray(self.tmax[idx, t0:t1]),
         ).to(self.device, self.dtype)
         return tn, tx
 
     def chunk_lai(self, t0: int, t1: int):
-        """Observed daily LAI (N, t1-t0) for the Noah ET path, gathered to HRU
-        rows by each day's day-of-year; None if the domain has no LAI sidecar."""
+        """Observed daily LAI (physics rows, t1-t0) for the Noah ET path, gathered
+        by each day's day-of-year; None if the domain has no LAI sidecar."""
         if self.lai_lut is None:
             return None
         doy_idx = self.forcing.doy[t0:t1].astype(np.int64) - 1   # 0..365
-        lai = self.lai_lut[self.cell_idx][:, doy_idx]            # (N, t1-t0)
+        lai = self.lai_lut[self.phys_idx][:, doy_idx]            # (N, t1-t0)
         return torch.as_tensor(np.ascontiguousarray(lai)).to(self.device, self.dtype)
 
     def chunk_state(self, t0: int, t1: int):
-        """Climate-state index (N, t1-t0) for days [t0, t1) gathered to HRU rows;
-        None if the domain has no dynamic-parameter state field."""
+        """Climate-state index (physics rows, t1-t0) for days [t0, t1); None if the
+        domain has no dynamic-parameter state field."""
         if self.state is None:
             return None
-        s = self.state[self.cell_idx, t0:t1]
+        s = self.state[self.phys_idx, t0:t1]
         return torch.as_tensor(np.ascontiguousarray(s)).to(self.device, self.dtype)
 
     def ga_params(self, data_dir: str = "data") -> dict[str, torch.Tensor]:
@@ -119,6 +185,76 @@ class DomainTensors:
                 self.device, self.dtype)
             for name in PARAM_ORDER
         }
+
+
+def _rows_differing(a: np.ndarray, rep: np.ndarray) -> np.ndarray:
+    """(N,) bool: rows of ``a`` not bitwise-equal to ``rep`` (NaN == NaN)."""
+    a = np.asarray(a).reshape(len(a), -1)
+    rep = np.asarray(rep).reshape(len(rep), -1)
+    ne = a != rep
+    if np.issubdtype(a.dtype, np.floating):
+        ne &= ~(np.isnan(a) & np.isnan(rep))
+    return ne.any(axis=1)
+
+
+def with_cell_dedup(dom: DomainTensors, x=None, *, verbose: bool = True) -> DomainTensors:
+    """A copy of ``dom`` whose per-cell physics runs once per DISTINCT grid cell
+    (``DplConfig.dedup_cells``; see :class:`CellDedup`).  The row-level fields —
+    ``hrus``, ``cell_idx``, ``lat_rad``/``elev``/``veg_frac``, ``flowlen``, ``W`` —
+    are unchanged; the physics accessors (``n_phys``, ``phys_*``, ``chunk*``,
+    ``phys_x``, ``row_cell``) switch to the distinct cells, in first-appearance order.
+
+    Refuses (``ValueError``) when rows that share a cell do not carry identical
+    physics inputs: the parameter-net features ``x`` (``(N, F)`` array or tensor —
+    pass it: e.g. a net with the flow length as a feature gives every (entity,
+    cell) row its own parameters), the latitude, elevation and observed veg
+    fraction.  Forcing, LAI and the climate-state index are per cell by
+    construction (gathered through ``cell_idx``)."""
+    if dom.dedup is not None:
+        return dom
+    ci = np.asarray(dom.cell_idx)
+    _, first, inv = np.unique(ci, return_index=True, return_inverse=True)
+    order = np.argsort(first, kind="stable")          # distinct cells, first-appearance order
+    rank = np.empty_like(order)
+    rank[order] = np.arange(len(order))
+    first_row = first[order]                          # (U,) first HRU row of each cell
+    row_cell = rank[inv.reshape(-1)]                  # (N,) cell of each HRU row
+    rep = first_row[row_cell]                         # (N,) the representative row
+
+    def _t(v):
+        return v.detach().cpu().numpy() if isinstance(v, torch.Tensor) else np.asarray(v)
+
+    checks = {"lat_rad": dom.lat_rad, "elev": dom.elev, "veg_frac": dom.veg_frac,
+              "parameter-net features x": x}
+    for name, v in checks.items():
+        if v is None:
+            continue
+        a = _t(v)
+        if len(a) != len(ci):
+            raise ValueError(f"cell dedup: {name} has {len(a)} rows, the domain {len(ci)}")
+        bad = np.flatnonzero(_rows_differing(a, a[rep]))
+        if len(bad):
+            ex = ", ".join(f"{dom.hrus['basin'].iat[i]}/{dom.hrus['key'].iat[i]}"
+                           for i in bad[:5])
+            raise ValueError(
+                f"cell dedup refused: {len(bad)} HRU row(s) differ in {name} from the "
+                f"other rows of their grid cell (e.g. {ex}) — the per-cell physics would "
+                "not be shared; run without dedup_cells (a flow-length feature, "
+                "flowlen_feature=True, gives every (entity, cell) row its own parameters)")
+    dev = dom.device
+    fr_t = torch.as_tensor(first_row, dtype=torch.int64, device=dev)
+    dd = CellDedup(
+        row_cell=torch.as_tensor(row_cell, dtype=torch.int64, device=dev),
+        first_row=fr_t,
+        cell_idx=ci[first_row],
+        lat_rad=dom.lat_rad.index_select(0, fr_t),
+        elev=dom.elev.index_select(0, fr_t),
+        veg_frac=None if dom.veg_frac is None else dom.veg_frac.index_select(0, fr_t))
+    if verbose:
+        print(f"cell dedup: {len(ci)} HRU rows -> {len(first_row)} distinct cells "
+              f"({len(ci) / max(len(first_row), 1):.2f} rows per cell): per-cell physics "
+              "once per cell, routing + aggregation per row", flush=True)
+    return dataclasses.replace(dom, dedup=dd)
 
 
 @dataclass

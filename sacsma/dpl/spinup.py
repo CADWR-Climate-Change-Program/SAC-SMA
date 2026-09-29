@@ -122,8 +122,8 @@ def cold_state(dom: DomainTensors, cfg: DplConfig,
                params: dict[str, torch.Tensor]) -> PipelineState:
     """The cycle spinup's start: the frozen cold start (SMA [0, 0, 100, 100, 100, 0],
     snow, canopy water and routing history empty)."""
-    return initial_state(dom.n_hru, dom.device, dom.dtype, init_mode="reference",
-                         params=params, et_mode=cfg.et_mode)
+    return initial_state(dom.n_phys, dom.device, dom.dtype, init_mode="reference",
+                         params=params, et_mode=cfg.et_mode, n_rows=dom.n_hru)
 
 
 def stream_rows(
@@ -135,7 +135,9 @@ def stream_rows(
 ) -> tuple[torch.Tensor | None, PipelineState]:
     """Eager no-grad ``run_window`` over ``[t0, t1)`` in ``window``-day pieces;
     ``agg`` maps each piece's cell flow ``(N, T)`` to output rows ``(R, T)``
-    (``None``: stream the state only).  Returns ``(rows (R, t1 - t0) or None, state)``."""
+    (``None``: stream the state only).  Returns ``(rows (R, t1 - t0) or None, state)``.
+    Under cell dedup (``dom.dedup``) ``params``/``canopy`` and the state's physics
+    parts are per distinct cell; the flow handed to ``agg`` is per HRU row."""
     out: list[torch.Tensor] = []
     with torch.no_grad():
         t = t0
@@ -144,14 +146,15 @@ def stream_rows(
             pr, ta, doy, leap = dom.chunk(t, te)
             tn, tx = dom.chunk_tmm(t, te)
             flow, state = run_window(
-                pr, ta, doy, leap, dom.lat_rad, dom.elev, params, uh, state,
+                pr, ta, doy, leap, dom.phys_lat_rad, dom.phys_elev, params, uh, state,
                 n_inc=cfg.n_inc, perc_mode=cfg.perc_mode, fracp_floor=cfg.fracp_floor,
                 ninc_mode="fixed", et_mode=cfg.et_mode, canopy_params=canopy,
-                tmin=tn, tmax=tx, veg_frac=dom.veg_frac, lai=dom.chunk_lai(t, te),
+                tmin=tn, tmax=tx, veg_frac=dom.phys_veg_frac, lai=dom.chunk_lai(t, te),
                 noah_pet=cfg.noah_pet, sac_pet=cfg.sac_pet,
                 pt_snow_albedo=cfg.pt_snow_albedo,
                 pt_dewpoint_depression=cfg.pt_dewpoint_depression,
-                canopy_lite=cfg.canopy_lite, sac_exchanges=cfg.noah_sac_exchanges, state_idx=dom.chunk_state(t, te))
+                canopy_lite=cfg.canopy_lite, sac_exchanges=cfg.noah_sac_exchanges, state_idx=dom.chunk_state(t, te),
+                row_cell=dom.row_cell)
             if agg is not None:
                 out.append(agg(flow))
             t = te
@@ -178,8 +181,8 @@ def spin_state(
     legacy preceding window.  Returns the state and a one-line description."""
     if mode == "window":
         s = window_start(dom.dates, t0, cfg.spinup_start)
-        st = initial_state(dom.n_hru, dom.device, dom.dtype, init_mode=cfg.init_mode,
-                           params=params, et_mode=cfg.et_mode)
+        st = initial_state(dom.n_phys, dom.device, dom.dtype, init_mode=cfg.init_mode,
+                           params=params, et_mode=cfg.et_mode, n_rows=dom.n_hru)
         _, st = stream_rows(dom, cfg, params, uh, canopy, s, t0, st, None)
         return st, f"window spinup from {dom.dates[s].date()}"
     if mode != "cycle":

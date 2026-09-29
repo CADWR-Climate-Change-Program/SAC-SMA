@@ -195,6 +195,7 @@ def _dpl_train(args: argparse.Namespace) -> int:
         train_chunk_days=args.train_chunk_days, chunk_grid=args.chunk_grid,
         nograd_window=args.nograd_window,
         train_graph_segments=args.train_graph_segments,
+        dedup_cells=args.dedup_cells,
         seed=args.seed, use_cuda_graphs=not args.no_graphs,
     )
     train(args.variant, data_dir=args.data_dir, out_dir=args.out, cfg=cfg,
@@ -219,8 +220,10 @@ def _dpl_evaluate(args: argparse.Namespace) -> int:
         evaluate_checkpoint_mt(args.checkpoint, data_dir=args.data_dir,
                                out_dir=args.out,
                                hydrographs=args.hydrographs,
-                               spinup=args.spinup)
+                               spinup=args.spinup, dedup_cells=args.dedup_cells)
         return 0
+    if args.dedup_cells:
+        raise ValueError("--dedup-cells is wired for multi-timescale checkpoints only")
     evaluate_checkpoint(args.checkpoint, data_dir=args.data_dir,
                         out_dir=args.out, parallel=not args.serial,
                         temp_delta=args.temp_delta)
@@ -730,6 +733,13 @@ def main(argv: list[str] | None = None) -> int:
                          "gradient as the single graph up to float32 summation "
                          "order); 2 keeps 366-day chunks under the graph-size "
                          "limit of drivers that fault on whole-year captures")
+    tr.add_argument("--dedup-cells", action="store_true",
+                    help="cell-deduplicated forward: the parameter net and the per-cell "
+                         "physics (PET, Snow-17, ET, SAC-SMA, states, PXTEMP) run once per "
+                         "distinct grid cell, routing and aggregation per (entity, cell) "
+                         "row; refused when rows of a cell differ in their net features "
+                         "(e.g. the flow-length feature) or with --gnn-k; with dropout a "
+                         "shared cell draws one mask instead of one per row")
     tr.add_argument("--no-graphs", action="store_true",
                     help="disable CUDA-graph capture (eager; much slower)")
     tr.add_argument("--resume", action="store_true",
@@ -764,6 +774,10 @@ def main(argv: list[str] | None = None) -> int:
                          "start — cycle = loop its first ten water years 20 times "
                          "from the cold start (timing-independent, default); window "
                          "= the legacy ten water years before it")
+    ev.add_argument("--dedup-cells", action="store_true",
+                    help="multi-timescale checkpoints only: run the per-cell physics "
+                         "once per distinct grid cell (routing per (entity, cell) row); "
+                         "same flows to float round-off, less compute")
     ev.set_defaults(func=_dpl_evaluate)
 
     hy = dpl_sub.add_parser(

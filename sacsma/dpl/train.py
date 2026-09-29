@@ -79,6 +79,7 @@ from .data import (
     load_swe_obs,
     shape_chunk_targets,
     water_balance_anchor,
+    with_cell_dedup,
 )
 from .features import (AEF_STORE_VARIANTS, AEF_VARIANTS, CONTINUOUS_STATICS, FeatureSet,
                        aef_store, build_features)
@@ -132,13 +133,13 @@ _RESUME_FIXED = ("loss", "log_loss_lambda", "log_loss_eps", "var_loss_lambda",
                  "noah_sac_exchanges", "spatial_reg_lambda", "adaptive_loss",
                  "et_loss_lambda", "et_level_lambda", "swe_loss_lambda",
                  "obs_mask", "pxtemp_learn", "pxtemp_box", "pxtemp_tau",
-                 "mt_share_norm", "mt_loss_ref", "mt_loss_ref_power")
+                 "mt_share_norm", "mt_loss_ref", "mt_loss_ref_power", "dedup_cells")
 #: fields added after checkpoints already existed, whose absence means the default:
 #: an older checkpoint is compared as if it recorded these (a pre-mask checkpoint
 #: resumed with --obs-mask must be refused, not skipped)
 _RESUME_DEFAULTED = {"obs_mask": (), "pxtemp_learn": False, "pxtemp_box": (-1.0, 3.0),
                      "pxtemp_tau": 1.0, "mt_share_norm": "present", "mt_loss_ref": "",
-                     "mt_loss_ref_power": None}
+                     "mt_loss_ref_power": None, "dedup_cells": False}
 
 
 def _split_out(out: dict, et_mode: str):
@@ -180,20 +181,21 @@ def _stream_nograd(
             te = min(t + cfg.nograd_window, t1)
             pr, ta, doy, leap = dom.chunk(t, te)
             tn, tx = dom.chunk_tmm(t, te)
-            flow, state = run_window(pr, ta, doy, leap, dom.lat_rad, dom.elev,
+            flow, state = run_window(pr, ta, doy, leap, dom.phys_lat_rad, dom.phys_elev,
                                      params, uh, state, n_inc=cfg.n_inc,
                                      perc_mode=cfg.perc_mode,
                                      fracp_floor=cfg.fracp_floor,
                                      ninc_mode="fixed", et_mode=cfg.et_mode,
                                      canopy_params=canopy_params, tmin=tn, tmax=tx,
-                                     veg_frac=dom.veg_frac,
+                                     veg_frac=dom.phys_veg_frac,
                                      lai=dom.chunk_lai(t, te),
                                      noah_pet=cfg.noah_pet, sac_pet=cfg.sac_pet,
                                      pt_snow_albedo=cfg.pt_snow_albedo,
                                      pt_dewpoint_depression=cfg.pt_dewpoint_depression,
                                      canopy_lite=cfg.canopy_lite,
                                      sac_exchanges=cfg.noah_sac_exchanges,
-                                     state_idx=dom.chunk_state(t, te))
+                                     state_idx=dom.chunk_state(t, te),
+                                     row_cell=dom.row_cell)
             if collect:
                 outs.append(dom.W @ flow)
             t = te
@@ -622,6 +624,20 @@ def train(
         aef_path=aef_store(data_dir) if variant in AEF_STORE_VARIANTS else None,
     )
     x = torch.as_tensor(fs.x).to(dev, dtype)
+    # cell dedup (opt-in): the per-cell physics and the parameter net run once per
+    # distinct grid cell (x_net); routing and W stay per (entity, cell) row.  Off,
+    # x_net IS x and every dom.phys_* accessor returns the row field unchanged.
+    if cfg.dedup_cells:
+        if cfg.gnn_k > 0:
+            raise ValueError("dedup_cells needs a per-cell parameter net (gnn_k == 0): the "
+                             "message passing runs over the HRU rows")
+        dom = with_cell_dedup(dom, fs.x)
+        if cfg.dropout > 0.0:
+            print(f"train: dedup_cells with dropout {cfg.dropout:g} — one dropout mask "
+                  "per distinct cell per chunk (the rows of a shared cell no longer "
+                  "draw their own), so the training noise differs from a run without "
+                  "dedup; the eval-mode forward is the same", flush=True)
+    x_net = dom.phys_x(x)
 
     # -- opt-in regularizers (default-off => byte-identical to the baseline) --
     reg_lambda = cfg.spatial_reg_lambda
@@ -901,8 +917,8 @@ def train(
         try:
             net.eval()
             with torch.no_grad():
-                params0, canopy0 = _split_out(net(x), cfg.et_mode)
-                uh0 = routing_uh(params0, dom.flowlen)
+                params0, canopy0 = _split_out(net(x_net), cfg.et_mode)
+                uh0 = routing_uh(params0, dom.flowlen, row_cell=dom.row_cell)
             print("train: capturing CUDA graphs (no-grad window + train chunk) ...",
                   flush=True)
             nograd_g = NoGradWindow(dom, cfg, cfg.nograd_window, params0, uh0,
@@ -996,7 +1012,7 @@ def train(
             for clen in cap_lens:
                 try:
                     train_gs[clen] = TrainChunk(
-                        net, dom, cfg, clen, x, calobs.obs_var,
+                        net, dom, cfg, clen, x_net, calobs.obs_var,
                         weight=fam_w if fam_w is not None else basin_w,
                         swe_basin_w=swe_w,
                         mt_rows=m_rows if eobs is not None else None,
@@ -1097,12 +1113,12 @@ def train(
         (pooled scalar + the per-basin vector for adaptive weighting)."""
         net.eval()
         with torch.no_grad():
-            pe, cp_e = _split_out(net(x), cfg.et_mode)
-            ue = routing_uh(pe, dom.flowlen)
+            pe, cp_e = _split_out(net(x_net), cfg.et_mode)
+            ue = routing_uh(pe, dom.flowlen, row_cell=dom.row_cell)
         if nograd_g is not None:
             nograd_g.set_params(pe, ue, canopy_params=cp_e)
-        st0 = initial_state(dom.n_hru, dev, dtype, init_mode=cfg.init_mode,
-                            params=pe, et_mode=cfg.et_mode)
+        st0 = initial_state(dom.n_phys, dev, dtype, init_mode=cfg.init_mode,
+                            params=pe, et_mode=cfg.et_mode, n_rows=dom.n_hru)
         if cfg.spinup_mode == "cycle":
             from .graphs import _clone_state
             # the cold start and spinup_passes the first time; then from the previous
@@ -1418,7 +1434,9 @@ def train(
             eval_terms_path, mode="a", index=False,
             header=not eval_terms_path.exists())
 
-    print(f"train[{variant}]: {dom.n_hru} HRUs, {len(dom.basins)} basins, "
+    print(f"train[{variant}]: {dom.n_hru} HRUs"
+          + (f" on {dom.n_phys} distinct cells (cell dedup)" if dom.dedup is not None else "")
+          + f", {len(dom.basins)} basins, "
           f"{x.shape[1]} features | cal days {calobs.t0}..{calobs.t1} "
           + ("(cycle spinup) " if cfg.spinup_mode == "cycle" else
              f"(spinup from day {spin_t0}"
@@ -1585,8 +1603,8 @@ def train(
                     # net(x) (one dropout draw) and the same graphed forward,
                     # without autograd
                     with torch.no_grad() if dead_nograd else contextlib.nullcontext():
-                        params, cp = _split_out(net(x), cfg.et_mode)
-                        uh = routing_uh(params, dom.flowlen)
+                        params, cp = _split_out(net(x_net), cfg.et_mode)
+                        uh = routing_uh(params, dom.flowlen, row_cell=dom.row_cell)
                         if two:
                             state = burn[0][0]      # the burn-in's carried state
                         if carry_grad and not dead_nograd:
@@ -1621,13 +1639,14 @@ def train(
                         def _eager(d0: int):
                             sl = slice(d0, None)
                             return run_window(
-                                pr[:, sl], ta[:, sl], doy[sl], leap[sl], dom.lat_rad, dom.elev,
+                                pr[:, sl], ta[:, sl], doy[sl], leap[sl], dom.phys_lat_rad,
+                                dom.phys_elev,
                                 params, uh, state_g, n_inc=cfg.n_inc, perc_mode=cfg.perc_mode,
                                 fracp_floor=cfg.fracp_floor, ninc_mode="fixed",
                                 et_mode=cfg.et_mode, canopy_params=cp,
                                 tmin=None if tn is None else tn[:, sl],
                                 tmax=None if tx is None else tx[:, sl],
-                                veg_frac=dom.veg_frac,
+                                veg_frac=dom.phys_veg_frac,
                                 lai=None if lai_c is None else lai_c[:, sl],
                                 noah_pet=cfg.noah_pet,
                                 sac_pet=cfg.sac_pet, pt_snow_albedo=cfg.pt_snow_albedo,
@@ -1636,7 +1655,8 @@ def train(
                                 sac_exchanges=cfg.noah_sac_exchanges,
                                 state_idx=None if st_c is None else st_c[:, sl],
                                 return_tet=et_tgt is not None,
-                                return_swe=swe_tgt is not None)
+                                return_swe=swe_tgt is not None,
+                                row_cell=dom.row_cell)
 
                         if n_g == -1 or n_g == ce - w0:
                             res = (flow_g, state_g)
