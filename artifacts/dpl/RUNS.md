@@ -952,6 +952,251 @@ UF9 second row scores the Yuba against the arcs its entity simulates):
 | UF22: San Joaquin R. at Millerton | FLOW-UNIMPAIRED | 1,879 | 0.842 | -4.3 | 0.850 | -4.7 | 0.793 | -5.2 |
 | UF21: Fresno R. near Daulton | arc sum | 95 | 0.789 | -2.9 | 0.826 | +0.3 | 0.824 | +8.7 |
 
+## Multifamily training program: runs A–H and H95 (2026-09-22 → 29)
+
+**Why.** The trained fields of the three runs of the section above share one regime: median riva
+0.85–0.90, pfree 0.99, lzsk at its 0.003 floor, lztwm at its 5,000 mm ceiling on 95 % or more of
+entity-cell rows and uztwm ≈ 1,000 mm, with tier-1 flows early in timing at 20 of 20 locations
+(CalSim3 WY1950–84). The riparian term does the work of a summer ET sink that the Noah-lite path
+lacks: with Noah-lite soil ET, the rest of the reference SAC ET block (the ADIMP ET, the upper-zone
+free → tension rebalance, the lower-zone resupply) was skipped. From 2026-09-22 a series of
+single-seed runs on the 26 entities of `noah_cdec_uf` changed one thing at a time (physics, the
+TBPTT gradient, the network inputs, the loss), each scored through the full chain and read against
+pass/fail bars written before its result. The series ended in two runs the user adopted as bases: H
+(`noah_cdec_uf_sacx_carry_px_aef`, 26 entities, 2026-09-28) and H95
+(`noah_cdec_uf_usgs_areaw_all_kref05_sacx_carry_px_aef`, 95 entities, 2026-09-29).
+
+**Names and layout.** After the families, a run's name lists its recipe: `_rivapin` =
+`--param-box riva=0:0`; `_seed1` = seed 1; `_sacx` = `--noah-sac-exchanges`; `_carry` =
+`--tbptt-carry relative` (`_flux` = the flux carry); `_w2ft` / `_w3` = 2- or 3-water-year TBPTT
+windows (`ft`: fine-tuned from A); `_tp` / `_g2` = the timing and peak loss terms, first and revised
+form; `_px` = learned PXTEMP with the observation mask; `_aef` / `_aef64` = the feature variant (no
+suffix: `physical_climate`); `_all` = `--mt-share-norm all`; `_kref05` = the frozen family loss
+scale at p = 0.5. A folder named `_failed_` / `_stopped_` / `_aborted_` + run name + date holds a
+launch that did not finish. H and H95 track the ten files of the multifamily layout; the other runs in
+the table stay local and git-ignored, and each run folder records its code as `code_base.txt` +
+`code_diff.patch`. The letters A–H are the labels the bars used.
+
+**Recipe.** Every 26-entity run is the `noah_cdec_uf` recipe (the multifamily common recipe, `--basins`
+with the 17 `cdec_*` and 9 `uf_*` ids, `--mt-family-weight none`, `--epochs 90`, seed 0 unless
+named) plus the flags in the table, all with `--diagnostics --dead-chunk-nograd`; B through G2 used
+`--patience 6`. Selection is the pooled cal KGE over the 26 entities (the statistic behind
+`noah_cdec_uf`'s 0.8241), on the masked daily target for H. R1 and R2 ran on `17229ec` and
+`noah_cdec_uf_sacx` on `e299947`, each with the working diff of the day; A onward ran on `889e671`
+plus the options below.
+
+**Trainer options added 2026-09-23 → 28**, all off by default:
+- `--noah-sac-exchanges` (needs `--canopy-lite`; committed in `889e671`): restores the ADIMP ET(5),
+  the upper-zone free → tension rebalance and the lower-zone free → tension resupply around the
+  Noah-lite soil ET, in the torch path and the numba mirror (`sma_noah_lite`); exported
+  `params_canopy.csv` files carry a `sac_exchanges` column.
+- `--tbptt-carry relative|flux`: the state carried into each water-year chunk keeps its values, but
+  the backward holds each SAC store's relative saturation fixed, so a larger capacity no longer
+  looks like free deficit at every chunk start; `flux` also holds the lower-zone free stores'
+  carried drainage flux fixed.
+- `--tbptt-window-years 2|3` with `--graph-recompute-days 73`: each live chunk backpropagates
+  through the previous one or two water years as a burn-in, the loss on its own year only; the
+  recompute replays one captured 73-day CUDA graph and re-runs its segments in the backward, so
+  graph memory stays one segment's.
+- `--timing-lambda` and `--peak-lambda` (with `--peak-frac`, `--shape-min-days`,
+  `--timing-vol-gate`; water-year grid only): a summer-recession timing term (normalized cumulative
+  flow, 1 Jul–30 Sep) and a flood-peak term (the mean of the top 2 % of days, sim vs obs, over the
+  record mean of that statistic, Huber-capped).
+- `--learn-pxtemp` (`--pxtemp-box -1:3`, `--pxtemp-tau 1.0`): the Snow-17 rain/snow threshold learned
+  per cell by a zero-init head (exactly the fixed 0 °C at init); the forward split stays hard and
+  the gradient passes through a sigmoid surrogate of width τ, so the exported PXTEMP column runs
+  as-is in the frozen `run_basin`.
+- `--obs-mask CSV`: daily target observations masked out of training and scoring (the checkpoint
+  carries the list). `data/cdec_fnf/fnf_daily_mask.csv` holds five confirmed artifact days: CLE
+  1996-05-26, FOL 1993-02-24, YRS 1995-06-17, NML 2016-06-28, SHA 1996-01-26.
+- `--mt-share-norm all`, `--mt-loss-ref` and `--mt-loss-ref-power`: see H95 below.
+- Feature variant `aef64`: all 64 AlphaEarth unit-direction coordinates plus the length (65
+  inputs), no PCA.
+
+**The runs between the section above and H.** Single seed. Selection = best pooled 26-entity cal
+KGE @ its epoch (early-stop epoch). Tier 1 = CalSim3 WY1950–84 KGE mean; "trimmed" = the trimmed
+windows, full window at the 4 locations without one. Peaks and Shasta = CDEC daily, WY1988–2018;
+"4-basin" = ORO, FOL, YRS, MKM. The "60 nested gauges" are the USGS gauges inside the trained
+footprints that no 26-entity run trains on. The control is `noah_cdec_uf`: tier 1 0.794, trimmed
+0.790, volume −2.8 %, early at 20 of 20 locations, median α 0.840.
+
+| run | change | selection | verdict |
+|---|---|---|---|
+| `noah_cdec_uf_rivapin` (R1) | control + `--param-box riva=0:0` | 0.8314 @48 (70) | Leaves the regime by the pin (pfree 0.44, lzsk 0.015): early at 6 of 20 (control 20), median α 0.948, tier 1 0.853, trimmed 0.854, but volume −5.2 %. A pin, not a cause; superseded by `--noah-sac-exchanges`. |
+| `noah_cdec_uf_seed1` (R2) | control, seed 1; stopped by hand at epoch 64 on its plateau | 0.8378 @60 | Same regime (riva 0.844, early 19 of 20), so the regime is systematic, not a seed draw. Tier 1 0.818 (control 0.794), volume −1.1 %: the seed pair behind the spreads the later bars use. |
+| `noah_cdec_uf_sacx` | control + `--noah-sac-exchanges` | 0.8447 @58 (80) | The regime is gone without a pin: riva 0.0009, pfree 0.66, adimp 0.26 (control 0.016); early 5 of 20, α 0.945; tier 1 0.839, trimmed 0.844, volume −4.3 %. The physics of every later run. |
+| `noah_cdec_uf_sacx_carry_aef` (A) | sacx + `--tbptt-carry relative` + `aef` inputs (17) | 0.8862 @62 (stopped by hand after 76) | The best 26-entity run until H: cdec 0.864, uf 0.928; tier 1 0.862, trimmed 0.869, volume −3.5 %; lztwm median 218 mm (sacx 4,378). The base of D–H. |
+| `_aborted_noah_cdec_uf_sacx_carry_20260924` | B's first launch, started by a leftover queue while A was being scored | 0.4201 @0 | Killed after 2 epochs; relaunched as B. |
+| `noah_cdec_uf_sacx_carry` (B) | A without `aef` (`physical_climate`, 26 inputs) | 0.8772 @62 (76) | The carry gives most of A's gain over sacx (0.8772 against 0.8447; uf 0.915 against 0.887). The embeddings add the rest in training and on the 60 nested gauges (B − A paired median ΔKGE −0.055, B higher at 20), but not on the 16 tier-2 arcs on cells no entity uses (B 0.457, A −0.047). |
+| `noah_cdec_uf_sacx_carry_aef64` (C) | A with `aef64` (65 inputs) | 0.8904 @64 (78) | The highest selection and uf 0.942, but ORO 0.859 (A 0.896), trimmed 0.865 (0.869) and the unused-cell tier-2 arcs −0.243 (A −0.047): more embedding detail transfers worse. `aef` kept. |
+| `noah_cdec_uf_sacx_flux_aef` (D) | A with `--tbptt-carry flux` | 0.8720 @60 (74) | Moves Shasta as intended (lzsk median 0.0058 against 0.0118, Jul–Nov volume −15.1 % against −27.5 %) but damps the Sierra flood peaks: ORO 0.815, 4-basin Q99.9 −25.4 % (A −5.5 %). Rejected. |
+| `_failed_noah_cdec_uf_sacx_w2ft_aef_20260926` | E's first launch | — | Refused at start: the warm-start check expected statics that the `aef` inputs do not have; fixed in `train.py`, relaunched. |
+| `noah_cdec_uf_sacx_w2ft_aef` (E) | fine-tune of A: `--init-from` A, `--tbptt-window-years 2 --graph-recompute-days 73`, lr 3e-4, 30 epochs, the final network scored | 0.8862 @0 (= A); 0.8778 @28 | Shasta Jul–Nov −15.1 % with the Sierra peaks kept (4-basin Q99.9 −7.1 %), but trimmed 0.847 (A 0.869) and no change on the 60 nested gauges (paired −0.001, E higher at 28). Rejected. |
+| `noah_cdec_uf_sacx_w3_aef` (F) | A from scratch with 3-water-year windows (recompute 73) | 0.8704 @62 (76) | Fixes Shasta (Jul–Nov −3.5 %, volume +2.5 %, lzsk 0.0041) and uf 0.934, but loses the Sierra flood peaks: 4-basin KGE 0.789 (A 0.875), α 0.829, Q99.9 −27.2 %, five largest annual maxima −46.4 % (A −24.1 %); trimmed 0.854. Rejected; G and G2 try to keep its Shasta with A's peaks. |
+| `_failed_noah_cdec_uf_sacx_w3_tp_aef_20260927` | G's first launch | — | Never trained: the machine crashed at launch. |
+| `_stopped_noah_cdec_uf_sacx_w3_tp_aef_20260927` (G) | F + `--peak-lambda 1.0 --timing-lambda 24` (first forms) | 0.8292 @22 (stopped) | Stopped at epoch 22 (F 0.7998 at the same epoch) after a review of the two terms: the peak term gave every year an equal vote, so dry years carried it, and neither term was gated against near-zero flows. Replaced by G2. |
+| `noah_cdec_uf_sacx_w3_g2_aef` (G2) | F + the revised terms, `--peak-lambda 1.0 --timing-lambda 3.5` | 0.8783 @54 (68) | Shasta held (Jul–Nov −0.5 %) but all four Sierra peak bars failed: KGE ORO/FOL/YRS/MKM 0.852/0.813/0.800/0.782 (A 0.896/0.893/0.863/0.846), α 0.864, Q99.9 −20.6 %, top five −40.8 %. A stayed the base; scoring stopped in tier 2 (no tier 2 or atlas). |
+| `noah_cdec_uf_sacx_carry_px_aef` (H) | A + `--learn-pxtemp` + `--obs-mask` | 0.8946 @68 (90 epochs, no stop) | Adopted 2026-09-28; entry below. |
+| `noah_cdec_uf_usgs_areaw_all_kref05_sacx_carry_px_aef` (H95) | H's recipe on 95 entities, family influence equalized | 0.8509 @92 (114), share-weighted family mean | Adopted 2026-09-29; entry below. |
+
+- **`multifamily/noah_cdec_uf_sacx_carry_px_aef`** (run H) — A's recipe (26 entities, `aef`,
+  `--noah-sac-exchanges --tbptt-carry relative`, `--epochs 90`, patience 10) plus `--learn-pxtemp
+  --pxtemp-tau 1.0` (box −1 to 3 °C) and `--obs-mask data/cdec_fnf/fnf_daily_mask.csv`. Its target
+  was Trinity (CLE), where A, with the rain/snow threshold fixed at 0 °C, was too wet in winter and
+  too dry in May–Jun (WY1987–2018 daily volume bias Dec–Feb +40.1 %, May–Jun −10.0 %). Ran all 90
+  epochs; selected epoch 68, selection 0.8946 on the masked target (A 0.8862 on the unmasked one;
+  about 0.002 of the gap is the mask: +0.0017 on A's side, +0.0024 on H's). 48 steps were skipped for a non-finite gradient in epochs
+  16–19 (1 / 6 / 23 / 18). Family mean cal KGE (masked daily target): cdec 0.874 (median 0.886) /
+  uf 0.934.
+
+  Bars against A, both on the masked target: Trinity passed, with CLE Dec–Feb +40.1 → +10.5 %,
+  May–Jun −10.0 → −2.6 % and daily KGE 0.800 → 0.881. So did the basins with the same pattern (CLE,
+  MKM, TRM, FOL, MRC): mean |Dec–Feb| + |May–Jun| 35.5 → 19.6 points, 4 of 5 better by more than 10.
+  Guards: CDEC median KGE 0.879 → 0.886, 26-entity mean 0.888 → 0.895, uf mean 0.928 → 0.934, and
+  the 60 nested gauges paired median ΔKGE +0.014 (90 % interval −0.012 to +0.044) with H higher at
+  34 (all pass); ORO 0.896 → 0.838, a drop of 0.058 against a 0.040 seed spread (fail), with YRS
+  −0.021, SHA −0.032, BND −0.011, NHG +0.057.
+
+  Attribution: with PXTEMP reset to 0 on H's trained field, CLE goes back to Dec–Feb +57.5 % /
+  May–Jun −45.9 % (KGE 0.766) and ORO to 0.903, so the learned threshold carries both the Trinity
+  fix and the ORO loss; NHG's gain is not PXTEMP (0.922 with it reset). ORO's loss is in α (0.930 →
+  0.849; Q99.9 −8.8 → −27.9 %). The threshold stores the precipitation of cool storm days (daily
+  mean 0–4 °C) as snow, which moves ORO's winter volume to spring (Nov–Mar volume bias A +8 %, H
+  −1 %) and damps moderate cool storms (five ORO events at 0.60–0.76 of the observed peak, 0.79–1.09
+  with the threshold reset); the largest warm flood (1997-01-01) is unchanged. A uniform cap only
+  trades one against the other: capped at 1.5 °C on H's field, CLE is back to Dec–Feb +30.0 % /
+  May–Jun −22.7 % while ORO recovers only to 0.871. So the next step the bars prescribed for this
+  outcome, a fresh run with a narrower box (−0.5 to 1.5 °C), was not run. Learned PXTEMP: median
+  1.50 °C over entity-cell rows; basin medians 1.00 at SHA, 1.07 at BND, 1.5–2.1 at the other CDEC
+  basins and 2.39 at CLE; no cell within 0.1 °C of a box edge.
+
+  Not bars: the 8 arid USGS gauges outside the trained footprints, paired ΔKGE −0.139 and median
+  |pbias| 37 → 76 %; the 18 DWR unimpaired sites, monthly KGE median WY1926–49 / 1950–84 / 1985–2014
+  0.829 / 0.867 / 0.935 (A 0.829 / 0.893 / 0.925) and volume −9.8 / −7.9 / −3.9 % (A −7.2 / −5.1 /
+  −1.1 %). CLE's cal-window volume bias is +6.4 %, inside the 10 % that would have called for a
+  volume term. CalSim3 WY1950–84, out of sample at all 20 locations: tier-1 KGE mean 0.859 / median
+  0.871 (anchors 0.865, arc sums 0.853), median |bias| 8.4 %, volume 29,995 vs 32,115 TAF/yr
+  (−6.6 %); trimmed windows 0.863 / 0.877, volume −7.4 %. Tier-2 median 0.628 over 196 arcs: 0.654
+  on the 155 arcs of trained entities, 0.108 on the 41 extrapolated arcs (25 on trained cells 0.124,
+  16 on unseen cells −0.017).
+
+  Decision: the user adopted H as the new base on 2026-09-28, with ORO's loss (α and the peaks of
+  moderate cool storms, at ORO and less at YRS) recorded as a known cost. The candidate fix is a
+  rain/snow partition that does not switch whole storm days, such as a snow fraction ramped over a
+  temperature range; it changes the dPL snow step and has not been built.
+
+- **`multifamily/noah_cdec_uf_usgs_areaw_all_kref05_sacx_carry_px_aef`** (run H95) — H's recipe
+  (`aef`, `--noah-sac-exchanges --tbptt-carry relative --learn-pxtemp --pxtemp-tau 1.0 --obs-mask
+  data/cdec_fnf/fnf_daily_mask.csv`, seed 0) on all 95 entities (69 `usgs_daily`, 17 `cdec_daily`,
+  9 `uf_monthly`) with the footprint-area shares of `noah_cdec_uf_usgs_areaw`
+  (`--mt-family-weight usgs=0.216,cdec=0.558,uf=0.226`), two weighting changes (`--mt-share-norm
+  all`, `--mt-loss-ref usgs=0.7368,cdec=0.4202,uf=0.0980 --mt-loss-ref-power 0.5`), `--epochs 120`,
+  patience 10.
+
+  Why the weighting changes. Under the default `--mt-share-norm present` each chunk's loss is
+  divided by the weight of the entities that chunk scores. USGS records start in WY1950 and the CDEC
+  and uf targets in WY1985 or later, so the 35 WY1950–84 chunks score USGS alone at full weight, and
+  the shares 0.216 / 0.558 / 0.226 came out about 0.57 / 0.34 / 0.10 over an epoch (both earlier
+  95-entity runs trained this way). `all` divides by the weight of every entity of the run (daily
+  86, monthly 9), so the shares hold as loss coefficients summed over the chunks (realized 0.234 /
+  0.546 / 0.220). Coefficients are not influence, because the family losses are in different units:
+  per entity, at the reference state below, usgs 0.7368 / cdec 0.4202 / uf 0.0980 (7.5 : 4.3 : 1).
+  The frozen scale multiplies each family term by κ = L̄ / L_ref^p, with p = 0.5 and L̄ = 0.6179:
+  usgs × 0.7198, cdec × 0.9532, uf × 1.9737, fixed for the run. L_ref are the per-entity loss levels
+  of `noah_cdec_uf_usgs_areaw`'s best.pt re-scored with this loss; p = 0.5 is the power that brings
+  each family's share of the optimizer step to its share at trained states (p = 1 would give uf
+  about 1.4–1.5× its share). Selection keeps the nominal shares, never κ; the loss columns of
+  `train_log.csv` are on the κ scale, so compare runs on KGE and selection only. The run's local
+  `provenance/` keeps the reference levels (`shares.txt`, `final_numbers.txt`) and the script that
+  computed them (`levels_sim.py`).
+
+  Training. Early stop at epoch 114 (11 stale selections); selected epoch 92, selection 0.8509 (the
+  share-weighted family mean at the nominal shares, masked daily target; `noah_cdec_uf_usgs_areaw`
+  logged 0.7610, and 0.7702 re-scored on the masked target: a confounded comparison, since the
+  recipe differs). The `loss nan` on the epoch-114 line is the early-stop epoch, which runs a
+  selection pass and no training chunk. Seven chunks were skipped for a non-finite gradient in
+  epochs 8–9 (5 of 70 in epoch 9, over the flag line of 4 per epoch), in a gradient explosion
+  through lzsk and lzpk at a few USGS creek cells with lzsk at its 0.003 floor. None followed after
+  epoch 10, and selection had recovered by epoch 10 (0.7150). The weighting did what it was built
+  to do: at best.pt the families' shares of the clipped, Adam-preconditioned step are 0.235 / 0.558
+  / 0.207 against the coefficients 0.234 / 0.546 / 0.220 (pass). Loss-mass shares over epochs ≥ 10
+  are 0.368 / 0.516 / 0.116, and the norm clip acted on 15.7 % of stepped chunks (epochs ≥ 5). The
+  per-entity usgs : cdec loss ratio converged at 2.21, 1.26× the reference 1.75 (flagged above
+  1.25: re-reference only for a next run).
+
+  Skill (each entity's cal window, masked daily target). Family mean cal KGE: usgs 0.687 (median
+  0.723) / cdec 0.880 (0.882) / uf 0.935 (0.940); H cdec 0.874 (0.886) / uf 0.934 (0.943);
+  `noah_cdec_uf_usgs_areaw` usgs 0.592 / cdec 0.795 / uf 0.879 (confounded). Bars against H, with
+  the preregistered one-seed spreads (cdec family mean 0.018, uf 0.005, single entity 0.04; a
+  change inside its spread is unreadable):
+  - uf, the success condition: 0.9351 against 0.9337, above the bar (0.924) but inside the spread,
+    so unreadable; worst entity uf_13 0.959 → 0.923 (−0.035, inside 0.04).
+  - cdec mean 0.880 against 0.874, unreadable. Guards: ORO 0.838 → 0.888 (α 0.849 → 0.901), SHA
+    0.864 → 0.909 and BND 0.865 → 0.910 are readable gains; YRS 0.846 → 0.860 is unreadable; NHG
+    0.924 → 0.873 is a readable fail (−0.051; α 0.988 → 0.905), back at A's 0.867, so H's NHG gain
+    is lost. Also up beyond the spread: MKM +0.079, PNF +0.046.
+  - Peaks, all pass: CDEC mean Q99.9 bias −10.3 % (H −12.2 %); flood-year
+    (WY1986/95/97/98/2006/2011) Dec–Mar volume ORO −2.0 %, YRS −5.4 %, NML −2.1 % (H −7.4 / −10.5 /
+    −14.3 %); the five moderate cool ORO storms of H's attribution at 0.65–0.92 of the observed peak
+    (H 0.60–0.76).
+  - USGS: family mean 0.687 against the old recipe's 0.592 (bar 0.562), higher at 54 of 69 gauges;
+    confounded by the recipe.
+  - Trinity, reported: CLE Dec–Feb +10.4 % (H +10.5), May–Jun −7.5 % (H −2.6), KGE 0.869 (0.881).
+
+  CalSim3 WY1950–84 is in sample at the 16 tier-1 locations a trained creek covers (68 % of the USGS
+  family's observation days fall in WY1950–84) and out of sample at UF2, UF4, UF10 and UF15. Tier-1
+  KGE mean 0.857 / median 0.877 (anchors 0.867, arc sums 0.847), median |bias| 7.8 %, volume
+  30,537 vs 32,115 TAF/yr (−4.9 %); trimmed windows 0.860 / 0.881, volume −5.8 % (H: 0.859 / 0.871,
+  −6.6 %; trimmed 0.863 / 0.877, −7.4 %). The change against H, which trains no creek, is the same on
+  the full and the trimmed windows (+0.001 on average, at most 0.025 at UF20), so no creek inflation
+  of the WY1950–84 scores can be detected. By location (table below) the moves against H beyond
+  0.04 are UF8 +0.043, UF3 +0.080 and UF14 +0.054 up, UF15 −0.071 and UF21 −0.042 down. Tier-2
+  median 0.657 over 196 arcs (H 0.628): 0.684 on the 155 arcs of trained entities, 0.233 on the 41
+  extrapolated arcs, of which 34 lie on cells the creeks trained on (0.347, partly in sample) and 7
+  on cells no entity uses (−0.403; arcs of 2–12 TAF/yr). The 18 DWR sites, monthly KGE median
+  WY1926–49 / 1950–84 / 1985–2014: 0.810 / 0.872 / 0.923 (H 0.829 / 0.867 / 0.935), about 1.8
+  points wetter than H in each era (volume −8.1 / −6.1 / −2.1 %); NHG is down in all three eras
+  (−0.123 / −0.081 / −0.108), ORO up in all three (+0.052 / +0.044 / +0.050).
+
+  The learned PXTEMP differs from H's: median 1.18 °C over entity-cell rows (H 1.50); basin medians
+  at or just below 0 °C at NHG (−0.24), CSN (−0.19) and seven of the nine uf basins (−0.19 to
+  +0.01), 1.74 at SHA and 1.48 at BND; 130 of the 2,652 cells sit within 0.1 °C of the 3 °C cap
+  (52 of them in the Shasta footprint), none in H.
+
+  Decision: the bars' reading was to run the paired nominal arm (the same run and seed without the
+  frozen scale) before deciding, because the NHG fail cannot be attributed to κ without it and the
+  success condition (uf) was unreadable on one seed. The user adopted H95 as the new base on
+  2026-09-29 without the nominal arm, a departure from that reading, with NHG's loss (α 0.988 →
+  0.905) recorded as a known cost, as ORO's was for H. Neither the nominal arm nor a second seed has
+  been run.
+
+Tier 1 by location, CalSim3 WY1950–84, cycle spinup (from the two `tier1/tier1_metrics.csv`; in
+sample for H95 at the 16 creek-covered locations, for H at none):
+
+| location | reference | CalSim3 TAF/yr | KGE H | bias % | KGE H95 | bias % |
+|---|---|---:|---:|---:|---:|---:|
+| SHA: Sacramento R. at Shasta | FLOW-UNIMPAIRED | 6,323 | 0.856 | -13.2 | 0.878 | -11.6 |
+| CLE: Trinity R. at Trinity Dam | FLOW-UNIMPAIRED | 1,416 | 0.645 | +28.0 | 0.653 | +26.9 |
+| UF6: Sacramento R. near Red Bluff | FLOW-UNIMPAIRED | 9,210 | 0.851 | -12.5 | 0.878 | -11.5 |
+| UF7: Sacramento Valley east-side minor streams | arc sum | 1,328 | 0.767 | -11.6 | 0.758 | -10.1 |
+| UF8: Feather R. near Oroville | FLOW-UNIMPAIRED | 4,941 | 0.859 | -9.9 | 0.902 | -7.1 |
+| UF4: Stony Creek at Black Butte | arc sum | 505 | 0.789 | -17.0 | 0.750 | -20.8 |
+| UF11: American R. at Fair Oaks | FLOW-UNIMPAIRED | 2,922 | 0.943 | -2.0 | 0.946 | +1.6 |
+| UF9: Yuba R. at Smartville | FLOW-UNIMPAIRED | 2,546 | 0.886 | -4.1 | 0.875 | -5.5 |
+| UF9: Yuba R. at Smartville | arc sum, covered arcs | 2,515 | 0.924 | -2.9 | 0.912 | -4.3 |
+| UF10: Bear R. near Wheatland | arc sum | 384 | 0.922 | -6.2 | 0.894 | -3.6 |
+| UF3: Cache Creek above Rumsey | arc sum | 718 | 0.787 | -15.1 | 0.868 | -7.3 |
+| UF2: Putah Creek near Winters | arc sum | 425 | 0.955 | -1.6 | 0.956 | -0.2 |
+| UF13: Cosumnes R. at Michigan Bar | arc sum | 421 | 0.867 | -9.8 | 0.867 | -7.3 |
+| UF14: Mokelumne R. at Pardee | arc sum | 811 | 0.875 | -5.5 | 0.929 | +2.9 |
+| UF16: Stanislaus R. at Melones | FLOW-UNIMPAIRED | 1,231 | 0.922 | +0.2 | 0.893 | +8.2 |
+| UF15: Calaveras R. at Jenny Lind | arc sum | 178 | 0.910 | -8.5 | 0.838 | -12.2 |
+| UF18: Tuolumne R. at Don Pedro | FLOW-UNIMPAIRED | 2,001 | 0.951 | -2.3 | 0.924 | -3.0 |
+| UF19: Merced R. at Exchequer | FLOW-UNIMPAIRED | 1,025 | 0.883 | +7.0 | 0.898 | +9.1 |
+| UF20: Chowchilla R. at Buchanan | arc sum | 78 | 0.776 | -8.3 | 0.774 | -14.2 |
+| UF22: San Joaquin R. at Millerton | FLOW-UNIMPAIRED | 1,879 | 0.853 | -13.3 | 0.823 | -12.9 |
+| UF21: Fresno R. near Daulton | arc sum | 95 | 0.881 | -3.0 | 0.839 | -4.2 |
+
 ## Open items
 - **Rename (2026-07-21):** the climate-adaptive physics and hybrid family
   canonicalized 2026-07-19 as `noah_ca` / `hybrid_base` / `hybrid_dtdp` are
@@ -1048,3 +1293,9 @@ UF9 second row scores the Yuba against the arcs its entity simulates):
   training (INVENTORY §data/region).
 - `pt_refined_noah_lite` resolved 2026-07-14 (wash + reshuffle, not promoted;
   see the Noah ET line).
+- **Multifamily bases (2026-09-29).** H95 is the base dPL; its paired nominal arm, a second seed and
+  a re-referenced κ (its usgs : cdec loss ratio ended at 1.26× the reference) have not been run. The
+  CalSim-hybrid work stays on H for now: H's only overlap with the WY1976–85 holdout chosen for that
+  work is the uf family in WY1985, while 68 % of the observation days H95's USGS creeks train on
+  fall in WY1950–84. H95's recipe enters with the planned CalSim dPL retrain, which masks WY1976–85
+  in every family and adds the observed CalSim3 rim arcs as a fourth, monthly family.

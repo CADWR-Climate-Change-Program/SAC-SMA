@@ -78,6 +78,8 @@ artifacts/dpl/multifamily/*
 !artifacts/dpl/multifamily/noah_cdec_uf_usgs/
 !artifacts/dpl/multifamily/noah_cdec_uf_usgs_areaw/
 !artifacts/dpl/multifamily/noah_cdec_uf/
+!artifacts/dpl/multifamily/noah_cdec_uf_sacx_carry_px_aef/
+!artifacts/dpl/multifamily/noah_cdec_uf_usgs_areaw_all_kref05_sacx_carry_px_aef/
 artifacts/dpl/multifamily/*/*
 !artifacts/dpl/multifamily/*/train_log.csv
 !artifacts/dpl/multifamily/*/metrics_entities.csv
