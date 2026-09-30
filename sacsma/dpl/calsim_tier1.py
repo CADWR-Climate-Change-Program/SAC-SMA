@@ -36,6 +36,13 @@ which the creeks covered the least of the location (``window = trimmed``; the ru
 window and has no ``trimmed`` row.  The full-window score is always reported; the summary
 gives the aggregate both ways.
 
+A run that held water years out of training in every family (``DplConfig.holdout_wy``, read from
+its checkpoint) is validated over those instead: windows ``WY1976-85`` (the holdout) and
+``WY1976-84`` (the holdout minus its last water year, comparable with runs that trained the
+monthly family's WY1985), WY1950-84 kept as ``WY1950-84_mixed`` (partly in-sample for such a run),
+no trimmed window, and the ``train`` window scored without the held-out water years
+(``excluded_wy``).  The regime figure and the summary are then over ``WY1976-85``.
+
 Usage::
 
     python -m sacsma.dpl.calsim_tier1 <run_dir> [--out DIR] [--data-dir data]
@@ -68,7 +75,70 @@ VALIDATION_WINDOW = "WY1950-84"
 #: a location the USGS creek gauges reached inside the validation window is also scored over water
 #: years ``val_start_wy`` .. ``val_end_wy`` of the set table (see :mod:`sacsma.dpl.calsim_windows`)
 TRIMMED_WINDOW = "trimmed"
+#: a run that held water years out of training in every family (``DplConfig.holdout_wy``) is
+#: validated over them instead: window ``WY<first>-<last>`` (e.g. ``WY1976-85``), plus the same
+#: minus its last water year (``WY1976-84``: comparable with runs that trained the monthly
+#: family's registry window, which starts in WY1985).  WY1950-84 is then partly in-sample (the
+#: creeks, the back-extended monthly family and the arcs train WY1950-75) and is kept under
+#: this suffix; the trimmed window answers a question such a run no longer asks and is dropped.
+MIXED_SUFFIX = "_mixed"
 _WY_MONTHS = ["Oct", "Nov", "Dec", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep"]
+
+
+def wy_label(first: int, last: int) -> str:
+    """``WY1976-85`` for water years 1976..1985 (last two digits, four across a century)."""
+    return f"WY{first}-{last % 100:02d}" if last // 100 == first // 100 else f"WY{first}-{last}"
+
+
+def window_range(name: str) -> tuple[str, str]:
+    """The inclusive month range of a window name: :data:`WINDOWS` first, else a
+    ``WY<first>-<last>`` name (any suffix after it ignored) as Oct of first-1 .. Sep of last."""
+    if name in WINDOWS:
+        return WINDOWS[name]
+    import re
+    m = re.match(r"^WY(\d{4})-(\d{2}|\d{4})", str(name))
+    if not m:
+        raise KeyError(f"window {name!r}")
+    a = int(m.group(1))
+    b = int(m.group(2)) if len(m.group(2)) == 4 else a // 100 * 100 + int(m.group(2))
+    if b < a:
+        b += 100
+    return f"{a - 1}-10", f"{b}-09"
+
+
+def holdout_windows(holdout_wy) -> dict[str, tuple[str, str]]:
+    """The scoring windows of a run with ``holdout_wy`` (first, last): the holdout (the
+    validation window), the holdout minus its last water year, and WY1950-84 as mixed."""
+    a, b = int(holdout_wy[0]), int(holdout_wy[1])
+    out = {wy_label(a, b): window_range(wy_label(a, b))}
+    if b > a:
+        out[wy_label(a, b - 1)] = window_range(wy_label(a, b - 1))
+    out[VALIDATION_WINDOW + MIXED_SUFFIX] = WINDOWS[VALIDATION_WINDOW]
+    return out
+
+
+def run_holdout_wy(path: str | Path) -> tuple[int, ...]:
+    """``DplConfig.holdout_wy`` of a run folder (its ``checkpoints/best.pt``) or a checkpoint
+    file; ``()`` when the checkpoint has none (or does not exist)."""
+    p = Path(path)
+    ck = p if p.is_file() else p / "checkpoints" / "best.pt"
+    if not ck.exists():
+        return ()
+    import torch
+
+    cfg = torch.load(ck, map_location="cpu", weights_only=False).get("cfg") or {}
+    ho = cfg.get("holdout_wy") or ()
+    if isinstance(ho, str):
+        ho = tuple(int(v) for v in ho.split("-") if v)
+    return tuple(int(v) for v in ho)
+
+
+def holdout_month_mask(months: pd.PeriodIndex, holdout_wy) -> np.ndarray:
+    """True on the months whose water year is inside ``holdout_wy`` (all False for ``()``)."""
+    if not holdout_wy:
+        return np.zeros(len(months), dtype=bool)
+    wy = np.asarray(months.year + (months.month >= 10))
+    return (wy >= int(holdout_wy[0])) & (wy <= int(holdout_wy[1]))
 
 
 def _split(arcs) -> list[str]:
@@ -252,15 +322,22 @@ def training_record_taf(entity_id: str, data_dir: str | Path = "data",
     return s
 
 
-def score_run(run_dir: str | Path, data_dir: str | Path = "data") -> tuple[pd.DataFrame, pd.DataFrame, dict]:
+def score_run(run_dir: str | Path, data_dir: str | Path = "data",
+              holdout_wy: tuple[int, ...] | None = None) -> tuple[pd.DataFrame, pd.DataFrame, dict]:
     """Score one run.  Returns (metrics, monthly, panels): metrics has one row per
     set x reference kind x window (``WY1950-84``, the entity's own ``train`` window, and
     ``trimmed`` where the set table's val_start_wy..val_end_wy differ from the full window);
     monthly holds the aligned sim/ref TAF series over the simulated record; panels holds
-    the per-set series used by :func:`location_figure`."""
+    the per-set series used by :func:`location_figure`.
+
+    ``holdout_wy`` (default: the run checkpoint's ``DplConfig.holdout_wy``): a run that held
+    water years out of training is scored over :func:`holdout_windows` instead (no trimmed
+    window), and its ``train`` window leaves the holdout out (column ``excluded_wy``)."""
     sets = load_sets(data_dir)
     depth = load_run_monthly_depth(run_dir)
     obs_mask = _run_obs_mask(run_dir)
+    ho = run_holdout_wy(run_dir) if holdout_wy is None else tuple(holdout_wy)
+    ho_windows = holdout_windows(ho) if ho else None
     inflow, unimp = load_references(data_dir)
     areas, ent_arcs, fp = arc_areas(data_dir), registry_arcs(data_dir), footprint_areas(data_dir)
     train_win = registry_windows(data_dir)
@@ -290,14 +367,25 @@ def score_run(run_dir: str | Path, data_dir: str | Path = "data") -> tuple[pd.Da
         if missing:
             refs["arcsum_covered"] = _arcsum(inflow, covered, f"{st.set_id} (covered arcs)")
         t0, t1 = train_win[ent]
-        windows = {VALIDATION_WINDOW: WINDOWS[VALIDATION_WINDOW], "train": (str(t0), str(t1))}
-        trim = (f"{int(st.val_start_wy) - 1}-10", f"{int(st.val_end_wy)}-09")
-        if trim != WINDOWS[VALIDATION_WINDOW]:
-            windows[TRIMMED_WINDOW] = trim
+        if ho_windows is not None:
+            windows = dict(ho_windows)
+            windows["train"] = (str(t0), str(t1))
+        else:
+            windows = {VALIDATION_WINDOW: WINDOWS[VALIDATION_WINDOW], "train": (str(t0), str(t1))}
+            trim = (f"{int(st.val_start_wy) - 1}-10", f"{int(st.val_end_wy)}-09")
+            if trim != WINDOWS[VALIDATION_WINDOW]:
+                windows[TRIMMED_WINDOW] = trim
         for kind, ref in refs.items():
             for wname, (m0, m1) in windows.items():
                 idx = pd.period_range(m0, m1, freq="M")
-                met = _score(idx, sim.reindex(idx).to_numpy(), ref.reindex(idx).to_numpy())
+                s_w, r_w = sim.reindex(idx).to_numpy(), ref.reindex(idx).to_numpy()
+                extra = {}
+                if ho_windows is not None:
+                    # the in-sample window never scores the held-out water years
+                    carve = holdout_month_mask(idx, ho) if wname == "train" else np.zeros(len(idx), bool)
+                    s_w, r_w = np.where(carve, np.nan, s_w), np.where(carve, np.nan, r_w)
+                    extra = {"excluded_wy": f"{ho[0]}-{ho[1]}" if carve.any() else ""}
+                met = _score(idx, s_w, r_w)
                 rows.append(dict(set_id=st.set_id, name=st.name, entity_id=ent, ref_kind=kind,
                                  system=st.system if kind == "anchor" else "", window=wname,
                                  win_start=m0, win_end=m1,
@@ -305,7 +393,7 @@ def score_run(run_dir: str | Path, data_dir: str | Path = "data") -> tuple[pd.Da
                                  nested_in=st.nested_in,
                                  area_set_mi2=a_set, area_sim_mi2=a_sim, cover_frac=cover_frac,
                                  n_arcs=len(st.arcs), n_arcs_missing=len(missing), **met,
-                                 note=st.note))
+                                 note=st.note, **extra))
             monthly.append(pd.DataFrame({"set_id": st.set_id, "ref_kind": kind,
                                          "month": span.astype(str),
                                          "sim_taf": sim.reindex(span).to_numpy(),
@@ -315,6 +403,9 @@ def score_run(run_dir: str | Path, data_dir: str | Path = "data") -> tuple[pd.Da
             row=st, kind=main_kind, sim=sim, ref=refs[main_kind].reindex(span), train=(t0, t1),
             covered=refs["arcsum_covered"].reindex(span) if missing else None,
             record=training_record_taf(ent, data_dir, obs_mask))
+        if ho_windows is not None:
+            vw = next(iter(ho_windows))
+            panels[st.set_id].update(val_window=(vw, ho_windows[vw]), holdout_wy=ho)
     return pd.DataFrame(rows), pd.concat(monthly, ignore_index=True), panels
 
 
@@ -342,11 +433,16 @@ def location_figure(panel: dict, out: Path, run_label: str = "") -> None:
     s, r = sim.to_numpy(), ref.to_numpy()
     kind = (f"FLOW-UNIMPAIRED {st.system}" if panel["kind"] == "anchor"
             else f"sum of {len(st.arcs)} INFLOW arcs")
-    v0, v1 = (pd.Period(x, "M") for x in WINDOWS[VALIDATION_WINDOW])
+    # a holdout run's validation window is its held-out water years (score_run's panel)
+    vname, vrange = panel.get("val_window", (VALIDATION_WINDOW, WINDOWS[VALIDATION_WINDOW]))
+    v0, v1 = (pd.Period(x, "M") for x in vrange)
     c0, c1 = panel["train"]
     train_label = f"{c0}..{c1}"
     in_val = np.asarray((idx >= v0) & (idx <= v1))
     in_cal = np.asarray((idx >= c0) & (idx <= c1))
+    if panel.get("holdout_wy"):
+        in_cal &= ~holdout_month_mask(idx, panel["holdout_wy"])
+        train_label += f" minus WY{panel['holdout_wy'][0]}-{panel['holdout_wy'][1]}"
     val = _period_stats(s[in_val], r[in_val])
     cal = _period_stats(s[in_cal], r[in_cal])
 
@@ -379,12 +475,12 @@ def location_figure(panel: dict, out: Path, run_label: str = "") -> None:
         ax.axvline(c1.to_timestamp(), color="tab:blue", lw=1.2, ls="--")
     ax.set_xlim(dmin, dmax)
     ax.set_ylabel("volume (TAF/month)")
-    ax.set_title(f"Monthly volume — validation WY1950-84 shaded, training window "
+    ax.set_title(f"Monthly volume — validation {vname} shaded, training window "
                  f"{train_label} clear", fontsize=8.5)
     ax.set_ylim(0, np.nanmax([np.nanmax(s), np.nanmax(r)]) * 1.5)
     # stat boxes in the two top corners; the single legend goes below the whole figure
     box = dict(boxstyle="round", fc="white", ec="0.7", alpha=0.9)
-    ax.text(0.01, 0.97, _stat_text("VAL WY1950-84", val), transform=ax.transAxes, va="top",
+    ax.text(0.01, 0.97, _stat_text(f"VAL {vname}", val), transform=ax.transAxes, va="top",
             ha="left", fontsize=8, family="monospace", bbox=box)
     ax.text(0.99, 0.97, _stat_text(f"CAL {train_label}", cal), transform=ax.transAxes, va="top",
             ha="right", fontsize=8, family="monospace", bbox=box)
@@ -394,7 +490,7 @@ def location_figure(panel: dict, out: Path, run_label: str = "") -> None:
     axes_rg = [fig.add_subplot(gs[1, 0]), fig.add_subplot(gs[1, 1])]
     month = np.asarray(idx.month)
     for axrg, mask, lab in zip(axes_rg, (in_val, in_cal),
-                               ("validation WY1950-84", f"training {train_label}"), strict=True):
+                               (f"validation {vname}", f"training {train_label}"), strict=True):
         fin = mask & np.isfinite(s) & np.isfinite(r)
         if fin.sum():
             def regime(y):
@@ -483,7 +579,7 @@ def regime_figure(monthly: pd.DataFrame, metrics: pd.DataFrame, path: Path,
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    m0, m1 = WINDOWS[window]
+    m0, m1 = window_range(window)
     mon = monthly.copy()
     mon["period"] = pd.PeriodIndex(mon["month"], freq="M")
     mon = mon[(mon.period >= pd.Period(m0, "M")) & (mon.period <= pd.Period(m1, "M"))]
@@ -536,14 +632,17 @@ def main(argv=None) -> None:
     metrics, monthly, panels = score_run(a.run_dir, a.data_dir)
     metrics.to_csv(out / "tier1_metrics.csv", index=False)
     monthly.to_csv(out / "tier1_monthly.csv", index=False)
-    regime_figure(monthly, metrics, out / f"tier1_regime_{VALIDATION_WINDOW}.png", title=label)
+    # a holdout run is validated over its held-out water years (score_run)
+    ho = run_holdout_wy(a.run_dir)
+    vwin = next(iter(holdout_windows(ho))) if ho else VALIDATION_WINDOW
+    regime_figure(monthly, metrics, out / f"tier1_regime_{vwin}.png", window=vwin, title=label)
     n_fig = 1
     if not a.no_figures:
         (out / "figures").mkdir(exist_ok=True)
         for sid, panel in panels.items():
             location_figure(panel, out / "figures" / f"{sid}.png", run_label=label)
             n_fig += 1
-    print(summarize(metrics))
+    print(summarize(metrics, window=vwin))
     print(f"wrote {out / 'tier1_metrics.csv'}, tier1_monthly.csv and {n_fig} figures")
 
 

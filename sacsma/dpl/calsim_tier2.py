@@ -23,6 +23,15 @@ simulated for its volume but has no series to score against.  The converse is ``
 (the lower Rubicon accretion): it has a CalSim3 series but no merged-layer polygon, so tier
 2 does not simulate it, and ``tier2_not_simulated.csv`` (polygons only) does not list it.
 
+A checkpoint with ``DplConfig.holdout_wy`` (water years held out of training in every family) is
+scored over them instead (:func:`sacsma.dpl.calsim_tier1.holdout_windows`): ``WY1976-85``, the
+same on each arc's own gauge-record months only (``WY1976-85_own``, :func:`sacsma.dpl.calsim_arcs.
+own_record_months`), ``WY1976-84`` and ``WY1950-84_mixed``, and the ``train`` window without the
+held-out water years (``excluded_wy``); the maps, regime figures and summary are over
+``WY1976-85``, and ``tier2_anchor_rescaled.csv`` (:func:`anchor_rescaled`, eval-only) is written
+beside the absolute scores.  With ``calsim_monthly`` entities in the run each trained arc is its
+own parent (the smallest listing entity), so its rows are the trained cs_ rows.
+
 Usage::
 
     python -m sacsma.dpl.calsim_tier2 <run_dir | checkpoint.pt> [--out DIR] [--data-dir data]
@@ -30,6 +39,7 @@ Usage::
                                   [--tiles-dir tmp/hydrosheds] [--trace-python PY] [--figures-only]
                                   [--label NAME] [--dedup-cells] [--components [fastslow|parts]]
                                   [--extension-cells CSV] [--temp-delta DT] [--precip-scale S]
+                                  [--anchor-rescaled]
 
 Writes ``tier2_metrics.csv`` (one row per arc x window), ``tier2_monthly.csv``,
 ``tier2_arcs.csv`` (coverage, parent entity and trained-cell share per arc),
@@ -80,8 +90,13 @@ import torch
 from ..metrics import center_of_timing, kge, nse, pbias, pearson, seasonal_mismatch
 from ..calsim.catchments import (_EQ_CRS, _GRID_STEP_DEG, EXCLUDE_ARCS, MERGED_LAYER,
                          _square_cell_overlap, load_catchments, load_crosswalk, series_arc)
-from .calsim_tier1 import (AF_PER_MM_MI2, VALIDATION_WINDOW, WINDOWS, arc_to_set, load_references,
-                    load_sets, registry_arcs, registry_windows)
+from .calsim_tier1 import (AF_PER_MM_MI2, VALIDATION_WINDOW, WINDOWS, arc_to_set,
+                    holdout_month_mask, holdout_windows, load_references, load_sets, registry_arcs,
+                    registry_windows, run_holdout_wy, window_range)
+
+#: suffix of the window that scores an arc on its OWN gauge-record months inside the holdout
+#: (:func:`sacsma.dpl.calsim_arcs.own_record_months`), for a run with ``holdout_wy``
+OWN_SUFFIX = "_own"
 
 
 def rim_polygons(data_dir: str | Path = "data"):
@@ -485,6 +500,66 @@ def _score(months: pd.PeriodIndex, sim: np.ndarray, ref: np.ndarray) -> dict:
     return out
 
 
+def anchor_rescaled(monthly: pd.DataFrame, data_dir: str | Path = "data", *,
+                    windows: dict[str, tuple[str, str]], own: dict | None = None,
+                    own_window: str | None = None, wy_range: tuple[int, int] = (1950, 2015)
+                    ) -> pd.DataFrame:
+    """Eval-only ANCHOR-RESCALED arc scores beside the absolute ones.
+
+    ``monthly`` is ``tier2_monthly.csv`` (``arc, month, sim_taf, ref_taf``).  Per closure group
+    of ``data/calsim/arc_hierarchy.csv`` and complete water year, every simulated member arc is
+    scaled by anchor / simulated arc sum (:func:`sacsma.dpl.calsim_arcs.close_water_years`,
+    ``mode="proportional"``: the arcs' volume-weighted shares of the anchor, the anchor being
+    CalSim3 FLOW-UNIMPAIRED or the DWR unimpaired record of the group), so the score measures the
+    split of the anchor's water-year volume among arcs and months, not the system volume.  Groups
+    left out of the closure (``CLOSURE_EXCLUDED``), groups with a member polygon this run did not
+    simulate, arcs in no group and water years the closure skips have no rescaled value.  Both scores are over the same months (those with a rescaled
+    value) per window; ``own`` (arc -> months) adds ``own_window``, the window of that name in
+    ``windows`` restricted to each arc's own months."""
+    from .calsim_arcs import (close_water_years, closure_members, load_anchor_taf, load_hierarchy,
+                              water_year)
+    mon = monthly.copy()
+    mon["period"] = pd.PeriodIndex(mon["month"], freq="M")
+    sim = mon.pivot(index="period", columns="arc", values="sim_taf")
+    ref = mon.pivot(index="period", columns="arc", values="ref_taf")
+    hier = load_hierarchy(data_dir)
+    anchor = load_anchor_taf(data_dir, hier)
+    # a group closes only when every member with a polygon is simulated: a partial run (e.g.
+    # --no-extend) would hand the whole anchor to the few arcs it has
+    poly = set(hier.loc[hier["has_polygon"].astype(bool), "arc"])
+    part = [g for g, mem in closure_members(hier).items()
+            if any(m in poly and m not in sim.columns for m in mem)]
+    anchor = anchor.drop(columns=[g for g in part if g in anchor.columns])
+    closed, diag = close_water_years(sim, anchor, hier, wy_range=wy_range, mode="proportional")
+    grp = hier.dropna(subset=["closure_group"]).set_index("arc")["closure_group"]
+    done = set(zip(diag["group"], diag["wy"], strict=True)) if len(diag) else set()
+    wy = water_year(sim.index)
+    rows = []
+    specs = dict(windows)
+    if own is not None and own_window:
+        specs[own_window + OWN_SUFFIX] = windows[own_window]
+    for arc in sim.columns:
+        g = grp.get(arc)
+        ok = (np.array([(g, int(y)) in done for y in wy]) if isinstance(g, str)
+              else np.zeros(len(wy), bool))
+        for wname, (m0, m1) in specs.items():
+            idx = pd.period_range(m0, m1, freq="M")
+            pos = sim.index.get_indexer(idx)
+            keep = np.where(pos >= 0, ok[np.clip(pos, 0, None)], False)
+            if wname.endswith(OWN_SUFFIX):
+                keep &= idx.isin(own.get(arc, pd.PeriodIndex([], freq="M")))
+            r = ref[arc].reindex(idx).to_numpy()
+            s_abs = np.where(keep, sim[arc].reindex(idx).to_numpy(), np.nan)
+            s_res = np.where(keep, closed[arc].reindex(idx).to_numpy(), np.nan)
+            a_ = _score(idx, s_abs, np.where(keep, r, np.nan))
+            b_ = _score(idx, s_res, np.where(keep, r, np.nan))
+            keys = ("kge", "nse", "pbias", "r", "alpha", "beta")
+            rows.append(dict(arc=arc, closure_group=g if isinstance(g, str) else "", window=wname,
+                             n_months=a_["n_months"], **{f"{k}_abs": a_[k] for k in keys},
+                             **{f"{k}_resc": b_[k] for k in keys}))
+    return pd.DataFrame(rows)
+
+
 def score_run(ckpt: str | Path, data_dir: str | Path = "data", *, device=None, run_dir=None,
               extend: bool = True, tiles_dir: str | Path = "tmp/hydrosheds", out: Path | None = None,
               trace_python: str | None = None, spinup: str = "cycle",
@@ -522,6 +597,7 @@ def score_run(ckpt: str | Path, data_dir: str | Path = "data", *, device=None, r
                         dedup_cells=dedup_cells, components=mode, temp_delta=float(temp_delta),
                         precip_scale=float(precip_scale), extension_cells=extension_cells)
     net, x, dom, cfg, ck = load_net_from_checkpoint(ckpt, data_dir, device=device)
+    ho = tuple(int(v) for v in (getattr(cfg, "holdout_wy", ()) or ()))
     catch = rim_polygons(data_dir)
     mapping = cell_arc_overlap(dom.hrus, catch)
     parent = parent_entities(dom.basins, data_dir)
@@ -597,23 +673,47 @@ def score_run(ckpt: str | Path, data_dir: str | Path = "data", *, device=None, r
     train_win = registry_windows(data_dir)
     taf = _monthly_taf(sim_arc, dates, arcs["sq_mi"].to_numpy())
     taf.columns = list(arcs["arc"])
+    ho_win = holdout_windows(ho) if ho else None
+    own = {}
+    if ho:
+        from .calsim_arcs import own_record_months
+        own = own_record_months(data_dir, ho)
     rows, monthly = [], []
     for a in arcs.itertuples(index=False):
         ref = inflow[a.arc] if a.arc in inflow.columns else pd.Series(np.nan, index=taf.index)
         # in-sample window: the parent entity's training window; for an extrapolated arc there
         # is none, so the monthly family's window stands in as the comparison period
         t0m, t1m = train_win[a.entity] if a.entity else (pd.Period("1984-10", "M"), pd.Period("2014-09", "M"))
-        windows = {VALIDATION_WINDOW: WINDOWS[VALIDATION_WINDOW], "train": (str(t0m), str(t1m))}
+        if ho_win is not None:
+            # a holdout run: the held-out water years (all months, and the arc's own gauge-record
+            # months among them), WY1950-84 as mixed, and the train window without the holdout
+            hw = next(iter(ho_win))
+            windows = dict(ho_win)
+            windows[hw + OWN_SUFFIX] = ho_win[hw]
+            windows["train"] = (str(t0m), str(t1m))
+        else:
+            windows = {VALIDATION_WINDOW: WINDOWS[VALIDATION_WINDOW], "train": (str(t0m), str(t1m))}
         for wname, (m0, m1) in windows.items():
             idx = pd.period_range(m0, m1, freq="M")
-            met = _score(idx, taf[a.arc].reindex(idx).to_numpy(), ref.reindex(idx).to_numpy())
+            s_w, r_w = taf[a.arc].reindex(idx).to_numpy(), ref.reindex(idx).to_numpy()
+            extra = {}
+            if ho_win is not None:
+                if wname == "train":
+                    drop = holdout_month_mask(idx, ho)
+                elif wname.endswith(OWN_SUFFIX):
+                    drop = ~idx.isin(own.get(a.arc, pd.PeriodIndex([], freq="M")))
+                else:
+                    drop = np.zeros(len(idx), dtype=bool)
+                s_w, r_w = np.where(drop, np.nan, s_w), np.where(drop, np.nan, r_w)
+                extra = {"excluded_wy": f"{ho[0]}-{ho[1]}" if wname == "train" else ""}
+            met = _score(idx, s_w, r_w)
             rows.append(dict(arc=a.arc, node=a.node, entity=a.entity, basis=a.basis,
                              trained_cell_frac=float(a.trained_cell_frac),
                              system=xw["system"].get(a.arc, ""), tier1_set=in_set.get(a.arc, ""),
                              sq_mi=a.sq_mi, cover_frac=a.cover_frac, n_cells=a.n_cells,
                              n_nan_cells=int(a.n_nan_cells), nan_weight_frac=float(a.nan_weight_frac),
                              has_series=a.arc in inflow.columns, window=wname,
-                             win_start=m0, win_end=m1, **met))
+                             win_start=m0, win_end=m1, **met, **extra))
         monthly.append(pd.DataFrame({"arc": a.arc, "month": taf.index.astype(str),
                                      "sim_taf": taf[a.arc].to_numpy(),
                                      "ref_taf": ref.reindex(taf.index).to_numpy()}))
@@ -621,7 +721,7 @@ def score_run(ckpt: str | Path, data_dir: str | Path = "data", *, device=None, r
     # arcs with a series that this run does not simulate
     simulated = set(arcs["arc"])
     missing = [a for a in catch["arc"].unique() if a not in simulated and a in inflow.columns]
-    v0, v1 = WINDOWS[VALIDATION_WINDOW]
+    v0, v1 = WINDOWS[VALIDATION_WINDOW] if ho_win is None else next(iter(ho_win.values()))
     idx = pd.period_range(v0, v1, freq="M")
     not_sim = pd.DataFrame({
         "arc": missing,
@@ -764,7 +864,7 @@ def regime_figures(out: Path, data_dir: str | Path = "data", label: str = "",
             sets_of.setdefault(a, []).append(s.set_id)
     set_name = {s.set_id: s.name for s in sets.itertuples(index=False)}
     set_system = {s.set_id: s.system for s in sets.itertuples(index=False)}
-    m0, m1 = WINDOWS[window]
+    m0, m1 = window_range(window)
     idx = pd.period_range(m0, m1, freq="M")
     wm = (idx.month - 10) % 12
     met = metrics[(metrics.window == window)].set_index("arc")
@@ -890,6 +990,11 @@ def main(argv=None) -> None:
     p.add_argument("--extension-cells", default=None,
                    help="reuse the flow lengths of a previous run's tier2_extension_cells.csv "
                         "(same checkpoint's entity set) instead of tracing")
+    p.add_argument("--anchor-rescaled", action="store_true",
+                   help="also write tier2_anchor_rescaled.csv (eval-only anchor-rescaled arc "
+                        "scores beside the absolute ones; always on for a run with holdout_wy); "
+                        "with "
+                        "--figures-only it is computed from the existing tier2_monthly.csv")
     p.add_argument("--trace-only", nargs=2, metavar=("CELLS_CSV", "OUT_CSV"), default=None,
                    help=argparse.SUPPRESS)   # the flow-length subprocess entry point
     a = p.parse_args(argv)
@@ -904,6 +1009,10 @@ def main(argv=None) -> None:
     out = Path(a.out) if a.out else run_dir / "tier2"
     out.mkdir(parents=True, exist_ok=True)
     label = a.label or run_dir.name
+    # a run that held water years out of training is validated over them (score_run)
+    ho = run_holdout_wy(ckpt)
+    ho_win = holdout_windows(ho) if ho else None
+    vwin = next(iter(ho_win)) if ho_win else VALIDATION_WINDOW
     if not a.figures_only:
         extra = {}
         if a.components:
@@ -923,17 +1032,28 @@ def main(argv=None) -> None:
         not_sim.to_csv(out / "tier2_not_simulated.csv", index=False)
         if a.components:
             res[5].to_csv(out / "tier2_components_monthly.csv", index=False)
-        print(summarize(metrics, not_sim))
+        print(summarize(metrics, not_sim, window=vwin))
         print(f"wrote {out / 'tier2_metrics.csv'}, tier2_monthly.csv, tier2_arcs.csv, tier2_not_simulated.csv"
               + (", tier2_components_monthly.csv" if a.components else ""))
     else:
         metrics = pd.read_csv(out / "tier2_metrics.csv")
+    if (ho or a.anchor_rescaled) and (out / "tier2_monthly.csv").exists():
+        from .calsim_arcs import own_record_months
+        wins = ho_win or {VALIDATION_WINDOW: WINDOWS[VALIDATION_WINDOW]}
+        ar = anchor_rescaled(pd.read_csv(out / "tier2_monthly.csv"), a.data_dir, windows=wins,
+                             own=own_record_months(a.data_dir, ho) if ho else None,
+                             own_window=vwin if ho else None)
+        ar.to_csv(out / "tier2_anchor_rescaled.csv", index=False)
+        g = ar[ar.window == vwin].dropna(subset=["kge_resc"])
+        print(f"tier2: anchor-rescaled (eval-only), {vwin}: {len(g)} arcs, KGE median absolute "
+              f"{g.kge_abs.median():.3f} vs rescaled {g.kge_resc.median():.3f} on the same months "
+              f"-> {out / 'tier2_anchor_rescaled.csv'}", flush=True)
     if not a.no_maps:
         try:
-            maps(metrics, out, label, a.data_dir)
+            maps(metrics, out, label, a.data_dir, window=vwin)
         except Exception as e:  # noqa: BLE001 — maps are a convenience on top of the CSVs
             print(f"tier2: maps skipped ({e})")
-    paths = regime_figures(out, a.data_dir, label)
+    paths = regime_figures(out, a.data_dir, label, window=vwin)
     print(f"wrote {len(paths)} regime figures under {out / 'figures'}")
 
 
