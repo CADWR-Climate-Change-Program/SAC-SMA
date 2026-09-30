@@ -134,6 +134,21 @@ def _obs_mask(path: str | None) -> tuple[str, ...]:
                  for e, d in zip(m["entity_id"], m["date"], strict=True))
 
 
+def _holdout_wy(text: str) -> tuple[int, ...]:
+    """``--holdout-wy 1976-1985`` (or a single water year ``1983``) -> ``(1976, 1985)``."""
+    if not text:
+        return ()
+    parts = text.split("-")
+    try:
+        a, b = (int(parts[0]), int(parts[-1])) if len(parts) <= 2 else (None, None)
+    except ValueError:
+        a = None
+    if a is None:
+        raise SystemExit(f"--holdout-wy {text!r}: expected FIRST-LAST water years, e.g. "
+                         "1976-1985")
+    return (a, b)
+
+
 def _dpl_train(args: argparse.Namespace) -> int:
     from .dpl.config import DplConfig
     from .dpl.train import train
@@ -147,6 +162,8 @@ def _dpl_train(args: argparse.Namespace) -> int:
         peak_loss_lambda=args.peak_lambda, peak_loss_frac=args.peak_frac,
         shape_min_days=args.shape_min_days, timing_vol_gate=args.timing_vol_gate,
         obs_mask=_obs_mask(args.obs_mask),
+        holdout_wy=_holdout_wy(args.holdout_wy),
+        uf_train_start=args.uf_train_start, calsim_arcs=args.calsim_arcs,
         pxtemp_learn=args.learn_pxtemp,
         pxtemp_box=tuple(float(v) for v in args.pxtemp_box.split(":")),
         pxtemp_tau=args.pxtemp_tau,
@@ -190,7 +207,7 @@ def _dpl_train(args: argparse.Namespace) -> int:
                         if args.dynamic_params else ()),
         dynamic_amp=args.dynamic_amp, dynamic_window=args.dynamic_window,
         mt_family_weight=args.mt_family_weight,
-        mt_share_norm=args.mt_share_norm,
+        mt_share_norm=args.mt_share_norm, mt_select_weight=args.mt_select_weight,
         mt_loss_ref=args.mt_loss_ref, mt_loss_ref_power=args.mt_loss_ref_power,
         train_chunk_days=args.train_chunk_days, chunk_grid=args.chunk_grid,
         nograd_window=args.nograd_window,
@@ -418,7 +435,8 @@ def main(argv: list[str] | None = None) -> int:
                          "term adds with coefficient 1 (baseline); equal = "
                          "shares 1:1:1 over the families the run trains "
                          "(selection = mean of the family means); or numeric "
-                         "shares 'usgs=0.27,cdec=0.54,uf=0.19' (renormalized "
+                         "shares 'usgs=0.27,cdec=0.54,uf=0.19' (+ calsim= with "
+                         "--calsim-arcs; renormalized "
                          "over the families present, entities equal within a "
                          "family; selection uses the same share-weighted family "
                          "mean) (multifamily domain only)")
@@ -428,6 +446,12 @@ def main(argv: list[str] | None = None) -> int:
                          "holding one family gives it the whole term); 'all' divides by "
                          "every entity's weight, so the shares hold summed over chunks "
                          "whose families train in different eras")
+    tr.add_argument("--mt-select-weight", default="",
+                    help="checkpoint-SELECTION shares of a numeric --mt-family-weight "
+                         "run, when they must differ from the loss shares: 'area' = the "
+                         "footprint-area shares of the run's families (registry "
+                         "area_mi2 summed over its entities), or numeric shares in the "
+                         "--mt-family-weight syntax. Default '' = the loss shares")
     tr.add_argument("--mt-loss-ref", default="",
                     help="FROZEN per-family loss scale (needs --mt-share-norm all): "
                          "'usgs=0.7368,cdec=0.4202,uf=0.0980' = each family's per-entity "
@@ -637,6 +661,23 @@ def main(argv: list[str] | None = None) -> int:
                          "to mask out of training and scoring, e.g. "
                          "data/cdec_fnf/fnf_daily_mask.csv; the checkpoint carries the "
                          "list")
+    tr.add_argument("--holdout-wy", default="", metavar="FIRST-LAST",
+                    help="water years held out of EVERY family (multifamily), e.g. "
+                         "1976-1985: their targets are blanked after the registry n_obs "
+                         "audit and --obs-mask, before the NNSE normalizers, so neither "
+                         "the loss, the normalizers nor selection read them; the "
+                         "checkpoint carries it. '' = off")
+    tr.add_argument("--uf-train-start", default="", metavar="YYYY-MM-01",
+                    help="back-extend the uf_monthly training targets to this month "
+                         "start (multifamily), e.g. 1949-10-01: each uf entity also "
+                         "trains from it to its registry train_start (minus "
+                         "--holdout-wy); the registry windows are unchanged. '' = off")
+    tr.add_argument("--calsim-arcs", default="none", choices=["none", "train_default"],
+                    help="train_default: append the train_default CalSim3 rim arcs of "
+                         "data/calsim/arc_hierarchy.csv (tier A) as the calsim_monthly "
+                         "family (cs_<ARC>, hierarchy order) after the other entities "
+                         "(multifamily; share runs name it 'calsim=' in "
+                         "--mt-family-weight and --mt-loss-ref)")
     tr.add_argument("--hidden", type=int, default=64, help="trunk width")
     tr.add_argument("--embed", type=int, default=32, help="embedding width")
     tr.add_argument("--dropout", type=float, default=0.1,

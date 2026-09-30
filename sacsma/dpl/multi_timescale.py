@@ -86,6 +86,13 @@ class EntityObs:
     #: per dom.basins entry: observations removed by obs_mask (0 without one), so
     #: scoring can check its counts against the registry n_obs
     n_masked: tuple[int, ...] = ()
+    #: per dom.basins entry: in-window observations removed by the water-year
+    #: holdout (``holdout_wy``; 0 without one)
+    n_holdout: tuple[int, ...] = ()
+    #: per dom.basins entry: months ADDED by the uf back-extension
+    #: (``uf_train_start``; 0 without one) — scored = n_obs - n_masked -
+    #: n_holdout + n_ext
+    n_ext: tuple[int, ...] = ()
 
 
 def load_entity_obs(
@@ -95,12 +102,23 @@ def load_entity_obs(
     cal_start: str = ENVELOPE_START,
     cal_end: str = ENVELOPE_END,
     obs_mask: tuple[str, ...] = (),
+    holdout_wy: tuple[int, int] | None = None,
+    uf_train_start: str | None = None,
 ) -> EntityObs:
     """``obs_mask`` (``DplConfig.obs_mask``, ``"entity_id|YYYY-MM-DD"``) drops those
     daily observations.  An entry for a registry entity outside this run's basins
     is skipped; an unknown entity, a monthly entity of this run (the mask is
     daily-only), or a day that is not an observed in-window day raises (a stale
-    entry must not silently mask nothing)."""
+    entry must not silently mask nothing).
+
+    ``holdout_wy`` (``DplConfig.holdout_wy``, inclusive water years) blanks every
+    family's targets in those water years — after the registry n_obs audit and
+    the obs_mask, before the NNSE variances — and counts them per entity
+    (``n_holdout``); a calsim_monthly entity must lose none (its arc mask already
+    excludes the holdout: a nonzero count is a stale mask).  ``uf_train_start``
+    (``DplConfig.uf_train_start``) adds each uf_monthly entity's months from that
+    date to its registry train_start (minus the holdout) from the same store,
+    after the audit; every one must be observed (``n_ext``)."""
     ddir = domain_dir(data_dir, MULTI_TIMESCALE_DOMAIN)
     reg = pd.read_csv(ddir / "entities.csv", dtype={"site_id": str},
                       parse_dates=["train_start", "train_end"])
@@ -175,6 +193,16 @@ def load_entity_obs(
             raise ValueError(f"obs_mask {s!r}: not an observed in-window day")
         obs_d[j, k] = np.nan
         n_masked[daily_rows[j]] += 1
+    # the water-year holdout — after the audit and the mask, before the normalizers
+    n_holdout = [0] * len(dom.basins)
+    n_ext = [0] * len(dom.basins)
+    if holdout_wy:
+        wy_d = np.asarray(window.year + (window.month >= 10))
+        ho_d = (wy_d >= holdout_wy[0]) & (wy_d <= holdout_wy[1])
+        cnt = np.isfinite(obs_d[:, ho_d]).sum(axis=1)
+        obs_d[:, ho_d] = np.nan
+        for j, i in enumerate(daily_rows):
+            n_holdout[i] = int(cnt[j])
     var_d = np.nanvar(obs_d, axis=1)
 
     # ---- monthly entities over the envelope's calendar months -----------
@@ -182,6 +210,9 @@ def load_entity_obs(
     m_end = pd.Timestamp(cal_end).to_period("M")
     months = pd.period_range(m_start, m_end, freq="M")
     month_code = (months.year * 12 + (months.month - 1)).to_numpy()
+    wy_m = np.asarray(months.year + (months.month >= 10))
+    ho_m = ((wy_m >= holdout_wy[0]) & (wy_m <= holdout_wy[1]) if holdout_wy
+            else np.zeros(len(months), dtype=bool))
     obs_m = np.full((len(monthly_rows), len(months)), np.nan)
     cs_store = None
     for j, i in enumerate(monthly_rows):
@@ -210,11 +241,32 @@ def load_entity_obs(
                 & (months.end_time <= r["train_end"] + pd.Timedelta(days=1))
             vals = s.reindex(months).to_numpy(np.float64, copy=True)
             vals[~keep] = np.nan
-        obs_m[j] = vals
         n = int(np.isfinite(vals).sum())
         if n != int(r["n_obs"]):
             raise ValueError(f"{eid}: {n} in-window months vs registry "
                              f"n_obs {int(r['n_obs'])}")
+        if holdout_wy:
+            n_holdout[i] = int(np.isfinite(vals[ho_m]).sum())
+            if r["family"] == CALSIM_FAMILY and n_holdout[i]:
+                raise ValueError(f"{eid}: {n_holdout[i]} arc-month(s) inside the holdout "
+                                 f"WY{holdout_wy[0]}-{holdout_wy[1]} — arc_obs_mask.csv "
+                                 "is stale (it must exclude the holdout)")
+            vals[ho_m] = np.nan
+        if uf_train_start and r["family"] == "uf_monthly":
+            ts = pd.Timestamp(uf_train_start)
+            if ts >= r["train_start"]:
+                raise ValueError(f"{eid}: uf_train_start {uf_train_start} is not before "
+                                 f"its registry train_start {r['train_start'].date()}")
+            ext = ((months.start_time >= ts) & (months.end_time < r["train_start"])
+                   & ~ho_m)
+            ev = s.reindex(months).to_numpy(np.float64, copy=True)[ext]
+            if not np.isfinite(ev).all():
+                raise ValueError(f"{eid}: {int((~np.isfinite(ev)).sum())} of {len(ev)} "
+                                 f"back-extension months from {uf_train_start} missing "
+                                 "in the store")
+            vals[ext] = ev
+            n_ext[i] = int(ext.sum())
+        obs_m[j] = vals
     var_m = (np.nanvar(obs_m, axis=1) if len(monthly_rows)
              else np.zeros(0))
 
@@ -231,6 +283,8 @@ def load_entity_obs(
         obs_monthly=torch.as_tensor(obs_m).to(dom.device, dom.dtype),
         var_monthly=torch.as_tensor(var_m).to(dom.device, dom.dtype),
         n_masked=tuple(n_masked),
+        n_holdout=tuple(n_holdout),
+        n_ext=tuple(n_ext),
     )
 
 

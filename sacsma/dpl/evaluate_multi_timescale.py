@@ -15,7 +15,9 @@ Outputs (next to the checkpoint, like the other domains):
 * ``params_dpl.csv`` — the learned per-(entity, cell) parameter field.
 * ``metrics_entities.csv`` — one row per entity: family, timescale, KGE,
   NSE, pbias, r, alpha, beta, n days/months scored (asserted == the
-  registry ``n_obs``).
+  registry ``n_obs``).  A run with ``holdout_wy`` / ``uf_train_start`` adds
+  ``n_holdout`` / ``n_ext`` and the registry-window scores ``n_reg`` /
+  ``kge_reg`` / ``nse_reg`` / ``pbias_reg`` (holdout and back-extension out).
 * ``sim_daily_mm.npz`` — the simulated daily basin depth (entities x days)
   over the envelope, for downstream figures/analyses.
 * ``figures/skill_by_family.png`` — per-entity KGE by family (fixed 0-1 axis).
@@ -89,7 +91,7 @@ def _components(s: np.ndarray, o: np.ndarray) -> tuple[float, float]:
 def _skill_by_family_fig(met: pd.DataFrame, out: Path) -> None:
     """Sorted per-entity cal KGE, one panel per family (fixed 0-1 scale,
     negatives clipped and marked)."""
-    fams = [f for f in ("usgs_daily", "cdec_daily", "uf_monthly")
+    fams = [f for f in ("usgs_daily", "cdec_daily", "uf_monthly", "calsim_monthly")
             if (met["family"] == f).any()]
     fig, axes = plt.subplots(
         1, len(fams), figsize=(2.6 + 1.6 * len(fams), 3.2),
@@ -108,7 +110,7 @@ def _skill_by_family_fig(met: pd.DataFrame, out: Path) -> None:
         ax.axhline(med, color="tab:red", lw=1.0, ls="--")
         ax.set_ylim(0, 1.05)
         ax.set_title(f"{fam} (n={len(sub)}, median {med:.3f})")
-        if fam == "usgs_daily":
+        if fam in ("usgs_daily", "calsim_monthly"):
             ax.set_xticks([])
             ax.set_xlabel("entities (sorted)")
         else:
@@ -155,8 +157,13 @@ def evaluate_checkpoint_mt(
     print(f"wrote {out / 'params_dpl.csv'} ({len(dpl_df)} entity-cell rows, "
           f"sel cal KGE {ck.get('cal_kge', float('nan')):.4f})", flush=True)
 
-    # scored against the run's own training target (its obs_mask, if any)
-    eobs: EntityObs = load_entity_obs(dom, data_dir, obs_mask=cfg.obs_mask)
+    # scored against the run's own training target (its obs_mask, water-year
+    # holdout and uf back-extension, if any — all from the checkpoint's cfg)
+    eobs: EntityObs = load_entity_obs(dom, data_dir, obs_mask=cfg.obs_mask,
+                                      holdout_wy=cfg.holdout_wy or None,
+                                      uf_train_start=cfg.uf_train_start or None)
+    # the holdout / back-extension counts are columns only for a run that used them
+    ho_cols = bool(cfg.holdout_wy or cfg.uf_train_start)
     print(f"eval: streaming the envelope "
           f"({dom.n_hru} HRUs, {len(dom.basins)} entities, {cfg.dtype} "
           f"config scored in float64 on {dom.device.type}) ...", flush=True)
@@ -197,30 +204,55 @@ def evaluate_checkpoint_mt(
         fin = np.isfinite(o)
         sf, of = s[fin], o[fin]
         alpha, beta = _components(sf, of)
+        reg_cols = {}
+        if ho_cols:
+            # the same target on the REGISTRY window only (so minus the holdout, and
+            # without the uf back-extension): uf reads like-for-like with runs trained
+            # on the registry windows (a daily entity: == the columns before)
+            dts = pd.DatetimeIndex(m["date"])
+            ends = dts + pd.offsets.MonthEnd(0) if r["timescale"] != "daily" else dts
+            rw = fin & np.asarray((dts >= pd.Timestamp(r["train_start"]))
+                                  & (ends <= pd.Timestamp(r["train_end"])))
+            reg_cols = {"n_reg": int(rw.sum()), "kge_reg": kge(s[rw], o[rw]),
+                        "nse_reg": nse(s[rw], o[rw]), "pbias_reg": pbias(s[rw], o[rw])}
         rows.append({
             "entity_id": eid, "family": r["family"],
             "timescale": r["timescale"], "site_id": r["site_id"],
             "name": r["name"], "area_mi2": r["area_mi2"],
             "n_obs": int(r["n_obs"]), "n_masked": int(eobs.n_masked[i]),
+            **({"n_holdout": int(eobs.n_holdout[i]), "n_ext": int(eobs.n_ext[i])}
+               if ho_cols else {}),
             "n_scored": int(fin.sum()),
             "kge": kge(sf, of), "nse": nse(sf, of), "pbias": pbias(sf, of),
-            "r": pearson(sf, of), "alpha": alpha, "beta": beta,
+            "r": pearson(sf, of), "alpha": alpha, "beta": beta, **reg_cols,
         })
         want_fig = (hydrographs == "all"
                     or (hydrographs == "review"
                         and r["family"] in _REVIEW_FAMILIES))
         if want_fig:
-            figs.append((eid, m, unit,
-                         pd.Timestamp(r["train_start"]),
-                         pd.Timestamp(r["train_end"])))
+            # a back-extended uf entity's training window starts at uf_train_start
+            ts = pd.Timestamp(r["train_start"])
+            if cfg.uf_train_start and r["family"] == "uf_monthly":
+                ts = min(ts, pd.Timestamp(cfg.uf_train_start))
+            figs.append((eid, m, unit, ts, pd.Timestamp(r["train_end"])))
 
     met = pd.DataFrame(rows)
-    bad = met[met["n_scored"] != met["n_obs"] - met["n_masked"]]
+    want = met["n_obs"] - met["n_masked"]
+    if ho_cols:
+        want = want - met["n_holdout"] + met["n_ext"]
+    bad = met[met["n_scored"] != want]
     if len(bad):
         raise AssertionError(f"scored counts diverge from the registry "
                              f"n_obs: {bad['entity_id'].tolist()[:5]}")
+    if ho_cols:
+        # registry window = the scored target minus the back-extension months
+        bad = met[met["n_reg"] != met["n_scored"] - met["n_ext"]]
+        if len(bad):
+            raise AssertionError(f"registry-window counts diverge: "
+                                 f"{bad['entity_id'].tolist()[:5]}")
     met.to_csv(out / "metrics_entities.csv", index=False)
-    fam_tbl = (met.groupby("family")[["kge", "nse", "pbias"]]
+    fam_tbl = (met.groupby("family")[["kge", "nse", "pbias"]
+                                     + (["kge_reg"] if ho_cols else [])]
                .median().round(3))
     print(f"wrote {out / 'metrics_entities.csv'} ({len(met)} entities); "
           "family medians:", flush=True)
