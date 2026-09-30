@@ -61,16 +61,22 @@ def _seasonal(params: dict[str, torch.Tensor], name: str,
 
 @dataclass
 class PipelineState:
+    # snow / sac / canopy: per physics row; hist_*: per routed row — the same N
+    # except under cell dedup (distinct cells vs (entity, cell) rows)
     snow: Snow17State
     sac: SacState
     hist_surf: torch.Tensor   # (N, N_TAPS-1) unrouted direct-inflow history
     hist_base: torch.Tensor   # (N, N_TAPS-1) unrouted baseflow history
     canopy: NoahCanopyState | None = None   # only in et_mode="noah"
+    # (4, N, N_TAPS-1) unrouted history of the runoff parts (quick, interflow,
+    # supplemental, primary) — carried only by run_window(return_parts=True)
+    hist_parts: torch.Tensor | None = None
 
     def detach(self) -> PipelineState:
         return PipelineState(self.snow.detach(), self.sac.detach(),
                              self.hist_surf.detach(), self.hist_base.detach(),
-                             None if self.canopy is None else self.canopy.detach())
+                             None if self.canopy is None else self.canopy.detach(),
+                             None if self.hist_parts is None else self.hist_parts.detach())
 
 
 def initial_state(
@@ -78,8 +84,13 @@ def initial_state(
     init_mode: str = "reference",
     params: dict[str, torch.Tensor] | None = None,
     et_mode: str = "sac",
+    n_rows: int | None = None,
 ) -> PipelineState:
-    """Reference protocol: Snow-17 zeros, SMA [0,0,100,100,100,0], no inflow history."""
+    """Reference protocol: Snow-17 zeros, SMA [0,0,100,100,100,0], no inflow history.
+
+    ``n`` sizes the per-cell physics states; ``n_rows`` (default ``n``) the routing
+    histories — they differ under cell dedup (``DomainTensors.n_phys`` distinct
+    cells vs ``n_hru`` routed rows)."""
     if init_mode == "reference":
         sac = SacState.reference_init(n, device, dtype)
     elif init_mode == "capacity":
@@ -88,7 +99,8 @@ def initial_state(
         sac = SacState.capacity_init(params)
     else:
         raise ValueError(f"init_mode {init_mode!r}")
-    hist = torch.zeros(n, N_TAPS - 1, device=device, dtype=dtype)
+    hist = torch.zeros(n if n_rows is None else n_rows, N_TAPS - 1,
+                       device=device, dtype=dtype)
     canopy = NoahCanopyState.zeros(n, device, dtype) if et_mode == "noah" else None
     return PipelineState(snow=Snow17State.zeros(n, device, dtype), sac=sac,
                          hist_surf=hist, hist_base=hist.clone(), canopy=canopy)
@@ -125,14 +137,48 @@ def run_window(
     pt_dewpoint_depression: float = 0.0,   # >0: max arid dewpoint depression (degC)
                                            # on the PT net-longwave term; 0 = Tdew=Tmin
     canopy_lite: bool = False,             # minimal 1-param Noah ET (et_noah.noah_lite_et_step)
+    sac_exchanges: bool = False,           # Noah-lite: keep the reference UZ rebalance, LZ
+                                           # resupply and ADIMP ET(5) (DplConfig.noah_sac_exchanges)
     state_idx: torch.Tensor | None = None,  # (N, T) climate-state index (dynamic params)
     return_tet: bool = False,              # also return total ET (N, T) for closure
     return_swe: bool = False,              # also return Snow-17 SWE (N, T) (obs loss)
-) -> tuple[torch.Tensor, PipelineState]:   # (+ tet, then swe, when requested)
+    return_components: bool = False,       # also return the routed (fast, slow) pair
+    return_parts: bool = False,            # also return the 4 routed runoff parts
+    row_cell: torch.Tensor | None = None,  # (R,) cell dedup: the physics row of each
+                                           # routed row (DomainTensors.row_cell)
+) -> tuple[torch.Tensor, PipelineState]:   # (+ tet, swe, components, parts, when requested)
     """One window through the full pipeline; returns (routed flow (N, T), state),
-    with ``tet`` (total ET) appended when ``return_tet`` and the per-day Snow-17
-    SWE appended when ``return_swe`` (both off by default — hot path unchanged;
-    order is always flow, state, [tet], [swe]).
+    with ``tet`` (total ET) appended when ``return_tet``, the per-day Snow-17
+    SWE appended when ``return_swe``, the routed runoff components
+    ``(fast, slow)`` appended when ``return_components`` and the routed runoff
+    parts ``(quick, interflow, supplemental, primary)`` appended when
+    ``return_parts`` (all off by default — hot path unchanged; order is always
+    flow, state, [tet], [swe], [(fast, slow)], [parts]).
+
+    The components are the two routed terms whose sum IS ``flow``: ``fast`` =
+    the SAC-SMA direct inflow (impervious + direct + surface + interflow) through
+    the hillslope x channel UH, ``slow`` = primary + supplemental baseflow through
+    the channel UH alone (``flow = fast + slow`` elementwise, exactly).  Both are
+    NET of SAC-SMA's riparian et4 channel-ET deduction and dry-channel clamp,
+    which act on the aggregate direct inflow / baseflow before routing.
+
+    The parts split those two further (:func:`sacsma.dpl.sma.sacsma_step`
+    ``return_parts``; the net inflow apportioned in proportion to the
+    pre-deduction parts): ``quick`` = impervious + ADIMP direct + surface runoff
+    and ``interflow``, each routed through the hillslope x channel UH (``quick +
+    interflow = fast``), and ``supplemental`` / ``primary`` baseflow through the
+    channel UH (``supplemental + primary = slow``) — equal up to floating-point
+    rounding of the linear routing, since the unrouted parts sum exactly.  Their
+    routing history travels in ``state.hist_parts``; a state without it is
+    accepted only with an empty routing history (a cold start), so a parts run
+    must stream its spinup with ``return_parts`` too.
+
+    ``row_cell`` (cell dedup, ``DplConfig.dedup_cells``): the forcing, statics,
+    ``params``/``canopy_params`` and the snow/SAC/canopy states are per DISTINCT
+    cell (``U`` rows), while ``uh`` and the routing histories are per routed row
+    (``R``); each cell's surface and base runoff is gathered to its rows before
+    the routing, so the flow (and ``tet``/``swe``) come back per routed row
+    ``(R, T)``.  None (default) = one physics column per row, as always.
 
     ``et_mode="noah"`` runs the Noah canopy-resistance ET: ``canopy_params`` are
     the LEARNED physiology; ``veg_frac`` (static) and ``lai`` ((N,T) seasonal)
@@ -222,31 +268,82 @@ def run_window(
         noah = {"tavg": tavg, "tmin": tmin, "tmax": tmax, "doy": doy,
                 "lat_rad": lat_rad, "elev": elev, "cp": cp,
                 "veg_frac": veg_frac, "lai": lai, "canopy": state.canopy,
-                "lite": canopy_lite}
-    surf, base, tet, sac_state = run_sacsma(pet, eff_p, params, state=state.sac,
-                                            n_inc=n_inc, perc_mode=perc_mode,
-                                            fracp_floor=fracp_floor,
-                                            ninc_mode=ninc_mode,
-                                            et_mode=et_mode, noah=noah,
-                                            recession=recession)
+                "lite": canopy_lite, "sac_exchanges": sac_exchanges}
+    sac_out = run_sacsma(pet, eff_p, params, state=state.sac,
+                         n_inc=n_inc, perc_mode=perc_mode,
+                         fracp_floor=fracp_floor,
+                         ninc_mode=ninc_mode,
+                         et_mode=et_mode, noah=noah,
+                         recession=recession, return_parts=return_parts)
+    surf, base, tet, sac_state = sac_out[:4]
+    if row_cell is not None:
+        # cell dedup: every (entity, cell) row routes its cell's runoff through its
+        # own flow length (the backward sums the rows' gradients onto the cell)
+        surf = surf.index_select(0, row_cell)
+        base = base.index_select(0, row_cell)
+        if return_tet:
+            tet = tet.index_select(0, row_cell)
+        if return_swe:
+            swe = swe.index_select(0, row_cell)
+        if return_parts:
+            # the six runoff parts go to the rows the same way (per cell they sum to
+            # surf / base, so per row they still do; hist_parts is per routed row)
+            sac_out = (*sac_out[:4], tuple(p.index_select(0, row_cell) for p in sac_out[4]))
     uh_direct, uh_base = uh
-    flow = route(surf, uh_direct, state.hist_surf) + route(base, uh_base, state.hist_base)
+    if return_components or return_parts:
+        # the same two routed terms and the same sum as the default expression
+        fast = route(surf, uh_direct, state.hist_surf)
+        slow = route(base, uh_base, state.hist_base)
+        flow = fast + slow
+    else:
+        flow = route(surf, uh_direct, state.hist_surf) + route(base, uh_base, state.hist_base)
+
+    hist_parts = None
+    if return_parts:
+        roimp, sdro, ssur, sif, bf_sup, bf_pri = sac_out[4]
+        # (4, N, T) unrouted quick / interflow / supplemental / primary; quick is
+        # summed in the order that reproduces the exact split (sma._apportion_parts)
+        series = torch.stack([roimp + sdro + ssur, sif, bf_sup, bf_pri])
+        hp = state.hist_parts
+        if hp is None:
+            if bool(state.hist_surf.any()) or bool(state.hist_base.any()):
+                raise ValueError("return_parts needs the parts' routing history "
+                                 "(state.hist_parts): stream the spinup with "
+                                 "return_parts too, or start from an empty history")
+            hp = torch.zeros((4,) + tuple(state.hist_surf.shape),
+                             device=surf.device, dtype=surf.dtype)
+        uhs = (uh_direct, uh_direct, uh_base, uh_base)
+        parts = tuple(route(series[k], uhs[k], hp[k]) for k in range(4))
+        hist_parts = torch.cat([hp, series], dim=-1)[..., -(N_TAPS - 1):]
 
     # carry the last N_TAPS-1 inflow days for the next chunk's convolution
     hist_surf = torch.cat([state.hist_surf, surf], dim=-1)[:, -(N_TAPS - 1):]
     hist_base = torch.cat([state.hist_base, base], dim=-1)[:, -(N_TAPS - 1):]
     new_state = PipelineState(snow=snow_state, sac=sac_state,
                               hist_surf=hist_surf, hist_base=hist_base,
-                              canopy=noah["canopy"] if noah is not None else None)
+                              canopy=noah["canopy"] if noah is not None else None,
+                              hist_parts=hist_parts)
     out = [flow, new_state]
     if return_tet:
         out.append(tet)
     if return_swe:
         out.append(swe)
+    if return_components:
+        out.append((fast, slow))
+    if return_parts:
+        out.append(parts)
     return tuple(out)
 
 
-def routing_uh(params: dict[str, torch.Tensor], flowlen: torch.Tensor):
-    """Build the per-HRU UH pair once per parameter set (reuse across chunks)."""
+def routing_uh(params: dict[str, torch.Tensor], flowlen: torch.Tensor,
+               row_cell: torch.Tensor | None = None):
+    """Build the per-HRU UH pair once per parameter set (reuse across chunks).
+
+    ``row_cell`` (cell dedup): ``params`` are per distinct cell and ``flowlen`` per
+    routed row; the hillslope UH is built per cell and gathered, the channel UH
+    per row from the cell's Velo/Diff and the row's flow length."""
+    if row_cell is None:
+        return build_uh(params["Nres"], params["Kres"], params["Velo"], params["Diff"],
+                        flowlen)
     return build_uh(params["Nres"], params["Kres"], params["Velo"], params["Diff"],
-                    flowlen)
+                    flowlen, row_cell=row_cell)

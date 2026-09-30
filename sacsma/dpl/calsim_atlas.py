@@ -79,7 +79,8 @@ def daily_monthly_overlap(data_dir: str | Path, run_dir: Path | None):
     """Where a daily-family entity and a monthly-family entity of the run both train: the
     intersection of the two families' cell-footprint unions (1/16-degree cell squares from
     ``entity_cells.csv``).  The trained entities are read from the run's ``sim_daily_mm.npz``
-    when available, else every registry entity is assumed trained."""
+    when available, else every base registry entity is assumed trained (the opt-in
+    ``calsim_monthly`` arcs train only when named, as in ``load_domain_tensors``)."""
     from shapely import box
     from shapely.ops import unary_union
     reg = pd.read_csv(Path(data_dir) / "multifamily" / "entities.csv", dtype={"site_id": str})
@@ -88,6 +89,8 @@ def daily_monthly_overlap(data_dir: str | Path, run_dir: Path | None):
         trained = set(np.load(Path(run_dir) / "sim_daily_mm.npz")["entity_id"].tolist())
     if trained is not None:
         reg = reg[reg["entity_id"].isin(trained)]
+    else:
+        reg = reg[reg["family"] != "calsim_monthly"]
     cells = pd.read_csv(Path(data_dir) / "multifamily" / "entity_cells.csv")
     cells = cells[cells["entity_id"].isin(reg["entity_id"])]
     fam = reg.set_index("entity_id")["timescale"]
@@ -144,18 +147,47 @@ def run_recipe(run_dir: Path, data_dir: str | Path, trained=None) -> dict | None
         s = family_shares(spec) or {}
         tot = sum(s.get(f, 0.0) for f in counts) or 1.0
         share = {f: s.get(f, 0.0) / tot for f in counts}
-        how = ("family shares set by the user: each family carries its share of the loss, entities weigh "
-               f"equally within a family (daily term x {sum(share[f] for f in daily):.2f}, "
-               f"monthly term x {sum(share[f] for f in monthly):.2f})")
+        how = ("family shares set by the user: each family's loss term carries its share as a "
+               "coefficient, entities weigh equally within a family (daily term x "
+               f"{sum(share[f] for f in daily):.2f}, monthly term x {sum(share[f] for f in monthly):.2f})")
+    norm = str(cfg.get("mt_share_norm", "present"))
+    if spec != "none":
+        how += ("; each chunk's loss divided by the weight of EVERY entity (--mt-share-norm all), so the "
+                "coefficients hold summed over chunks whose families train in different eras"
+                if norm == "all" else
+                "; each chunk's loss renormalized over the entities it scores (--mt-share-norm present), "
+                "so a chunk holding one family gives it the whole term and the realized coefficients "
+                "differ from the nominal ones by era")
+    kappa = None
+    if cfg.get("mt_loss_ref") and spec != "none":
+        from .config import family_loss_refs
+        refs = family_loss_refs(cfg["mt_loss_ref"])
+        pw = float(cfg.get("mt_loss_ref_power") or 1.0)
+        lbar = sum(share[f] * refs[f] ** pw for f in share if f in refs)
+        kappa = {f: lbar / refs[f] ** pw for f in share if f in refs}
+        eff = {f: share[f] * kappa[f] for f in kappa}
+        z = sum(eff.values()) or 1.0
+        how += ("; every family term multiplied by a FROZEN loss scale (--mt-loss-ref "
+                + ", ".join(f"{f.split('_')[0]} {refs[f]:.4g}" for f in kappa)
+                + f", power {pw:g}): x " + ", ".join(f"{f.split('_')[0]} {kappa[f]:.3f}" for f in kappa)
+                + ", effective coefficients " + ", ".join(f"{f.split('_')[0]} {100 * eff[f] / z:.3g}%"
+                                                          for f in kappa)
+                + " — set so each family's share of the optimizer step matches its nominal share; "
+                  "selection keeps the nominal shares")
     return dict(counts=counts, n=len(ids), spec=spec, share=share, how=how, epoch=ck.get("epoch"),
-                select=_SELECT_LABEL.get(ck.get("mt_select")), seed=cfg.get("seed"))
+                select=_SELECT_LABEL.get(ck.get("mt_select")), seed=cfg.get("seed"), norm=norm,
+                kappa=kappa)
 
 
 def _recipe_sentence(rc: dict) -> str:
     fams = ", ".join(f"{n} {f}" for f, n in rc["counts"].items())
     shares = ", ".join(f"{f.split('_')[0]} {100 * s:.3g}%" for f, s in rc["share"].items())
-    return (f"Trained on {rc['n']} entities ({fams}) with --mt-family-weight {rc['spec']}: "
-            f"nominal share of the loss {shares}.")
+    norm = (f", --mt-share-norm {rc['norm']}" if rc["spec"] != "none" and rc.get("norm") else "")
+    kap = (", frozen family loss scale x " + ", ".join(f"{f.split('_')[0]} {k:.3f}"
+                                                       for f, k in rc["kappa"].items())
+           if rc.get("kappa") else "")
+    return (f"Trained on {rc['n']} entities ({fams}) with --mt-family-weight {rc['spec']}{norm}{kap}: "
+            f"nominal loss coefficients {shares}.")
 
 
 FAMILY_LABEL = {"cdec_daily": "CDEC daily full natural flow",
@@ -166,13 +198,16 @@ FAMILY_COLOR = {"cdec_daily": "tab:blue", "uf_monthly": "tab:green", "usgs_daily
 
 def _entity_footprints(data_dir: str | Path, entity_ids=None):
     """Per entity: the union of its 1/16-degree cell squares, as a GeoDataFrame with the
-    registry attributes (family, name, area, outlet)."""
+    registry attributes (family, name, area, outlet).  ``entity_ids=None``: the base
+    registry entities (the opt-in ``calsim_monthly`` arcs only when named)."""
     import geopandas as gpd
     from shapely import box
     from shapely.ops import unary_union
     reg = pd.read_csv(Path(data_dir) / "multifamily" / "entities.csv", dtype={"site_id": str})
     if entity_ids is not None:
         reg = reg[reg["entity_id"].isin(entity_ids)]
+    else:
+        reg = reg[reg["family"] != "calsim_monthly"]
     cells = pd.read_csv(Path(data_dir) / "multifamily" / "entity_cells.csv")
     cells = cells[cells["entity_id"].isin(reg["entity_id"])]
     h = 0.03125
@@ -1336,7 +1371,7 @@ def main(argv=None) -> None:
         trained = set(np.load(run_dir / "sim_daily_mm.npz")["entity_id"].tolist())
     fam_maps = family_maps(catch, a.data_dir, out, trained=trained, label=label)
     print("atlas: family footprint maps for " + ", ".join(f"{k} ({len(v[1])})" for k, v in fam_maps.items())
-          + ("" if trained else " (all registry entities: the run has no sim_daily_mm.npz)"))
+          + ("" if trained else " (all base registry entities: the run has no sim_daily_mm.npz)"))
     creeks = creek_overlap(sets, geoms, a.data_dir, trained=trained, window=VALIDATION_WINDOW)
     creeks_trained = trained is None or any(str(x).startswith("usgs_") for x in trained)
     n = 0

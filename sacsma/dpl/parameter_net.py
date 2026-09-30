@@ -3,9 +3,10 @@
 A flat MLP (the tmp/src_dpl "flat variant": encoder + single linear head)
 whose sigmoid outputs are mapped into the GA feasible box ``config.BOUNDS`` —
 log-space interpolation for the parameters whose bounds span decades
-(``config.LOG_SPACE_PARAMS``).  Every free parameter is emitted PER HRU
+(``config.LOG_SPACE_PARAMS``) — or into a narrower per-parameter box
+(``DplConfig.param_box``, :meth:`ParameterNet.set_box`).  Every free parameter is emitted PER HRU
 ("everything per-HRU"); ``config.FIXED_PARAMS`` (side/SCF/PXTEMP) are appended
-as constants.
+as constants — except PXTEMP when ``pxtemp_learn`` gives it its own head.
 
 GA-prior initialization (ported pattern): the head weights start at zero and
 each bias at the logit of the (area-weighted median) archived GA value's
@@ -77,7 +78,10 @@ class ParameterNet(nn.Module):
                  canopy_separate_trunk: bool = True,
                  canopy_lite: bool = False,
                  dynamic_params: tuple[str, ...] = (),
-                 dynamic_amp: float = 0.5):
+                 dynamic_amp: float = 0.5,
+                 pxtemp_learn: bool = False,
+                 pxtemp_box: tuple[float, float] = (-1.0, 3.0),
+                 pxtemp_tau: float = 1.0):
         super().__init__()
         self.grouped_heads = grouped_heads
         self.gnn_k = gnn_k
@@ -188,6 +192,23 @@ class ParameterNet(nn.Module):
                 self.canopy_dynamic_head.weight.zero_()
                 self.canopy_dynamic_head.bias.zero_()
 
+        # Learned Snow-17 rain/snow threshold: one zero-init output off the shared
+        # trunk, mapped by tanh onto [lo, 0] / [0, hi] (piecewise, so tanh(0)=0
+        # lands EXACTLY on the GA constant 0 degC — the untrained forward is the
+        # fixed-threshold one).  Built last under a forked RNG so the other
+        # modules' init and the training RNG stream match a run without it.
+        self.pxtemp_learn = bool(pxtemp_learn)
+        if self.pxtemp_learn:
+            with torch.random.fork_rng(devices=[]):
+                self.pxtemp_head = nn.Linear(embed, 1)
+            with torch.no_grad():
+                self.pxtemp_head.weight.zero_()
+                self.pxtemp_head.bias.zero_()
+            lo, hi = (float(v) for v in pxtemp_box)
+            self.register_buffer("_px_box", torch.tensor([lo, hi], dtype=torch.float64))
+            self.register_buffer("_px_tau", torch.tensor(float(pxtemp_tau),
+                                                         dtype=torch.float64))
+
     def set_neighbors(self, idx, w) -> None:
         """Load the (N, k) neighbor tables (numpy or tensor) into the buffers."""
         if self.gnn_k <= 0:
@@ -195,18 +216,42 @@ class ParameterNet(nn.Module):
         self._nbr_idx.copy_(torch.as_tensor(idx, dtype=torch.int64))
         self._nbr_w.copy_(torch.as_tensor(w, dtype=torch.float64))
 
+    def set_box(self, box: dict[str, tuple[float, float]]) -> None:
+        """Override the bounds box of named free parameters (physical units)
+        in the ``_lo``/``_hi`` buffers the checkpoint carries; ``lo == hi``
+        pins the parameter at that value."""
+        with torch.no_grad():
+            for p, (lo, hi) in box.items():
+                i = FREE_PARAMS.index(p)
+                if p in LOG_SPACE_PARAMS:
+                    lo, hi = math.log(lo), math.log(hi)
+                self._lo[i] = lo
+                self._hi[i] = hi
+
     def _head_params(self) -> list[tuple[nn.Linear, tuple[str, ...]]]:
         if self.grouped_heads:
             return [(self.heads[g], ps) for g, ps in PARAM_GROUPS.items()]
         return [(self.head, FREE_PARAMS)]
 
-    def init_from_priors(self, priors: dict[str, float]) -> None:
-        """Zero the head weights; set biases so the initial field == priors."""
+    def init_from_priors(self, priors: dict[str, float],
+                         box: dict[str, tuple[float, float]] | None = None) -> None:
+        """Zero the head weights; set biases so the initial field == priors.
+        A parameter narrowed by ``box`` (lo < hi) starts at its prior clamped
+        into that box (its position measured in the box, not in ``BOUNDS``); a
+        pinned one (lo == hi) is exact whatever its bias."""
+        box = box or {}
         with torch.no_grad():
             for head, params in self._head_params():
                 head.weight.zero_()
                 for i, p in enumerate(params):
-                    pos = _normalized_position(p, priors[p])
+                    if p in box and box[p][0] < box[p][1]:
+                        lo, hi = box[p]
+                        v = min(max(priors[p], lo), hi)
+                        if p in LOG_SPACE_PARAMS:
+                            lo, hi, v = math.log(lo), math.log(hi), math.log(v)
+                        pos = min(max((v - lo) / (hi - lo), _MIN_NORM), 1.0 - _MIN_NORM)
+                    else:
+                        pos = _normalized_position(p, priors[p])
                     head.bias[i] = math.log(pos / (1.0 - pos))
 
     def forward(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
@@ -231,6 +276,13 @@ class ParameterNet(nn.Module):
         n = x.shape[0]
         for p, c in FIXED_PARAMS.items():
             out[p] = torch.full((n,), c, device=x.device, dtype=s.dtype)
+        if self.pxtemp_learn:
+            # per-cell threshold in the box; PXTEMP_tau switches Snow-17 to the
+            # straight-through split (hard forward, sigmoid-surrogate gradient)
+            r = torch.tanh(self.pxtemp_head(z)[:, 0])
+            box = self._px_box.to(r.dtype)
+            out["PXTEMP"] = torch.where(r >= 0.0, r * box[1], -r * box[0])
+            out["PXTEMP_tau"] = self._px_tau.to(r.dtype).repeat(n)   # (N,), contiguous
         if self.seasonal_params:
             # tanh-capped per-param: |a_sin|,|a_cos| <= frac*(hi-lo) (relative swing).
             sc = self._seasonal_cap.to(z.dtype) * torch.tanh(self.seasonal_head(z))  # (N, 2*S)

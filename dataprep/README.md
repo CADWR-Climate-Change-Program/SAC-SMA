@@ -20,6 +20,8 @@ Keys are normalized 5-decimal `<lat>_<lon>`; per-cell flags `in_<domain>` and `i
 | ET obs: gleam, fluxcom | `local_obs_region.py` | `et_obs/*.npz` | done (verified to 1e-7) |
 | ET/SWE obs: terraclimate/fldas/era5land/daymet | `gee_obs_region.py` | `et_obs/*.npz`, `swe_obs/*.npz` | done (GEE spec v2, 2026-07-16) |
 | ET referees: openet, modis | `gee_obs_region.py --products openet modis` | `et_obs/{openet,modis}_*.npz` | done (benchmark-only, 2026-07-17) |
+| ET referee: Reitz 2023 historical ET (annual WY1896–2018, monthly 1990-01..2018-09) | `reitz_et.py` (`--cut`, `--ingest`; `sacsma-gis` env; 7-Zip for the monthly zips' Deflate64) | `et_obs/reitz2023_cell_annual.npz` (1.9 MB) + `et_obs/reitz2023_cell_monthly.npz` (5.1 MB); CA-cut rasters local only (`tmp/reitz2023_et/ca`, 1.6 GB for 43 GB raw) | annual done (2026-09-18); monthly 1990–2018 done (2026-09-23). The `*_monthly.zip` sources are ScienceBase cloud files (login / captcha request); the nine zips before 1990 are not fetched |
+| AlphaEarth satellite embeddings (64-d, multi-year mean 2017–2025) | `gee_aef_region.py` (`sacsma` env, Earth Engine) | `aef/aef_cell_mean.npz` (1.1 MB LFS); per-year cell means local only (`tmp/aef_parts`) | done (2026-09-22): 4410 cells × 9 years, `--check` passed on 2017/2021/2025 |
 | daily forcing master (raw) | `wgen_forcing.py` | local only (not in repo) | done |
 | raw GIS rasters (soil/veg/terrain/LAI staging) | `download_gis.py` | local only (~89 GB, `D:\sacsma-data\raw_gis`) | staged + verified complete (2026-07-29); re-fetch is resumable |
 | USGS gauge flows inside CalSim3 | `usgs_flows.py` | `data/usgs/` (`flow_daily.nc` 3.2 MB LFS + `gauges.csv` + `gis/usgs_watersheds.gpkg`) | done — 69 gauges, daily 1950–2018 (2026-07-29) |
@@ -535,25 +537,100 @@ Needs `pypdf` (added to `environment.yml`).
     python dataprep/dwr_unimpaired.py --pdf <report.pdf>
     python dataprep/dwr_unimpaired.py --verify
 
-## Multi-timescale training inputs (`build_obs_depth.py`, `build_entities.py`, `build_entity_cells.py`, `build_flowlens.py`)
+## Multi-timescale training inputs (`build_obs_depth.py`, `build_calsim_arcs.py`, `build_entities.py`, `build_entity_cells.py`, `build_flowlens.py`)
 
 The inputs of the dPL `multifamily` domain (`data/multifamily/`, documented in that
-store's README). Four builders, run in this order from the repo root; each checks its
-own output against in-script gates and rewrites its table in full:
+store's README). Five builders, run in this order from the repo root; each checks its
+own output against in-script gates and rewrites its table in full, except
+`build_flowlens.py --calsim-arcs`, which appends (below):
 
 | script | writes | what |
 |---|---|---|
 | `build_obs_depth.py` | `data/dwr_unimpaired/uf_monthly_mm.csv`, `data/cdec_fnf/fnf_daily_mm.csv` | depth companions of the two volume/cfs stores, each series over its own stated area |
+| `build_calsim_arcs.py` | `data/calsim/arc_hierarchy.csv`, `arc_obs_mask.csv`, `calsim3_inflow_monthly_mm.csv` | the CalSim3 rim-arc target set: arc → anchor hierarchy, closure groups and record tiers; each arc's own observed months in the training water years (listed gauge period minus the report's extension years); the INFLOW series as depth over `SQ_MI`. Reads the registry's 95 base rows; run before the three registry builders when they get `--calsim-arcs` |
 | `build_entities.py` | `data/multifamily/entities.csv` | the registry: one row per training target, from `usgs/gauges.csv` + `usgs/flow_daily.nc` (LFS), `cdec15/`, `cdec_fnf/`, `dwr_unimpaired/uf_locations.csv` + `uf_monthly.csv`, the hand-maintained `uf_gauges.csv`, and `calsim/` (crosswalk, `gis/calsim3.gpkg`, `fnf_11obs_monthly.csv`) |
 | `build_entity_cells.py` | `data/multifamily/entity_cells.csv` | per-entity region-grid cell sets with cell-square overlap areas as weights |
 | `build_flowlens.py` | `data/multifamily/flowlens.csv` | per-cell path length to each entity outlet on the HydroSHEDS v2 flow directions |
 
-The first three need only committed stores (including the LFS files) and, in the
-`environment.yml` environment, reproduce their tables byte for byte.
+`--calsim-arcs` (all three registry builders; opt-in) appends the `calsim_monthly`
+family (196 CalSim3 rim arcs, `cs_<ARC>`) after the 95 base entities, whose rows stay
+byte-identical; `build_flowlens.py --calsim-arcs` traces only the new entities and
+appends them to the existing store, copying its base rows byte for byte. The committed
+`data/multifamily/` tables are this build (291 entities; 9,691 cell and flow-length
+rows), so the registry builders run with the flag:
+
+    python dataprep/build_obs_depth.py
+    python dataprep/build_calsim_arcs.py
+    python dataprep/build_entities.py --calsim-arcs
+    python dataprep/build_entity_cells.py --calsim-arcs
+    python dataprep/build_flowlens.py --calsim-arcs
+
+Without the flag, `build_entities.py` and `build_entity_cells.py` write the 95-entity
+base tables (5,849 cell rows) over the committed ones. `build_calsim_arcs.py` reads the
+registry's base rows, so starting without a registry, run `build_entities.py` once
+without the flag first (see `data/multifamily/README.md`).
+
+`build_obs_depth.py`, `build_calsim_arcs.py`, `build_entities.py` and
+`build_entity_cells.py` need only committed stores (including the LFS files) and, in the
+`environment.yml` environment, reproduce their tables byte for byte (the two registry
+builders with `--calsim-arcs`; without it, the base tables).
 `build_flowlens.py` needs `rasterio` (declared in `environment.yml`) and the DIR and ACC
 rasters of four 10-degree HydroSHEDS tiles (8 files, ~6 GB, downloaded on demand to
-`tmp/hydrosheds/`, not in git); it imports no
+`tmp/hydrosheds/`, not in git; `--calsim-arcs` reads the tiles already there); it imports no
 geopandas, because the two GDAL stacks must stay in separate processes.
+
+## AlphaEarth embeddings (`gee_aef_region.py`)
+
+Google DeepMind's AlphaEarth Foundations satellite embeddings
+(`GOOGLE/SATELLITE_EMBEDDING/V1/ANNUAL`; Brown et al. 2025, arXiv:2507.22291;
+CC-BY 4.0) reduced to **one static 64-d vector per region cell**: each
+calendar year's 10 m pixel vectors are averaged over the cell rectangle, then
+the nine years 2017–2025 are averaged with equal weight. The vectors are not
+unit length after averaging. `norm` (0.65–0.95) measures how mixed a cell is,
+and `year_cos_min` flags cells that changed between years (mostly surface
+water: the Tulare Lake bed reflooding in the wet 2023, Goose Lake, rice; also
+burn scars). Before a year-to-year change or a 2017+ comparison, keep in mind that
+the layers are **calendar** years, not water years, and that all of them
+post-date the WY1989–2003 calibration windows.
+
+How the reduction works, all measured before the burn and checked by an
+adversarial review:
+
+- **No `mosaic()`.** The −120° UTM 10N/11N line is a cell edge on the 1/16°
+  lattice, so each cell is summed on its own zone's tiles only, in the tile's
+  native UTM grid, and the per-tile weighted sums are combined. Every year has
+  28 non-overlapping tiles over the grid (16 × 10N, 12 × 11N). The summed
+  weight equals the full-cell pixel count to 1e-15 on tile corners and on the
+  −120° cells, so no pixel is counted twice or missed. The other zone carries
+  about 84 m of valid but slightly different pixels past −120°, and they are
+  never used. At 10 m the result equals the zone mosaic's mean to 1e-12 for
+  about a third less compute.
+- **15 m, not coarser.** EE's pyramid levels at 20 m and coarser are
+  **L2-renormalized** block means (despite `pyramidingPolicy: MEAN` in the
+  asset metadata). Reducing at 19–20 m silently reads them and inflates the
+  mean's length by ~4e-3. At 15 m in native UTM, EE reads the full-resolution
+  level on a nearest-neighbour lattice (4/9 of the pixels). Against the full
+  10 m mean that gives ≤ 2e-4 per band (≤ 9e-5 on tile corners, zone-edge,
+  lake and grid-extreme cells; 1.6–1.9e-4 on 90 random cells) and
+  cos ≥ 0.9999998, with the length unchanged to ≤ 6e-5. It costs 12.8 instead of 23.3 EECU-s per cell-year, so the whole
+  burn is about 140 EECU-h (the noncommercial Community tier allows 150 per
+  month). 16 m aliases (1e-3 error), so `--scale` accepts only 10 or 15.
+- **Resume and safety.** Each (year, unit) is banked atomically with the cell
+  keys it holds, and empty or null results are refused. `run.json` pins
+  `--chunk`/`--scale`, `run.lock` blocks a second concurrent burn, Ctrl+C
+  cancels the queue, and any failed unit makes the exit status non-zero, so a
+  re-run fetches only what is missing.
+
+```bash
+python dataprep/gee_aef_region.py --project ee-warnold            # the burn (~1-2 h), resumable
+python dataprep/gee_aef_region.py --status
+python dataprep/gee_aef_region.py --project ee-warnold --check 30 --check-year 2021
+python dataprep/gee_aef_region.py --assemble                      # -> data/region/aef/aef_cell_mean.npz
+```
+
+Every script that uses GEE from the DWR network needs the Windows trust store
+(`import pip._vendor.truststore as t; t.inject_into_ssl()` before `import ee`).
+`gee_aef_region.py` injects it itself; `gee_obs_region.py` does not yet.
 
 ## Verification
 

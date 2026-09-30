@@ -25,15 +25,77 @@ GA's 1.08, costing ~0.1 KGE on the strong basins).  A chunk std over ~366
 days is a stable statistic, unlike chunk-local correlation/mean ratios —
 this is NOT chunked KGE.
 
+Optional hydrograph-shape terms (``timing_lambda``, ``peak_lambda``; daily rows
+only), scored on basin-chunks with at least ``shape_min_days`` valid days and
+scaled by per-basin RECORD constants computed once from the training obs
+(:func:`record_references`), so drought years and short chunks cannot dominate
+them and a zero-flow year stays bounded: timing = the summer RECESSION shape, the
+mean squared difference of the normalized cumulative flow over 1 Jul - 30 Sep
+(volume-blind, no pull on winter or on the flood peaks); peak = the mean of the
+chunk's top ``peak_frac`` valid days, sim minus obs, over the record mean of that
+statistic, Huber-capped (flood years carry it).
+
 Selection metric: pooled mean per-basin KGE over the full calibration record
 (the GA-comparable exact objective), computed no-grad by the trainer.
 """
 
 from __future__ import annotations
 
+import numpy as np
 import torch
 
 from ..metrics import kge as kge_numpy  # noqa: F401  (re-export for trainers)
+
+
+#: the peak term's record constant below this (mm/day) switches the term off for
+#: the basin (keeps the value finite; the smallest daily-entity constant is 0.39)
+PEAK_REF_FLOOR = 0.01
+
+
+def _top_mean(x: torch.Tensor, k: torch.Tensor, kmax: int) -> torch.Tensor:
+    """Per row, the mean of the ``k`` largest values (``k`` (B,) integer, 1 <=
+    k <= ``kmax``; ``kmax`` a Python int from the static shape).  Branch-free (topk
+    + rank mask, no host sync), so a per-row ``k`` stays CUDA-graph capturable."""
+    xs = torch.topk(x, kmax, dim=1).values
+    rank = torch.arange(kmax, device=x.device)
+    m = (rank[None, :] < k[:, None]).to(x.dtype)
+    return (xs * m).sum(dim=1) / k.to(x.dtype)
+
+
+def jul_sep_window(doy: torch.Tensor, leap: torch.Tensor) -> torch.Tensor:
+    """(T,) bool: 1 Jul - 30 Sep, from the 1-based day of year and the leap flag
+    (the timing term's recession window; capture-safe)."""
+    lp = leap.to(doy.dtype)
+    return (doy >= 182.0 + lp) & (doy <= 273.0 + lp)
+
+
+def record_references(obs: np.ndarray, water_year: np.ndarray, *, min_days: int = 300,
+                      peak_frac: float = 0.02) -> tuple[np.ndarray, np.ndarray]:
+    """Per-basin record constants of the peak and timing terms, from the training
+    observations (like ``obs_var``, computed once): over the water years of the
+    window with at least ``min_days`` valid days, the mean of each year's observed
+    top-``k`` mean (``k = max(1, round(peak_frac * valid days))``, the peak term's
+    scale) and the mean of each year's observed mean daily flow (the timing term's
+    volume scale).  0.0 for a basin with no such year, which gates both terms off.
+
+    ``obs`` (B, T) mm/day with NaN where missing; ``water_year`` (T,) the water-year
+    label of each day."""
+    b = obs.shape[0]
+    pk, vol = np.zeros(b), np.zeros(b)
+    for i in range(b):
+        tops, means = [], []
+        for y in np.unique(water_year):
+            o = obs[i, water_year == y]
+            o = o[np.isfinite(o)]
+            if len(o) < min_days:
+                continue
+            o = np.clip(o, 0.0, None)
+            k = max(1, int(round(peak_frac * len(o))))
+            tops.append(float(np.sort(o)[::-1][:k].mean()))
+            means.append(float(o.mean()))
+        if tops:
+            pk[i], vol[i] = float(np.mean(tops)), float(np.mean(means))
+    return pk, vol
 
 
 def masked_basin_loss(
@@ -48,7 +110,17 @@ def masked_basin_loss(
     var_gate_frac: float = 1e-3,
     var_huber_cap: float = 1.0,
     bias_lambda: float = 0.0,
+    timing_lambda: float = 0.0,
+    peak_lambda: float = 0.0,
+    peak_frac: float = 0.02,
+    peak_ref: torch.Tensor | None = None,
+    vol_ref: torch.Tensor | None = None,
+    timing_window: torch.Tensor | None = None,
+    shape_min_days: int = 300,
+    timing_vol_gate: float = 0.05,
+    timing_min_window: int = 60,
     weight: torch.Tensor | None = None,
+    weight_total: float | None = None,
     min_days: int = 90,
 ) -> torch.Tensor:
     """Mean over valid basins of the (normalized) squared error on this chunk.
@@ -56,6 +128,10 @@ def masked_basin_loss(
     ``weight`` (B,), if given, reweights the per-basin mean (adaptive per-basin
     training weights) — renormalized by its own sum, so unit-mean weights leave
     the loss scale unchanged.  ``weight=None`` is byte-identical to no weighting.
+    ``weight_total``, if given, replaces that renormalization: the weighted sum
+    over the valid basins is divided by this FIXED total (the weight of every
+    basin of the run, valid in this chunk or not — ``mt_share_norm="all"``),
+    so a chunk's loss scales with the weight it holds.  ``None`` = unchanged.
     ``var_gate_frac`` is the share of the basin's record variance a chunk must
     carry for the variance term to apply; ``var_huber_cap`` the ``|alpha - 1|``
     beyond which that term grows linearly (``<= 0``: quadratic throughout).
@@ -115,11 +191,84 @@ def masked_basin_loss(
         beta = ms_b / mo_b.clamp_min(1e-12)
         per_basin = per_basin + bias_lambda * (beta - 1.0) ** 2
 
+    if timing_lambda > 0.0 or peak_lambda > 0.0:
+        # the two hydrograph-SHAPE terms score whole water years only: a basin-chunk
+        # needs shape_min_days valid days (the 92-day envelope tail and sparse years
+        # drop out) and a positive record constant (a basin without a qualifying
+        # training year never gets them).  Gated rows add 0 and a 0 gradient.
+        if ((peak_lambda > 0.0 and peak_ref is None)
+                or (timing_lambda > 0.0 and (vol_ref is None or timing_window is None))):
+            raise ValueError("the peak / timing terms need their record constants "
+                             "(peak_ref / vol_ref, loss.record_references) and the timing "
+                             "term its day window (timing_window, loss.jul_sep_window)")
+        shape_ok = n_fin >= shape_min_days
+
+    if timing_lambda > 0.0:
+        # summer RECESSION timing: over the valid days of the chunk's 1 Jul - 30 Sep
+        # window (timing_window, (T,) bool), the share of the window's volume passed
+        # by each day, sim vs obs, mean squared.  Volume-blind (the level terms carry
+        # volume) and zero outside the window, so it pulls on the recession shape —
+        # a store that drains too fast or too slow — and never on winter volume or
+        # the flood peaks (a whole-year cumulative curve did both, against the other
+        # terms at most Sierra basins).  Missing days add nothing to either sum.
+        # Gated off unless the window has timing_min_window valid days and an
+        # observed mean of at least timing_vol_gate of the basin's record mean flow
+        # (a dry summer has no recession to match; an all-zero one would leave the
+        # observed curve at 0), and unless the simulated window volume is at least
+        # 10 % of the observed one: below that there is no simulated recession to
+        # shape, and a floored normalizer would turn the term into a summer-VOLUME
+        # pull (at the untrained start ~80 % of the rows sit there, with 3x the
+        # gradient of the level terms) — the level terms carry that deficit.  The
+        # gate makes the gradient bounded by ~2 / (0.1 x observed window volume).
+        m = finite & timing_window.reshape(1, -1)
+        mf = m.to(sim_f.dtype)
+        n_w = m.sum(dim=1)
+        n_w_safe = n_w.clamp_min(1)
+        cs = torch.cumsum(sim_f.clamp_min(0.0) * mf, dim=1)
+        co = torch.cumsum(obs_f.clamp_min(0.0) * mf, dim=1)
+        s_tot, o_tot = cs[:, -1], co[:, -1]
+        cs = cs / torch.maximum(s_tot, 0.1 * o_tot).clamp_min(1e-6).unsqueeze(1)
+        co = co / o_tot.clamp_min(1e-6).unsqueeze(1)
+        v_ok = vol_ref > 0.0
+        v_safe = torch.where(v_ok, vol_ref, torch.ones_like(vol_ref))
+        gate = (shape_ok & v_ok & (n_w >= timing_min_window)
+                & (o_tot / n_w_safe >= (timing_vol_gate * v_safe).clamp_min(1e-3))
+                & (s_tot >= 0.1 * o_tot))
+        per_basin = per_basin + timing_lambda * gate.to(per_basin.dtype) * (
+            ((cs - co) ** 2 * mf).sum(dim=1) / n_w_safe)
+
+    if peak_lambda > 0.0:
+        # FLOOD PEAKS: the mean of the chunk's top ``peak_frac`` valid days, sim vs
+        # obs, each sorted on its own (the flow-duration curve's high segment —
+        # timing-free), k = max(1, round(peak_frac * valid days)).  The difference is
+        # normalized by the basin's RECORD constant peak_ref (the record mean of the
+        # yearly observed top-k mean), not by the chunk's own observed peaks, and
+        # Huber-capped at 1: so a flood year, whose peaks are several times the
+        # record mean, carries the term, a drought year's small peaks weigh little,
+        # an over- and an under-prediction of the same size cost the same, and an
+        # all-zero observed year stays bounded.  The other terms can trade the few
+        # largest storm / rain-on-snow peaks of the wettest years away when a large
+        # store buys low-flow skill (the 3-water-year TBPTT run F lost 30-50 % of
+        # them at the Sierra snow basins while each year's variance ratio stayed
+        # ~1).  Missing days are zero in both series and sort to the bottom.  A
+        # record constant under PEAK_REF_FLOOR switches the term off for the basin.
+        kmax = max(1, int(round(peak_frac * sim.shape[1])))
+        kk = (torch.round(peak_frac * n_fin.to(sim.dtype)).clamp(1.0, float(kmax))
+              .to(torch.long))
+        ts = _top_mean(sim_f.clamp_min(0.0), kk, kmax)
+        to = _top_mean(obs_f.clamp_min(0.0), kk, kmax)
+        p_ok = peak_ref >= PEAK_REF_FLOOR
+        e = (ts - to) / torch.where(p_ok, peak_ref, torch.ones_like(peak_ref))
+        pen = torch.where(e.abs() <= 1.0, e * e, 2.0 * e.abs() - 1.0)
+        per_basin = per_basin + peak_lambda * (shape_ok & p_ok).to(per_basin.dtype) * pen
+
     # branch-free mean over valid basins (CUDA-graph capturable: no host sync);
     # no valid basins -> 0.0 with the graph still alive through per_basin.
     valid = (n_fin >= min_days).to(per_basin.dtype)
     if weight is not None:
         valid = valid * weight
+    if weight_total is not None:
+        return (per_basin * valid).sum() / float(weight_total)
     return (per_basin * valid).sum() / valid.sum().clamp_min(1.0)
 
 

@@ -107,6 +107,33 @@ def _dpl_benchmark(args: argparse.Namespace) -> int:
     return 0
 
 
+def _param_box(spec: str | None) -> dict[str, tuple[float, float]]:
+    """``"riva=0:0,lzsk=0.01:0.5"`` -> ``{"riva": (0.0, 0.0), "lzsk": (0.01, 0.5)}``."""
+    box: dict[str, tuple[float, float]] = {}
+    for item in (spec or "").split(","):
+        if not item.strip():
+            continue
+        name, _, rng = item.partition("=")
+        lo, sep, hi = rng.partition(":")
+        if not sep:
+            raise SystemExit(f"--param-box {item!r}: expected name=lo:hi")
+        box[name.strip()] = (float(lo), float(hi))
+    return box
+
+
+def _obs_mask(path: str | None) -> tuple[str, ...]:
+    """Hand-edited mask CSV (``entity_id,date,...``) -> ``("entity_id|YYYY-MM-DD", ...)``."""
+    if not path:
+        return ()
+    import pandas as pd
+
+    m = pd.read_csv(path, dtype=str, comment="#")
+    if not {"entity_id", "date"} <= set(m.columns):
+        raise SystemExit(f"--obs-mask {path}: needs entity_id and date columns")
+    return tuple(f"{e.strip()}|{pd.Timestamp(d).date().isoformat()}"
+                 for e, d in zip(m["entity_id"], m["date"], strict=True))
+
+
 def _dpl_train(args: argparse.Namespace) -> int:
     from .dpl.config import DplConfig
     from .dpl.train import train
@@ -116,6 +143,13 @@ def _dpl_train(args: argparse.Namespace) -> int:
         fracp_floor=args.fracp_floor, dtype=args.dtype, device=args.device,
         loss=args.loss, log_loss_lambda=args.log_lambda,
         var_loss_lambda=args.var_lambda, bias_loss_lambda=args.bias_lambda,
+        timing_loss_lambda=args.timing_lambda,
+        peak_loss_lambda=args.peak_lambda, peak_loss_frac=args.peak_frac,
+        shape_min_days=args.shape_min_days, timing_vol_gate=args.timing_vol_gate,
+        obs_mask=_obs_mask(args.obs_mask),
+        pxtemp_learn=args.learn_pxtemp,
+        pxtemp_box=tuple(float(v) for v in args.pxtemp_box.split(":")),
+        pxtemp_tau=args.pxtemp_tau,
         var_gate_frac=args.var_gate_frac, var_huber_cap=args.var_huber_cap,
         et_loss_lambda=args.et_loss_lambda,
         et_level_lambda=args.et_level_lambda,
@@ -128,9 +162,16 @@ def _dpl_train(args: argparse.Namespace) -> int:
         lr_warmup_epochs=args.warmup_epochs, n_epochs=args.epochs,
         spinup_refresh_every=args.spinup_refresh,
         spinup_start=args.spinup_start, patience=args.patience,
+        spinup_mode=args.spinup_mode, spinup_years=args.spinup_years,
+        min_stop_epoch=args.min_stop_epoch,
+        dead_chunk_nograd=args.dead_chunk_nograd, diagnostics=args.diagnostics,
+        tbptt_carry=args.tbptt_carry,
+        tbptt_window_years=args.tbptt_window_years,
+        graph_recompute_days=args.graph_recompute_days,
         hidden=args.hidden, embed=args.embed, dropout=args.dropout,
         grouped_heads=args.grouped_heads, fourier_k=args.fourier_k,
         flowlen_feature=not args.no_flowlen_feature,
+        param_box=_param_box(args.param_box),
         gnn_k=args.gnn_k,
         spatial_reg_lambda=args.spatial_reg_lambda,
         spatial_reg_k=args.spatial_reg_k,
@@ -143,14 +184,18 @@ def _dpl_train(args: argparse.Namespace) -> int:
         pt_snow_albedo=args.pt_snow_albedo,
         pt_dewpoint_depression=args.pt_dewpoint_depression,
         canopy_lite=args.canopy_lite,
+        noah_sac_exchanges=args.noah_sac_exchanges,
         calsim_footprint=args.calsim_footprint,
         dynamic_params=(tuple(args.dynamic_params.split(","))
                         if args.dynamic_params else ()),
         dynamic_amp=args.dynamic_amp, dynamic_window=args.dynamic_window,
         mt_family_weight=args.mt_family_weight,
+        mt_share_norm=args.mt_share_norm,
+        mt_loss_ref=args.mt_loss_ref, mt_loss_ref_power=args.mt_loss_ref_power,
         train_chunk_days=args.train_chunk_days, chunk_grid=args.chunk_grid,
         nograd_window=args.nograd_window,
         train_graph_segments=args.train_graph_segments,
+        dedup_cells=args.dedup_cells,
         seed=args.seed, use_cuda_graphs=not args.no_graphs,
     )
     train(args.variant, data_dir=args.data_dir, out_dir=args.out, cfg=cfg,
@@ -174,8 +219,11 @@ def _dpl_evaluate(args: argparse.Namespace) -> int:
                              "multi-timescale domain")
         evaluate_checkpoint_mt(args.checkpoint, data_dir=args.data_dir,
                                out_dir=args.out,
-                               hydrographs=args.hydrographs)
+                               hydrographs=args.hydrographs,
+                               spinup=args.spinup, dedup_cells=args.dedup_cells)
         return 0
+    if args.dedup_cells:
+        raise ValueError("--dedup-cells is wired for multi-timescale checkpoints only")
     evaluate_checkpoint(args.checkpoint, data_dir=args.data_dir,
                         out_dir=args.out, parallel=not args.serial,
                         temp_delta=args.temp_delta)
@@ -338,11 +386,17 @@ def main(argv: list[str] | None = None) -> int:
              "-> artifacts/dpl/<variant>/",
     )
     tr.add_argument("variant",
-                    choices=["static", "climate", "physical", "physical_climate"],
+                    choices=["static", "climate", "physical", "physical_climate",
+                             "aef", "aef64", "aef_random"],
                     help="feature ablation arm (physical = continuous "
                          "soil/veg/terrain/LAI in place of one-hot soil/veg; "
                          "physical_climate = physical + the 4 climate indices, "
-                         "so the learned params ADAPT under a perturbed climate)")
+                         "so the learned params ADAPT under a perturbed climate; "
+                         "aef = AlphaEarth embeddings only (16 PCs of the unit "
+                         "directions + the vector length, region grid only); "
+                         "aef64 = all 64 unit-direction coordinates + the length, "
+                         "no PCA; aef_random = its control, 17 random values "
+                         "per cell)")
     tr.add_argument("--data-dir", default="data", help="organized data/ store")
     tr.add_argument("--domain", default="15cdec",
                     choices=["15cdec", "15cdec_grid", "multifamily"],
@@ -367,6 +421,23 @@ def main(argv: list[str] | None = None) -> int:
                          "over the families present, entities equal within a "
                          "family; selection uses the same share-weighted family "
                          "mean) (multifamily domain only)")
+    tr.add_argument("--mt-share-norm", default="present", choices=["present", "all"],
+                    help="with --mt-family-weight shares/equal: 'present' divides each "
+                         "chunk's loss by the weight of the entities it scores (a chunk "
+                         "holding one family gives it the whole term); 'all' divides by "
+                         "every entity's weight, so the shares hold summed over chunks "
+                         "whose families train in different eras")
+    tr.add_argument("--mt-loss-ref", default="",
+                    help="FROZEN per-family loss scale (needs --mt-share-norm all): "
+                         "'usgs=0.7368,cdec=0.4202,uf=0.0980' = each family's per-entity "
+                         "chunk loss (sum l_f / sum c_f) at a reference state; each "
+                         "family term is multiplied by Lbar / L_ref_f^p (Lbar = the "
+                         "share-weighted reference level^p; p = --mt-loss-ref-power), "
+                         "frozen for the run.  Selection unchanged. Default '' = off")
+    tr.add_argument("--mt-loss-ref-power", type=float, default=None,
+                    help="exponent p of --mt-loss-ref, REQUIRED with it: kappa_f = "
+                         "Lbar / L_ref_f^p (1 = equal loss mass at the reference; 0.5 = "
+                         "matches the families' optimizer-step shares at trained states)")
     tr.add_argument("--et", default="sac", choices=["sac", "noah"],
                     help="ET scheme: sac = frozen Hamon PET (scorable via "
                          "run_basin); noah = Noah canopy-resistance ET (NEW "
@@ -395,6 +466,11 @@ def main(argv: list[str] | None = None) -> int:
                          "with ONE learned exponent (soil_chi); drops the Jarvis "
                          "resistance, froot, redist_k and the separate canopy trunk "
                          "(needs --et noah; --noah-pet still selects the potential)")
+    tr.add_argument("--noah-sac-exchanges", action="store_true",
+                    help="Noah ET replaces only the SAC E1-E3 withdrawals: keep the "
+                         "upper free->tension rebalance, the lower free->tension "
+                         "resupply (rserv) and the ADIMP ET(5) of the reference ET "
+                         "block (off: the external-ET path skips all three; needs --canopy-lite)")
     tr.add_argument("--calsim-footprint", action="store_true",
                     help="re-foot basin aggregation onto the CalSim3 catchments "
                          "(overlap weights) to correct the coarse-grid footprint "
@@ -442,6 +518,26 @@ def main(argv: list[str] | None = None) -> int:
     tr.add_argument("--bias-lambda", type=float, default=0.0,
                     help="per-chunk bias penalty (mean ratio - 1)^2; the KGE beta "
                          "term the MSE/NNSE loss lacks (0 disables)")
+    tr.add_argument("--timing-lambda", type=float, default=0.0,
+                    help="per-chunk summer-RECESSION timing penalty: mean squared "
+                         "difference of the normalized cumulative flow over 1 Jul - "
+                         "30 Sep, sim vs obs (recession shape; volume-blind; no pull on "
+                         "winter or the flood peaks; 0 disables)")
+    tr.add_argument("--peak-lambda", type=float, default=0.0,
+                    help="per-chunk flood-peak penalty: the mean of the top --peak-frac "
+                         "valid days, sim vs obs, each sorted on its own (flow-duration "
+                         "high segment), their difference over the basin's record mean "
+                         "of that statistic (flood years carry it; Huber-capped; 0 "
+                         "disables)")
+    tr.add_argument("--peak-frac", type=float, default=0.02,
+                    help="share of a chunk's valid days the peak term averages "
+                         "(0.02 = 7 days a year)")
+    tr.add_argument("--shape-min-days", type=int, default=300,
+                    help="the timing and peak terms score a basin-chunk only with at "
+                         "least this many valid observed days (whole water years)")
+    tr.add_argument("--timing-vol-gate", type=float, default=0.05,
+                    help="the timing term skips a basin-chunk whose observed Jul-Sep mean "
+                         "flow is under this share of the basin's record mean flow")
     tr.add_argument("--et-loss-lambda", type=float, default=0.0,
                     help="ET seasonal-SHAPE loss weight: inverse-variance pull of "
                          "the model's NORMALIZED monthly ET cycle to the 5-product "
@@ -526,6 +622,20 @@ def main(argv: list[str] | None = None) -> int:
                          "param gets a comparable RELATIVE day-of-year swing, so a "
                          "mixed set (Kpet + melt factors) is balanced (0.10 -> Kpet "
                          "+/-0.21, MFMAX/MFMIN +/-0.50, MBASE +/-0.50)")
+    tr.add_argument("--learn-pxtemp", action="store_true",
+                    help="learn the Snow-17 rain/snow threshold PXTEMP per cell (else "
+                         "the fixed 0 degC): zero-init head, hard split forward, "
+                         "straight-through sigmoid-surrogate gradient")
+    tr.add_argument("--pxtemp-box", default="-1:3", metavar="LO:HI",
+                    help="learned PXTEMP range in degC (must contain 0)")
+    tr.add_argument("--pxtemp-tau", type=float, default=1.0,
+                    help="width (degC) of the sigmoid surrogate that carries the "
+                         "PXTEMP gradient; the forward split stays hard")
+    tr.add_argument("--obs-mask", default=None, metavar="CSV",
+                    help="hand-edited CSV (entity_id,date,...) of daily observations "
+                         "to mask out of training and scoring, e.g. "
+                         "data/cdec_fnf/fnf_daily_mask.csv; the checkpoint carries the "
+                         "list")
     tr.add_argument("--hidden", type=int, default=64, help="trunk width")
     tr.add_argument("--embed", type=int, default=32, help="embedding width")
     tr.add_argument("--dropout", type=float, default=0.1,
@@ -536,6 +646,47 @@ def main(argv: list[str] | None = None) -> int:
                     help="early-stop after this many stale cal-KGE selections "
                          "(lower = stop sooner at plateau; selection cadence is "
                          "every 2 epochs)")
+    tr.add_argument("--min-stop-epoch", type=int, default=0,
+                    help="arm early stopping only from this epoch on (a stale "
+                         "streak before it never stops the run)")
+    tr.add_argument("--tbptt-carry", choices=("absolute", "relative", "flux"),
+                    default="absolute",
+                    help="state carried into each TBPTT chunk: 'absolute' (detached "
+                         "SAC contents), 'relative' (same values, but the backward "
+                         "holds each store's relative saturation fixed, so a larger "
+                         "capacity is not seen as free deficit at every chunk start) "
+                         "or 'flux' (relative, plus the lower-zone free stores' "
+                         "carried drainage flux held fixed, so a faster store carries "
+                         "less water into the next year); segmented/eager chunk path")
+    tr.add_argument("--tbptt-window-years", type=int, choices=(1, 2, 3), default=1,
+                    help="TBPTT window in water years (water_year grid): n > 1 runs each "
+                         "live chunk's previous n - 1 water years as a gradient-carrying "
+                         "burn-in before it, the loss on its own year only, so the "
+                         "gradient sees the water carried into the scored year; the "
+                         "state still advances one year per step (~n x compute and "
+                         "activation memory; segmented/eager chunk path)")
+    tr.add_argument("--graph-recompute-days", type=int, default=0,
+                    help="> 0: activation recompute — one captured graph of this many "
+                         "days replayed over every training window, the backward "
+                         "re-running each segment from its stored start state, so "
+                         "graph memory stays one segment's for any window length "
+                         "(e.g. 73 with --tbptt-window-years 2/3); ~1 extra forward "
+                         "per segment; 0 = off")
+    tr.add_argument("--dead-chunk-nograd", action="store_true",
+                    help="run chunks with no scoreable observation (a "
+                         "26-entity multifamily run's WY1950-84) forward-only, "
+                         "without autograd; the carried state and every later "
+                         "chunk are unchanged (segmented/eager chunk path)")
+    tr.add_argument("--diagnostics", action="store_true",
+                    help="write chunk_log.csv (per chunk: loss by family, "
+                         "pre-clip gradient norm), eval_terms.csv (selection "
+                         "epochs: eval-mode loss by family and term) and "
+                         "per-epoch net snapshots with an EMA shadow under "
+                         "checkpoints/snapshots/; numerics unchanged")
+    tr.add_argument("--param-box", default=None,
+                    help="narrow learned parameters' bounds, name=lo:hi[,...] "
+                         "in physical units inside the GA box; lo == hi pins "
+                         "the parameter (riva=0:0 turns riparian ET off)")
     tr.add_argument("--spinup-refresh", type=int, default=1,
                     help="re-run the no-grad spinup every k epochs (k=2 "
                          "reuses one-epoch-stale state on odd epochs — same "
@@ -549,6 +700,16 @@ def main(argv: list[str] | None = None) -> int:
                          "the full prefix 1.000000; clamped to the record "
                          "start, so pass 1915-01-01 for the exact frozen "
                          "full-prefix convention)")
+    tr.add_argument("--spinup-mode", default="window", choices=["window", "cycle"],
+                    help="window = spin up over --spinup-start .. the cal window (the "
+                         "multifamily domain: the ten water years before it); cycle = "
+                         "timing-independent: loop the window's own first "
+                         "--spinup-years years from the cold start 20 times, then "
+                         "from the previous state until a pass moves no basin's "
+                         "annual flow by more than 0.1%% (reads nothing before the "
+                         "window)")
+    tr.add_argument("--spinup-years", type=int, default=10,
+                    help="length of the looped block for --spinup-mode cycle")
     tr.add_argument("--lr", type=float, default=1e-3)
     tr.add_argument("--seed", type=int, default=0)
     tr.add_argument("--train-chunk-days", type=int, default=366,
@@ -572,6 +733,13 @@ def main(argv: list[str] | None = None) -> int:
                          "gradient as the single graph up to float32 summation "
                          "order); 2 keeps 366-day chunks under the graph-size "
                          "limit of drivers that fault on whole-year captures")
+    tr.add_argument("--dedup-cells", action="store_true",
+                    help="cell-deduplicated forward: the parameter net and the per-cell "
+                         "physics (PET, Snow-17, ET, SAC-SMA, states, PXTEMP) run once per "
+                         "distinct grid cell, routing and aggregation per (entity, cell) "
+                         "row; refused when rows of a cell differ in their net features "
+                         "(e.g. the flow-length feature) or with --gnn-k; with dropout a "
+                         "shared cell draws one mask instead of one per row")
     tr.add_argument("--no-graphs", action="store_true",
                     help="disable CUDA-graph capture (eager; much slower)")
     tr.add_argument("--resume", action="store_true",
@@ -601,6 +769,15 @@ def main(argv: list[str] | None = None) -> int:
                     help="multi-timescale checkpoints only: which per-entity "
                          "diagnostics figures to draw (review = the cdec_daily "
                          "+ uf_monthly set; all adds the 69 USGS entities)")
+    ev.add_argument("--spinup", default="cycle", choices=["cycle", "window"],
+                    help="multi-timescale checkpoints only: state at the envelope "
+                         "start — cycle = loop its first ten water years 20 times "
+                         "from the cold start (timing-independent, default); window "
+                         "= the legacy ten water years before it")
+    ev.add_argument("--dedup-cells", action="store_true",
+                    help="multi-timescale checkpoints only: run the per-cell physics "
+                         "once per distinct grid cell (routing per (entity, cell) row); "
+                         "same flows to float round-off, less compute")
     ev.set_defaults(func=_dpl_evaluate)
 
     hy = dpl_sub.add_parser(

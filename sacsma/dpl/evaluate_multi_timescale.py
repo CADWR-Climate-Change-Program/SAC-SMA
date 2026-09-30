@@ -1,8 +1,9 @@
 """Per-entity evaluation of a multi-timescale (``multifamily``) checkpoint.
 
 The multi-timescale counterpart of :func:`sacsma.dpl.evaluate.evaluate_checkpoint`:
-rebuild the net, stream the full envelope once under ``torch.no_grad()`` (same
-spinup convention as training — ten water years ahead of the window), then
+rebuild the net, stream the full envelope once under ``torch.no_grad()`` (the
+state at its start from the timing-independent cycle spinup of
+:mod:`sacsma.dpl.spinup`, whatever spinup the run trained with), then
 score every entity over its OWN registry window at its NATIVE timescale —
 daily entities on days, monthly entities on calendar-month sums of the same
 simulated flow.  There is no held-out flow validation in this domain by
@@ -36,61 +37,46 @@ from .._figures import _period_stats, basin_diagnostics_fig, plt
 from ..io import MULTI_TIMESCALE_DOMAIN, domain_dir
 from ..metrics import kge, nse, pbias, pearson
 from .evaluate import export_canopy_params, export_params, load_net_from_checkpoint
-from .forward import initial_state, routing_uh, run_window
+from .forward import routing_uh
 from .multi_timescale import EntityObs, load_entity_obs
+from .spinup import spin_state, stream_rows
 
 #: hydrograph families drawn by default (69 USGS figures on request only)
 _REVIEW_FAMILIES = ("cdec_daily", "uf_monthly")
 
 
-def _entity_flow(net, x, dom, cfg) -> tuple[np.ndarray, int, int]:
+def _entity_flow(net, x, dom, cfg, *, spinup: str = "cycle",
+                 dedup_cells: bool = False) -> tuple[np.ndarray, int, int]:
     """Stream the trained field over the envelope; returns the basin daily
     depth ``(B, t1-t0)`` (numpy float64) plus the envelope indices.
 
-    Mirrors the trainer's no-grad protocol: cold start ten water years ahead
-    of the window (clamped to the record start), eager ``run_window`` chunks
-    (no CUDA graphs — a single full pass does not need them)."""
+    The state at the envelope start comes from ``spinup``
+    (:func:`sacsma.dpl.spinup.spin_state`): ``"cycle"`` (default) loops the
+    envelope's own first ``cfg.spinup_years`` years ``cfg.spinup_passes`` times
+    from the cold start — nothing before the envelope is read; ``"window"`` is the
+    legacy ten water years ahead of it (or ``cfg.spinup_start`` when earlier).  Eager ``run_window``
+    pieces (no CUDA graphs — a single full pass does not need them).
+    ``dedup_cells``: the per-cell physics once per distinct cell
+    (:func:`sacsma.dpl.data.with_cell_dedup`)."""
+    from .data import with_cell_dedup
     from .multi_timescale import ENVELOPE_END, ENVELOPE_START
 
     t0 = int(dom.dates.searchsorted(pd.Timestamp(ENVELOPE_START)))
     t1 = int(dom.dates.searchsorted(pd.Timestamp(ENVELOPE_END))) + 1
-    # the trainer's spinup basis exactly: honor an explicit early
-    # cfg.spinup_start; redirect the default (set for the 15cdec calibration
-    # window, which falls inside this envelope) to ten water years ahead of it
-    spin_req = int(dom.dates.searchsorted(pd.Timestamp(cfg.spinup_start)))
-    if spin_req >= t0:
-        spin_req = int(dom.dates.searchsorted(
-            dom.dates[t0] - pd.DateOffset(years=10)))
-    spin = max(min(spin_req, t0), 0)
+    if dedup_cells:
+        dom = with_cell_dedup(dom, x)
 
     net.eval()
     with torch.no_grad():
-        out = net(x)
+        out = net(dom.phys_x(x))
         canopy = out.pop("_canopy", None)
-        uh = routing_uh(out, dom.flowlen)
-        state = initial_state(dom.n_hru, dom.device, dom.dtype,
-                              init_mode=cfg.init_mode, params=out,
-                              et_mode=cfg.et_mode)
-        sims = []
-        t = spin
-        while t < t1:
-            te = min(t + 512, t1)
-            pr, ta, doy, leap = dom.chunk(t, te)
-            tn, tx = dom.chunk_tmm(t, te)
-            flow, state = run_window(
-                pr, ta, doy, leap, dom.lat_rad, dom.elev, out, uh, state,
-                n_inc=cfg.n_inc, perc_mode=cfg.perc_mode,
-                fracp_floor=cfg.fracp_floor, ninc_mode="fixed",
-                et_mode=cfg.et_mode, canopy_params=canopy, tmin=tn, tmax=tx,
-                veg_frac=dom.veg_frac, lai=dom.chunk_lai(t, te),
-                noah_pet=cfg.noah_pet, sac_pet=cfg.sac_pet,
-                pt_snow_albedo=cfg.pt_snow_albedo,
-                pt_dewpoint_depression=cfg.pt_dewpoint_depression,
-                canopy_lite=cfg.canopy_lite, state_idx=dom.chunk_state(t, te))
-            if te > t0:
-                sims.append((dom.W @ flow)[:, max(t0 - t, 0):].cpu())
-            t = te
-    return torch.cat(sims, dim=1).double().numpy(), t0, t1
+        uh = routing_uh(out, dom.flowlen, row_cell=dom.row_cell)
+        state, how = spin_state(dom, cfg, out, uh, canopy, t0, mode=spinup,
+                                agg=lambda f: dom.W @ f)
+        print(f"eval: {how}", flush=True)
+        sim, _ = stream_rows(dom, cfg, out, uh, canopy, t0, t1, state,
+                             lambda f: (dom.W @ f).cpu())
+    return sim.double().numpy(), t0, t1
 
 
 def _components(s: np.ndarray, o: np.ndarray) -> tuple[float, float]:
@@ -143,6 +129,8 @@ def evaluate_checkpoint_mt(
     *,
     hydrographs: str = "review",   # review (cdec+uf) | all | none
     device: str | None = None,     # None = cuda if available
+    spinup: str = "cycle",         # cycle (timing-independent) | window (legacy)
+    dedup_cells: bool = False,     # per-cell physics once per distinct cell
 ) -> pd.DataFrame:
     """Score a ``multifamily`` checkpoint per entity; returns the metrics."""
     if hydrographs not in ("review", "all", "none"):
@@ -167,11 +155,13 @@ def evaluate_checkpoint_mt(
     print(f"wrote {out / 'params_dpl.csv'} ({len(dpl_df)} entity-cell rows, "
           f"sel cal KGE {ck.get('cal_kge', float('nan')):.4f})", flush=True)
 
-    eobs: EntityObs = load_entity_obs(dom, data_dir)
+    # scored against the run's own training target (its obs_mask, if any)
+    eobs: EntityObs = load_entity_obs(dom, data_dir, obs_mask=cfg.obs_mask)
     print(f"eval: streaming the envelope "
           f"({dom.n_hru} HRUs, {len(dom.basins)} entities, {cfg.dtype} "
           f"config scored in float64 on {dom.device.type}) ...", flush=True)
-    sim, t0, t1 = _entity_flow(net, x, dom, cfg)
+    sim, t0, t1 = _entity_flow(net, x, dom, cfg, spinup=spinup,
+                               dedup_cells=dedup_cells)
     assert (t0, t1) == (eobs.t0, eobs.t1)
     dates = dom.dates[t0:t1]
     np.savez_compressed(
@@ -211,7 +201,8 @@ def evaluate_checkpoint_mt(
             "entity_id": eid, "family": r["family"],
             "timescale": r["timescale"], "site_id": r["site_id"],
             "name": r["name"], "area_mi2": r["area_mi2"],
-            "n_obs": int(r["n_obs"]), "n_scored": int(fin.sum()),
+            "n_obs": int(r["n_obs"]), "n_masked": int(eobs.n_masked[i]),
+            "n_scored": int(fin.sum()),
             "kge": kge(sf, of), "nse": nse(sf, of), "pbias": pbias(sf, of),
             "r": pearson(sf, of), "alpha": alpha, "beta": beta,
         })
@@ -224,7 +215,7 @@ def evaluate_checkpoint_mt(
                          pd.Timestamp(r["train_end"])))
 
     met = pd.DataFrame(rows)
-    bad = met[met["n_scored"] != met["n_obs"]]
+    bad = met[met["n_scored"] != met["n_obs"] - met["n_masked"]]
     if len(bad):
         raise AssertionError(f"scored counts diverge from the registry "
                              f"n_obs: {bad['entity_id'].tolist()[:5]}")

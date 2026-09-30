@@ -28,7 +28,7 @@ from ..cdec15 import BASINS, CAL_END, load_gage
 from ..metrics import kge, nse, pbias
 from ..model import run_basin
 from .config import CANOPY_LEARNED_PARAMS, PARAM_ORDER, DplConfig, pick_device
-from .data import DomainTensors, load_domain_tensors
+from .data import DomainTensors, load_domain_tensors, with_cell_dedup
 from .forward import initial_state, routing_uh, run_window
 
 
@@ -40,7 +40,9 @@ def export_params(net: torch.nn.Module, dom: DomainTensors,
     ``ga_optimum.csv`` columns keyed by grid-cell ``key``, plus the per-basin
     ``basin`` column the model.py filter uses — the ~1835 cells shared between
     basins intentionally carry per-basin values.  Fixed parameters
-    (side/SCF/PXTEMP) come out at their GA constants.
+    (side/SCF/PXTEMP) come out at their GA constants — PXTEMP at its learned
+    per-cell value for a ``pxtemp_learn`` net (the frozen model applies the same
+    hard split at it).
     """
     net.eval()
     with torch.no_grad():
@@ -76,6 +78,10 @@ def export_canopy_params(net: torch.nn.Module, dom: DomainTensors,
         df["veg_frac_obs"] = dom.veg_frac.double().cpu().numpy()
     if dom.lai_lut is not None:
         df["lai_obs_mean"] = dom.lai_lut[dom.cell_idx].mean(axis=1)
+    if getattr(net, "noah_sac_exchanges", False):
+        # the frozen Noah-lite path (model._resolve_canopy) reads it per HRU;
+        # absent = the default external-ET physics
+        df["sac_exchanges"] = 1
     return df
 
 #: named numerics configs — (ninc, perc_mode, fracp_floor, dtype)
@@ -264,10 +270,18 @@ def score_frozen(
     return metrics
 
 
-def _pipeline_storage(st) -> torch.Tensor:
+def _pipeline_storage(st, row_cell: torch.Tensor | None = None) -> torch.Tensor:
     """Total liquid-equivalent water (N,) held in a PipelineState — for the
     Noah mass-balance closure.  Snow SWE + the 5 SAC stores + canopy wc +
-    in-transit routing history.  adimc is EXCLUDED (it overlaps uztwc/uzfwc)."""
+    in-transit routing history.  adimc is EXCLUDED (it overlaps uztwc/uzfwc).
+    ``row_cell`` (cell dedup): the cell stores are per distinct cell and are
+    gathered to the HRU rows of the routing histories."""
+    if row_cell is not None:
+        c = (st.snow.w_i + st.snow.w_q
+             + st.sac.uztwc + st.sac.uzfwc + st.sac.lztwc + st.sac.lzfsc + st.sac.lzfpc)
+        if st.canopy is not None:
+            c = c + st.canopy.wc
+        return c.index_select(0, row_cell) + st.hist_surf.sum(-1) + st.hist_base.sum(-1)
     s = (st.snow.w_i + st.snow.w_q
          + st.sac.uztwc + st.sac.uzfwc + st.sac.lztwc + st.sac.lzfsc + st.sac.lzfpc
          + st.hist_surf.sum(-1) + st.hist_base.sum(-1))
@@ -278,7 +292,9 @@ def _pipeline_storage(st) -> torch.Tensor:
 
 def _noah_stream(net: torch.nn.Module, x: torch.Tensor, dom: DomainTensors,
                  cfg: DplConfig, *, temp_delta: float | np.ndarray = 0.0,
-                 precip_scale: float = 1.0, chunk_days: int = 4096) -> dict:
+                 precip_scale: float = 1.0, chunk_days: int = 4096,
+                 components: bool | str = False,
+                 dedup_cells: bool = False) -> dict:
     """Stream the full record through the torch Noah pipeline -> the basin daily
     flow (``sim``, (B, T) ndarray mm/day) + per-HRU ET sums + water-balance
     closure.  ``temp_delta`` adds to tavg/tmin/tmax: a scalar degC (warming
@@ -286,25 +302,50 @@ def _noah_stream(net: torch.nn.Module, x: torch.Tensor, dom: DomainTensors,
     detrending field) gathered to HRU rows via ``dom.cell_idx``.  ``precip_scale``
     MULTIPLIES precip (e.g. 1.1 for +10%): the precipitation-perturbation knob
     parallel to ``temp_delta``, applied before the model AND the closure sum so
-    the water balance stays consistent under the counterfactual."""
+    the water balance stays consistent under the counterfactual.  ``components``
+    adds ``sim_fast`` / ``sim_slow`` ((B, T) each): the basin aggregates of the
+    routed fast (direct) and slow (baseflow) runoff components, ``sim_fast +
+    sim_slow`` = ``sim`` (off by default; ``sim`` is unchanged either way);
+    ``components="parts"`` also adds ``sim_quick`` / ``sim_interflow`` /
+    ``sim_supplemental`` / ``sim_primary``, the four routed runoff parts
+    (``quick + interflow = fast``, ``supplemental + primary = slow`` up to
+    rounding; :func:`sacsma.dpl.forward.run_window` ``return_parts``).  All are
+    NET of SAC-SMA's riparian et4 channel-ET deduction (and dry-channel clamp),
+    which act on the aggregate direct inflow / baseflow before routing.
+
+    ``dedup_cells`` (or a ``dom`` already carrying ``dedup``): the per-cell
+    physics runs once per distinct cell (:func:`sacsma.dpl.data.with_cell_dedup`,
+    ``x`` = the per-row features, checked identical within each cell); the flow,
+    ET sums and closure stay per HRU row."""
+    if components not in (False, True, "fastslow", "parts"):
+        raise ValueError(f"components {components!r} (False, True/'fastslow' or 'parts')")
+    parts = components == "parts"
+    if dedup_cells:
+        dom = with_cell_dedup(dom, x)
     net.eval()
     with torch.no_grad():
-        o = net(x)
+        o = net(dom.phys_x(x))
     params = {k: v for k, v in o.items() if k != "_canopy"}
     cp = o.get("_canopy")
-    uh = routing_uh(params, dom.flowlen)
+    rc = dom.row_cell
+    uh = routing_uh(params, dom.flowlen, row_cell=rc)
     n, tt = dom.n_hru, dom.n_time
-    st0 = initial_state(n, dom.device, dom.dtype, init_mode=cfg.init_mode,
-                        params=params, et_mode="noah")
+    st0 = initial_state(dom.n_phys, dom.device, dom.dtype, init_mode=cfg.init_mode,
+                        params=params, et_mode="noah", n_rows=n)
     state = st0
     basin = torch.empty(len(dom.basins), tt, device=dom.device, dtype=dom.dtype)
+    if components:
+        basin_fast = torch.empty_like(basin)
+        basin_slow = torch.empty_like(basin)
+    if parts:
+        basin_parts = [torch.empty_like(basin) for _ in range(4)]
     sum_pr = torch.zeros(n, device=dom.device, dtype=dom.dtype)
     sum_fl = torch.zeros(n, device=dom.device, dtype=dom.dtype)
     sum_et = torch.zeros(n, device=dom.device, dtype=dom.dtype)
     dt_field = None
     if not isinstance(temp_delta, (int, float)):
         dt_field = torch.as_tensor(np.ascontiguousarray(
-            np.asarray(temp_delta)[dom.cell_idx])).to(dom.device, dom.dtype)
+            np.asarray(temp_delta)[dom.phys_idx])).to(dom.device, dom.dtype)
     with torch.no_grad():
         t0 = 0
         while t0 < tt:
@@ -322,30 +363,49 @@ def _noah_stream(net: torch.nn.Module, x: torch.Tensor, dom: DomainTensors,
                 ta = ta + temp_delta
                 if tn is not None:
                     tn, tx = tn + temp_delta, tx + temp_delta
-            flow, state, tet = run_window(
-                pr, ta, doy, leap, dom.lat_rad, dom.elev, params, uh, state,
+            res = run_window(
+                pr, ta, doy, leap, dom.phys_lat_rad, dom.phys_elev, params, uh, state,
                 n_inc=cfg.n_inc, perc_mode=cfg.perc_mode,
                 fracp_floor=cfg.fracp_floor, ninc_mode=cfg.ninc_mode,
                 et_mode="noah", canopy_params=cp, tmin=tn, tmax=tx,
-                veg_frac=dom.veg_frac, lai=dom.chunk_lai(t0, t1),
-                noah_pet=cfg.noah_pet, canopy_lite=cfg.canopy_lite,
+                veg_frac=dom.phys_veg_frac, lai=dom.chunk_lai(t0, t1),
+                noah_pet=cfg.noah_pet, canopy_lite=cfg.canopy_lite, sac_exchanges=cfg.noah_sac_exchanges,
                 pt_snow_albedo=cfg.pt_snow_albedo,
                 pt_dewpoint_depression=cfg.pt_dewpoint_depression,
                 state_idx=dom.chunk_state(t0, t1),
-                return_tet=True)
+                return_tet=True, return_components=bool(components),
+                return_parts=parts, row_cell=rc)
+            flow, state, tet = res[0], res[1], res[2]
             basin[:, t0:t1] = dom.W @ flow
-            sum_pr += pr.sum(1)
+            if components:
+                basin_fast[:, t0:t1] = dom.W @ res[3][0]
+                basin_slow[:, t0:t1] = dom.W @ res[3][1]
+            if parts:
+                for k in range(4):
+                    basin_parts[k][:, t0:t1] = dom.W @ res[4][k]
+            if rc is None:
+                sum_pr += pr.sum(1)
+            else:                               # per-cell precip -> the cell's rows
+                sum_pr += pr.sum(1).index_select(0, rc)
             sum_fl += flow.sum(1)
             sum_et += tet.sum(1)
             t0 = t1
 
     # per-HRU water-balance closure: Σprcp ≈ Σflow + Σtet + ΔS (the routing-tail
     # residual is the only expected slack over the full record)
-    dS = _pipeline_storage(state) - _pipeline_storage(st0)
+    dS = _pipeline_storage(state, rc) - _pipeline_storage(st0, rc)
     resid = (sum_pr - sum_fl - sum_et - dS).abs()
     closure_rel = float((resid / sum_pr.clamp_min(1e-6)).max())
-    return dict(sim=basin.double().cpu().numpy(), sum_et=sum_et,
-                closure_rel=closure_rel)
+    out = dict(sim=basin.double().cpu().numpy(), sum_et=sum_et,
+               closure_rel=closure_rel)
+    if components:
+        out.update(sim_fast=basin_fast.double().cpu().numpy(),
+                   sim_slow=basin_slow.double().cpu().numpy())
+    if parts:
+        for name, b in zip(("quick", "interflow", "supplemental", "primary"), basin_parts,
+                           strict=True):
+            out[f"sim_{name}"] = b.double().cpu().numpy()
+    return out
 
 
 def score_noah_torch(net: torch.nn.Module, x: torch.Tensor, dom: DomainTensors,
@@ -502,7 +562,7 @@ def load_net_from_checkpoint(
     import numpy as _np
 
     from ..io import soilveg_path
-    from .features import FeatureSet, build_features
+    from .features import AEF_STORE_VARIANTS, FeatureSet, aef_store, build_features
     from .parameter_net import ParameterNet
 
     ck = torch.load(ckpt_path, map_location="cpu", weights_only=False)
@@ -546,6 +606,7 @@ def load_net_from_checkpoint(
                         physical_path=(soilveg_path(data_dir, domain)
                                        if variant in ("physical",
                                        "physical_climate") else None),
+                        aef_path=aef_store(data_dir) if variant in AEF_STORE_VARIANTS else None,
                         stats=stats)
     x = torch.as_tensor(fs.x).to(dev, torch.float64)
     gnn_k = nc.get("gnn_k", 0)
@@ -563,8 +624,14 @@ def load_net_from_checkpoint(
                        canopy_lite=nc.get("canopy_lite", False),
                        dynamic_params=dyn,
                        dynamic_amp=nc.get("dynamic_amp", 0.5),
+                       pxtemp_learn=nc.get("pxtemp_learn", False),
+                       pxtemp_box=tuple(nc.get("pxtemp_box", (-1.0, 3.0))),
+                       pxtemp_tau=nc.get("pxtemp_tau", 1.0),
                        ).to(dev, torch.float64)
     net.load_state_dict(ck["net"])   # restores baked neighbor buffers too
+    # the physics switch rides on the net so every canopy export carries it
+    # (export_canopy_params), whichever caller builds the table
+    net.noah_sac_exchanges = bool(cfg.noah_sac_exchanges)
     return net, x, dom, cfg, ck
 
 

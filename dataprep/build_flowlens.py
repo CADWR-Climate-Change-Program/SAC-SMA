@@ -39,7 +39,12 @@ processes.
 Usage (sacsma conda env, from the repo root):
     python dataprep/build_flowlens.py [--data-dir data]
         [--tiles-dir tmp/hydrosheds] [--only cdec_MKM,uf_07]
-        [--out data/multifamily/flowlens.csv]
+        [--out data/multifamily/flowlens.csv] [--calsim-arcs]
+
+``--calsim-arcs`` traces only the registry's ``calsim_monthly`` entities (no outlet
+coordinate: footprint-exit mode, uf_07's; the run re-traces uf_07 and asserts its stored
+rows are reproduced) and appends them to the existing ``--out`` store, copying its base
+rows byte for byte.
 """
 
 from __future__ import annotations
@@ -356,6 +361,100 @@ def trace_cells_to_exit(cells_csv: Path, out_csv: Path, tiles_dir: Path) -> None
     pd.concat(frames, ignore_index=True).to_csv(out_csv, index=False)
 
 
+CALSIM_FAMILY = "calsim_monthly"
+
+
+def trace_exit_entity(dir_m: Mosaic, acc_m: Mosaic, sub: pd.DataFrame,
+                      elev: pd.Series | None = None) -> pd.DataFrame:
+    """One entity without an outlet coordinate, exactly as main() traces uf_07:
+    every cell to where its path leaves the union of the entity's cell squares,
+    untraced cells at the entity's median traced length.  An entity with no
+    traced cell at all (never the case for uf_07) takes straight line x 1.5 to its
+    lowest cell (``elev``), the tier-2 convention of :func:`trace_cells_to_exit`."""
+    sub = sub.reset_index(drop=True)
+    m = 0.10
+    dirr, tr = dir_m.read(sub.lat.min() - m, sub.lat.max() + m,
+                          sub.lon.min() - m, sub.lon.max() + m)
+    exit_mask = np.zeros(dirr.shape, dtype=bool)
+    inv = ~tr
+    for cr in sub.itertuples():
+        c0, r0 = inv * (cr.lon - HALF, cr.lat + HALF)
+        c1, r1 = inv * (cr.lon + HALF, cr.lat - HALF)
+        exit_mask[max(int(r0), 0):int(r1) + 1,
+                  max(int(c0), 0):int(c1) + 1] = True
+    res = trace_entity(dirr, tr, sub, acc_m, None, exit_mask, None)
+    ok = res.flowlen_m.notna() & (res.method != "fallback")
+    if ok.any():
+        res.loc[~ok, "flowlen_m"] = res.flowlen_m[ok].median()
+    else:
+        e = sub["key"].map(elev).to_numpy()
+        j = int(np.nanargmin(e))
+        res["flowlen_m"] = haversine_m(sub.lat, sub.lon, sub.lat[j], sub.lon[j]) * 1.5
+    res["flowlen_m"] = res.flowlen_m.round(1)
+    return res
+
+
+def append_calsim(args) -> None:
+    """``--calsim-arcs``: trace the registry's calsim_monthly entities (no outlet:
+    exit-of-footprint, like uf_07) and append them to the existing store, whose
+    base rows are copied byte for byte (never re-traced).  Gate: uf_07 re-traced
+    with the same function must reproduce its stored rows exactly."""
+    ent = pd.read_csv(args.data_dir / "multifamily" / "entities.csv",
+                      dtype={"site_id": str})
+    cells = pd.read_csv(args.data_dir / "multifamily" / "entity_cells.csv")
+    cs = ent[ent["family"] == CALSIM_FAMILY]
+    assert len(cs) and cs["outlet_lat"].isna().all()
+    raw = args.out.read_bytes()
+    eol = b"\r\n" if raw.endswith(b"\r\n") else b"\n"
+    lines = raw[:-len(eol)].split(eol)
+    keep = [ln for ln in lines if not ln.startswith(b"cs_")]   # drop a previous append
+    base = pd.read_csv(args.out)
+    base = base[base["entity_id"].isin(ent.loc[ent["family"] != CALSIM_FAMILY, "entity_id"])]
+    want_base = cells[~cells["entity_id"].isin(cs["entity_id"])][["entity_id", "key"]]
+    assert len(keep) - 1 == len(base) == len(want_base)
+    assert (base[["entity_id", "key"]].to_numpy() == want_base.to_numpy()).all()
+    elev = pd.read_csv(args.data_dir / "region" / "soilveg_continuous.csv",
+                       usecols=["key", "dem_elev"]).set_index("key")["dem_elev"]
+    dir_m = Mosaic(args.tiles_dir, "DIR")
+    acc_m = Mosaic(args.tiles_dir, "ACC")
+    # gate: the exit-mode path reproduces uf_07's stored lengths exactly
+    u7 = trace_exit_entity(dir_m, acc_m, cells[cells.entity_id == "uf_07"], elev)
+    s7 = base[base.entity_id == "uf_07"].reset_index(drop=True)
+    assert (u7["key"].to_numpy() == s7["key"].to_numpy()).all()
+    assert np.array_equal(u7["flowlen_m"].to_numpy(), s7["flowlen_m"].to_numpy()) and \
+        (u7["method"].to_numpy() == s7["method"].to_numpy()).all(), "uf_07 not reproduced"
+    print(f"gate: uf_07 exit-mode trace reproduces its {len(s7)} stored rows exactly",
+          flush=True)
+    frames, rep = [], []
+    for e in cs.itertuples():
+        sub = cells[cells.entity_id == e.entity_id]
+        res = trace_exit_entity(dir_m, acc_m, sub, elev)
+        res.insert(0, "entity_id", e.entity_id)
+        n_ok = int((res.method != "fallback").sum())
+        fb_w = sub.loc[(res.method == "fallback").to_numpy(), "overlap_mi2"].sum()
+        rep.append((e.entity_id, len(sub), n_ok, 100 * fb_w / sub.overlap_mi2.sum()))
+        frames.append(res[["entity_id", "key", "flowlen_m", "method"]])
+    dir_m.close()
+    acc_m.close()
+    df = pd.concat(frames, ignore_index=True)
+    rep = pd.DataFrame(rep, columns=["entity_id", "n_cells", "n_traced", "fallback_wpct"])
+    want = cells[cells["entity_id"].isin(cs["entity_id"])][["entity_id", "key"]]
+    assert len(df) == len(want) and (df[["entity_id", "key"]].to_numpy()
+                                     == want.to_numpy()).all()
+    assert df.flowlen_m.notna().all() and (df.flowlen_m >= 0).all()
+    assert df.flowlen_m.max() < 7e5, df.flowlen_m.max()
+    w = want.merge(cells, on=["entity_id", "key"]).assign(method=df["method"].to_numpy())
+    share = w.loc[w.method == "fallback", "overlap_mi2"].sum() / w.overlap_mi2.sum()
+    print(f"calsim_monthly: {len(cs)} entities, {len(df)} rows, traced "
+          f"{int((df.method != 'fallback').sum())}; fallback weight share "
+          f"{100 * share:.1f}%; no traced cell: "
+          f"{rep.loc[rep.n_traced == 0, 'entity_id'].tolist()}")
+    print(rep.sort_values("fallback_wpct", ascending=False).head(8).to_string(index=False))
+    body = df.to_csv(index=False, header=False, lineterminator=eol.decode())
+    args.out.write_bytes(eol.join(keep) + eol + body.encode())
+    print(f"wrote {args.out}: {len(keep) - 1} base rows kept + {len(df)} calsim rows")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--data-dir", default=Path("data"), type=Path)
@@ -371,10 +470,17 @@ def main() -> None:
     ap.add_argument("--trace-cells", nargs=2, metavar=("CELLS_CSV", "OUT_CSV"), default=None,
                     help="exit-of-footprint mode for an arbitrary cell table (tier 2's "
                          "extrapolated arcs): trace CELLS_CSV, write OUT_CSV, and stop")
+    ap.add_argument("--calsim-arcs", action="store_true",
+                    help="trace only the registry's calsim_monthly entities (footprint "
+                         "exit, like uf_07) and append them to the existing --out store, "
+                         "keeping its base rows byte for byte")
     args = ap.parse_args()
 
     if args.trace_cells:
         trace_cells_to_exit(Path(args.trace_cells[0]), Path(args.trace_cells[1]), args.tiles_dir)
+        return
+    if args.calsim_arcs:
+        append_calsim(args)
         return
     if not args.only:  # test runs may not have complete local tiles yet
         ensure_tiles(args.tiles_dir)

@@ -1,0 +1,204 @@
+arc,region,status,sq_mi,has_polygon,has_series,method_class,residual,n_containing,containing_anchors,innermost_anchor,top_anchor,fu_systems,closure_group,closure_anchor,closure_excluded,duplicates_entity,usgs_training_gauge,reg_screen,record_months_listed,record_months,record_first,record_last,tier_listed,tier,tier_note,train_default
+I_ALD002,Sacramento,rim_arc,3.3370649331,True,True,gauged_extended_split,False,2,FU_FOLS;cdec_FOL,FU_FOLS,FU_FOLS,FOLS,FU_FOLS,calsim_unimpaired:FOLS,,,,False,0,0,,,E,E,,False
+I_ALD004,Sacramento,rim_arc,18.6571403474,True,True,gauged_extended_split,False,2,FU_FOLS;cdec_FOL,FU_FOLS,FU_FOLS,FOLS,FU_FOLS,calsim_unimpaired:FOLS,,,,False,0,0,,,E,E,,False
+I_ALMNR,Sacramento,rim_arc,355.493694935,True,True,complete_record,False,2,FU_OROV;cdec_ORO,FU_OROV,FU_OROV,OROV,FU_OROV,calsim_unimpaired:OROV,,,,False,672,672,1949-10,2015-09,A,A,,True
+I_ALOHA,Sacramento,rim_arc,3.43883618161,True,True,gauged_extended_split,False,2,FU_FOLS;cdec_FOL,FU_FOLS,FU_FOLS,FOLS,FU_FOLS,calsim_unimpaired:FOLS,,,,False,0,0,,,E,E,,False
+I_AMADR,San Joaquin,rim_arc,60.1788933909,True,True,gauged_extended_split,False,0,,,,,,,unanchored,,,False,0,0,,,E,E,,False
+I_ANG017,San Joaquin,rim_arc,2.25566313723,True,True,gauged_extended_split,False,2,FU_ST;cdec_NML,FU_ST,FU_ST,ST,FU_ST,calsim_unimpaired:ST,,,,False,0,0,,,E,E,,False
+I_ANT011,Sacramento,rim_arc,123.775993873,True,True,gauged_extended,False,1,uf_07,uf_07,uf_07,,uf_07,uf_monthly:7,,,11379000,False,312,312,1949-10,1975-09,A,A,,True
+I_ANTLP,Sacramento,rim_arc,70.9672749628,True,True,gauged_extended,False,2,FU_OROV;cdec_ORO,FU_OROV,FU_OROV,OROV,FU_OROV,calsim_unimpaired:OROV,,,,False,408,240,1963-10,1993-09,A,A,,True
+I_BANOS,San Joaquin,rim_arc,149.594871012,True,True,gauged_extended,False,0,,,,,,,unanchored,,,True,96,0,,,B,F,,False
+I_BCC014,Sacramento,rim_arc,72.1496586683,True,True,gauged_extended,False,1,uf_07,uf_07,uf_07,,uf_07,uf_monthly:7,,,,False,324,324,1949-10,1986-09,A,A,,True
+I_BCK040,San Joaquin,rim_arc,71.435415285,True,True,gauged_extended,False,0,,,,,,,unanchored,,,False,312,312,1989-10,2015-09,A,A,,True
+I_BCN010,Sacramento,rim_arc,73.5176290471,True,True,gauged_extended,False,3,FU_SRBB;uf_06;cdec_BND,FU_SRBB,FU_SRBB,SRBB,,,FU_SRBB:srbb_valley_node_holds_the_gap,,,False,96,12,1966-10,1967-09,A,A,,True
+I_BEARD,San Joaquin,rim_arc,12.992228426,True,True,by_difference_accretion,True,2,FU_ST;cdec_NML,FU_ST,FU_ST,ST,FU_ST,calsim_unimpaired:ST,,,,True,204,0,,,X,F,,False
+I_BLKBT,Sacramento,rim_arc,389.817891857,True,True,gauged_extended,False,1,uf_04,uf_04,uf_04,,uf_04,uf_monthly:4,,,,False,0,0,,,F,F,,False
+I_BOWMN,Sacramento,rim_arc,22.8581300354,True,True,gauged_extended_split,False,2,cdec_YRS;FU_YUBA,cdec_YRS,FU_YUBA,YUBA,FU_YUBA,calsim_unimpaired:YUBA,,,,False,0,0,,,E,E,,False
+I_BRC003,Sacramento,rim_arc,94.9552297083,True,True,gauged_extended_split,False,1,uf_03,uf_03,uf_03,,,,uf_03:lake_routed_anchor,,11451715,False,0,0,,,E,E,,False
+I_BRR023,Sacramento,rim_arc,105.591907451,True,True,gauged_extended_split,False,1,uf_10,uf_10,uf_10,,uf_10,uf_monthly:10,,,,False,0,0,,,E,E,,False
+I_BSH003,Sacramento,rim_arc,8.01461019792,True,True,gauged_extended_split,False,2,FU_FOLS;cdec_FOL,FU_FOLS,FU_FOLS,FOLS,FU_FOLS,calsim_unimpaired:FOLS,,,,False,0,0,,,E,E,,False
+I_BTC048,Sacramento,rim_arc,147.693507988,True,True,reservoir_mass_balance,False,1,uf_07,uf_07,uf_07,,uf_07,uf_monthly:7,,,,False,672,672,1949-10,2015-09,D,D,,False
+I_BTL006,Sacramento,rim_arc,360.368194618,True,True,gauged_extended,False,3,FU_SRBB;uf_06;cdec_BND,FU_SRBB,FU_SRBB,SRBB,,,FU_SRBB:srbb_valley_node_holds_the_gap,,,False,672,672,1949-10,2015-09,A,A,,True
+I_BTVLY,Sacramento,rim_arc,62.9378215702,True,True,gauged_extended_split,False,2,FU_OROV;cdec_ORO,FU_OROV,FU_OROV,OROV,FU_OROV,calsim_unimpaired:OROV,,,,False,0,0,,,E,E,,False
+I_BUCKS,Sacramento,rim_arc,28.5426705415,True,True,gauged_extended,False,2,FU_OROV;cdec_ORO,FU_OROV,FU_OROV,OROV,FU_OROV,calsim_unimpaired:OROV,,,,False,360,204,1998-10,2015-09,A,A,,True
+I_BUR005,San Joaquin,rim_arc,72.1427575124,True,True,gauged_extended,False,0,,,,,,,unanchored,,,True,312,312,1989-10,2015-09,B,B,,False
+I_BVC007,San Joaquin,rim_arc,29.5199122645,True,True,gauged_extended,False,2,FU_ST;cdec_NML,FU_ST,FU_ST,ST,FU_ST,calsim_unimpaired:ST,,,,False,308,300,1990-10,2015-09,A,A,,True
+I_CAP000,San Joaquin,rim_arc,47.3677845143,True,True,gauged_extended_split,False,0,,,,,,,unanchored,,,True,0,0,,,E,E,,False
+I_CAPLS,Sacramento,rim_arc,13.5972377226,True,True,gauged_extended,False,2,FU_FOLS;cdec_FOL,FU_FOLS,FU_FOLS,FOLS,FU_FOLS,calsim_unimpaired:FOLS,,,,False,396,396,1949-10,1992-09,A,A,,True
+I_CCH053,Sacramento,rim_arc,248.025211085,True,True,gauged_extended,False,1,uf_03,uf_03,uf_03,,,,uf_03:lake_routed_anchor,,,False,0,0,,,F,F,,False
+I_CFS001,San Joaquin,rim_arc,67.2646813002,True,True,gauged_extended,False,2,FU_ST;cdec_NML,FU_ST,FU_ST,ST,FU_ST,calsim_unimpaired:ST,,,11292500,False,408,408,1950-10,1994-09,A,A,,True
+I_CHC000,San Joaquin,rim_arc,186.861894178,True,True,gauged_extended_split,False,0,,,,,,,unanchored,,,True,0,0,,,E,E,,False
+I_CHW031,San Joaquin,rim_arc,30.3683615088,True,True,gauged_extended_split,False,0,,,,,,,unanchored,,,False,0,0,,,E,E,,False
+I_CLR011,Sacramento,rim_arc,28.3454815416,True,True,gauged_extended_split,False,3,FU_SRBB;uf_06;cdec_BND,FU_SRBB,FU_SRBB,SRBB,,,FU_SRBB:srbb_valley_node_holds_the_gap,,11372000,False,0,0,,,E,E,,False
+I_CLRLK,Sacramento,rim_arc,489.454785185,True,True,by_difference_accretion,True,1,uf_03,uf_03,uf_03,,,,uf_03:lake_routed_anchor,,,False,0,0,,,F,F,,False
+I_CLV026,San Joaquin,rim_arc,104.439795204,True,True,gauged_extended_split,False,0,,,,,,,unanchored,,,True,0,0,,,E,E,,False
+I_CMBIE,Sacramento,rim_arc,31.8448124247,True,True,gauged_extended_split,False,1,uf_10,uf_10,uf_10,,uf_10,uf_monthly:10,,,,False,0,0,,,E,E,,False
+I_CMCHE,San Joaquin,rim_arc,42.4021599839,True,True,gauged_extended_split,False,0,,,,,,,unanchored,,,False,0,0,,,E,E,,False
+I_CMP001,San Joaquin,rim_arc,15.7076840199,True,True,gauged_extended,False,2,uf_13;cdec_CSN,uf_13,uf_13,,uf_13,uf_monthly:13,,,,False,480,480,1954-10,2004-09,A,A,,True
+I_CMP014,San Joaquin,rim_arc,29.7308203078,True,True,gauged_extended,False,2,uf_13;cdec_CSN,uf_13,uf_13,,uf_13,uf_monthly:13,,,,False,84,84,1949-10,1956-09,A,A,,True
+I_CMPFW,Sacramento,rim_arc,25.0969974101,True,True,gauged_extended_split,False,1,uf_10,uf_10,uf_10,,uf_10,uf_monthly:10,,,,False,0,0,,,E,E,,False
+I_COL003,San Joaquin,rim_arc,20.6784256592,True,True,gauged_extended,False,1,cdec_MKM,cdec_MKM,cdec_MKM,,cdec_MKM,uf_monthly:14,,,11315000,False,672,672,1949-10,2015-09,A,A,,True
+I_COT033,San Joaquin,rim_arc,30.3173832183,True,True,gauged_extended_split,False,1,uf_21,uf_21,uf_21,,uf_21,uf_monthly:21,,,,False,0,0,,,E,E,,False
+I_COW014,Sacramento,rim_arc,384.0351176,True,True,gauged_extended_split,False,3,FU_SRBB;uf_06;cdec_BND,FU_SRBB,FU_SRBB,SRBB,,,FU_SRBB:srbb_valley_node_holds_the_gap,,11374000,False,0,0,,,E,E,,False
+I_CSM035,San Joaquin,rim_arc,476.361044335,True,True,complete_record,False,2,uf_13;cdec_CSN,uf_13,uf_13,,uf_13,uf_monthly:13,,,,False,672,672,1949-10,2015-09,A,A,,True
+I_CWD018,Sacramento,rim_arc,394.941946735,True,True,gauged_extended,False,3,FU_SRBB;uf_06;cdec_BND,FU_SRBB,FU_SRBB,SRBB,,,FU_SRBB:srbb_valley_node_holds_the_gap,,,False,61,48,1972-10,1986-09,A,A,,True
+I_CYN009,Sacramento,rim_arc,1.27797359812,True,True,proportioned_ungauged,False,2,FU_FOLS;cdec_FOL,FU_FOLS,FU_FOLS,FOLS,FU_FOLS,calsim_unimpaired:FOLS,,,,False,0,0,,,E,E,,False
+I_DAVIS,Sacramento,rim_arc,43.8743604741,True,True,gauged_extended,False,2,FU_OROV;cdec_ORO,FU_OROV,FU_OROV,OROV,FU_OROV,calsim_unimpaired:OROV,,,,False,466,94,1966-12,1975-09,A,A,,True
+I_DBC024,San Joaquin,rim_arc,31.9508949143,True,True,gauged_extended_split,False,1,uf_21,uf_21,uf_21,,uf_21,uf_monthly:21,,,,False,0,0,,,E,E,,False
+I_DCC010,Sacramento,rim_arc,9.70096734654,True,True,gauged_extended,False,2,FU_FOLS;cdec_FOL,FU_FOLS,FU_FOLS,FOLS,FU_FOLS,calsim_unimpaired:FOLS,,,11427700,False,540,540,1960-10,2015-09,A,A,,True
+I_DCM027,San Joaquin,rim_arc,39.0293138661,True,True,gauged_extended,False,0,,,,,,,unanchored,,,False,192,192,1966-10,1992-09,A,A,,True
+I_DCT050,San Joaquin,rim_arc,65.4620551779,True,True,gauged_extended_split,False,0,,,,,,,unanchored,,,False,0,0,,,E,E,,False
+I_DED044,San Joaquin,rim_arc,42.6065177606,True,True,gauged_extended_split,False,0,,,,,,,unanchored,,,False,0,0,,,E,E,,False
+I_DEE023,San Joaquin,rim_arc,74.7954339992,True,True,gauged_extended,False,0,,,,,,,unanchored,,,False,180,168,1960-10,1975-09,A,A,,True
+I_DER001,Sacramento,rim_arc,28.5369717379,True,True,by_difference_accretion,True,1,FU_YUBA,FU_YUBA,FU_YUBA,YUBA,FU_YUBA,calsim_unimpaired:YUBA,,,,False,672,672,1949-10,2015-09,C,C,,False
+I_DER004,Sacramento,rim_arc,35.6402921871,True,True,gauged_extended_split,False,1,FU_YUBA,FU_YUBA,FU_YUBA,YUBA,FU_YUBA,calsim_unimpaired:YUBA,,,,False,0,0,,,E,E,,False
+I_DHC021,Sacramento,rim_arc,96.7029423067,True,True,proportioned_ungauged,False,0,,,,,,,unanchored,,,False,0,0,,,E,E,,False
+I_DONLL,San Joaquin,rim_arc,112.93927312,True,True,by_difference_accretion,True,2,FU_ST;cdec_NML,FU_ST,FU_ST,ST,FU_ST,calsim_unimpaired:ST,,,,False,595,384,1972-10,2015-09,C,C,,False
+I_DPC008,San Joaquin,rim_arc,72.7753538063,True,True,gauged_extended,False,0,,,,,,,unanchored,,11274630,True,480,480,1965-10,2015-09,B,B,,False
+I_DRC012,Sacramento,rim_arc,208.997747437,True,True,complete_record,False,1,uf_07,uf_07,uf_07,,uf_07,uf_monthly:7,,,,False,672,672,1949-10,2015-09,A,A,,True
+I_DSC035,San Joaquin,rim_arc,158.898955941,True,True,gauged_extended_split,False,0,,,,,,,unanchored,,,False,0,0,,,E,E,,False
+I_EBF001,Sacramento,rim_arc,955.672466225,True,True,gauged_extended,False,2,FU_OROV;cdec_ORO,FU_OROV,FU_OROV,OROV,FU_OROV,calsim_unimpaired:OROV,,,,False,238,144,1950-10,1975-09,A,A,,True
+I_ECHOL,,rim_arc,4.75103086469,True,True,,False,2,FU_FOLS;cdec_FOL,FU_FOLS,FU_FOLS,FOLS,FU_FOLS,calsim_unimpaired:FOLS,,,,,0,0,,,X,X,not_in_derivation,False
+I_ELD027,Sacramento,rim_arc,92.824593101,True,True,gauged_extended,False,0,,,,,,,unanchored,,,False,672,444,1949-10,1996-09,A,A,,True
+I_ELENR,San Joaquin,rim_arc,109.4475973122,True,True,reservoir_mass_balance,False,2,FU_TU;cdec_TLG,FU_TU,FU_TU,TU,FU_TU,calsim_unimpaired:TU,,,,False,540,540,1960-10,2015-09,D,D,,False
+I_ENGLB,Sacramento,rim_arc,135.508215946,True,True,gauged_extended,False,2,cdec_YRS;FU_YUBA,cdec_YRS,FU_YUBA,YUBA,FU_YUBA,calsim_unimpaired:YUBA,,,,True,0,0,,,F,F,,False
+I_EPARK,Sacramento,rim_arc,97.6343125206,True,True,reservoir_mass_balance,False,1,uf_04,uf_04,uf_04,,uf_04,uf_monthly:4,,,,False,0,0,,,D,D,,False
+I_ESTMN,San Joaquin,rim_arc,234.811659592,True,True,reservoir_mass_balance,False,1,uf_20,uf_20,uf_20,,uf_20,uf_monthly:20,,uf_20,,False,0,0,,,D,D,,False
+I_FOLSM,Sacramento,rim_arc,193.996983146,True,True,by_difference_accretion,True,2,FU_FOLS;cdec_FOL,FU_FOLS,FU_FOLS,FOLS,FU_FOLS,calsim_unimpaired:FOLS,,,,True,0,0,,,F,F,,False
+I_FRDYC,Sacramento,rim_arc,31.626772939,True,True,gauged_extended,False,2,cdec_YRS;FU_YUBA,cdec_YRS,FU_YUBA,YUBA,FU_YUBA,calsim_unimpaired:YUBA,,,,False,471,468,1966-10,2015-09,A,A,,True
+I_FRMAN,Sacramento,rim_arc,81.1801970227,True,True,gauged_extended,False,2,FU_OROV;cdec_ORO,FU_OROV,FU_OROV,OROV,FU_OROV,calsim_unimpaired:OROV,,,11394500,False,648,480,1965-10,2015-09,A,A,,True
+I_FRMDW,Sacramento,rim_arc,47.0378382962,True,True,gauged_extended,False,2,FU_FOLS;cdec_FOL,FU_FOLS,FU_FOLS,FOLS,FU_FOLS,calsim_unimpaired:FOLS,,,,False,480,468,1965-10,2015-09,A,A,,True
+I_FRNCH,Sacramento,rim_arc,4.72906279714,True,True,gauged_extended_split,False,2,cdec_YRS;FU_YUBA,cdec_YRS,FU_YUBA,YUBA,FU_YUBA,calsim_unimpaired:YUBA,,,,False,0,0,,,E,E,,False
+I_FRS046,San Joaquin,rim_arc,45.8220529924,True,True,gauged_extended_split,False,1,uf_21,uf_21,uf_21,,uf_21,uf_monthly:21,,,,False,0,0,,,E,E,,False
+I_FSL012,San Joaquin,no_polygon,,False,True,other,False,0,,,,,,,unanchored,,,,0,0,,,F,F,,False
+I_GERLE,Sacramento,rim_arc,22.6793716999,True,True,gauged_extended_split,False,2,FU_FOLS;cdec_FOL,FU_FOLS,FU_FOLS,FOLS,FU_FOLS,calsim_unimpaired:FOLS,,,,True,0,0,,,E,E,,False
+I_GRZ012,San Joaquin,rim_arc,54.2953535256,True,True,gauged_extended_split,False,0,,,,,,,unanchored,,,True,0,0,,,E,E,,False
+I_GZL009,Sacramento,rim_arc,13.689701561,True,True,gauged_extended,False,2,FU_OROV;cdec_ORO,FU_OROV,FU_OROV,OROV,FU_OROV,calsim_unimpaired:OROV,,,,False,360,264,1993-10,2015-09,A,A,,True
+I_HHOLE,Sacramento,rim_arc,80.9806008299,True,True,gauged_extended,False,2,FU_FOLS;cdec_FOL,FU_FOLS,FU_FOLS,FOLS,FU_FOLS,calsim_unimpaired:FOLS,,,,False,480,480,1965-10,2015-09,A,A,,True
+I_HNSLY,San Joaquin,rim_arc,235.594591668,True,True,gauged_extended,False,1,uf_21,uf_21,uf_21,,uf_21,uf_monthly:21,,,,False,0,0,,,F,F,,False
+I_HON021,Sacramento,rim_arc,30.5528396547,True,True,gauged_extended,False,0,,,,,,,unanchored,,,False,312,312,1950-10,1986-09,A,A,,True
+I_HTCHY,San Joaquin,rim_arc,526.2135664093,True,True,reservoir_mass_balance,False,2,FU_TU;cdec_TLG,FU_TU,FU_TU,TU,FU_TU,calsim_unimpaired:TU,,,,False,456,456,1967-10,2015-09,D,D,,False
+I_ICEHS,Sacramento,rim_arc,27.2920439684,True,True,gauged_extended,False,2,FU_FOLS;cdec_FOL,FU_FOLS,FU_FOLS,FOLS,FU_FOLS,calsim_unimpaired:FOLS,,,,False,672,672,1949-10,2015-09,A,A,,True
+I_INDVL,Sacramento,rim_arc,120.931192953,True,True,by_difference_accretion,True,1,uf_03,uf_03,uf_03,,,,uf_03:lake_routed_anchor,,,False,0,0,,,F,F,,False
+I_ING008,San Joaquin,rim_arc,62.2512305176,True,True,gauged_extended_split,False,0,,,,,,,unanchored,,,True,0,0,,,E,E,,False
+I_JBP006,San Joaquin,no_polygon,,False,True,other,False,0,,,,,,,unanchored,,,,672,672,1949-10,2015-09,X,X,other,False
+I_JKSMD,Sacramento,rim_arc,37.1519493027,True,True,gauged_extended,False,2,cdec_YRS;FU_YUBA,cdec_YRS,FU_YUBA,YUBA,FU_YUBA,calsim_unimpaired:YUBA,,,,False,504,504,1963-10,2015-09,A,A,,True
+I_JNKSN,San Joaquin,rim_arc,17.3137755283,True,True,gauged_extended,False,2,uf_13;cdec_CSN,uf_13,uf_13,,uf_13,uf_monthly:13,,,,False,72,72,1949-10,1955-09,A,A,,True
+I_LCBRF,Sacramento,rim_arc,17.5034310232,True,True,gauged_extended,False,2,cdec_YRS;FU_YUBA,cdec_YRS,FU_YUBA,YUBA,FU_YUBA,calsim_unimpaired:YUBA,,,,False,0,0,,,F,F,,False
+I_LCC038,Sacramento,rim_arc,25.5196856026,True,True,gauged_extended,False,1,uf_07,uf_07,uf_07,,uf_07,uf_monthly:7,,,,False,560,324,1959-10,1996-09,A,A,,True
+I_LDC029,Sacramento,rim_arc,33.546785214,True,True,proportioned_ungauged,False,1,uf_07,uf_07,uf_07,,uf_07,uf_monthly:7,,,,False,0,0,,,E,E,,False
+I_LGRSV,Sacramento,rim_arc,25.669838468,True,True,gauged_extended,False,2,FU_OROV;cdec_ORO,FU_OROV,FU_OROV,OROV,FU_OROV,calsim_unimpaired:OROV,,,,True,504,504,1963-10,2015-09,B,B,,False
+I_LJC022,San Joaquin,rim_arc,200.938181195,True,True,gauged_extended,False,0,,,,,,,unanchored,,,False,672,648,1951-10,2015-09,A,A,,True
+I_LKVLY,Sacramento,rim_arc,4.36066723759,True,True,proportioned_ungauged,False,2,FU_FOLS;cdec_FOL,FU_FOLS,FU_FOLS,FOLS,FU_FOLS,calsim_unimpaired:FOLS,,,,False,0,0,,,E,E,,False
+I_LLOYD,San Joaquin,rim_arc,115.601148771,True,True,reservoir_mass_balance,False,2,FU_TU;cdec_TLG,FU_TU,FU_TU,TU,FU_TU,calsim_unimpaired:TU,,,,False,575,575,1957-11,2015-09,D,D,,False
+I_LNG012,Sacramento,rim_arc,7.42642391296,True,True,gauged_extended,False,2,FU_FOLS;cdec_FOL,FU_FOLS,FU_FOLS,FOLS,FU_FOLS,calsim_unimpaired:FOLS,,,,False,192,192,1966-10,1992-09,A,A,,True
+I_LOONL,Sacramento,rim_arc,8.0314318553,True,True,gauged_extended,False,2,FU_FOLS;cdec_FOL,FU_FOLS,FU_FOLS,FOLS,FU_FOLS,calsim_unimpaired:FOLS,,,,False,516,516,1962-10,2015-09,A,A,,True
+I_LOSVQ,San Joaquin,rim_arc,18.6866888749,True,True,gauged_extended,False,0,,,,,,,unanchored,,,True,0,0,,,F,F,,False
+I_LPC007,San Joaquin,rim_arc,81.9149254051,True,True,gauged_extended_split,False,0,,,,,,,unanchored,,,True,0,0,,,E,E,,False
+I_LRB004,Sacramento,rim_arc,5.85396271009,True,True,gauged_extended,False,2,FU_FOLS;cdec_FOL,FU_FOLS,FU_FOLS,FOLS,FU_FOLS,calsim_unimpaired:FOLS,,,,False,300,300,1990-10,2015-09,A,A,,True
+I_LWSTN,Sacramento,rim_arc,26.1407616861,True,True,gauged_extended,False,0,,,,,,,unanchored,,,True,0,0,,,F,F,,False
+I_LYONS,San Joaquin,rim_arc,18.6824052239,True,True,by_difference_accretion,True,2,FU_ST;cdec_NML,FU_ST,FU_ST,ST,FU_ST,calsim_unimpaired:ST,,,,True,672,672,1949-10,2015-09,X,X,by_difference_fails_screen,False
+I_MCD055,San Joaquin,rim_arc,22.928904448,True,True,reservoir_mass_balance,False,0,,,,,,,unanchored,,,False,0,0,,,D,D,,False
+I_MCLRE,San Joaquin,rim_arc,1036.0761981327,True,True,reservoir_mass_balance,False,2,FU_ME;cdec_MRC,FU_ME,FU_ME,ME,FU_ME,calsim_unimpaired:ME,,cdec_MRC,,False,0,0,,,D,D,,False
+I_MERLC,Sacramento,rim_arc,71.6025363333,True,True,gauged_extended,False,0,,,,,,,unanchored,,,False,0,0,,,F,F,,False
+I_MFA001,Sacramento,rim_arc,93.4866010393,True,True,gauged_extended_split,False,2,FU_FOLS;cdec_FOL,FU_FOLS,FU_FOLS,FOLS,FU_FOLS,calsim_unimpaired:FOLS,,,11433300;11433500,True,0,0,,,E,E,,False
+I_MFA023,Sacramento,rim_arc,4.60564481899,True,True,by_difference_accretion,True,2,FU_FOLS;cdec_FOL,FU_FOLS,FU_FOLS,FOLS,FU_FOLS,calsim_unimpaired:FOLS,,,11433300,True,564,564,1958-10,2015-09,X,X,by_difference_fails_screen,False
+I_MFA025,Sacramento,rim_arc,141.9181601903,True,True,gauged_extended_split,False,2,FU_FOLS;cdec_FOL,FU_FOLS,FU_FOLS,FOLS,FU_FOLS,calsim_unimpaired:FOLS,,,11433300,True,0,0,,,E,E,,False
+I_MFA036,Sacramento,rim_arc,32.0777236666,True,True,gauged_extended,False,2,FU_FOLS;cdec_FOL,FU_FOLS,FU_FOLS,FOLS,FU_FOLS,calsim_unimpaired:FOLS,,,,False,480,468,1965-10,2015-09,A,A,,True
+I_MFF019,Sacramento,rim_arc,476.008562915,True,True,by_difference_accretion,True,2,FU_OROV;cdec_ORO,FU_OROV,FU_OROV,OROV,FU_OROV,calsim_unimpaired:OROV,,,11394500,False,648,300,1951-10,1986-09,C,C,,False
+I_MFF087,Sacramento,rim_arc,460.211668108,True,True,gauged_extended_split,False,2,FU_OROV;cdec_ORO,FU_OROV,FU_OROV,OROV,FU_OROV,calsim_unimpaired:OROV,,,11394500,False,0,0,,,E,E,,False
+I_MFM008,San Joaquin,rim_arc,94.8846631828,True,True,complete_record,False,1,cdec_MKM,cdec_MKM,cdec_MKM,,cdec_MKM,uf_monthly:14,,,,False,672,672,1949-10,2015-09,A,A,,True
+I_MFS013,San Joaquin,rim_arc,22.9136452749,True,True,by_difference_accretion,True,2,FU_ST;cdec_NML,FU_ST,FU_ST,ST,FU_ST,calsim_unimpaired:ST,,,,True,204,0,,,X,F,,False
+I_MFS022,San Joaquin,rim_arc,65.8988709257,True,True,by_difference_accretion,True,2,FU_ST;cdec_NML,FU_ST,FU_ST,ST,FU_ST,calsim_unimpaired:ST,,,,False,595,384,1972-10,2015-09,C,C,,False
+I_MFS047,San Joaquin,rim_arc,23.0889626821,True,True,by_difference_accretion,True,2,FU_ST;cdec_NML,FU_ST,FU_ST,ST,FU_ST,calsim_unimpaired:ST,,,,False,672,672,1949-10,2015-09,C,C,,False
+I_MFY013,Sacramento,rim_arc,107.718585653,True,True,reservoir_mass_balance,False,2,cdec_YRS;FU_YUBA,cdec_YRS,FU_YUBA,YUBA,FU_YUBA,calsim_unimpaired:YUBA,,,,False,444,444,1968-10,2015-09,D,D,,False
+I_MIL003,San Joaquin,rim_arc,12.3116336358,True,True,gauged_extended_split,False,2,FU_ST;cdec_NML,FU_ST,FU_ST,ST,FU_ST,calsim_unimpaired:ST,,,,False,0,0,,,E,E,,False
+I_MLC006,Sacramento,rim_arc,131.950406359,True,True,gauged_extended,False,1,uf_07,uf_07,uf_07,,uf_07,uf_monthly:7,,,,False,672,672,1949-10,2015-09,A,A,,True
+I_MLRTN,San Joaquin,rim_arc,1637.79925007,True,True,operations_model,False,2,FU_SJ;cdec_MIL,FU_SJ,FU_SJ,SJ,FU_SJ,calsim_unimpaired:SJ,,cdec_MIL,,False,672,672,1949-10,2015-09,X,X,operations_model,False
+I_MNS000,Sacramento,rim_arc,292.266972649,True,True,proportioned_ungauged,False,1,uf_07,uf_07,uf_07,,uf_07,uf_monthly:7,,,,True,0,0,,,E,E,,False
+I_MOK079,San Joaquin,rim_arc,56.9074629542,True,True,reservoir_mass_balance,False,1,cdec_MKM,cdec_MKM,cdec_MKM,,cdec_MKM,uf_monthly:14,,,,False,672,672,1949-10,2015-09,D,D,,False
+I_MPS038,San Joaquin,rim_arc,108.890848206,True,True,gauged_extended,False,0,,,,,,,unanchored,,,False,312,240,1989-10,2009-09,A,A,,True
+I_MSH015,San Joaquin,rim_arc,87.2765390898,True,True,gauged_extended_split,False,0,,,,,,,unanchored,,11337500,False,0,0,,,E,E,,False
+I_MTMDW,Sacramento,rim_arc,153.83242463,True,True,complete_record,False,2,FU_OROV;cdec_ORO,FU_OROV,FU_OROV,OROV,FU_OROV,calsim_unimpaired:OROV,,,,True,672,672,1949-10,2015-09,B,B,,False
+I_NBLDB,Sacramento,rim_arc,189.17083045,True,True,gauged_extended,False,2,cdec_YRS;FU_YUBA,cdec_YRS,FU_YUBA,YUBA,FU_YUBA,calsim_unimpaired:YUBA,,,,False,0,0,,,F,F,,False
+I_NFA016,Sacramento,rim_arc,14.507347798,True,True,proportioned_ungauged,False,2,FU_FOLS;cdec_FOL,FU_FOLS,FU_FOLS,FOLS,FU_FOLS,calsim_unimpaired:FOLS,,,,False,0,0,,,E,E,,False
+I_NFA022,Sacramento,rim_arc,145.136220173,True,True,proportioned_ungauged,False,2,FU_FOLS;cdec_FOL,FU_FOLS,FU_FOLS,FOLS,FU_FOLS,calsim_unimpaired:FOLS,,,,False,0,0,,,E,E,,False
+I_NFA054,Sacramento,rim_arc,185.406364803,True,True,proportioned_ungauged,False,2,FU_FOLS;cdec_FOL,FU_FOLS,FU_FOLS,FOLS,FU_FOLS,calsim_unimpaired:FOLS,,,,False,0,0,,,E,E,,False
+I_NFF029,Sacramento,rim_arc,309.586475883,True,True,by_difference_accretion,True,2,FU_OROV;cdec_ORO,FU_OROV,FU_OROV,OROV,FU_OROV,calsim_unimpaired:OROV,,,,False,672,672,1949-10,2015-09,C,C,,False
+I_NFM010,San Joaquin,rim_arc,92.4677112424,True,True,by_difference_accretion,True,1,cdec_MKM,cdec_MKM,cdec_MKM,,cdec_MKM,uf_monthly:14,,,,True,192,192,1985-10,2001-09,X,X,by_difference_fails_screen,False
+I_NFS005,San Joaquin,rim_arc,5.97190782342,True,True,by_difference_accretion,True,2,FU_ST;cdec_NML,FU_ST,FU_ST,ST,FU_ST,calsim_unimpaired:ST,,,11294500,False,672,300,1990-10,2015-09,C,C,,False
+I_NFS009,San Joaquin,rim_arc,92.1647223165,True,True,by_difference_accretion,True,2,FU_ST;cdec_NML,FU_ST,FU_ST,ST,FU_ST,calsim_unimpaired:ST,,,11294500,False,672,672,1949-10,2015-09,C,C,,False
+I_NFS033,San Joaquin,rim_arc,28.4436447487,True,True,gauged_extended,False,2,FU_ST;cdec_NML,FU_ST,FU_ST,ST,FU_ST,calsim_unimpaired:ST,,,,False,636,636,1952-10,2015-09,A,A,,True
+I_NFY029,Sacramento,rim_arc,250.183229094,True,True,gauged_extended,False,2,cdec_YRS;FU_YUBA,cdec_YRS,FU_YUBA,YUBA,FU_YUBA,calsim_unimpaired:YUBA,,,,False,672,672,1949-10,2015-09,A,A,,True
+I_NHGAN,San Joaquin,rim_arc,361.610671554,True,True,reservoir_mass_balance,False,1,cdec_NHG,cdec_NHG,cdec_NHG,,cdec_NHG,uf_monthly:15,,cdec_NHG,,False,504,504,1963-10,2015-09,D,D,,False
+I_NLC003,Sacramento,rim_arc,3.56226889426,True,True,gauged_extended_split,False,2,FU_FOLS;cdec_FOL,FU_FOLS,FU_FOLS,FOLS,FU_FOLS,calsim_unimpaired:FOLS,,,,False,0,0,,,E,E,,False
+I_NMA003,Sacramento,rim_arc,88.6991249531,True,True,gauged_extended,False,2,FU_FOLS;cdec_FOL,FU_FOLS,FU_FOLS,FOLS,FU_FOLS,calsim_unimpaired:FOLS,,,11433260,False,120,120,1965-10,1975-09,A,A,,True
+I_NNA013,Sacramento,rim_arc,4.40290834774,True,True,proportioned_ungauged,False,2,FU_FOLS;cdec_FOL,FU_FOLS,FU_FOLS,FOLS,FU_FOLS,calsim_unimpaired:FOLS,,,,False,0,0,,,E,E,,False
+I_OGN005,Sacramento,rim_arc,29.0862704328,True,True,gauged_extended,False,2,cdec_YRS;FU_YUBA,cdec_YRS,FU_YUBA,YUBA,FU_YUBA,calsim_unimpaired:YUBA,,,,False,445,445,1968-09,2015-09,A,A,,True
+I_ORG000,San Joaquin,rim_arc,112.587492611,True,True,gauged_extended_split,False,0,,,,,,,unanchored,,,True,0,0,,,E,E,,False
+I_OROVL,Sacramento,rim_arc,311.880023373,True,True,by_difference_accretion,True,2,FU_OROV;cdec_ORO,FU_OROV,FU_OROV,OROV,FU_OROV,calsim_unimpaired:OROV,,,,True,0,0,,,F,F,,False
+I_ORT014,San Joaquin,rim_arc,141.306704127,True,True,gauged_extended,False,0,,,,,,,unanchored,,11274500,True,672,672,1949-10,2015-09,B,B,,False
+I_OWN040,San Joaquin,rim_arc,25.7269042283,True,True,gauged_extended,False,0,,,,,,,unanchored,,,False,312,312,1989-10,2015-09,A,A,,True
+I_PARDE,San Joaquin,rim_arc,33.6541263259,True,True,gauged_extended_split,False,0,,,,,,,unanchored,,,False,0,0,,,E,E,,False
+I_PCRST,San Joaquin,rim_arc,27.1802698741,True,True,gauged_extended,False,2,FU_ST;cdec_NML,FU_ST,FU_ST,ST,FU_ST,calsim_unimpaired:ST,,,,False,672,672,1949-10,2015-09,A,A,,True
+I_PEDRO,San Joaquin,rim_arc,780.3108621645,True,True,gauged_extended,False,2,FU_TU;cdec_TLG,FU_TU,FU_TU,TU,FU_TU,calsim_unimpaired:TU,,,,False,0,0,,,F,F,,False
+I_PLC007,Sacramento,rim_arc,4.03620567777,True,True,gauged_extended_split,False,2,FU_FOLS;cdec_FOL,FU_FOLS,FU_FOLS,FOLS,FU_FOLS,calsim_unimpaired:FOLS,,,,False,0,0,,,E,E,,False
+I_PLM001,Sacramento,rim_arc,7.03359170139,True,True,gauged_extended,False,2,FU_FOLS;cdec_FOL,FU_FOLS,FU_FOLS,FOLS,FU_FOLS,calsim_unimpaired:FOLS,,,,False,0,0,,,F,F,,False
+I_PTH070,Sacramento,rim_arc,567.457149998,True,True,gauged_extended,False,1,uf_02,uf_02,uf_02,,uf_02,uf_monthly:2,,uf_02,,False,0,0,,,F,F,,False
+I_PYN001,Sacramento,rim_arc,101.921331719,True,True,gauged_extended_split,False,0,,,,,,,unanchored,,,False,0,0,,,E,E,,False
+I_PYR001,Sacramento,rim_arc,5.31118515482,True,True,gauged_extended_split,False,2,FU_FOLS;cdec_FOL,FU_FOLS,FU_FOLS,FOLS,FU_FOLS,calsim_unimpaired:FOLS,,,,False,0,0,,,E,E,,False
+I_QNT005,San Joaquin,rim_arc,55.0372085535,True,True,gauged_extended_split,False,0,,,,,,,unanchored,,,True,0,0,,,E,E,,False
+I_RCK001,Sacramento,rim_arc,72.9349251115,True,True,gauged_extended,False,2,FU_FOLS;cdec_FOL,FU_FOLS,FU_FOLS,FOLS,FU_FOLS,calsim_unimpaired:FOLS,,,,False,264,264,1986-10,2008-09,A,A,,True
+I_RLIEF,San Joaquin,rim_arc,24.292465043,True,True,gauged_extended,False,2,FU_ST;cdec_NML,FU_ST,FU_ST,ST,FU_ST,calsim_unimpaired:ST,,,,False,672,672,1949-10,2015-09,A,A,,True
+I_RLLNS,Sacramento,rim_arc,103.682747844,True,True,by_difference_accretion,True,1,uf_10,uf_10,uf_10,,uf_10,uf_monthly:10,,,,False,0,0,,,F,F,,False
+I_RUB002,Sacramento,no_polygon,,False,True,gauged_extended,False,2,FU_FOLS;cdec_FOL,FU_FOLS,FU_FOLS,FOLS,FU_FOLS,calsim_unimpaired:FOLS,,,,,204,204,1958-10,1975-09,X,X,own_gauge_unscreened,False
+I_RUB047,Sacramento,rim_arc,26.4876926074,True,True,gauged_extended,False,2,FU_FOLS;cdec_FOL,FU_FOLS,FU_FOLS,FOLS,FU_FOLS,calsim_unimpaired:FOLS,,,,False,288,288,1991-10,2015-09,A,A,,True
+I_RVPHB,Sacramento,rim_arc,7.59692364845,True,True,gauged_extended_split,False,2,FU_OROV;cdec_ORO,FU_OROV,FU_OROV,OROV,FU_OROV,calsim_unimpaired:OROV,,,,False,0,0,,,E,E,,False
+I_SCOTF,Sacramento,rim_arc,14.5280311817,True,True,gauged_extended_split,False,2,cdec_YRS;FU_YUBA,cdec_YRS,FU_YUBA,YUBA,FU_YUBA,calsim_unimpaired:YUBA,,,,True,0,0,,,E,E,,False
+I_SCW008,Sacramento,rim_arc,372.17399023,True,True,reservoir_mass_balance,False,3,FU_SRBB;uf_06;cdec_BND,FU_SRBB,FU_SRBB,SRBB,,,FU_SRBB:srbb_valley_node_holds_the_gap,,,False,672,672,1949-10,2015-09,D,D,,False
+I_SFA030,Sacramento,rim_arc,31.5416976429,True,True,by_difference_accretion,True,2,FU_FOLS;cdec_FOL,FU_FOLS,FU_FOLS,FOLS,FU_FOLS,calsim_unimpaired:FOLS,,,,True,494,492,1964-10,2015-09,X,X,by_difference_fails_screen,False
+I_SFA040,Sacramento,rim_arc,99.2697638745,True,True,gauged_extended,False,2,FU_FOLS;cdec_FOL,FU_FOLS,FU_FOLS,FOLS,FU_FOLS,calsim_unimpaired:FOLS,,,,True,672,600,1949-10,2015-09,B,B,,False
+I_SFA066,Sacramento,rim_arc,67.4375224867,True,True,gauged_extended_split,False,2,FU_FOLS;cdec_FOL,FU_FOLS,FU_FOLS,FOLS,FU_FOLS,calsim_unimpaired:FOLS,,,,False,0,0,,,E,E,,False
+I_SFA076,Sacramento,rim_arc,39.5115212214,True,True,gauged_extended_split,False,2,FU_FOLS;cdec_FOL,FU_FOLS,FU_FOLS,FOLS,FU_FOLS,calsim_unimpaired:FOLS,,,,False,0,0,,,E,E,,False
+I_SFD003,Sacramento,rim_arc,5.67754980116,True,True,gauged_extended_split,False,2,cdec_YRS;FU_YUBA,cdec_YRS,FU_YUBA,YUBA,FU_YUBA,calsim_unimpaired:YUBA,,,,True,0,0,,,E,E,,False
+I_SFF008,Sacramento,rim_arc,24.5213843918,True,True,gauged_extended_split,False,2,FU_OROV;cdec_ORO,FU_OROV,FU_OROV,OROV,FU_OROV,calsim_unimpaired:OROV,,,,True,0,0,,,E,E,,False
+I_SFF011,Sacramento,rim_arc,57.9016624919,True,True,gauged_extended_split,False,2,FU_OROV;cdec_ORO,FU_OROV,FU_OROV,OROV,FU_OROV,calsim_unimpaired:OROV,,,,True,0,0,,,E,E,,False
+I_SFM005,San Joaquin,rim_arc,64.0549020101,True,True,gauged_extended,False,1,cdec_MKM,cdec_MKM,cdec_MKM,,cdec_MKM,uf_monthly:14,,,11318500,False,672,672,1949-10,2015-09,A,A,,True
+I_SFR006,Sacramento,rim_arc,15.2121235855,True,True,gauged_extended_split,False,2,FU_FOLS;cdec_FOL,FU_FOLS,FU_FOLS,FOLS,FU_FOLS,calsim_unimpaired:FOLS,,,,False,0,0,,,E,E,,False
+I_SFS030,San Joaquin,rim_arc,3.33169382176,True,True,by_difference_accretion,True,2,FU_ST;cdec_NML,FU_ST,FU_ST,ST,FU_ST,calsim_unimpaired:ST,,,,True,672,672,1949-10,2015-09,X,X,by_difference_fails_screen,False
+I_SFS033,San Joaquin,rim_arc,17.9306459864,True,True,by_difference_accretion,True,2,FU_ST;cdec_NML,FU_ST,FU_ST,ST,FU_ST,calsim_unimpaired:ST,,,,False,672,672,1949-10,2015-09,C,C,,False
+I_SFY007,Sacramento,rim_arc,146.645751024,True,True,by_difference_accretion,True,2,cdec_YRS;FU_YUBA,cdec_YRS,FU_YUBA,YUBA,FU_YUBA,calsim_unimpaired:YUBA,,,,False,557,552,1959-10,2015-09,C,C,,False
+I_SFY048,Sacramento,rim_arc,54.2431944696,True,True,gauged_extended,False,2,cdec_YRS;FU_YUBA,cdec_YRS,FU_YUBA,YUBA,FU_YUBA,calsim_unimpaired:YUBA,,,11414000,False,660,660,1949-10,2014-09,A,A,,True
+I_SGRGE,Sacramento,rim_arc,257.48496143,True,True,reservoir_mass_balance,False,1,uf_04,uf_04,uf_04,,uf_04,uf_monthly:4,,,,False,0,0,,,D,D,,False
+I_SHSTA,Sacramento,rim_arc,6588.45234035,True,True,reservoir_mass_balance,False,5,FU_SHAS;cdec_SHA;FU_SRBB;uf_06;cdec_BND,FU_SHAS,FU_SRBB,SHAS;SRBB,FU_SHAS,calsim_unimpaired:SHAS,,cdec_SHA,,False,0,0,,,D,D,,False
+I_SILVR,Sacramento,rim_arc,15.044219396,True,True,gauged_extended,False,2,FU_FOLS;cdec_FOL,FU_FOLS,FU_FOLS,FOLS,FU_FOLS,calsim_unimpaired:FOLS,,,,False,672,672,1949-10,2015-09,A,A,,True
+I_SJR258,San Joaquin,excluded_below_rim,79.8115118966,True,True,gauged_extended_split,False,0,,,,,,,unanchored,,,,0,0,,,E,E,,False
+I_SJR265,San Joaquin,excluded_below_rim,36.0441292012,True,True,gauged_extended,False,0,,,,,,,unanchored,,,,24,24,1949-10,1951-09,X,X,own_gauge_unscreened,False
+I_SLC003,Sacramento,rim_arc,7.05098842626,True,True,gauged_extended_split,False,2,FU_FOLS;cdec_FOL,FU_FOLS,FU_FOLS,FOLS,FU_FOLS,calsim_unimpaired:FOLS,,,,False,0,0,,,E,E,,False
+I_SLF009,Sacramento,rim_arc,45.1471686865,True,True,gauged_extended_split,False,2,FU_FOLS;cdec_FOL,FU_FOLS,FU_FOLS,FOLS,FU_FOLS,calsim_unimpaired:FOLS,,,,False,0,0,,,E,E,,False
+I_SLO007,San Joaquin,rim_arc,53.4047968676,True,True,gauged_extended_split,False,0,,,,,,,unanchored,,,True,0,0,,,E,E,,False
+I_SLT009,Sacramento,rim_arc,49.2131940552,True,True,gauged_extended,False,2,cdec_YRS;FU_YUBA,cdec_YRS,FU_YUBA,YUBA,FU_YUBA,calsim_unimpaired:YUBA,,,,False,540,540,1960-10,2015-09,A,A,,True
+I_SLTSP,San Joaquin,rim_arc,169.781488615,True,True,gauged_extended,False,1,cdec_MKM,cdec_MKM,cdec_MKM,,cdec_MKM,uf_monthly:14,,,,False,672,324,1988-10,2015-09,A,A,,True
+I_SLUIS,San Joaquin,rim_arc,87.1421589868,True,True,gauged_extended,False,0,,,,,,,unanchored,,,True,168,168,1949-10,1963-09,B,B,,False
+I_SLV006,Sacramento,rim_arc,24.5070203364,True,True,gauged_extended,False,2,FU_FOLS;cdec_FOL,FU_FOLS,FU_FOLS,FOLS,FU_FOLS,calsim_unimpaired:FOLS,,,,False,288,288,1991-10,2015-09,A,A,,True
+I_SLV015,Sacramento,rim_arc,31.3952280157,True,True,gauged_extended,False,2,FU_FOLS;cdec_FOL,FU_FOLS,FU_FOLS,FOLS,FU_FOLS,calsim_unimpaired:FOLS,,,,False,288,288,1991-10,2015-09,A,A,,True
+I_SLYCK,Sacramento,rim_arc,24.0454557489,True,True,gauged_extended,False,2,FU_OROV;cdec_ORO,FU_OROV,FU_OROV,OROV,FU_OROV,calsim_unimpaired:OROV,,,,False,384,384,1973-10,2015-09,A,A,,True
+I_SPICE,San Joaquin,rim_arc,44.6567069583,True,True,gauged_extended,False,2,FU_ST;cdec_NML,FU_ST,FU_ST,ST,FU_ST,calsim_unimpaired:ST,,,11294000,False,636,312,1952-10,1988-09,A,A,,True
+I_SPLDG,Sacramento,rim_arc,33.4097986743,True,True,gauged_extended,False,2,cdec_YRS;FU_YUBA,cdec_YRS,FU_YUBA,YUBA,FU_YUBA,calsim_unimpaired:YUBA,,,,False,492,468,1966-10,2015-09,A,A,,True
+I_SRBB_VAL,,seriesless_node,682.0250291206,True,False,,False,3,FU_SRBB;uf_06;cdec_BND,FU_SRBB,FU_SRBB,SRBB,,,seriesless:FU_SRBB,,,,0,0,,,X,X,seriesless,False
+I_STMPY,Sacramento,rim_arc,14.8927676082,True,True,gauged_extended_split,False,2,FU_FOLS;cdec_FOL,FU_FOLS,FU_FOLS,FOLS,FU_FOLS,calsim_unimpaired:FOLS,,,,False,0,0,,,E,E,,False
+I_STS059,San Joaquin,rim_arc,17.7977932518,True,True,gauged_extended_split,False,0,,,,,,,unanchored,,,False,0,0,,,E,E,,False
+I_STS072,San Joaquin,rim_arc,291.896053403,True,True,gauged_extended,False,2,FU_ST;cdec_NML,FU_ST,FU_ST,ST,FU_ST,calsim_unimpaired:ST,,,,True,0,0,,,F,F,,False
+I_TGC003,San Joaquin,rim_arc,7.8703110319,True,True,gauged_extended_split,False,1,cdec_MKM,cdec_MKM,cdec_MKM,,cdec_MKM,uf_monthly:14,,,,True,0,0,,,E,E,,False
+I_THM028,Sacramento,rim_arc,204.127963777,True,True,gauged_extended,False,0,,,,,,,unanchored,,,False,444,444,1949-10,1996-09,A,A,,True
+I_TRNTY,Sacramento,rim_arc,692.855878007,True,True,gauged_extended,False,2,FU_TRIN;cdec_CLE,FU_TRIN,FU_TRIN,TRIN,FU_TRIN,calsim_unimpaired:TRIN,,cdec_CLE,,False,0,0,,,F,F,,False
+I_TULOC,San Joaquin,rim_arc,74.6799693523,True,True,gauged_extended_split,False,0,,,,,,,unanchored,,,False,0,0,,,E,E,,False
+I_TUO054,San Joaquin,excluded_below_rim,17.2757967198,True,True,other,False,0,,,,,,,unanchored,,,,0,0,,,F,F,,False
+I_UBEAR,San Joaquin,rim_arc,37.2529927898,True,True,gauged_extended,False,1,cdec_MKM,cdec_MKM,cdec_MKM,,cdec_MKM,uf_monthly:14,,,,False,333,324,1988-10,2015-09,A,A,,True
+I_UNVLY,Sacramento,rim_arc,83.8034998021,True,True,gauged_extended,False,2,FU_FOLS;cdec_FOL,FU_FOLS,FU_FOLS,FOLS,FU_FOLS,calsim_unimpaired:FOLS,,,,False,132,132,1949-10,1960-09,A,A,,True
+I_WBF006,Sacramento,rim_arc,36.2822419915,True,True,gauged_extended_split,False,2,FU_OROV;cdec_ORO,FU_OROV,FU_OROV,OROV,FU_OROV,calsim_unimpaired:OROV,,,,True,0,0,,,E,E,,False
+I_WBF015,Sacramento,rim_arc,63.682345685,True,True,gauged_extended_split,False,2,FU_OROV;cdec_ORO,FU_OROV,FU_OROV,OROV,FU_OROV,calsim_unimpaired:OROV,,,,False,0,0,,,E,E,,False
+I_WBF030,Sacramento,rim_arc,38.0437790686,True,True,gauged_extended_split,False,2,FU_OROV;cdec_ORO,FU_OROV,FU_OROV,OROV,FU_OROV,calsim_unimpaired:OROV,,,,False,0,0,,,E,E,,False
+I_WBR001,Sacramento,rim_arc,98.9278850295,True,True,gauged_extended,False,2,FU_FOLS;cdec_FOL,FU_FOLS,FU_FOLS,FOLS,FU_FOLS,calsim_unimpaired:FOLS,,,,False,120,120,1949-10,1959-09,A,A,,True
+I_WKYTN,Sacramento,rim_arc,199.855505833,True,True,gauged_extended_split,False,4,FU_WH;FU_SRBB;uf_06;cdec_BND,FU_WH,FU_SRBB,WH;SRBB,FU_WH,calsim_unimpaired:WH,,,11372000,False,0,0,,,E,E,,False
+I_WLF013,Sacramento,rim_arc,15.7482511574,True,True,gauged_extended_split,False,1,uf_10,uf_10,uf_10,,uf_10,uf_monthly:10,,,,False,0,0,,,E,E,,False
