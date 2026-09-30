@@ -15,8 +15,10 @@ Products / sources / conventions:
 
 * ``historical_livneh_unsplit`` — from the local WGEN NonDetrend-Unsplit
   master (``wgen_forcing.py --build-master``; raw lineage, 1915-2018), with
-  the documented x10 misplaced-decimal spikes CORRECTED (/10) at the 197
-  ``data/region/prcp_x10_artifacts.csv`` pairs (user decision 2026-07-16:
+  the documented x10 misplaced-decimal spikes CORRECTED (/10) at the 289
+  ``data/region/prcp_x10_artifacts.csv`` pairs (197 at the 2026-07-16 build;
+  the 92 added 2026-09-29 were patched into the committed store with the
+  same ``/= 10.0``, see data/INVENTORY.md) (user decision 2026-07-16:
   the unified store carries the corrected convention everywhere — the
   committed calsim stores already did; the raw cdec15_grid convention is
   retired with its store, and its dPL consumers are retrained).

@@ -12,17 +12,20 @@ the same store, float32, with the ~0.05% of days carrying an inverted
 and hence tavg, is unchanged).
 
 **The x10 precipitation artifact**: the raw lineage carries misplaced-decimal
-precipitation spikes — 197 (cell, day) pairs over 168 region cells, isolated
-summer days (1916-07-01, 1954-08-28, 1974-07-08..10, 1976-08-15, 1980-07-02),
-each EXACTLY 10x too large.  The CalSim-domain ingest corrected them (/10,
-consistent across 9unimp/11obs/12rim); the cdec15 lineage kept them raw (146
-of the cells are shared with the committed ``cdec15_grid`` store, which the
-GA/dPL calibrations trained on — a pre-existing upstream inconsistency).  The
-master stays bit-faithful to the RAW source; ``--scan-x10`` derives the
-auditable correction table ``data/region/prcp_x10_artifacts.csv`` from the
-committed calsim stores, ``--verify`` expects the calsim stores to differ by
-exactly that table, and ``--cut`` applies the correction by default
-(``--no-fix-x10`` opts out, reproducing the raw cdec15 convention).
+precipitation spikes — 289 (cell, day) pairs over 244 region cells, 15
+isolated summer days 1916-1992, each EXACTLY 10x too large.  The CalSim-domain
+ingest corrected them (/10, consistent across 9unimp/11obs/12rim), as does WGEN
+Product A; the retired ``cdec15_grid`` store kept them raw (dPL trained on it —
+a pre-existing upstream inconsistency; the dense ``data/cdec15/forcing`` store
+is corrected).  The master stays bit-faithful to the RAW source; the auditable
+correction table ``data/region/prcp_x10_artifacts.csv`` holds 197 pairs derived
+by ``--scan-x10`` from the committed calsim stores (2026-07-16) plus 92 found
+2026-09-29 against WGEN Product A scenario 1 (``wgen_product_a.nc``; the region
+store's only non-rounding differences from it) — ``--scan-x10`` cannot
+re-derive those 92, so never let it overwrite the committed table.
+``--verify`` expects the region store to differ from the master by exactly
+that table, and ``--cut`` applies the correction by default (``--no-fix-x10``
+opts out, reproducing the raw cdec15_grid convention).
 
 This tool packs the region's cells (``data/region/grid_cells.csv``) into ONE
 compressed NetCDF master kept on local disk (NOT the repo — repo policy is
@@ -136,7 +139,9 @@ def scan_x10(master_path: str, out_csv: str) -> None:
 
     HISTORICAL: the per-domain calsim stores this scans were retired by the
     unified region store (2026-07-16, git history) — the committed table is
-    frozen provenance and cannot be re-derived from a clone."""
+    frozen provenance and cannot be re-derived from a clone.  It yields only
+    the 197 calsim-cell pairs; the 92 added 2026-09-29 (found against WGEN
+    Product A scenario 1) would be lost if its output replaced the table."""
     probe = (Path("data") / "calsim" / "forcing"
              / f"historical_livneh_unsplit_{CALSIM_DOMAINS[0]}.nc")
     if not probe.exists():
@@ -216,11 +221,10 @@ def _warn_x10_suspects(sub: xr.Dataset, keys: list[str],
                        x10: pd.DataFrame | None) -> None:
     """Warn about POSSIBLE x10 artifacts the reference table cannot cover.
 
-    The table is exact only where a committed calsim store exists; the
-    upstream correction was station-informed (no value threshold reproduces
-    it — calibration against the 197 known pairs found no clean separator),
-    so cells outside the modeling domains may carry uncorrected spikes on the
-    same known days.  Flag cut cell-days on those days whose value is >= 30 mm
+    The table is complete against WGEN Product A scenario 1 (2026-09-29), but
+    the upstream correction only ever touched raw values >= 150 mm (all 289
+    known pairs), and no value threshold separates the rest, so any cell may
+    carry uncorrected sub-150 mm spikes on the same known days.  Flag cut cell-days on those days whose value is >= 30 mm
     AND > 2x the cell's own max summer daily precip over the rest of the
     record — a HUMAN decision, never an automatic edit."""
     if x10 is None or not len(x10):
