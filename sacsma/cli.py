@@ -305,8 +305,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     run.add_argument("--forcing", default=None, metavar="PRODUCT",
                      help="forcing product (store filename stem), e.g. wgen_product_a "
-                          "for the WGEN historical-parallel sequence (CalSim domains "
-                          "only; default: the historical Livneh-unsplit store)")
+                          "for the WGEN historical-parallel sequence, or "
+                          "wgen_product_a_s12 for WGEN climate scenario 12 (CalSim "
+                          "domains only; default: the historical Livneh-unsplit store)")
     run.add_argument("--start", default=None, help="start date YYYY-MM-DD")
     run.add_argument("--end", default=None, help="end date YYYY-MM-DD")
     run.add_argument("--out", default=None, help="output CSV path")

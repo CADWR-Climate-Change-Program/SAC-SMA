@@ -28,6 +28,7 @@ Keys are normalized 5-decimal `<lat>_<lon>`; per-cell flags `in_<domain>` and `i
 | ×10 precip-artifact table | `wgen_forcing.py --scan-x10` | `prcp_x10_artifacts.csv` (frozen) | done |
 | **unified region forcing** | `build_region_forcing.py` | `forcing/{historical_livneh_unsplit,wgen_product_a,historical_lto}.nc` (~3.1 GB LFS) | done; replaced the per-domain stores (2026-07-16) |
 | **AORC forcing (1979–2025)** | `aorc_region.py` | `forcing/aorc.nc` (1.79 GB LFS) | done — re-pulled clean and verified 2026-07-30 after the fill-masking fix; ⚠ **run from WY1982** and note the store contains NaN (see below) |
+| **WGEN Product A climate scenarios** | `wgen_product_a_scenarios.py` (`--key`, `--pull S`, `--build S`, `--verify S`; Box read-only) | `wgen_product_a_scenarios.csv` (30-scenario key) + `forcing/wgen_product_a_s12.nc` (16.3 MB LFS; exact table codec over `wgen_product_a.nc`, decoded by `sacsma/wgen_scenarios.py`); int32 pull checkpoints local only (`tmp/wgen_product_a_scen/pull`) | s12 (+2 °C) done 2026-09-29: all 4410 cells bit-exact vs the release; other scenarios ≈40 min Box pull + minutes build each |
 | **BCM monthly hydrology (WY1916–2018)** | `bcm_region.py` | `bcm/bcm_<scenario>_monthly.nc` + `bcm/bcm_<scenario>_catchments_monthly.csv` + `bcm/bcm_catchments.csv` (~200 MB) | done — Scenario 1 + Scenario 13, all six variables (2026-07-28) |
 
 ## AORC (`aorc_region.py`)

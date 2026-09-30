@@ -588,15 +588,22 @@ def attach_tminmax(data_dir: str | Path, domain: str, forcing: DomainForcing,
             "has no grid-based forcing store (only the region domains do)")
     import xarray as xr
 
-    ds = xr.open_dataset(forcing_path(data_dir, domain, product))
-    try:
-        key_row = {str(k): i for i, k in enumerate(ds["key"].values)}
-        order = np.array([key_row[norm_grid_key(k)] for k in forcing.pos],
-                         dtype=np.int64)
-        tmin = ds["tmin"].values[order]
-        tmax = ds["tmax"].values[order]
-    finally:
-        ds.close()
+    from . import wgen_scenarios
+
+    if wgen_scenarios.scenario_of(product) is not None:     # decoded exactly against its base
+        want = [norm_grid_key(k) for k in forcing.pos]
+        ds = wgen_scenarios.load_region_subset(data_dir, product, want, ("tmin", "tmax"))
+        tmin, tmax = ds["tmin"].values, ds["tmax"].values
+    else:
+        ds = xr.open_dataset(forcing_path(data_dir, domain, product))
+        try:
+            key_row = {str(k): i for i, k in enumerate(ds["key"].values)}
+            order = np.array([key_row[norm_grid_key(k)] for k in forcing.pos],
+                             dtype=np.int64)
+            tmin = ds["tmin"].values[order]
+            tmax = ds["tmax"].values[order]
+        finally:
+            ds.close()
     t = forcing.prcp.shape[1]
     if tmin.shape[1] != t:   # e.g. a time-sliced forcing window
         raise ValueError(
@@ -645,7 +652,7 @@ def _run_basin_native(
         forcing = load_domain_forcing(dd, domain=domain, start=start, end=end, product=product)
     noah_lite = et_scheme == "noah_lite"
     if pet_source == "priestley_taylor" or noah_lite:
-        attach_tminmax(dd, domain, forcing)   # no-op if already attached
+        attach_tminmax(dd, domain, forcing, product=product)   # no-op if already attached
     params_df = params if params is not None else load_params(dd, domain=domain)
     # per-watershed calibrations (e.g. 9unimp) repeat shared cells with different
     # params per basin; filter to this basin before indexing by key.

@@ -70,10 +70,13 @@ DEFAULT_FORCING = "historical_livneh_unsplit"
 def forcing_name(domain: str = DEFAULT_DOMAIN, product: str = DEFAULT_FORCING) -> str:
     """Forcing store filename for a ``product`` (the filename stem).
 
-    Products: :data:`DEFAULT_FORCING` (the historical Livneh-unsplit grid) and
+    Products: :data:`DEFAULT_FORCING` (the historical Livneh-unsplit grid),
     ``wgen_product_a`` (WGEN Product A scenario 1 — the same unsplit
     precipitation, temperature detrended to the 1991-2020 baseline; CalSim
-    domains only).  See ``data/INVENTORY.md``.
+    domains only) and ``wgen_product_a_sNN`` (WGEN Product A climate scenario
+    NN, a compact table store decoded against ``wgen_product_a`` by
+    :mod:`sacsma.wgen_scenarios`; region domains only).  See
+    ``data/INVENTORY.md``.
     """
     return f"{product}{_sfx(domain)}.nc"
 
@@ -341,12 +344,22 @@ def load_forcing(
     returned dataset looks exactly like the retired per-domain files
     (``prcp``/``tavg``), plus ``tmin``/``tmax``.  Gaps in the region store are
     persistence-filled at load — see :func:`fill_missing_days`.
+
+    A WGEN climate-scenario product ``wgen_product_a_sNN`` is decoded exactly
+    against ``wgen_product_a`` (:mod:`sacsma.wgen_scenarios`; raises on any
+    fingerprint mismatch).
     """
     import xarray as xr
+
+    from . import wgen_scenarios
 
     if name:
         return xr.open_dataset(domain_dir(data_dir, domain) / "forcing" / name)
     path = forcing_path(data_dir, domain, product)
+    scen = wgen_scenarios.scenario_of(product) is not None
+    if scen and domain not in REGION_DOMAINS:
+        raise ValueError(f"{product} is a region-grid scenario store; domain {domain!r} "
+                         "is not a region domain")
     ds = xr.open_dataset(path)
     if domain not in REGION_DOMAINS:
         # the dense 15cdec store is gap-free, and is left lazily-indexed on
@@ -366,7 +379,11 @@ def load_forcing(
     # tmin/tmax the model actually gets (no-op unless the product has gaps).
     # Subset the variables first: aorc.nc carries nine, and filling the six
     # this function discards would load ~3x the data for nothing.
-    sub = fill_missing_days(ds[["prcp", "tmin", "tmax"]].sel(key=want))
+    if scen:
+        ds.close()
+        sub = fill_missing_days(wgen_scenarios.load_region_subset(data_dir, product, want))
+    else:
+        sub = fill_missing_days(ds[["prcp", "tmin", "tmax"]].sel(key=want))
     tavg = ((sub["tmin"].astype("float64") + sub["tmax"].astype("float64"))
             / 2.0).astype("float32")
     out = xr.Dataset(
