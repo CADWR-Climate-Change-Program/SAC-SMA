@@ -95,6 +95,7 @@ Three tools score a trained `multifamily` run against CalSim3 over **WY1950–84
 python -m sacsma.dpl.calsim_tier1 <run>              # -> <run>/tier1/
 python -m sacsma.dpl.calsim_tier2 <run> [--no-extend] [--trace-python <python with rasterio>]   # -> <run>/tier2/   (re-runs the checkpoint forward)
 #   opt-in extras: [--dedup-cells] [--components [fastslow|parts]] [--temp-delta DT] [--precip-scale S] [--extension-cells CSV]
+#   several climate perturbations in one batched pass: --scenarios t1=1:1,p85=0:0.85,... [--batch-window DAYS]   # -> <run>/tier2_scenarios/<name>/
 python -m sacsma.dpl.calsim_atlas <run>              # -> <run>/atlas/calsim_validation_atlas.html
 python -m sacsma.dpl.calsim_windows                  # the trimmed-window rule against data/calsim/tier1_sets.csv (--write stores it; then re-run calsim_tier1)
 python -m sacsma.dpl.calsim_compare <run_a> <run_b>  # tier 1 of two scored runs side by side -> tier1_comparison.md/.html/.csv under --out (default: the current folder)
