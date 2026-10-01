@@ -1,0 +1,499 @@
+{
+ "run": "artifacts\\dpl\\multifamily\\s1_cs64_ho7685_ufx_areaw_all_kref05_sacx_carry_px_aef",
+ "bars_file": "<scratch>\\calsim_hybrid\\s1_retrain\\prereg\\bars.json",
+ "results": [
+  {
+   "id": "M-cs",
+   "cls": "bar",
+   "primary": false,
+   "value": {
+    "usgs": 0.1967,
+    "cdec": 0.507,
+    "uf": 0.2053,
+    "cs": 0.0911
+   },
+   "verdict": "pass",
+   "threshold": null,
+   "comparator": null,
+   "window": "epoch 0, 60 stepped chunks",
+   "detail": "usgs -0.0000, cdec -0.0000, uf +0.0001, cs -0.0000"
+  },
+  {
+   "id": "M-mass",
+   "cls": "report",
+   "primary": false,
+   "value": {
+    "usgs": 0.301,
+    "cdec": 0.494,
+    "uf": 0.114,
+    "cs": 0.091
+   },
+   "verdict": "report",
+   "threshold": null,
+   "comparator": null,
+   "window": "every epoch; flag epochs >= 10 with calsim outside [0.5x, 2x] its e0 share",
+   "detail": "last epoch's loss-mass shares; e0 usgs 0.241, cdec 0.627, uf 0.081, cs 0.051"
+  },
+  {
+   "id": "M-clip",
+   "cls": "bar",
+   "primary": false,
+   "value": 0.23832995071035082,
+   "verdict": "pass",
+   "threshold": 0.5,
+   "comparator": null,
+   "window": "epochs >= 5",
+   "detail": "skipped steps 2 (max 1 in one epoch), best.pt selection finite True, epochs 120"
+  },
+  {
+   "id": "S-sel",
+   "cls": "flag",
+   "primary": false,
+   "value": 116.0,
+   "verdict": "flag: not converged (>= 110)",
+   "threshold": [
+    40,
+    110
+   ],
+   "comparator": {
+    "run": "H95",
+    "value": 0.8522,
+    "what": "sel3 (H95 shares .216/.558/.226) re-scored on H95's evaluate sims, holdout-masked, registry windows",
+    "logged": 0.8509,
+    "note": "S1's sel3 = the same rule at .2164/.5578/.2258 (moves it ~1e-4); not a bar"
+   },
+   "window": "selection epochs",
+   "detail": "selection 0.8337, sel3 logged 0.8456 / re-scored 0.8381 vs H95 0.8522 (report)"
+  },
+  {
+   "id": "A-trn",
+   "cls": "bar",
+   "primary": false,
+   "value": {
+    "mean": 0.7146,
+    "median": 0.771,
+    "n": 64
+   },
+   "verdict": "pass",
+   "threshold": {
+    "mean": 0.6688,
+    "median": 0.7095
+   },
+   "comparator": {
+    "run": "H95 (untrained on arcs)",
+    "n": 64,
+    "mean": 0.6188,
+    "median": 0.6795
+   },
+   "window": "arc_obs_mask months (WY1950-75 + WY1986-2015)",
+   "detail": "entity basis (metrics_entities calsim_monthly): mean 0.7146 median 0.7710 n=64"
+  },
+  {
+   "id": "C1-mean",
+   "cls": "guard",
+   "primary": false,
+   "value": 0.8715978145384202,
+   "verdict": "unreadable (holds)",
+   "threshold": 0.8601,
+   "comparator": {
+    "run": "H95",
+    "value": 0.8801
+   },
+   "window": "registry windows (WY1986+), obs_mask, holdout (0 cdec days)",
+   "detail": "n=17"
+  },
+  {
+   "id": "C1-median",
+   "cls": "guard",
+   "primary": false,
+   "value": 0.8886344094152927,
+   "verdict": "unreadable (holds)",
+   "threshold": 0.8621,
+   "comparator": {
+    "run": "H95",
+    "value": 0.8821
+   },
+   "window": "as C1-mean",
+   "detail": "n=17"
+  },
+  {
+   "id": "C1-ORO",
+   "cls": "guard",
+   "primary": false,
+   "value": 0.8886344094152927,
+   "verdict": "unreadable (holds)",
+   "threshold": 0.8481,
+   "comparator": {
+    "run": "H95",
+    "value": 0.8881
+   },
+   "window": "as C1-mean",
+   "detail": ""
+  },
+  {
+   "id": "C1-YRS",
+   "cls": "guard",
+   "primary": false,
+   "value": 0.8450819744846074,
+   "verdict": "unreadable (holds)",
+   "threshold": 0.8201,
+   "comparator": {
+    "run": "H95",
+    "value": 0.8601
+   },
+   "window": "as C1-mean",
+   "detail": ""
+  },
+  {
+   "id": "C1-SHA",
+   "cls": "guard",
+   "primary": false,
+   "value": 0.89998716957987,
+   "verdict": "unreadable (holds)",
+   "threshold": 0.8685,
+   "comparator": {
+    "run": "H95",
+    "value": 0.9085
+   },
+   "window": "as C1-mean",
+   "detail": ""
+  },
+  {
+   "id": "C1-BND",
+   "cls": "guard",
+   "primary": false,
+   "value": 0.9101847916685487,
+   "verdict": "unreadable (holds)",
+   "threshold": 0.8702,
+   "comparator": {
+    "run": "H95",
+    "value": 0.9102
+   },
+   "window": "as C1-mean",
+   "detail": ""
+  },
+  {
+   "id": "C1-NHG",
+   "cls": "guard",
+   "primary": false,
+   "value": 0.826622881677053,
+   "verdict": "fail",
+   "threshold": 0.8329,
+   "comparator": {
+    "run": "H95",
+    "value": 0.8729
+   },
+   "window": "as C1-mean",
+   "detail": "vs H 0.9239"
+  },
+  {
+   "id": "U1-mean",
+   "cls": "guard",
+   "primary": false,
+   "value": 0.8959673277240388,
+   "verdict": "fail",
+   "threshold": 0.9264,
+   "comparator": {
+    "run": "H95",
+    "value": 0.9364,
+    "note": "H95 on the SAME WY1986-2014 window (its logged uf 0.9351 was WY1985-2014)"
+   },
+   "window": "WY1986-2014 (348 months)",
+   "detail": "n=9, WY1986-2014"
+  },
+  {
+   "id": "U1-entity",
+   "cls": "guard",
+   "primary": false,
+   "value": {
+    "uf_02": 0.9205,
+    "uf_03": 0.8894,
+    "uf_04": 0.8514,
+    "uf_06": 0.9177,
+    "uf_07": 0.8168,
+    "uf_10": 0.9622,
+    "uf_13": 0.9119,
+    "uf_20": 0.875,
+    "uf_21": 0.9188
+   },
+   "verdict": "fail: uf_03, uf_04, uf_07, uf_20",
+   "threshold": {
+    "uf_02": 0.9056,
+    "uf_03": 0.9026,
+    "uf_04": 0.923,
+    "uf_06": 0.8698,
+    "uf_07": 0.9219,
+    "uf_10": 0.9177,
+    "uf_13": 0.8836,
+    "uf_20": 0.8816,
+    "uf_21": 0.8618
+   },
+   "comparator": {
+    "run": "H95",
+    "per_unit": {
+     "uf_02": 0.9456,
+     "uf_03": 0.9426,
+     "uf_04": 0.963,
+     "uf_06": 0.9098,
+     "uf_07": 0.9619,
+     "uf_10": 0.9577,
+     "uf_13": 0.9236,
+     "uf_20": 0.9216,
+     "uf_21": 0.9018
+    }
+   },
+   "window": "WY1986-2014",
+   "detail": ""
+  },
+  {
+   "id": "G1u-mean",
+   "cls": "guard",
+   "primary": false,
+   "value": 0.6912908462835068,
+   "verdict": "pass",
+   "threshold": 0.6623,
+   "comparator": {
+    "run": "H95",
+    "value": 0.6923
+   },
+   "window": "registry windows minus WY1976-85",
+   "detail": "n=69"
+  },
+  {
+   "id": "G1u-median",
+   "cls": "guard",
+   "primary": false,
+   "value": 0.7367609147020453,
+   "verdict": "pass",
+   "threshold": 0.6849,
+   "comparator": {
+    "run": "H95",
+    "value": 0.7149
+   },
+   "window": "as G1u-mean",
+   "detail": "n=69"
+  },
+  {
+   "id": "HO-A1",
+   "cls": "bar",
+   "primary": true,
+   "value": 0.7272030643577969,
+   "verdict": "pass",
+   "threshold": 0.6909,
+   "comparator": {
+    "run": "H",
+    "n": 45,
+    "value": 0.6609
+   },
+   "window": "WY1976-85 own-record months (calsim_arcs.own_record_months)",
+   "detail": "n=45 of the 45 preregistered arcs; min n_months 24"
+  },
+  {
+   "id": "HO-A2-all",
+   "cls": "guard",
+   "primary": false,
+   "value": 0.6901211849453498,
+   "verdict": "pass",
+   "threshold": 0.6376,
+   "comparator": {
+    "run": "H",
+    "n": 196,
+    "value": 0.6376
+   },
+   "window": "WY1976-85, all months",
+   "detail": "n=196; tier-A 64 median 0.7282 (H 0.6639)"
+  },
+  {
+   "id": "HO-A2-nonA",
+   "cls": "guard",
+   "primary": false,
+   "value": 0.6642468288766603,
+   "verdict": "pass",
+   "threshold": 0.6036,
+   "comparator": {
+    "run": "H",
+    "n": 132,
+    "value": 0.6236
+   },
+   "window": "WY1976-85, all months",
+   "detail": "n=132"
+  },
+  {
+   "id": "HO-U",
+   "cls": "guard",
+   "primary": false,
+   "value": 0.8952420258518998,
+   "verdict": "pass",
+   "threshold": 0.8733,
+   "comparator": {
+    "run": "H",
+    "value": 0.8833,
+    "per_unit": {
+     "uf_02": 0.7993,
+     "uf_03": 0.9119,
+     "uf_04": 0.9177,
+     "uf_06": 0.8929,
+     "uf_07": 0.9065,
+     "uf_10": 0.9161,
+     "uf_13": 0.8718,
+     "uf_20": 0.7925,
+     "uf_21": 0.9407
+    }
+   },
+   "window": "WY1976-84 (run H trained uf WY1985)",
+   "detail": "n=9; WY1976-85 mean 0.8935 (H 0.8838); uf_02 0.8198 (H 0.7993), uf_20 0.8326 (H 0.7925)"
+  },
+  {
+   "id": "HO-C-twins",
+   "cls": "guard",
+   "primary": false,
+   "value": 0.9305224905015089,
+   "verdict": "unreadable (holds)",
+   "threshold": 0.9145,
+   "comparator": {
+    "run": "H",
+    "value": 0.9345,
+    "per_unit": {
+     "cdec_ORO": 0.9656,
+     "cdec_YRS": 0.9345,
+     "cdec_FOL": 0.9567,
+     "cdec_MKM": 0.9171,
+     "cdec_NHG": 0.9302,
+     "cdec_NML": 0.8961,
+     "cdec_TLG": 0.9355,
+     "cdec_MRC": 0.9437,
+     "cdec_MIL": 0.9084
+    }
+   },
+   "window": "WY1976-85",
+   "detail": "n=9"
+  },
+  {
+   "id": "HO-C-FU",
+   "cls": "guard",
+   "primary": false,
+   "value": 0.9297664249055209,
+   "verdict": "unreadable (holds)",
+   "threshold": 0.9068,
+   "comparator": {
+    "run": "H",
+    "value": 0.9268,
+    "per_unit": {
+     "SHA": 0.8575,
+     "CLE": 0.9162,
+     "UF6": 0.8929,
+     "UF8": 0.9681,
+     "UF11": 0.9419,
+     "UF9": 0.9491,
+     "UF16": 0.8911,
+     "UF18": 0.9375,
+     "UF19": 0.963,
+     "UF22": 0.8985
+    }
+   },
+   "window": "WY1976-84 (uf-nested anchors; H trained uf WY1985)",
+   "detail": "n=10"
+  },
+  {
+   "id": "HO-G",
+   "cls": "guard",
+   "primary": false,
+   "value": 0.6946323652857698,
+   "verdict": "pass",
+   "threshold": 0.654,
+   "comparator": {
+    "run": "H (S0 pass)",
+    "n": 49,
+    "value": 0.654,
+    "mean": 0.4847
+   },
+   "window": "WY1976-85",
+   "detail": "n=49 of 49 gauges; mean 0.6229 (H 0.4847); H95 in-sample 0.7122 (never a bar)"
+  },
+  {
+   "id": "HO-R",
+   "cls": "report",
+   "primary": false,
+   "value": {
+    "abs_median": 0.7117,
+    "resc_median": 0.7198
+   },
+   "verdict": "report",
+   "threshold": null,
+   "comparator": {
+    "run": "H",
+    "n": 147,
+    "abs_median": 0.6696,
+    "resc_median": 0.6849,
+    "gaps": {
+     "uf": 0.0509,
+     "cdec_twins": -0.0208,
+     "fu_anchors": -0.0102,
+     "tierA_arcs": 0.0131
+    }
+   },
+   "window": "WY1976-85 (+ own-record months)",
+   "detail": "n=147 (H abs 0.6696 / resc 0.6849); gaps train-holdout uf +0.001 (H +0.051), cdec_twins -0.020 (H -0.021), fu_anchors -0.006 (H -0.010), tierA_arcs +0.043 (H +0.013)"
+  },
+  {
+   "id": "HO-P17",
+   "cls": "report",
+   "primary": false,
+   "value": {
+    "WY1926-49": 0.8455,
+    "WY1950-84_mixed": 0.9133,
+    "WY1976-84": 0.9163,
+    "WY1976-85": 0.9167,
+    "WY1986-2014": 0.9115
+   },
+   "verdict": "report",
+   "threshold": null,
+   "comparator": {
+    "H": {
+     "WY1926-49": 0.8293,
+     "WY1950-84_mixed": 0.8671,
+     "WY1976-84": 0.9155,
+     "WY1976-85": 0.9194,
+     "WY1986-2014": 0.9369
+    },
+    "H95": {
+     "WY1926-49": 0.8102,
+     "WY1950-84_mixed": 0.872,
+     "WY1976-84": 0.905,
+     "WY1976-85": 0.9021,
+     "WY1986-2014": 0.923
+    }
+   },
+   "window": "WY1926-49, WY1950-84_mixed, WY1976-85, WY1976-84, WY1986-2014",
+   "detail": "H {\"WY1926-49\": 0.8293, \"WY1950-84_mixed\": 0.8671, \"WY1976-84\": 0.9155, \"WY1976-85\": 0.9194, \"WY1986-2014\": 0.9369}"
+  }
+ ],
+ "cross_checks": [
+  [
+   "metrics_entities.csv kge_reg vs s1lib training-window KGE",
+   8.321278222034323e-09,
+   159
+  ],
+  [
+   "metrics_entities_holdout.csv vs s1lib holdout_metrics (sim_daily_mm.npz)",
+   8.257312389403637e-09,
+   177
+  ],
+  [
+   "tier2_metrics.csv WY1976-85 vs s1lib (tier2_monthly.csv)",
+   6.661338147750939e-16,
+   196
+  ],
+  [
+   "tier2_metrics.csv WY1976-85_own vs s1lib (tier2_monthly.csv)",
+   4.440892098500626e-16,
+   73
+  ],
+  [
+   "tier1_metrics.csv WY1976-84 anchors vs s1lib (tier1_monthly.csv)",
+   1.1102230246251565e-16,
+   10
+  ]
+ ],
+ "reading": "guard readable fail(s) ['C1-NHG', 'U1-mean', 'U1-entity']: run the S1-noarcs control (same seed) before attributing them to the arcs."
+}

@@ -1,0 +1,33 @@
+LOCAL PATHS SCRUBBED (2026-10-01, before the run folder was published)
+
+The files below named folders of the machine the run was made on.  Each such prefix was replaced by a
+placeholder; nothing else was changed.
+  <repo>       the repository checkout that held the comparator runs (dPL-26, dPL-95)
+  <scratch>    the working folder of the session that built and ran dPL-CalSim (its worktree is
+               <scratch>/wt_merge, the prereg files were in <scratch>/calsim_hybrid/s1_retrain)
+  <scratch-2>  the working folder of the earlier session that made the 1925-2018 re-simulations
+
+prereg_SHA256SUMS holds the sums of the files as they were frozen (2026-09-29), so bars.json and
+s1lib.py no longer match it.  sha256 of each changed file before (as frozen / as written by the run) and
+after the scrub, with the file's own line endings:
+
+  bars.json
+    before 135741475650ca5ae55ca5747e3f33191e396b5fca3a589b9d122d536f4ea796
+    after  9d03064fdbc76dc921d3532924be50da210d5ca008f50e205e01caef89244af9
+  levels_s1.json
+    before 46754f8d7beca65b03ab33194dd6298bb732fd5bbb9a9af5d05630de36ecab61
+    after  70751b9391a1a0a17a74929f82f9f3ee56278800ca2232024aea010fe066ddd3
+  levels_sim_s1.py
+    before 2945ce4973f325622be00f3d14d8cb74453d007525251b8d63b6aad5d04e032f
+    after  7b75523d01aa93c7cba9837770b2c0aaf6f61b24cc64e43c2504a4ed04abceba
+  prereg_sha256.txt
+    before 1e8fe09422f437d7d33983e689c9b80e6e94c544e7a925cb16d5d2067a4a6a0b
+    after  06750116c52df4c52fa02917fb7806733e1313c8492da91d563aefe2080bfe9d
+  readout.json
+    before f4f2206ef42fdf6d8bb03b4bd10224b1f1df8c90b54ef548e3bb072e6c1ca8ed
+    after  d06fc7dcd6401abf4dd7cc3e4190642d46ca3afd35ba504b2476e6a6af41b4c7
+  s1lib.py
+    before dcb4707048417cc2366db8e0fbbde4e263e3a8e067fbaad850679acd2c0268ed
+    after  5a20149cf1569c8bb7a1802421b47c867afa1895037682f32dc547c7a9372f2b
+
+The scripts are a record of what was run; with the placeholders they do not run as they are.

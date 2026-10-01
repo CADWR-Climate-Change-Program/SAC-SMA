@@ -1,0 +1,803 @@
+{
+ "written_utc": "2026-09-30T05:02:01+00:00",
+ "tool": "prereg/derive_bars.py",
+ "holdout_wy": [
+  1976,
+  1985
+ ],
+ "data_dir": "<scratch>\\wt_merge\\data",
+ "sources": {
+  "H": {
+   "run": "<repo>\\artifacts\\dpl\\multifamily\\noah_cdec_uf_sacx_carry_px_aef",
+   "best.pt": "41dd6f37ff82c4f5",
+   "sim_daily_mm.npz": "ad018a5db03e1624",
+   "tier1_monthly.csv": "42a9a49addb4335d",
+   "tier2_monthly.csv": "f7ca6e3c21da4431"
+  },
+  "H95": {
+   "run": "<repo>\\artifacts\\dpl\\multifamily\\noah_cdec_uf_usgs_areaw_all_kref05_sacx_carry_px_aef",
+   "best.pt": "a64a1df0620ed1f8",
+   "sim_daily_mm.npz": "e98de4e08c2963b5",
+   "tier1_monthly.csv": "ac29f001f0d8de99",
+   "tier2_monthly.csv": "a25a85f9ccc3f501"
+  },
+  "H_S0": {
+   "npz": "<scratch>\\calsim_hybrid\\hybrid_alt\\s0\\passes\\base\\entity_sim_daily.npz",
+   "sha": "1175f73f321e640f"
+  },
+  "P17b_H": {
+   "npz": "<scratch-2>\\train_alts\\p17\\p17b\\noah_cdec_uf_sacx_carry_px_aef_sim_1925.npz",
+   "sha": "2466e81dd6e6e064"
+  },
+  "P17b_H95": {
+   "npz": "<scratch-2>\\train_alts\\p17\\p17b\\noah_cdec_uf_usgs_areaw_all_kref05_sacx_carry_px_aef_sim_1925.npz",
+   "sha": "d00c5650f6b7832b"
+  }
+ },
+ "spreads": {
+  "cdec_mean": 0.018,
+  "uf_mean": 0.005,
+  "entity": 0.04
+ },
+ "readability": "|S1 - comparator| < spread => 'unreadable' (PREREG_H95 rule); a guard is HELD unless a readable fail; a bar PASSES only on a readable pass; no spread = literal",
+ "known_input_change": "the region forcing may gain 92 misplaced-decimal x10 precip cell-days (1916-1992; wgen_scen/x10) before launch: every comparator here comes from H / H95 run on the UNFIXED store and none is re-derived; 4 pairs fall in WY1976-85 (1976-08-19, 1980-07-02/03, CalSim3-footprint cells, no entity), 78 in WY1950-75 (S1 training, incl. cs_I_HON021 +151.7 mm basin mean on 1974-07-08, an arc_obs_mask month)",
+ "comparators": {
+  "H": {
+   "epoch": 68,
+   "logged_sel": 0.8946,
+   "fam": {
+    "cdec_daily": {
+     "n": 17,
+     "mean": 0.8739121026633011,
+     "median": 0.8856343540872931
+    },
+    "uf_monthly": {
+     "n": 9,
+     "mean": 0.934217645423392,
+     "median": 0.9410156030751354
+    }
+   },
+   "sel3_h95_shares": 0.8913
+  },
+  "H95": {
+   "epoch": 92,
+   "logged_sel": 0.8509,
+   "fam": {
+    "cdec_daily": {
+     "n": 17,
+     "mean": 0.8800838211473345,
+     "median": 0.8820855799345916
+    },
+    "uf_monthly": {
+     "n": 9,
+     "mean": 0.9363878001434391,
+     "median": 0.9425596922304487
+    },
+    "usgs_daily": {
+     "n": 69,
+     "mean": 0.692262324106705,
+     "median": 0.7148809191072794
+    }
+   },
+   "sel3_h95_shares": 0.8522
+  }
+ },
+ "bars": [
+  {
+   "id": "M-cs",
+   "cls": "bar",
+   "statistic": "e0 realized coefficient shares sum(c_f/kappa_f) over stepped chunks, all 4 families",
+   "window": "epoch 0, 60 stepped chunks",
+   "source": "S1 chunk_log.csv",
+   "target": {
+    "usgs_daily": 0.1967,
+    "cdec_daily": 0.507,
+    "uf_monthly": 0.2052,
+    "calsim_monthly": 0.0911
+   },
+   "tol": 0.01,
+   "rule": "every family within +/-0.01 of its footprint-area share",
+   "comparator": null
+  },
+  {
+   "id": "M-mass",
+   "cls": "report",
+   "statistic": "loss-mass shares sum(l_f)/sum(l) per epoch (kappa scale)",
+   "window": "every epoch; flag epochs >= 10 with calsim outside [0.5x, 2x] its e0 share",
+   "source": "S1 chunk_log.csv",
+   "comparator": null
+  },
+  {
+   "id": "M-clip",
+   "cls": "bar",
+   "statistic": "share of stepped chunks with gnorm > 1 in epochs >= 5",
+   "window": "epochs >= 5",
+   "source": "S1 chunk_log.csv",
+   "op": "<",
+   "threshold": 0.5,
+   "comparator": null,
+   "rule": "< 0.5 and a finite best.pt selection (PREREG_H95 M3); flag any epoch skipping > 4 of 70 chunks"
+  },
+  {
+   "id": "S-sel",
+   "cls": "flag",
+   "statistic": "best epoch (checkpoint epoch); both selection scalars reported",
+   "window": "selection epochs",
+   "source": "S1 best.pt + train_log.csv",
+   "op": "in",
+   "threshold": [
+    40,
+    110
+   ],
+   "comparator": {
+    "run": "H95",
+    "value": 0.8522,
+    "what": "sel3 (H95 shares .216/.558/.226) re-scored on H95's evaluate sims, holdout-masked, registry windows",
+    "logged": 0.8509,
+    "note": "S1's sel3 = the same rule at .2164/.5578/.2258 (moves it ~1e-4); not a bar"
+   }
+  },
+  {
+   "id": "A-trn",
+   "cls": "bar",
+   "statistic": "tier-A 64 arcs, KGE on their arc_obs_mask months (training WYs), tier-2 monthly TAF vs CalSim3 INFLOW; mean AND median",
+   "window": "arc_obs_mask months (WY1950-75 + WY1986-2015)",
+   "source": "tier2/tier2_monthly.csv",
+   "comparator": {
+    "run": "H95 (untrained on arcs)",
+    "n": 64,
+    "mean": 0.6188,
+    "median": 0.6795
+   },
+   "threshold": {
+    "mean": 0.6688,
+    "median": 0.7095
+   },
+   "op": ">=",
+   "spread": null,
+   "rule": "mean >= H95 + 0.05 AND median >= H95 + 0.03; fail = the arcs did not train: stop, discuss",
+   "also_report": "S1 metrics_entities.csv calsim_monthly kge (entity-cell basis, the trained target)"
+  },
+  {
+   "id": "C1-mean",
+   "cls": "guard",
+   "statistic": "cdec family mean KGE (17), masked daily target",
+   "window": "registry windows (WY1986+), obs_mask, holdout (0 cdec days)",
+   "source": "sim_daily_mm.npz via load_entity_obs",
+   "comparator": {
+    "run": "H95",
+    "value": 0.8801
+   },
+   "threshold": 0.8601,
+   "op": ">=",
+   "spread": 0.018,
+   "also": {
+    "H": 0.8739
+   }
+  },
+  {
+   "id": "C1-median",
+   "cls": "guard",
+   "statistic": "cdec family median KGE (17)",
+   "window": "as C1-mean",
+   "source": "as C1-mean",
+   "comparator": {
+    "run": "H95",
+    "value": 0.8821
+   },
+   "threshold": 0.8621,
+   "op": ">=",
+   "spread": 0.018,
+   "also": {
+    "H": 0.8856
+   }
+  },
+  {
+   "id": "C1-ORO",
+   "cls": "guard",
+   "statistic": "cdec_ORO KGE, masked daily target",
+   "window": "as C1-mean",
+   "source": "as C1-mean",
+   "comparator": {
+    "run": "H95",
+    "value": 0.8881
+   },
+   "threshold": 0.8481,
+   "op": ">=",
+   "spread": 0.04,
+   "also": {
+    "H": 0.8381
+   },
+   "note": null
+  },
+  {
+   "id": "C1-YRS",
+   "cls": "guard",
+   "statistic": "cdec_YRS KGE, masked daily target",
+   "window": "as C1-mean",
+   "source": "as C1-mean",
+   "comparator": {
+    "run": "H95",
+    "value": 0.8601
+   },
+   "threshold": 0.8201,
+   "op": ">=",
+   "spread": 0.04,
+   "also": {
+    "H": 0.8463
+   },
+   "note": null
+  },
+  {
+   "id": "C1-SHA",
+   "cls": "guard",
+   "statistic": "cdec_SHA KGE, masked daily target",
+   "window": "as C1-mean",
+   "source": "as C1-mean",
+   "comparator": {
+    "run": "H95",
+    "value": 0.9085
+   },
+   "threshold": 0.8685,
+   "op": ">=",
+   "spread": 0.04,
+   "also": {
+    "H": 0.8644
+   },
+   "note": null
+  },
+  {
+   "id": "C1-BND",
+   "cls": "guard",
+   "statistic": "cdec_BND KGE, masked daily target",
+   "window": "as C1-mean",
+   "source": "as C1-mean",
+   "comparator": {
+    "run": "H95",
+    "value": 0.9102
+   },
+   "threshold": 0.8702,
+   "op": ">=",
+   "spread": 0.04,
+   "also": {
+    "H": 0.8647
+   },
+   "note": null
+  },
+  {
+   "id": "C1-NHG",
+   "cls": "guard",
+   "statistic": "cdec_NHG KGE, masked daily target",
+   "window": "as C1-mean",
+   "source": "as C1-mean",
+   "comparator": {
+    "run": "H95",
+    "value": 0.8729
+   },
+   "threshold": 0.8329,
+   "op": ">=",
+   "spread": 0.04,
+   "also": {
+    "H": 0.9239
+   },
+   "note": "H95's known cost vs H; reported against H as well"
+  },
+  {
+   "id": "U1-mean",
+   "cls": "guard",
+   "statistic": "uf family mean KGE (9) on the registry window minus the holdout = WY1986-2014 (S1: metrics_entities.csv kge_reg)",
+   "window": "WY1986-2014 (348 months)",
+   "source": "sim_daily_mm.npz via load_entity_obs (no back-extension)",
+   "comparator": {
+    "run": "H95",
+    "value": 0.9364,
+    "note": "H95 on the SAME WY1986-2014 window (its logged uf 0.9351 was WY1985-2014)"
+   },
+   "threshold": 0.9264,
+   "op": ">=",
+   "spread": 0.005,
+   "also": {
+    "H": 0.9342
+   }
+  },
+  {
+   "id": "U1-entity",
+   "cls": "guard",
+   "statistic": "no uf entity down > 0.04 vs H95, kge_reg WY1986-2014",
+   "window": "WY1986-2014",
+   "source": "as U1-mean",
+   "comparator": {
+    "run": "H95",
+    "per_unit": {
+     "uf_02": 0.9456,
+     "uf_03": 0.9426,
+     "uf_04": 0.963,
+     "uf_06": 0.9098,
+     "uf_07": 0.9619,
+     "uf_10": 0.9577,
+     "uf_13": 0.9236,
+     "uf_20": 0.9216,
+     "uf_21": 0.9018
+    }
+   },
+   "threshold": {
+    "uf_02": 0.9056,
+    "uf_03": 0.9026,
+    "uf_04": 0.923,
+    "uf_06": 0.8698,
+    "uf_07": 0.9219,
+    "uf_10": 0.9177,
+    "uf_13": 0.8836,
+    "uf_20": 0.8816,
+    "uf_21": 0.8618
+   },
+   "op": ">=",
+   "spread": 0.04
+  },
+  {
+   "id": "G1u-mean",
+   "cls": "guard",
+   "statistic": "usgs family mean KGE (69), masked daily target (holdout out)",
+   "window": "registry windows minus WY1976-85",
+   "source": "sim_daily_mm.npz via load_entity_obs",
+   "comparator": {
+    "run": "H95",
+    "value": 0.6923
+   },
+   "threshold": 0.6623,
+   "op": ">=",
+   "fail_below": 0.6423,
+   "spread": null,
+   "rule": "below the threshold = the recorded cost of holdout + arcs (discuss); below fail_below FAILS"
+  },
+  {
+   "id": "G1u-median",
+   "cls": "guard",
+   "statistic": "usgs family median KGE (69)",
+   "window": "as G1u-mean",
+   "source": "as G1u-mean",
+   "comparator": {
+    "run": "H95",
+    "value": 0.7149
+   },
+   "threshold": 0.6849,
+   "op": ">=",
+   "spread": null
+  },
+  {
+   "id": "HO-A1",
+   "cls": "bar",
+   "primary": true,
+   "statistic": "median KGE of the tier-A arcs with >= 24 own-record months inside WY1976-85 (fixed arc list below), tier-2 monthly TAF vs CalSim3 INFLOW on those months",
+   "window": "WY1976-85 own-record months (calsim_arcs.own_record_months)",
+   "source": "tier2/tier2_monthly.csv",
+   "arcs": [
+    "I_ALMNR",
+    "I_ANT011",
+    "I_ANTLP",
+    "I_BCC014",
+    "I_BTL006",
+    "I_CAPLS",
+    "I_CFS001",
+    "I_CMP001",
+    "I_COL003",
+    "I_CSM035",
+    "I_CWD018",
+    "I_DAVIS",
+    "I_DCC010",
+    "I_DCM027",
+    "I_DEE023",
+    "I_DRC012",
+    "I_ELD027",
+    "I_FRDYC",
+    "I_FRMAN",
+    "I_FRMDW",
+    "I_HHOLE",
+    "I_HON021",
+    "I_ICEHS",
+    "I_JKSMD",
+    "I_LCC038",
+    "I_LJC022",
+    "I_LNG012",
+    "I_LOONL",
+    "I_MFA036",
+    "I_MFM008",
+    "I_MLC006",
+    "I_NFS033",
+    "I_NFY029",
+    "I_NMA003",
+    "I_OGN005",
+    "I_PCRST",
+    "I_RLIEF",
+    "I_SFM005",
+    "I_SFY048",
+    "I_SILVR",
+    "I_SLT009",
+    "I_SLYCK",
+    "I_SPICE",
+    "I_SPLDG",
+    "I_THM028"
+   ],
+   "comparator": {
+    "run": "H",
+    "n": 45,
+    "value": 0.6609
+   },
+   "threshold": 0.6909,
+   "op": ">=",
+   "spread": null,
+   "also": {
+    "H95_leaky": 0.6887,
+    "H_all_own_arcs_ge24": {
+     "n": 72,
+     "median": 0.6666
+    }
+   }
+  },
+  {
+   "id": "HO-A2-all",
+   "cls": "guard",
+   "statistic": "median KGE of every rim arc with a CalSim3 series (196)",
+   "window": "WY1976-85, all months",
+   "source": "tier2/tier2_monthly.csv",
+   "comparator": {
+    "run": "H",
+    "n": 196,
+    "value": 0.6376
+   },
+   "threshold": 0.6376,
+   "op": ">=",
+   "spread": null,
+   "also": {
+    "H95_leaky": 0.6432,
+    "H_tierA64": 0.6639
+   }
+  },
+  {
+   "id": "HO-A2-nonA",
+   "cls": "guard",
+   "statistic": "median KGE of the non-tier-A arcs (132; regionalization check)",
+   "window": "WY1976-85, all months",
+   "source": "tier2/tier2_monthly.csv",
+   "arcs": [
+    "I_ALD002",
+    "I_ALD004",
+    "I_ALOHA",
+    "I_AMADR",
+    "I_ANG017",
+    "I_BANOS",
+    "I_BEARD",
+    "I_BLKBT",
+    "I_BOWMN",
+    "I_BRC003",
+    "I_BRR023",
+    "I_BSH003",
+    "I_BTC048",
+    "I_BTVLY",
+    "I_BUR005",
+    "I_CAP000",
+    "I_CCH053",
+    "I_CHC000",
+    "I_CHW031",
+    "I_CLR011",
+    "I_CLRLK",
+    "I_CLV026",
+    "I_CMBIE",
+    "I_CMCHE",
+    "I_CMPFW",
+    "I_COT033",
+    "I_COW014",
+    "I_CYN009",
+    "I_DBC024",
+    "I_DCT050",
+    "I_DED044",
+    "I_DER001",
+    "I_DER004",
+    "I_DHC021",
+    "I_DONLL",
+    "I_DPC008",
+    "I_DSC035",
+    "I_ECHOL",
+    "I_ELENR",
+    "I_ENGLB",
+    "I_EPARK",
+    "I_ESTMN",
+    "I_FOLSM",
+    "I_FRNCH",
+    "I_FRS046",
+    "I_GERLE",
+    "I_GRZ012",
+    "I_HNSLY",
+    "I_HTCHY",
+    "I_INDVL",
+    "I_ING008",
+    "I_LCBRF",
+    "I_LDC029",
+    "I_LGRSV",
+    "I_LKVLY",
+    "I_LLOYD",
+    "I_LOSVQ",
+    "I_LPC007",
+    "I_LWSTN",
+    "I_LYONS",
+    "I_MCD055",
+    "I_MCLRE",
+    "I_MERLC",
+    "I_MFA001",
+    "I_MFA023",
+    "I_MFA025",
+    "I_MFF019",
+    "I_MFF087",
+    "I_MFS013",
+    "I_MFS022",
+    "I_MFS047",
+    "I_MFY013",
+    "I_MIL003",
+    "I_MLRTN",
+    "I_MNS000",
+    "I_MOK079",
+    "I_MSH015",
+    "I_MTMDW",
+    "I_NBLDB",
+    "I_NFA016",
+    "I_NFA022",
+    "I_NFA054",
+    "I_NFF029",
+    "I_NFM010",
+    "I_NFS005",
+    "I_NFS009",
+    "I_NHGAN",
+    "I_NLC003",
+    "I_NNA013",
+    "I_ORG000",
+    "I_OROVL",
+    "I_ORT014",
+    "I_PARDE",
+    "I_PEDRO",
+    "I_PLC007",
+    "I_PLM001",
+    "I_PTH070",
+    "I_PYN001",
+    "I_PYR001",
+    "I_QNT005",
+    "I_RLLNS",
+    "I_RVPHB",
+    "I_SCOTF",
+    "I_SCW008",
+    "I_SFA030",
+    "I_SFA040",
+    "I_SFA066",
+    "I_SFA076",
+    "I_SFD003",
+    "I_SFF008",
+    "I_SFF011",
+    "I_SFR006",
+    "I_SFS030",
+    "I_SFS033",
+    "I_SFY007",
+    "I_SGRGE",
+    "I_SHSTA",
+    "I_SLC003",
+    "I_SLF009",
+    "I_SLO007",
+    "I_SLUIS",
+    "I_STMPY",
+    "I_STS059",
+    "I_STS072",
+    "I_TGC003",
+    "I_TRNTY",
+    "I_TULOC",
+    "I_WBF006",
+    "I_WBF015",
+    "I_WBF030",
+    "I_WKYTN",
+    "I_WLF013"
+   ],
+   "comparator": {
+    "run": "H",
+    "n": 132,
+    "value": 0.6236
+   },
+   "threshold": 0.6036,
+   "op": ">=",
+   "spread": null
+  },
+  {
+   "id": "HO-U",
+   "cls": "guard",
+   "statistic": "uf family mean KGE (9), monthly depth vs DWR uf_monthly_mm",
+   "window": "WY1976-84 (run H trained uf WY1985)",
+   "source": "metrics_entities_holdout.csv (holdout_metrics)",
+   "comparator": {
+    "run": "H",
+    "value": 0.8833,
+    "per_unit": {
+     "uf_02": 0.7993,
+     "uf_03": 0.9119,
+     "uf_04": 0.9177,
+     "uf_06": 0.8929,
+     "uf_07": 0.9065,
+     "uf_10": 0.9161,
+     "uf_13": 0.8718,
+     "uf_20": 0.7925,
+     "uf_21": 0.9407
+    }
+   },
+   "threshold": 0.8733,
+   "op": ">=",
+   "spread": 0.005,
+   "also": {
+    "H_WY1976_85": 0.8838,
+    "flag_units": [
+     "uf_02",
+     "uf_20"
+    ],
+    "H95_leaky_WY1976_84": 0.8581
+   }
+  },
+  {
+   "id": "HO-C-twins",
+   "cls": "guard",
+   "statistic": "median KGE of the 9 CDEC twins at DWR UF sites, monthly TAF (registry area) vs uf_monthly.csv",
+   "window": "WY1976-85",
+   "source": "sim_daily_mm.npz",
+   "comparator": {
+    "run": "H",
+    "value": 0.9345,
+    "per_unit": {
+     "cdec_ORO": 0.9656,
+     "cdec_YRS": 0.9345,
+     "cdec_FOL": 0.9567,
+     "cdec_MKM": 0.9171,
+     "cdec_NHG": 0.9302,
+     "cdec_NML": 0.8961,
+     "cdec_TLG": 0.9355,
+     "cdec_MRC": 0.9437,
+     "cdec_MIL": 0.9084
+    }
+   },
+   "threshold": 0.9145,
+   "op": ">=",
+   "spread": 0.018
+  },
+  {
+   "id": "HO-C-FU",
+   "cls": "guard",
+   "statistic": "median KGE of the 10 tier-1 FLOW-UNIMPAIRED anchors, monthly TAF",
+   "window": "WY1976-84 (uf-nested anchors; H trained uf WY1985)",
+   "source": "tier1/tier1_monthly.csv",
+   "comparator": {
+    "run": "H",
+    "value": 0.9268,
+    "per_unit": {
+     "SHA": 0.8575,
+     "CLE": 0.9162,
+     "UF6": 0.8929,
+     "UF8": 0.9681,
+     "UF11": 0.9419,
+     "UF9": 0.9491,
+     "UF16": 0.8911,
+     "UF18": 0.9375,
+     "UF19": 0.963,
+     "UF22": 0.8985
+    }
+   },
+   "threshold": 0.9068,
+   "op": ">=",
+   "spread": 0.018
+  },
+  {
+   "id": "HO-G",
+   "cls": "guard",
+   "statistic": "median daily KGE of the USGS gauges with >= 365 held-out days (registry window inside WY1976-85)",
+   "window": "WY1976-85",
+   "source": "S1 metrics_entities_holdout.csv; H: the hybrid Stage-0 base entity pass of run H (cycle spinup)",
+   "gauges": [
+    "usgs_11196400",
+    "usgs_11197250",
+    "usgs_11199500",
+    "usgs_11209900",
+    "usgs_11213500",
+    "usgs_11214000",
+    "usgs_11218500",
+    "usgs_11224500",
+    "usgs_11226500",
+    "usgs_11230500",
+    "usgs_11237500",
+    "usgs_11253310",
+    "usgs_11264500",
+    "usgs_11266500",
+    "usgs_11269300",
+    "usgs_11274500",
+    "usgs_11274630",
+    "usgs_11275000",
+    "usgs_11281000",
+    "usgs_11282000",
+    "usgs_11283500",
+    "usgs_11284400",
+    "usgs_11292500",
+    "usgs_11294000",
+    "usgs_11294500",
+    "usgs_11299600",
+    "usgs_11315000",
+    "usgs_11316800",
+    "usgs_11318500",
+    "usgs_11334300",
+    "usgs_11337500",
+    "usgs_11341400",
+    "usgs_11371000",
+    "usgs_11374000",
+    "usgs_11375700",
+    "usgs_11379000",
+    "usgs_11390672",
+    "usgs_11394500",
+    "usgs_11396400",
+    "usgs_11408850",
+    "usgs_11409300",
+    "usgs_11413100",
+    "usgs_11414000",
+    "usgs_11426150",
+    "usgs_11427700",
+    "usgs_11433260",
+    "usgs_11449500",
+    "usgs_11451100",
+    "usgs_11523200"
+   ],
+   "comparator": {
+    "run": "H (S0 pass)",
+    "n": 49,
+    "value": 0.654,
+    "mean": 0.4847
+   },
+   "threshold": 0.654,
+   "op": ">=",
+   "spread": null,
+   "also": {
+    "H95_in_sample": 0.7122
+   },
+   "note": "the S0 pass exists (09-29), so HO-G is a guard, not only a report; H95's value is in-sample and never a bar"
+  },
+  {
+   "id": "HO-R",
+   "cls": "report",
+   "statistic": "anchor-rescaled arc KGE beside absolute (same months) + train-to-holdout gaps per family vs H",
+   "window": "WY1976-85 (+ own-record months)",
+   "source": "tier2/tier2_anchor_rescaled.csv (calsim_tier2.anchor_rescaled)",
+   "comparator": {
+    "run": "H",
+    "n": 147,
+    "abs_median": 0.6696,
+    "resc_median": 0.6849,
+    "gaps": {
+     "uf": 0.0509,
+     "cdec_twins": -0.0208,
+     "fu_anchors": -0.0102,
+     "tierA_arcs": 0.0131
+    }
+   }
+  },
+  {
+   "id": "HO-P17",
+   "cls": "report",
+   "statistic": "P17b: median KGE over the 18 DWR UF sites by era (monthly TAF)",
+   "window": "WY1926-49, WY1950-84_mixed, WY1976-85, WY1976-84, WY1986-2014",
+   "source": "p17/<run>_sim_1925.npz (p17b_s1.py)",
+   "comparator": {
+    "H": {
+     "WY1926-49": 0.8293,
+     "WY1950-84_mixed": 0.8671,
+     "WY1976-84": 0.9155,
+     "WY1976-85": 0.9194,
+     "WY1986-2014": 0.9369
+    },
+    "H95": {
+     "WY1926-49": 0.8102,
+     "WY1950-84_mixed": 0.872,
+     "WY1976-84": 0.905,
+     "WY1976-85": 0.9021,
+     "WY1986-2014": 0.923
+    }
+   }
+  }
+ ]
+}

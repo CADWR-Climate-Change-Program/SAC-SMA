@@ -1,0 +1,126 @@
+PREREG_S1 (FROZEN 2026-09-29, before any S1 number) — the H95 recipe with a WY1976-85 holdout and the 64 CalSim3 arcs (2026-09-29)
+=================================================================================================
+Written before any S1 number and frozen with prereg/bars.json, derive_bars.py, s1lib.py and readout.py
+(SHA256SUMS, chmod a-w); run_s1.sh refuses to launch unless the sums check, and copies all five into
+the run's provenance/.
+
+User decisions (09-29): area-rule shares, re-solved so the realized coefficients hit the footprint-area
+shares; UF back-extension WY1950-75; WY1976-85 held out in every family; arcs in selection at the area
+shares (--mt-select-weight area) with sel3 logged; absolute-volume arc loss (anchor-rescaled score
+eval-only); keep the 9 dual-use arcs and Caliente Cr; --dedup-cells off; seed 0 only.
+
+RUN
+  s1_cs64_ho7685_ufx_areaw_all_kref05_sacx_carry_px_aef = build/run_s1.sh run (branch
+  dpl/s1-calsim-retrain @ 93f2998 = the loss/holdout code ce7a920 + the post-train chain 93f2998, on
+  main c5fae09): H95's flags + --holdout-wy 1976-1985
+  --uf-train-start 1949-10-01 --calsim-arcs train_default --mt-select-weight area,
+  --mt-family-weight usgs=0.2366,cdec=0.5508,uf=0.1226,calsim=0.0900 (realized .1967/.5070/.2053/.0911),
+  --mt-loss-ref usgs=0.7388,cdec=0.4202,uf=0.1140,calsim=0.3549 p 0.5 (kappa .7625/1.0111/1.9412/1.1002),
+  --epochs 120, patience 10. Numbers per BUILD_REPORT sections 1, 5, 6 (they supersede S1_DESIGN_draft).
+  Chain: train, evaluate (+ metrics_entities_holdout.csv), tier 1, tier 2 --components parts, atlas,
+  P17b (p17/p17b_s1.py), readout (prereg/readout.py).
+
+KNOWN INPUT CHANGE (bars do not depend on it)
+  LANDED before launch: main c5fae09 corrected 92 more misplaced-decimal x10 precip cell-days
+  (wgen_scen/x10/X10_FINDINGS.txt; 1916-08-26 .. 1992-07-12; prcp_x10_artifacts.csv 197 -> 289 pairs;
+  historical_livneh_unsplit.nc sha256 34258d4c...). S1 trains on the corrected store. Every comparator below comes from
+  run H / H95 as archived, on the UNFIXED store, and none is re-derived after the fix. Exposure: 4 pairs in
+  WY1976-85 (1976-08-19, 1980-07-02/03; CalSim3-footprint cells of no entity: tier-2 extrapolated arcs
+  only); 78 in WY1950-75, which S1 now trains: cs_I_HON021 +151.7 mm basin mean on 1974-07-08 (an
+  arc_obs_mask month, a trained target), cs_I_THM028 +0.5 mm 1968-08-21 (trained month), uf_04 +0.57 mm
+  1968-08-21 (back-extension window); the rest on untrained months/entities. The store's LFS oid is
+  recorded at launch (data_lfs_oids.txt); the S1-vs-H difference at those arcs carries the fix.
+  The 419 sub-150-mm suspects (same report, section 5) are not fixed and not in any comparison.
+
+COMPARATORS (every number re-derived by prereg/derive_bars.py -> bars.json; s1lib.py computes the
+comparator and, in readout.py, the S1 value with the same function)
+  run H   noah_cdec_uf_sacx_carry_px_aef (best.pt sha 41dd6f37, epoch 68). CLEAN holdout comparator,
+          except uf WY1985 (it trained 1984-10..2014-09): uf and uf-nested locations are compared on
+          WY1976-84. Its USGS-69 sims = the hybrid Stage-0 base entity pass (sha 1175f73f, cycle spinup).
+  H95     noah_cdec_uf_usgs_areaw_all_kref05_sacx_carry_px_aef (best.pt a64a1df0, epoch 92). LEAKY on the
+          holdout (50 USGS gauges trained inside WY1976-85, spatial leak into every arc/anchor on their
+          cells): training-period guards only, holdout values shown as "leaky", never a bar.
+  Sources: <run>/sim_daily_mm.npz (evaluate, cycle spinup), <run>/tier1/tier1_monthly.csv,
+  <run>/tier2/tier2_monthly.csv, <run>/checkpoints/best.pt (cfg obs_mask), committed stores (wt_merge/data).
+  Checks: the re-derivation reproduces scout_select_baseline/rescore to 4 d.p. (H95 sel3 0.8522, usgs
+  0.6923/0.7149, cdec 0.8801/0.8821, uf 0.9364; H holdout uf 0.8833, arcs 0.6376/0.6609 ...).
+
+SPREADS AND READING OF A SINGLE BAR (PREREG_H95): cdec family mean ~0.018, uf family mean ~0.005, single
+entity ~0.04; arc family unknown (margins >= 0.03 on 45-64-arc medians), usgs family unknown (literal).
+|S1 - comparator| < spread => "unreadable" (holds / below the bar), never pass or fail. A GUARD holds
+unless it is a readable fail; a BAR passes only on a readable pass; no spread => literal.
+
+BARS (window; source; comparator -> threshold)
+Mechanism (S1 logs)
+  M-cs   bar    e0 realized coefficient shares sum(c_f/kappa_f), 60 stepped chunks; chunk_log.csv;
+                every family within +/-0.01 of usgs .1967 / cdec .5070 / uf .2052 / calsim .0911.
+  M-mass report loss-mass shares per epoch; flag an epoch >= 10 with calsim outside [0.5x, 2x] its e0 share.
+  M-clip bar    share of stepped chunks with gnorm > 1 in epochs >= 5 < 0.5, best.pt selection finite;
+                flag any epoch skipping > 4 of 70 chunks (H95 skipped 7 in total).
+Training period (holdout-masked targets; registry windows; the run's obs_mask; NO uf back-extension)
+  S-sel  flag   best epoch in [40, 110). Report the 4-family selection and sel3 (logged and re-scored)
+                vs H95's sel3 0.8522 (H95 shares, its evaluate sims, holdout-masked; logged 0.8509). Not a bar.
+  A-trn  bar    tier-A 64 arcs on their arc_obs_mask months (WY1950-75 + WY1986-2015), tier-2 monthly TAF vs
+                CalSim3 INFLOW; H95 (never trained arcs) mean 0.6188 / median 0.6795 -> mean >= 0.6688 AND
+                median >= 0.7095. Also reported: metrics_entities.csv calsim_monthly kge (entity-cell basis).
+  C1     guards cdec (17), daily, WY1986+ registry windows: mean H95 0.8801 -> 0.8601; median 0.8821 -> 0.8621
+                (spread 0.018); ORO 0.8881 -> 0.8481, YRS 0.8601 -> 0.8201, SHA 0.9085 -> 0.8685,
+                BND 0.9102 -> 0.8702, NHG 0.8729 -> 0.8329 (spread 0.04; NHG also shown vs H 0.9239).
+                H for reference: mean 0.8739, median 0.8856.
+  U1     guards uf (9), monthly, registry window minus the holdout = WY1986-2014 (S1: kge_reg): mean H95
+                0.9364 -> 0.9264 (spread 0.005; H95 re-scored on the SAME window, its logged 0.9351 was
+                WY1985-2014; H 0.9342); no entity below H95 - 0.04: uf_02 .9456 uf_03 .9426 uf_04 .9630
+                uf_06 .9098 uf_07 .9619 uf_10 .9577 uf_13 .9236 uf_20 .9216 uf_21 .9018.
+  G1u    guards usgs (69), daily, registry windows minus WY1976-85: mean H95 0.6923 -> 0.6623, median
+                0.7149 -> 0.6849; mean < 0.6423 FAILS (hard); between = the recorded cost of holdout + arcs
+                (discuss).
+Holdout WY1976-85 (the reason for S1)
+  HO-A1  PRIMARY bar  median KGE of the 45 tier-A arcs with >= 24 own-record months inside WY1976-85
+                (calsim_arcs.own_record_months: the arc_obs_mask rule on the holdout; list frozen in
+                bars.json), tier-2 monthly TAF vs INFLOW on those months: H 0.6609 -> >= 0.6909.
+                (H95 leaky 0.6887; H all 72 own-record arcs 0.6666.)
+  HO-A2  guards every rim arc with a series (196), WY1976-85 all months: H median 0.6376 -> >= 0.6376;
+                the 132 non-tier-A arcs (regionalization): H 0.6236 -> >= 0.6036. Report tier-A 64 (H 0.6639,
+                H95 leaky 0.7045).
+  HO-U   guard  uf (9) mean, WY1976-84, monthly depth vs DWR uf_monthly_mm (metrics_entities_holdout.csv):
+                H 0.8833 -> >= 0.8733 (spread 0.005). Report WY1976-85 (H 0.8838; S1's first full-holdout
+                uf number) and every unit; flag uf_02 (H 0.7993) and uf_20 (H 0.7925). H95 leaky 0.8581.
+  HO-C   guards CDEC twins at the 9 DWR UF sites, monthly TAF (registry area) vs uf_monthly.csv, WY1976-85:
+                H median 0.9345 -> >= 0.9145; the 10 tier-1 FLOW-UNIMPAIRED anchors, WY1976-84: H median
+                0.9268 -> >= 0.9068 (spread 0.018 for both).
+  HO-G   guard  median daily KGE of the 49 USGS gauges with >= 365 held-out days (registry window inside
+                WY1976-85): H (Stage-0 pass) 0.6540 -> >= 0.6540 (literal; H mean 0.4847). H95's 0.7122 is
+                in-sample, never a bar. (The design had HO-G as report-until-the-pass-exists; it exists.)
+  HO-R   report anchor-rescaled arc KGE (tier2_anchor_rescaled.csv: per closure group and complete WY every
+                member arc scaled by anchor / simulated arc sum, close_water_years proportional) beside the
+                absolute KGE on the same months: H 147 arcs, absolute 0.6696 / rescaled 0.6849 (WY1976-85).
+                Train-to-holdout gaps (train minus holdout) vs H: uf +0.051, CDEC twins -0.021, FU anchors
+                -0.010, tier-A arcs +0.013. A shrinking gap with flat training skill is the healthy outcome.
+  HO-P17 report P17b 18 DWR UF sites, median monthly KGE by era (p17b_s1.py): H WY1926-49 0.8293,
+                WY1950-84_mixed 0.8671, WY1976-85 0.9194, WY1976-84 0.9155, WY1986-2014 0.9369; H95 0.8102 /
+                0.8720 / 0.9021 / 0.9050 / 0.9230. WY1926-49 is pre-training for all, not a bar (user).
+
+READING (readout.py applies it; results inside the spreads are unreadable)
+  M-cs fail -> the loss is not weighted as registered: stop, check the recipe before reading skill.
+  A-trn fail -> the arcs did not train: stop, discuss.
+  A-trn pass, HO-A1 not a readable pass -> fitted but not generalizing: stop, discuss; no downstream refit.
+  A-trn + HO-A1 pass, every guard holds (C1, U1, G1u, HO-A2, HO-U, HO-C, HO-G) -> S1 is the new CalSim dPL:
+    run the 17 mandatory v3 tier-2 parts passes (the base pass comes from this chain), refit v2/v3 with the
+    frozen recipes, write PREREG_HYBRID_ALT_v2 (its section 17). A G1u "cost (discuss)" is recorded, not
+    blocking; a G1u hard fail blocks.
+  Any guard readable fail -> the NO-ARCS CONTROL.
+
+NO-ARCS CONTROL (conditional, PREREG_H95 A1 pattern)
+  Trigger: any readable guard fail (C1-*, U1-*, G1u-*, HO-A2-*, HO-U, HO-C-*, HO-G). Not triggered by
+  A-trn / HO-A1 (those are about the arcs themselves) or by unreadable results.
+  Run: S1-noarcs = the S1 recipe with --calsim-arcs none, same seed, same holdout / uf back-extension /
+  frozen levels for usgs/cdec/uf, shares re-solved over 3 families to the 3-family area shares
+  (s1_shares.py), --mt-select-weight area. Its exact flags are fixed and written here BEFORE it launches
+  (owed: run_s1.sh has no noarcs mode yet). ~16 h GPU + the chain. Read: the same bars on S1-noarcs; a
+  guard that fails in S1 and holds in S1-noarcs is attributed to the arcs.
+
+NOT BARS
+  Tier 1 / tier 2 WY1950-84_mixed (partly in-sample for S1), sel3 vs H95, the entity-basis A-trn, P17b,
+  HO-R. Tier-2 basis note: each tier-A arc is its own cs_ parent in S1 (arc-outlet routing on the trained
+  cs_ rows), so S1 tier-2 is not like-for-like with H / H95 tier-2 row construction; the bars compare the
+  arc volumes against the same CalSim3 series on the same months.
