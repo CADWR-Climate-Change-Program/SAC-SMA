@@ -23,6 +23,11 @@ The unconstrained-arcs tab reads ``trained_cell_frac`` from ``tier2_metrics.csv`
 each arc's area on cells the run trained on, written by tier 2) to tell the arcs on ground the
 loss never saw from those that overlap a trained creek footprint.
 
+A run with ``DplConfig.holdout_wy`` is shown over its held-out water years (``WY1976-85``; the
+location tables also list ``WY1976-84`` and ``WY1950-84_mixed``, :mod:`sacsma.dpl.calsim_tier1`),
+its creek records leave the holdout out (so the creek columns read out of sample there), there is
+no full-against-trimmed tab, and its ``calsim_monthly`` arcs get their own footprint map.
+
 Usage::
 
     python -m sacsma.dpl.calsim_atlas <run_dir> [--data-dir data] [--out DIR] [--tier2-dir ...] [--label ...]
@@ -43,7 +48,8 @@ import numpy as np
 import pandas as pd
 
 from ..calsim.catchments import MERGED_LAYER, load_catchments, series_arc
-from .calsim_tier1 import TRIMMED_WINDOW, VALIDATION_WINDOW, arc_to_set, load_sets
+from .calsim_tier1 import (TRIMMED_WINDOW, VALIDATION_WINDOW, arc_to_set, holdout_windows, load_sets,
+                           run_holdout_wy, window_range)
 
 
 def _rim(data_dir):
@@ -127,11 +133,12 @@ def run_recipe(run_dir: Path, data_dir: str | Path, trained=None) -> dict | None
     ids = [str(x) for x in (trained if trained is not None else ck.get("basins") or [])]
     reg = pd.read_csv(Path(data_dir) / "multifamily" / "entities.csv", dtype={"site_id": str})
     fam_of = dict(zip(reg["entity_id"], reg["family"], strict=True))
-    counts = {f: sum(fam_of.get(i) == f for i in ids) for f in ("usgs_daily", "cdec_daily", "uf_monthly")}
+    counts = {f: sum(fam_of.get(i) == f for i in ids)
+              for f in ("usgs_daily", "cdec_daily", "uf_monthly", "calsim_monthly")}
     counts = {f: n for f, n in counts.items() if n}
     spec = str(cfg.get("mt_family_weight", "none"))
     daily = [f for f in ("usgs_daily", "cdec_daily") if f in counts]
-    monthly = [f for f in ("uf_monthly",) if f in counts]
+    monthly = [f for f in ("uf_monthly", "calsim_monthly") if f in counts]
     n_daily = sum(counts[f] for f in daily)
     if spec == "none":                      # every daily entity equal in the daily term; the two terms add 1:1
         d = 0.5 if monthly else 1.0
@@ -173,7 +180,10 @@ def run_recipe(run_dir: Path, data_dir: str | Path, trained=None) -> dict | None
                 + ", effective coefficients " + ", ".join(f"{f.split('_')[0]} {100 * eff[f] / z:.3g}%"
                                                           for f in kappa)
                 + " — set so each family's share of the optimizer step matches its nominal share; "
-                  "selection keeps the nominal shares")
+                + ("selection at the footprint-area shares (--mt-select-weight area)"
+                   if cfg.get("mt_select_weight") == "area" else
+                   f"selection at the shares {cfg['mt_select_weight']} (--mt-select-weight)"
+                   if cfg.get("mt_select_weight") else "selection keeps the nominal shares"))
     return dict(counts=counts, n=len(ids), spec=spec, share=share, how=how, epoch=ck.get("epoch"),
                 select=_SELECT_LABEL.get(ck.get("mt_select")), seed=cfg.get("seed"), norm=norm,
                 kappa=kappa)
@@ -192,8 +202,10 @@ def _recipe_sentence(rc: dict) -> str:
 
 FAMILY_LABEL = {"cdec_daily": "CDEC daily full natural flow",
                 "uf_monthly": "DWR Appendix B monthly unimpaired flow",
-                "usgs_daily": "USGS daily unimpaired gauges"}
-FAMILY_COLOR = {"cdec_daily": "tab:blue", "uf_monthly": "tab:green", "usgs_daily": "tab:orange"}
+                "usgs_daily": "USGS daily unimpaired gauges",
+                "calsim_monthly": "CalSim3 rim INFLOW arcs (own gauge record months)"}
+FAMILY_COLOR = {"cdec_daily": "tab:blue", "uf_monthly": "tab:green", "usgs_daily": "tab:orange",
+                "calsim_monthly": "tab:purple"}
 
 
 def _entity_footprints(data_dir: str | Path, entity_ids=None):
@@ -227,7 +239,7 @@ def family_maps(catch, data_dir, out: Path, trained=None, label: str = "") -> di
     fp = _entity_footprints(data_dir, trained)
     asp = _aspect(catch)
     out_map = {}
-    for fam in ("cdec_daily", "uf_monthly", "usgs_daily"):
+    for fam in ("cdec_daily", "uf_monthly", "usgs_daily", "calsim_monthly"):
         g = fp[fp["family"] == fam].sort_values("area_mi2", ascending=False).reset_index(drop=True)
         if not len(g):
             continue
@@ -241,7 +253,7 @@ def family_maps(catch, data_dir, out: Path, trained=None, label: str = "") -> di
         catch.plot(ax=ax, color="0.94", edgecolor="0.82", linewidth=0.3)
         g.plot(ax=ax, color=FAMILY_COLOR[fam], edgecolor="k", linewidth=0.6, alpha=0.45)
         rows = []
-        big = fam != "usgs_daily"
+        big = fam not in ("usgs_daily", "calsim_monthly")
         for i, r in enumerate(g.itertuples(index=False), start=1):
             tag = r.entity_id if big else str(i)
             has_out = pd.notna(r.outlet_lat) and pd.notna(r.outlet_lon)
@@ -365,7 +377,8 @@ def domain_maps(catch, sets, geoms, metrics, out: Path, label: str, window: str,
     return paths
 
 
-def creek_overlap(sets, geoms, data_dir: str | Path, trained=None, window: str = VALIDATION_WINDOW) -> dict:
+def creek_overlap(sets, geoms, data_dir: str | Path, trained=None, window: str = VALIDATION_WINDOW,
+                  holdout_wy=()) -> dict:
     """Per tier-1 location: the USGS creek gauges whose delineated watersheds overlap the
     location's arcs, with their record windows, and how much of the validation window the
     model saw at that location through them while training.
@@ -387,6 +400,9 @@ def creek_overlap(sets, geoms, data_dir: str | Path, trained=None, window: str =
     window), ``trim_cover`` (the coverage inside it) and ``n_seen_trim`` (the seen creeks with data
     inside it).
 
+    ``holdout_wy`` (a run's ``DplConfig.holdout_wy``): those water years are out of every creek's
+    training record, so a window inside them is out of sample by construction.
+
     Verdict from ``window_cover``: ``out of sample`` (0), ``partly seen through creeks``
     (below 0.5) or ``seen through creeks``.  Where the model saw the window through a creek,
     the validation there tests a transfer of scale and variable (daily interior gauge in
@@ -398,7 +414,6 @@ def creek_overlap(sets, geoms, data_dir: str | Path, trained=None, window: str =
     import xarray as xr
     from shapely import make_valid
     from shapely.ops import unary_union
-    from .calsim_tier1 import WINDOWS
     data_dir = Path(data_dir)
     reg = pd.read_csv(data_dir / "multifamily" / "entities.csv", dtype={"site_id": str})
     creeks = reg[reg["family"] == "usgs_daily"].set_index("entity_id")
@@ -411,7 +426,7 @@ def creek_overlap(sets, geoms, data_dir: str | Path, trained=None, window: str =
     poly_eq = {sid: make_valid(g) for sid, g in shp_eq.geometry.items()}
     poly_ll = {sid: g for sid, g in shp.geometry.items()}
     MI2 = 2.589988e6
-    w0, w1 = (pd.Period(m, "M") for m in WINDOWS[window])
+    w0, w1 = (pd.Period(m, "M") for m in window_range(window))
     win_months = pd.period_range(w0, w1, freq="M")
     n_val_months = len(win_months)
     ds = xr.open_dataset(data_dir / "usgs" / "flow_daily.nc")
@@ -419,6 +434,9 @@ def creek_overlap(sets, geoms, data_dir: str | Path, trained=None, window: str =
     for eid, r in creeks.iterrows():
         s = ds["flow_mm"].sel(gauge=str(r["site_id"])).to_series()
         s = s[(s.index >= pd.Timestamp(r["train_start"])) & (s.index <= pd.Timestamp(r["train_end"]))]
+        if holdout_wy:
+            wy_s = s.index.year + (s.index.month >= 10)
+            s = s[(wy_s < int(holdout_wy[0])) | (wy_s > int(holdout_wy[1]))]
         fin = s[np.isfinite(s.to_numpy())]
         if not len(fin):
             rec[eid] = dict(first=pd.NaT, last=pd.NaT, n_days=0, n_wy=0, val_months=0, wy_with_data=(), months=frozenset())
@@ -489,8 +507,8 @@ def creek_overlap(sets, geoms, data_dir: str | Path, trained=None, window: str =
         # the location's trimmed validation window (set table val_start_wy .. val_end_wy), the coverage
         # inside it and the creeks that still have data there
         trim_wy = (int(getattr(st, "val_start_wy", min(cover_by_wy))), int(getattr(st, "val_end_wy", max(cover_by_wy))))
-        if trim_wy == (min(cover_by_wy), max(cover_by_wy)):
-            trim_wy = None
+        if trim_wy == (min(cover_by_wy), max(cover_by_wy)) or holdout_wy:
+            trim_wy = None   # a holdout run has no trimmed window (calsim_tier1)
         trim_cover = float(np.mean([c for y, c in cover_by_wy.items() if trim_wy is None or trim_wy[0] <= y <= trim_wy[1]]))
         n_seen_trim = sum(1 for e in seen_ids if trim_wy is None or any(
             trim_wy[0] <= m.year + (m.month >= 10) <= trim_wy[1] for m in rec[e]["months"]))
@@ -517,7 +535,6 @@ def creek_overlap_figure(sid: str, row, catch, geoms, outlets, df, summary: dict
     from matplotlib.lines import Line2D
     from matplotlib.patches import Patch, Rectangle
     from matplotlib.ticker import MaxNLocator
-    from .calsim_tier1 import WINDOWS
     g, diss = geoms[sid]
     asp = _aspect(catch)
     n = len(df)
@@ -588,7 +605,7 @@ def creek_overlap_figure(sid: str, row, catch, geoms, outlets, df, summary: dict
         ttl = f"{sid}: no USGS creek watershed overlaps this location\n(out of sample)"
     ax.set_title(ttl, fontsize=8.2)
     # timeline
-    m0, m1 = WINDOWS[w]
+    m0, m1 = window_range(w)
     y0 = int(m0[:4]) + (int(m0[5:7]) >= 10)
     y1 = int(m1[:4]) + (int(m1[5:7]) >= 10)
     at.axvspan(y0 - 0.5, y1 + 0.5, color="0.86", alpha=0.6, label=f"validation window {w}")
@@ -1021,12 +1038,15 @@ def _trim_label(r) -> str:
     return f"WY{int(str(r.win_start)[:4]) + 1}-{str(r.win_end)[2:4]}"
 
 
-def _metrics_rows(metrics, sid, window):
+def _metrics_rows(metrics, sid, window, extra=()):
     m = metrics[(metrics.set_id == sid)]
     rows = []
-    # the trimmed window has its own tab
-    for r in m[(m.ref_kind != "arcsum_covered") & m.window.isin([window, "train"])].itertuples(index=False):
-        wl = r.window if r.window == window else f"training window {r.win_start}..{r.win_end}"
+    # the trimmed window has its own tab; ``extra``: a holdout run's other windows
+    for r in m[(m.ref_kind != "arcsum_covered") & m.window.isin([window, *extra, "train"])].itertuples(index=False):
+        wl = r.window if r.window in (window, *extra) else f"training window {r.win_start}..{r.win_end}"
+        ex = getattr(r, "excluded_wy", None)
+        if r.window == "train" and isinstance(ex, str) and ex:
+            wl += f" minus WY{ex}"
         rows.append((wl, r))
     for r in m[(m.ref_kind == "arcsum_covered") & (m.window == window)].itertuples(index=False):
         rows.append((f"{window}, covered arcs only ({100 * r.cover_frac:.1f}% of the set)", r))
@@ -1036,7 +1056,7 @@ def _metrics_rows(metrics, sid, window):
 def write_html(sets, metrics, out: Path, label: str, window: str, maps: list[Path], t1_dir: Path,
                t2=None, t2_dir: Path | None = None, fam_maps: dict | None = None,
                creeks: dict | None = None, creeks_trained: bool = True, recipe: dict | None = None,
-               window_cover: dict | None = None, creek_note: str = "") -> Path:
+               window_cover: dict | None = None, creek_note: str = "", extra_windows=()) -> Path:
     e = html.escape
     t2 = t2 if t2 is not None else pd.DataFrame()
     fam_maps = fam_maps or {}
@@ -1142,7 +1162,7 @@ def write_html(sets, metrics, out: Path, label: str, window: str, maps: list[Pat
                      (" Shown but not counted in the run's summary figures." if not s.volume_scored else "") + "</p>")
         parts.append("<table><tr><th>window</th><th>months</th><th>KGE</th><th>NSE</th><th>bias</th><th>r</th><th>alpha</th>"
                      "<th>beta</th><th>seas. mismatch</th><th>CT diff (mo)</th><th>sim / ref TAF/yr</th></tr>")
-        for wl, r in _metrics_rows(metrics, sid, window):
+        for wl, r in _metrics_rows(metrics, sid, window, extra_windows):
             parts.append(f"<tr><td class='l'>{e(wl)}</td><td>{int(r.n_months)}</td><td>{r.kge:.3f}</td><td>{r.nse:.3f}</td>"
                          f"<td>{r.pbias:+.1f}%</td><td>{r.r:.3f}</td><td>{r.alpha:.2f}</td><td>{r.beta:.2f}</td>"
                          f"<td>{r.seas_mismatch:.3f}</td><td>{r.ct_diff:+.2f}</td><td>{r.sim_taf_yr:,.0f} / {r.ref_taf_yr:,.0f}</td></tr>")
@@ -1262,7 +1282,7 @@ def write_html(sets, metrics, out: Path, label: str, window: str, maps: list[Pat
 
 def write_markdown(sets, metrics, out: Path, label: str, window: str, maps: list[Path], creeks: dict | None = None,
                    t1_dir: Path | None = None, recipe: dict | None = None,
-                   window_cover: dict | None = None, creek_note: str = "") -> Path:
+                   window_cover: dict | None = None, creek_note: str = "", extra_windows=()) -> Path:
     # tier-1 figures are linked relative to the atlas folder, wherever it is written
     figs = (Path(os.path.relpath((t1_dir or out.parent) / "figures", out)).as_posix())
     lines = [f"# CalSim3 validation atlas (tier 1) — {label}", ""]
@@ -1299,7 +1319,7 @@ def write_markdown(sets, metrics, out: Path, label: str, window: str, maps: list
                   + (f" {s.note}." if s.note else ""), "",
                   "| window | months | KGE | NSE | bias | r | alpha | beta | seas. mismatch | sim / ref TAF/yr |",
                   "|---|---|---|---|---|---|---|---|---|---|"]
-        for wl, r in _metrics_rows(metrics, s.set_id, window):
+        for wl, r in _metrics_rows(metrics, s.set_id, window, extra_windows):
             lines.append(f"| {wl} | {int(r.n_months)} | {r.kge:.3f} | {r.nse:.3f} | {r.pbias:+.1f}% | {r.r:.3f} | "
                          f"{r.alpha:.2f} | {r.beta:.2f} | {r.seas_mismatch:.3f} | {r.sim_taf_yr:,.0f} / {r.ref_taf_yr:,.0f} |")
         lines += ["", f"![{s.set_id} map]({s.set_id}_map.png) ![{s.set_id} zoom]({s.set_id}_zoom.png)", "",
@@ -1338,17 +1358,22 @@ def main(argv=None) -> None:
     out.mkdir(parents=True, exist_ok=True)
     label = a.label or t1.parent.name
     metrics = pd.read_csv(t1 / "tier1_metrics.csv")
+    run_dir = Path(a.run_dir) if a.run_dir else t1.parent
+    # a run that held water years out of training is validated over them (calsim_tier1)
+    ho = run_holdout_wy(run_dir)
+    ho_win = holdout_windows(ho) if ho else None
+    vwin = next(iter(ho_win)) if ho_win else VALIDATION_WINDOW
+    extra = tuple(list(ho_win)[1:]) if ho_win else ()
     sets = load_sets(a.data_dir)
     catch = _rim(a.data_dir)
     geoms = _set_geoms(catch, sets)
     outlets = _outlets(a.data_dir)
-    run_dir = Path(a.run_dir) if a.run_dir else t1.parent
     overlap, _ = daily_monthly_overlap(a.data_dir, run_dir)
     t2_dir = Path(a.tier2_dir) if a.tier2_dir else run_dir / "tier2"
     t2 = None
     if (t2_dir / "tier2_metrics.csv").exists():
         t2 = pd.read_csv(t2_dir / "tier2_metrics.csv")
-        t2 = t2[t2.window == VALIDATION_WINDOW].copy()
+        t2 = t2[t2.window == vwin].copy()
         deriv = Path(a.arc_derivation) if a.arc_derivation else Path(a.data_dir) / "calsim" / "calsim3_arc_derivation.csv"
         if deriv.exists():
             keep = [c for c in ("arc", "method_class", "record_frac", "record_owner") if c in pd.read_csv(deriv, nrows=0).columns]
@@ -1365,14 +1390,14 @@ def main(argv=None) -> None:
     else:
         t2_dir = None
     t2_idx = t2.set_index("arc") if t2 is not None else None
-    maps = domain_maps(catch, sets, geoms, metrics, out, label, VALIDATION_WINDOW, overlap=overlap)
+    maps = domain_maps(catch, sets, geoms, metrics, out, label, vwin, overlap=overlap)
     trained = None
     if (run_dir / "sim_daily_mm.npz").exists():
         trained = set(np.load(run_dir / "sim_daily_mm.npz")["entity_id"].tolist())
     fam_maps = family_maps(catch, a.data_dir, out, trained=trained, label=label)
     print("atlas: family footprint maps for " + ", ".join(f"{k} ({len(v[1])})" for k, v in fam_maps.items())
           + ("" if trained else " (all base registry entities: the run has no sim_daily_mm.npz)"))
-    creeks = creek_overlap(sets, geoms, a.data_dir, trained=trained, window=VALIDATION_WINDOW)
+    creeks = creek_overlap(sets, geoms, a.data_dir, trained=trained, window=vwin, holdout_wy=ho)
     creeks_trained = trained is None or any(str(x).startswith("usgs_") for x in trained)
     n = 0
     for s in sets.itertuples(index=False):
@@ -1394,10 +1419,13 @@ def main(argv=None) -> None:
     reg = pd.read_csv(Path(a.data_dir) / "multifamily" / "entities.csv")
     reg_creeks = set(reg.loc[reg["family"] == "usgs_daily", "entity_id"])
     n_tr = len(reg_creeks) if trained is None else len(reg_creeks & set(trained))
-    all_creeks = creeks if n_tr == len(reg_creeks) else creek_overlap(sets, geoms, a.data_dir, trained=None,
-                                                                      window=VALIDATION_WINDOW)
-    window_cover = {sid: v[1] for sid, v in all_creeks.items()}
-    if not (metrics.window == TRIMMED_WINDOW).any() and any(v.get("trim_wy") for v in window_cover.values()):
+    if ho:   # no trimmed windows: the holdout is out of every creek's training record
+        window_cover, n_tr = {}, len(reg_creeks)
+    else:
+        all_creeks = creeks if n_tr == len(reg_creeks) else creek_overlap(sets, geoms, a.data_dir, trained=None,
+                                                                          window=VALIDATION_WINDOW)
+        window_cover = {sid: v[1] for sid, v in all_creeks.items()}
+    if not ho and not (metrics.window == TRIMMED_WINDOW).any() and any(v.get("trim_wy") for v in window_cover.values()):
         print("atlas: tier1_metrics.csv has no trimmed rows: the page will not have the full-against-trimmed tab "
               "(re-run calsim_tier1)")
     creek_note = ("" if n_tr == len(reg_creeks) else
@@ -1407,11 +1435,11 @@ def main(argv=None) -> None:
                   f"This run trained {n_tr} of the registry's {len(reg_creeks)} USGS creeks: the creek columns describe "
                   "all of the registry's gauges, which set the windows; the coverage by the trained creeks alone is on "
                   "each location's tab.")
-    page = write_html(sets, metrics, out, label, VALIDATION_WINDOW, maps, t1, t2=t2, t2_dir=t2_dir,
+    page = write_html(sets, metrics, out, label, vwin, maps, t1, t2=t2, t2_dir=t2_dir,
                       fam_maps=fam_maps, creeks=creeks, creeks_trained=creeks_trained, recipe=recipe,
-                      window_cover=window_cover, creek_note=creek_note)
-    md = write_markdown(sets, metrics, out, label, VALIDATION_WINDOW, maps, creeks=creeks, t1_dir=t1, recipe=recipe,
-                        window_cover=window_cover, creek_note=creek_note)
+                      window_cover=window_cover, creek_note=creek_note, extra_windows=extra)
+    md = write_markdown(sets, metrics, out, label, vwin, maps, creeks=creeks, t1_dir=t1, recipe=recipe,
+                        window_cover=window_cover, creek_note=creek_note, extra_windows=extra)
     print(f"wrote {n} location map pairs, {len(maps)} domain maps, {page} ({page.stat().st_size / 1e6:.1f} MB) and {md}")
 
 

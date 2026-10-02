@@ -118,6 +118,20 @@ def cycle_spinup(
     return state, passes, change
 
 
+def _pert_col(v, neutral: float):
+    """A perturbation as applied to an ``(n_phys, T)`` forcing chunk: None when it is the
+    scalar ``neutral`` value (no-op, the forcing untouched), the scalar itself otherwise,
+    or a per-row tensor as an ``(n_phys, 1)`` column."""
+    if isinstance(v, torch.Tensor):
+        return v.reshape(-1, 1)
+    return None if v == neutral else v
+
+
+def _perturbed(temp_delta, precip_scale) -> bool:
+    return (isinstance(temp_delta, torch.Tensor) or isinstance(precip_scale, torch.Tensor)
+            or bool(temp_delta) or precip_scale != 1.0)
+
+
 def cold_state(dom: DomainTensors, cfg: DplConfig,
                params: dict[str, torch.Tensor]) -> PipelineState:
     """The cycle spinup's start: the frozen cold start (SMA [0, 0, 100, 100, 100, 0],
@@ -150,20 +164,24 @@ def stream_rows(
     and the state carries their routing history (``state.hist_parts``).
     ``temp_delta`` (degC, added to tavg/tmin/tmax) and ``precip_scale`` (multiplies
     precip) are a uniform climate perturbation of the forcing, the scalar path of
-    ``evaluate._noah_stream``; the defaults leave the forcing untouched."""
+    ``evaluate._noah_stream``; the defaults leave the forcing untouched.  Either may
+    also be a ``(n_phys,)`` tensor, one value per physics row (the scenario batch of
+    :func:`sacsma.dpl.calsim_tier2.stream_batch`: each row's forcing perturbed by its
+    own scenario's value, the same arithmetic as the scalar path)."""
     out: list[torch.Tensor] = []
+    pscale, tdelta = _pert_col(precip_scale, 1.0), _pert_col(temp_delta, 0.0)
     with torch.no_grad():
         t = t0
         while t < t1:
             te = min(t + window, t1)
             pr, ta, doy, leap = dom.chunk(t, te)
             tn, tx = dom.chunk_tmm(t, te)
-            if precip_scale != 1.0:             # multiplicative precip perturbation
-                pr = pr * precip_scale
-            if temp_delta:                      # uniform warming perturbation
-                ta = ta + temp_delta
+            if pscale is not None:              # multiplicative precip perturbation
+                pr = pr * pscale
+            if tdelta is not None:              # uniform warming perturbation
+                ta = ta + tdelta
                 if tn is not None:
-                    tn, tx = tn + temp_delta, tx + temp_delta
+                    tn, tx = tn + tdelta, tx + tdelta
             res = run_window(
                 pr, ta, doy, leap, dom.phys_lat_rad, dom.phys_elev, params, uh, state,
                 n_inc=cfg.n_inc, perc_mode=cfg.perc_mode, fracp_floor=cfg.fracp_floor,
@@ -195,7 +213,7 @@ def spin_state(
     t0: int, *, mode: str = "cycle",
     agg: Callable[[torch.Tensor], torch.Tensor] | None = None,
     temp_delta: float = 0.0, precip_scale: float = 1.0,
-    parts: bool = False,
+    parts: bool = False, window: int = 512,
 ) -> tuple[PipelineState, str]:
     """The state at record day ``t0`` under ``mode`` (eager): ``cycle`` from the cold
     start over the window's first ``cfg.spinup_years`` years, ``cfg.spinup_passes``
@@ -207,10 +225,13 @@ def spin_state(
     own climate.  ``parts`` streams the spin-up with the runoff parts on, so the
     returned state carries their routing history (``state.hist_parts``) for a
     following ``stream_rows(parts=True)``; the SAC/snow/canopy states and the
-    diagnostic are unchanged."""
+    diagnostic are unchanged.  Either perturbation may be a per-row tensor
+    (:func:`stream_rows`); ``window`` is :func:`stream_rows`' chunk length (memory only)."""
     pert = {}
-    if temp_delta or precip_scale != 1.0:
+    if _perturbed(temp_delta, precip_scale):
         pert = dict(temp_delta=temp_delta, precip_scale=precip_scale)
+    if window != 512:
+        pert["window"] = window
     if parts:
         pert["parts"] = True
         if agg is not None:        # the diagnostic rows see the flow only

@@ -64,6 +64,8 @@ from .config import (
     CANOPY_LEARNED_PARAMS,
     CANOPY_LITE_LEARNED,
     EQUAL_FAMILY_SHARES,
+    FAMILY_KEYS,
+    MONTHLY_FAMILIES,
     DplConfig,
     family_loss_refs,
     family_shares,
@@ -122,6 +124,10 @@ _CHUNK_LOG_COLS = ("epoch", "k", "start", "days", "live", "nograd", "stepped",
 _EVAL_TERM_COLS = ("epoch", "eval_loss", "usgs_nnse", "usgs_log", "usgs_var",
                    "usgs_timing", "usgs_peak", "cdec_nnse", "cdec_log", "cdec_var",
                    "cdec_timing", "cdec_peak", "uf_monthly")
+#: the CalSim3 arc family's columns, appended only when a run trains it (the files of
+#: every other run keep the columns above)
+_CS_CHUNK_LOG_COLS = ("n_cs", "c_cs", "l_cs")
+_CS_EVAL_TERM_COLS = ("cs_monthly",)
 #: DplConfig fields a --resume must repeat exactly (the objective and the TBPTT
 #: scheme); the check skips a field an older checkpoint does not record
 _RESUME_FIXED = ("loss", "log_loss_lambda", "log_loss_eps", "var_loss_lambda",
@@ -133,13 +139,15 @@ _RESUME_FIXED = ("loss", "log_loss_lambda", "log_loss_eps", "var_loss_lambda",
                  "noah_sac_exchanges", "spatial_reg_lambda", "adaptive_loss",
                  "et_loss_lambda", "et_level_lambda", "swe_loss_lambda",
                  "obs_mask", "pxtemp_learn", "pxtemp_box", "pxtemp_tau",
-                 "mt_share_norm", "mt_loss_ref", "mt_loss_ref_power", "dedup_cells")
+                 "mt_share_norm", "mt_loss_ref", "mt_loss_ref_power", "dedup_cells",
+                 "holdout_wy", "uf_train_start", "calsim_arcs", "mt_select_weight")
 #: fields added after checkpoints already existed, whose absence means the default:
 #: an older checkpoint is compared as if it recorded these (a pre-mask checkpoint
 #: resumed with --obs-mask must be refused, not skipped)
 _RESUME_DEFAULTED = {"obs_mask": (), "pxtemp_learn": False, "pxtemp_box": (-1.0, 3.0),
                      "pxtemp_tau": 1.0, "mt_share_norm": "present", "mt_loss_ref": "",
-                     "mt_loss_ref_power": None, "dedup_cells": False}
+                     "mt_loss_ref_power": None, "dedup_cells": False, "holdout_wy": (),
+                     "uf_train_start": "", "calsim_arcs": "none", "mt_select_weight": ""}
 
 
 def _split_out(out: dict, et_mode: str):
@@ -296,6 +304,92 @@ def _feature_stats(fs: FeatureSet) -> dict:
     return d
 
 
+def _with_calsim_arcs(data_dir: str, basins: tuple[str, ...] | None) -> tuple[str, ...]:
+    """``DplConfig.calsim_arcs = "train_default"``: the run's entities (``basins``, or the
+    registry's base entities) followed by the ``train_default`` arcs of
+    ``arc_hierarchy.csv`` as ``cs_<ARC>`` registry entities, in hierarchy file order."""
+    from ..io import domain_dir
+    from .calsim_arcs import load_hierarchy
+    from .multi_timescale import CALSIM_FAMILY
+
+    reg = pd.read_csv(domain_dir(data_dir, MULTI_TIMESCALE_DOMAIN) / "entities.csv",
+                      usecols=["entity_id", "family", "site_id"])
+    if basins is None:
+        basins = tuple(reg.loc[reg["family"] != CALSIM_FAMILY, "entity_id"])
+    cs_reg = reg[reg["family"] == CALSIM_FAMILY].set_index("site_id")["entity_id"]
+    if set(basins) & set(cs_reg):
+        raise ValueError("calsim_arcs='train_default' appends the arc family itself — "
+                         "drop the cs_ ids from --basins")
+    hier = load_hierarchy(data_dir)
+    # exactly True (a NaN would read True under astype(bool)); every one is tier A
+    td = hier["train_default"].eq(True)
+    if (hier.loc[td, "tier"] != "A").any():
+        raise ValueError("arc_hierarchy: train_default arcs outside tier A "
+                         f"{hier.loc[td & (hier['tier'] != 'A'), 'arc'].tolist()[:5]}")
+    arcs = hier.loc[td, "arc"].tolist()
+    missing = [a for a in arcs if a not in cs_reg.index]
+    if missing:
+        raise ValueError(f"calsim_arcs: train_default arcs without a registry entity "
+                         f"{missing[:5]} (rebuild entities.csv with --calsim-arcs)")
+    return tuple(basins) + tuple(cs_reg[a] for a in arcs)
+
+
+def _area_shares(data_dir: str, basins, families=None) -> dict[str, float]:
+    """Footprint-area family shares: each family's registry ``area_mi2`` summed over
+    ``basins`` (restricted to ``families`` when given), renormalized — the rule the
+    dPL-95 shares were set by."""
+    from ..io import domain_dir
+
+    reg = pd.read_csv(domain_dir(data_dir, MULTI_TIMESCALE_DOMAIN) / "entities.csv",
+                      usecols=["entity_id", "family", "area_mi2"]).set_index("entity_id")
+    area = reg.loc[list(basins)].groupby("family", sort=False)["area_mi2"].sum()
+    area = {f: float(area[f]) for f in FAMILY_KEYS.values()
+            if f in area.index and (families is None or f in families)}
+    tot = sum(area.values())
+    return {f: a / tot for f, a in area.items()}
+
+
+def _print_holdout(dom: DomainTensors, eobs, cfg: DplConfig) -> None:
+    """The launch-gate counts of ``holdout_wy`` / ``uf_train_start``: values removed and
+    entities touched per family, the (asserted) absence of any finite target inside the
+    holdout, the daily entities still valid for selection (>= 90 days) and the months
+    the uf back-extension adds."""
+    fam = np.array(eobs.family)
+    if cfg.holdout_wy:
+        a, b = cfg.holdout_wy
+        nh = np.array(eobs.n_holdout)
+        win = dom.dates[eobs.t0:eobs.t1]
+        wy_d = np.asarray(win.year + (win.month >= 10))
+        mc = eobs.month_code
+        wy_m = mc // 12 + (mc % 12 >= 9)
+        left = (int(torch.isfinite(eobs.obs_daily[:, torch.as_tensor(
+                    (wy_d >= a) & (wy_d <= b), device=eobs.obs_daily.device)]).sum())
+                + int(torch.isfinite(eobs.obs_monthly[:, torch.as_tensor(
+                    (wy_m >= a) & (wy_m <= b), device=eobs.obs_monthly.device)]).sum()))
+        if left:
+            raise RuntimeError(f"holdout WY{a}-{b}: {left} finite target(s) left inside it")
+        parts = [f"{f.split('_')[0]} {int(nh[fam == f].sum())} "
+                 f"({int(((fam == f) & (nh > 0)).sum())} of {int((fam == f).sum())} entities)"
+                 for f in FAMILY_KEYS.values() if (fam == f).any()]
+        n_d = torch.isfinite(eobs.obs_daily).sum(dim=1).cpu().numpy()
+        dfam = fam[eobs.daily_rows]
+        valid = [f"{f.split('_')[0]} {int(((dfam == f) & (n_d >= 90)).sum())}/"
+                 f"{int((dfam == f).sum())}" for f in ("usgs_daily", "cdec_daily")
+                 if (dfam == f).any()]
+        print(f"train: holdout WY{a}-{b} blanked in every family (after the n_obs audit "
+              "and obs_mask, before the normalizers) — removed " + ", ".join(parts)
+              + "; 0 finite targets left inside it; daily entities still valid (>= 90 d): "
+              + ", ".join(valid), flush=True)
+    if cfg.uf_train_start:
+        ne = np.array(eobs.n_ext)
+        uf = fam == "uf_monthly"
+        per = sorted(set(ne[uf].tolist()))
+        print(f"train: uf back-extension from {cfg.uf_train_start} — +{int(ne[uf].sum())} "
+              f"months over {int(uf.sum())} uf entities ({'/'.join(map(str, per))} each, "
+              "holdout excluded, every one observed); registry windows and their n_obs "
+              "audit unchanged", flush=True)
+
+
 def _shares_stat(fam_means: dict[str, float], shares: dict[str, float]) -> float:
     """Share-weighted mean of the family means over the families present in
     ``fam_means`` (shares renormalized over those families)."""
@@ -352,6 +446,12 @@ def train(
     ckdir.mkdir(parents=True, exist_ok=True)
     log_path = out / "train_log.csv"
 
+    if domain != MULTI_TIMESCALE_DOMAIN and (cfg.holdout_wy or cfg.uf_train_start
+                                              or cfg.calsim_arcs != "none"):
+        raise ValueError("holdout_wy / uf_train_start / calsim_arcs are wired for the "
+                         "multi-timescale domain only")
+    if cfg.calsim_arcs == "train_default":
+        basins = _with_calsim_arcs(data_dir, basins)
     dom = load_domain_tensors(
         data_dir, domain=domain, device=dev, dtype=dtype, basins=basins,
         dynamic_window=cfg.dynamic_window if cfg.dynamic_params else None,
@@ -368,10 +468,14 @@ def train(
                 "veg_class (they exist only where the original zonal "
                 "regionalization was drawn) — use the physical or embedding "
                 "variants, whose inputs cover the whole region grid")
-        eobs = load_entity_obs(dom, data_dir, obs_mask=cfg.obs_mask)
+        eobs = load_entity_obs(dom, data_dir, obs_mask=cfg.obs_mask,
+                               holdout_wy=cfg.holdout_wy or None,
+                               uf_train_start=cfg.uf_train_start or None)
         if cfg.obs_mask:
             print(f"train: obs_mask — {len(cfg.obs_mask)} hand-confirmed daily "
                   f"observation(s) masked: {', '.join(cfg.obs_mask)}", flush=True)
+        if cfg.holdout_wy or cfg.uf_train_start:
+            _print_holdout(dom, eobs, cfg)
         d_rows = torch.as_tensor(eobs.daily_rows, device=dev)
         m_rows = torch.as_tensor(eobs.monthly_rows, device=dev)
         # daily entities ride the existing chunk NNSE as a CalObs whose
@@ -440,7 +544,12 @@ def train(
                          "domain (the monthly term takes no per-entity "
                          "weights)")
     shares = None
+    # the monthly families this run trains, and (share runs) their own scales
+    m_fams: list[str] = []
+    monthly_scale_f: dict[str, float] = {}
     if eobs is not None:
+        m_fam_np = np.array(eobs.family)[eobs.monthly_rows]
+        m_fams = [f for f in MONTHLY_FAMILIES if (m_fam_np == f).any()]
         shares = (dict(EQUAL_FAMILY_SHARES) if cfg.mt_family_weight == "equal"
                   else family_shares(cfg.mt_family_weight))
     if shares is not None:
@@ -472,25 +581,61 @@ def train(
             fam_w = torch.as_tensor(w_np, device=dev, dtype=dtype)
         daily_scale = sum(shares.get(f, 0.0) for f in ("usgs_daily", "cdec_daily"))
         monthly_scale = shares.get("uf_monthly", 0.0)
+        # every monthly family is its own monthly term (a single one = the pooled term)
+        monthly_scale_f = {f: shares.get(f, 0.0) for f in m_fams}
         print("train: family weighting by SHARES — "
               + ", ".join(f"{f.split('_')[0]} {s:.3f}" for f, s in shares.items())
-              + f"; daily x {daily_scale:.3f}, monthly x {monthly_scale:.3f}; "
+              + f"; daily x {daily_scale:.3f}, "
+              + (f"monthly x {monthly_scale:.3f}; " if len(m_fams) <= 1 else
+                 "monthly " + ", ".join(f"{f.split('_')[0]} x {v:.3f}"
+                                        for f, v in monthly_scale_f.items()) + "; ")
               + ("selection = mean of the family means (equal shares)"
                  if cfg.mt_family_weight == "equal" else
                  "selection = share-weighted family mean"), flush=True)
+    # checkpoint selection: the loss shares, unless mt_select_weight sets its own (e.g.
+    # the area shares when the loss shares were re-solved to REALIZE them); with the
+    # CalSim3 arcs, sel3 (logged, not selected on) = the dPL-95 rule over the other
+    # families — their footprint-area shares
+    sel_shares, sel3_shares = shares, None
+    if shares is not None and cfg.mt_select_weight:
+        sw = (_area_shares(data_dir, dom.basins) if cfg.mt_select_weight == "area"
+              else family_shares(cfg.mt_select_weight))
+        miss = [str(f) for f in shares if f not in sw]
+        if miss:
+            raise ValueError(f"mt_select_weight {cfg.mt_select_weight!r} gives no share "
+                             f"to {miss} (present in this run)")
+        tot = sum(sw[f] for f in shares)
+        sel_shares = {f: sw[f] / tot for f in shares}
+        print(f"train: selection shares (mt_select_weight={cfg.mt_select_weight}) — "
+              + ", ".join(f"{f.split('_')[0]} {s:.4f}" for f, s in sel_shares.items())
+              + "; the loss keeps the shares above", flush=True)
+    if (shares is not None and cfg.mt_family_weight != "equal"
+            and "calsim_monthly" in shares and len(shares) > 1):
+        sel3_shares = _area_shares(data_dir, dom.basins,
+                                   families=[f for f in shares if f != "calsim_monthly"])
+        print("train: sel3 (logged beside the selection scalar) = the dPL-95 rule without "
+              "the arcs, the footprint-area shares "
+              + ", ".join(f"{f.split('_')[0]} {s:.4f}" for f, s in sel3_shares.items()),
+              flush=True)
     # mt_share_norm="all": fixed loss denominators, so every entity carries
     # share_f / n_f in every chunk it is scored in (a chunk holding one family
     # no longer hands it the whole term); "present" keeps the per-chunk
     # renormalization (weight_total / mt_total None -> byte-identical)
     w_total = mt_total = None
+    mt_total_f: dict[str, float] = {}       # per monthly family (its own entity count)
     if shares is not None and cfg.mt_share_norm == "all":
         if fam_w is not None:
             w_total = float(fam_w.sum())
         if eobs is not None and len(eobs.monthly_rows):
             mt_total = float(len(eobs.monthly_rows))
+            mt_total_f = {f: float((m_fam_np == f).sum()) for f in m_fams}
         print(f"train: family shares normalized over ALL entities (mt_share_norm=all) — "
-              f"daily denominator {w_total}, monthly {mt_total}: a chunk's family term "
-              "scales with the share of that family's entities it scores", flush=True)
+              f"daily denominator {w_total}, "
+              + (f"monthly {mt_total}" if len(m_fams) <= 1 else
+                 "monthly " + ", ".join(f"{f.split('_')[0]} {v}"
+                                        for f, v in mt_total_f.items()))
+              + ": a chunk's family term scales with the share of that family's entities "
+              "it scores", flush=True)
     # mt_loss_ref: the FROZEN per-family loss scale kappa_f = Lbar / L_ref_f.  Set
     # once, before any graph capture, and never changed: the daily families' kappa
     # goes into fam_w IN PLACE (the tensor every loss path and the captured
@@ -513,12 +658,36 @@ def train(
             fam_w.mul_(torch.as_tensor([kappa.get(f, 1.0) for f in fam],
                                        device=dev, dtype=dtype))
         monthly_scale *= kappa.get("uf_monthly", 1.0)
+        monthly_scale_f = {f: v * kappa[f] for f, v in monthly_scale_f.items()}
         print("train: FROZEN family loss scale (mt_loss_ref) — reference per-entity levels "
               + ", ".join(f"{f.split('_')[0]} {refs[f]:.4g}" for f in shares)
               + f"; kappa = {lbar:.4g} / L_ref^{pw:g}: "
               + ", ".join(f"{f.split('_')[0]} x {kappa[f]:.4f}" for f in shares)
-              + f" (monthly x {monthly_scale:.4f} in all); chunk_log c_/l_ carry kappa, "
-              "selection keeps the nominal shares", flush=True)
+              + (f" (monthly x {monthly_scale:.4f} in all)" if len(m_fams) <= 1 else
+                 " (monthly " + ", ".join(f"{f.split('_')[0]} x {v:.4f}"
+                                          for f, v in monthly_scale_f.items()) + " in all)")
+              + "; chunk_log c_/l_ carry kappa, selection keeps the "
+              + ("nominal shares" if not cfg.mt_select_weight else
+                 "mt_select_weight shares"), flush=True)
+    # the monthly terms: (log tag, dom.basins rows, positions in eobs.monthly_rows or
+    # None = all of them, scale, fixed denominator).  One pooled term over every
+    # monthly row unless a share run holds more than one monthly family — then one per
+    # family, each with its own share x kappa and entity count (the arcs must not
+    # dilute uf's per-entity coefficient share/9 to share/73)
+    m_groups: list[tuple] = []
+    if eobs is not None and len(eobs.monthly_rows):
+        if shares is None or m_fams == ["uf_monthly"]:
+            m_groups = [("uf", m_rows, None, monthly_scale, mt_total)]
+        elif len(m_fams) == 1:                  # the arcs as the only monthly family
+            m_groups = [("cs", m_rows, None, monthly_scale_f[m_fams[0]], mt_total)]
+        else:
+            for f in m_fams:
+                sel = np.flatnonzero(m_fam_np == f)
+                m_groups.append(("uf" if f == "uf_monthly" else "cs",
+                                 torch.as_tensor(eobs.monthly_rows[sel], device=dev),
+                                 torch.as_tensor(sel, device=dev),
+                                 monthly_scale_f[f], mt_total_f.get(f)))
+    has_cs = any(g[0] == "cs" for g in m_groups)
     # truncated spinup start (clamped to the record start; == 0 restores the
     # exact frozen full-prefix convention)
     spin_req = int(dom.dates.searchsorted(pd.Timestamp(cfg.spinup_start)))
@@ -607,6 +776,29 @@ def train(
                     f"init_from checkpoint was trained on statics "
                     f"{tuple(donor_stats.statics)}; this run asks for {statics} "
                     "(flowlen_feature) — the first layer would not load")
+    # the CalSim3 arc rows (cs_ entities) must not move the net's input scaling or its
+    # init priors: both are computed on the other entities' rows only, so the base rows
+    # see exactly the inputs a run without the arcs would (the arc rows are scaled by
+    # the same statistics).  None when the run holds no cs_ entity.
+    base_hru = None
+    if eobs is not None and "calsim_monthly" in eobs.family:
+        cs_ids = [b for b, f in zip(dom.basins, eobs.family, strict=True)
+                  if f == "calsim_monthly"]
+        base_hru = ~dom.hrus["basin"].isin(cs_ids).to_numpy()
+        if not base_hru.any():
+            raise ValueError("a run of CalSim3 arcs alone has no base rows to scale by")
+    if base_hru is not None and donor_stats is None:
+        donor_stats = build_features(
+            dom.hrus[base_hru].reset_index(drop=True), variant=variant,
+            forcing=dom.forcing if _needs_climate else None,
+            climate_product="historical_livneh_unsplit" if _needs_climate else None,
+            fourier_k=cfg.fourier_k,
+            physical_path=(soilveg_path(data_dir, domain) if _needs_physical else None),
+            statics=statics,
+            aef_path=aef_store(data_dir) if variant in AEF_STORE_VARIANTS else None)
+        print(f"train: feature z-scoring and init priors from the {int(base_hru.sum())} "
+              f"base-entity rows only (the {int((~base_hru).sum())} cs_ arc rows are "
+              "scaled by them)", flush=True)
     fs = build_features(
         dom.hrus, variant=variant,
         forcing=dom.forcing if _needs_climate else None,
@@ -719,7 +911,8 @@ def train(
         # prior (area-weighted median per param) comes from the region-grid
         # 15cdec GA params over the covered cells
         pdf = load_params(data_dir, domain="15cdec_grid").drop_duplicates("key")
-        hrus_p = dom.hrus[dom.hrus["key"].isin(set(pdf["key"]))]
+        hrus_b = dom.hrus if base_hru is None else dom.hrus[base_hru]
+        hrus_p = hrus_b[hrus_b["key"].isin(set(pdf["key"]))]
         if hrus_p.empty:            # debug subsets entirely off the 15cdec grid
             hrus_p = pdf[["key"]].assign(area_weight=1.0)
         print(f"train: init priors = 15cdec_grid GA median over "
@@ -751,7 +944,11 @@ def train(
                          else "family_weighted" if shares is not None
                          else "pooled")) if eobs is not None else None)
         donor_select = ick.get("mt_select") or "pooled"
-        donor_shares = (family_shares(ick.get("cfg", {}).get("mt_family_weight", "none"))
+        # the donor's SELECTION shares: its mt_select_weight when it set one
+        d_cfg = ick.get("cfg", {})
+        d_sel = d_cfg.get("mt_select_weight", "")
+        donor_shares = ((_area_shares(data_dir, donor_basins) if d_sel == "area"
+                         else family_shares(d_sel or d_cfg.get("mt_family_weight", "none")))
                         if donor_select == "family_weighted" else None)
         # a checkpoint without an entity list (pre-multi-timescale) is taken
         # as the same entity set, as the gate always assumed for those
@@ -903,6 +1100,11 @@ def train(
         # fail before any capture (the check after capture stays as a backstop)
         raise ValueError(f"tbptt_carry={cfg.tbptt_carry!r} needs the segmented or eager "
                          "chunk path (--train-graph-segments >= 2, or --no-graphs)")
+    if (len(m_groups) > 1 and cfg.use_cuda_graphs and dev.type == "cuda"
+            and cfg.train_graph_segments == 1 and not cfg.graph_recompute_days):
+        # the whole-chunk graph bakes ONE monthly term (its rows, scale, denominator)
+        raise ValueError(f"{len(m_groups)} monthly families need the segmented or eager "
+                         "chunk path (--train-graph-segments >= 2, or --no-graphs)")
     n_win = cfg.tbptt_window_years
     win2 = n_win > 1                 # multi-year TBPTT windows
     if (win2 and cfg.use_cuda_graphs and dev.type == "cuda"
@@ -1017,7 +1219,8 @@ def train(
                         swe_basin_w=swe_w,
                         mt_rows=m_rows if eobs is not None else None,
                         mt_var=eobs.var_monthly if eobs is not None else None,
-                        daily_scale=daily_scale, monthly_scale=monthly_scale,
+                        daily_scale=daily_scale,
+                        monthly_scale=m_groups[0][3] if m_groups else monthly_scale,
                         shape_kw=shape_kw, weight_total=w_total, mt_total=mt_total)
                     if fixed:
                         break           # the first length that fits is the grid's
@@ -1066,6 +1269,8 @@ def train(
         else:
             print(f"train: chunk lengths without a graph run eager: {other}", flush=True)
 
+    sel_extra: dict[str, float] = {}     # the last selection's sel3 (runs with arcs)
+
     def _mt_kge(sim: torch.Tensor) -> tuple[torch.Tensor, float]:
         """Pooled per-entity cal KGE at each entity's NATIVE timescale: daily
         rows at daily stride, monthly rows on calendar-month sums of the same
@@ -1082,27 +1287,40 @@ def train(
         fams = np.array(eobs.family)
         k_np, v_np = k.cpu().numpy(), valid.cpu().numpy()
         fam_means = {f: float(k_np[(fams == f) & v_np].mean())
-                     for f in ("usgs_daily", "cdec_daily", "uf_monthly")
+                     for f in FAMILY_KEYS.values()
                      if ((fams == f) & v_np).any()}
         parts = "  ".join(
             f"{f.split('_')[0]} {m:.4f} (n={int(((fams == f) & v_np).sum())})"
             for f, m in fam_means.items())
         pooled = float(k[valid].mean())
+        # with the CalSim3 arcs in the scalar, sel3 is logged beside it: the scalar a run
+        # without arcs selects on (share runs: dPL-95's rule, the other families' area shares)
+        fm3 = {f: m for f, m in fam_means.items() if f != "calsim_monthly"}
+        sel3_txt = ""
+        if len(fm3) < len(fam_means):
+            sel_extra["sel3"] = (float(np.mean(list(fm3.values())))
+                                 if cfg.mt_family_weight == "equal"
+                                 else _shares_stat(fm3, sel3_shares) if sel3_shares
+                                 else _shares_stat(fm3, shares) if shares is not None
+                                 else float(k_np[v_np & (fams != "calsim_monthly")].mean()))
+            sel3_txt = f" sel3 {sel_extra['sel3']:.4f}"
         if cfg.mt_family_weight == "equal":
             # selection follows the training objective: with equal family
             # weighting, each family casts one equal vote on which epoch is
             # best (the pooled mean stays printed for cross-run comparison).
             fam_scalar = float(np.mean(list(fam_means.values())))
             print(f"    per-family cal KGE: {parts}  | sel family-mean "
-                  f"{fam_scalar:.4f} (pooled {pooled:.4f})", flush=True)
+                  f"{fam_scalar:.4f}{sel3_txt} (pooled {pooled:.4f})", flush=True)
             return k, fam_scalar
         if shares is not None:
             # share-weighted family mean over the families with a valid
-            # entity, renormalized like the loss
-            fam_scalar = _shares_stat(fam_means, shares)
+            # entity, renormalized like the loss (at mt_select_weight's shares if set)
+            fam_scalar = _shares_stat(fam_means, sel_shares)
             print(f"    per-family cal KGE: {parts}  | sel family-weighted "
-                  f"{fam_scalar:.4f} (pooled {pooled:.4f})", flush=True)
+                  f"{fam_scalar:.4f}{sel3_txt} (pooled {pooled:.4f})", flush=True)
             return k, fam_scalar
+        if sel3_txt:
+            parts += f"  |{sel3_txt} (pooled without the arcs)"
         print(f"    per-family cal KGE: {parts}", flush=True)
         return k, pooled
 
@@ -1159,7 +1377,16 @@ def train(
                     "sched": sched.state_dict()}, path)
 
     def _payload(*, epoch: int, kge: float) -> dict:
-        return {"net": net.state_dict(), "epoch": epoch,
+        # runs with the arcs: the selection's sel3 beside cal_kge (NaN with no
+        # selection this epoch, like cal_kge)
+        extra = ({"sel3": sel_extra["sel3"] if math.isfinite(kge) else float("nan")}
+                 if sel_extra else {})
+        # the resolved shares the selection scalar / sel3 were computed with
+        if cfg.mt_select_weight and sel_shares is not None:
+            extra["mt_select_shares"] = dict(sel_shares)
+        if sel3_shares:
+            extra["sel3_shares"] = dict(sel3_shares)
+        return {"net": net.state_dict(), "epoch": epoch, **extra,
                 "best_kge": best_kge, "stale": stale, "cal_kge": kge,
                 "mt_select": ((("family_mean"
                                 if cfg.mt_family_weight == "equal" else
@@ -1282,6 +1509,11 @@ def train(
             print(f"train: {chunk_live.count(False)} chunk(s) carry no "
                   "scoreable obs — forward-only (no optimizer step)",
                   flush=True)
+            if cfg.holdout_wy:
+                print("train: dead chunks (water years): " + ", ".join(
+                    str(dom.dates[c0].year + 1) for (c0, _), lv in zip(grid, chunk_live,
+                                                                       strict=True)
+                    if not lv), flush=True)
     else:
         chunk_live = [True] * n_chunks
     skip_dead = cfg.dead_chunk_nograd and not all(chunk_live)
@@ -1299,6 +1531,8 @@ def train(
 
     # -- diagnostics (cfg.diagnostics; numerics-neutral) ---------------------
     diag = cfg.diagnostics
+    chunk_cols = _CHUNK_LOG_COLS + (_CS_CHUNK_LOG_COLS if has_cs else ())
+    eval_cols = _EVAL_TERM_COLS + (_CS_EVAL_TERM_COLS if has_cs else ())
     chunk_log_path, eval_terms_path = out / "chunk_log.csv", out / "eval_terms.csv"
     snapdir = ckdir / "snapshots"
     params_list = list(net.parameters())
@@ -1313,8 +1547,7 @@ def train(
             # the resumed run rewrites the interrupted epoch: drop its rows; the kept
             # rows take the current columns (a file from before a column was added
             # would otherwise keep a header the appended rows no longer match)
-            for p, cols in ((chunk_log_path, _CHUNK_LOG_COLS),
-                            (eval_terms_path, _EVAL_TERM_COLS)):
+            for p, cols in ((chunk_log_path, chunk_cols), (eval_terms_path, eval_cols)):
                 if p.exists():
                     d = pd.read_csv(p)
                     d[d["epoch"] < start_epoch].reindex(columns=cols).to_csv(p, index=False)
@@ -1339,14 +1572,30 @@ def train(
         torch.save({**_payload(epoch=epoch, kge=kge), "net_ema": ema_sd},
                    snapdir / f"e{epoch:03d}.pt")
 
+    def _mt_terms(basin_flow: torch.Tensor, k: int) -> list[tuple]:
+        """Chunk ``k``'s monthly terms, one per ``m_groups`` entry: (tag, simulated
+        complete-month sums, targets, finite mask, variances, scale, denominator) —
+        a single group is the whole monthly block unsliced (the pooled term)."""
+        mb, mtgt, mfin = mt_targets[k]
+        out_t = []
+        for tag, rows_g, sel, scale, n_tot in m_groups:
+            if sel is None:
+                out_t.append((tag, basin_flow[rows_g] @ mb, mtgt, mfin, eobs.var_monthly,
+                              scale, n_tot))
+            else:
+                out_t.append((tag, basin_flow[rows_g] @ mb, mtgt[sel], mfin[sel],
+                              eobs.var_monthly[sel], scale, n_tot))
+        return out_t
+
     def _loss_split(basin_flow: torch.Tensor, obs_c: torch.Tensor, k: int, *,
                     terms: bool = False) -> dict[str, float]:
         """The multi-timescale chunk loss as trained, split into additive
         contributions by family — ``l_<fam>`` (or, ``terms``, ``<fam>_nnse`` /
         ``_log`` / ``_var`` (variance + bias) / ``_timing`` / ``_peak`` and
-        ``uf_monthly``) — with each family's live entity count ``n_<fam>`` and
-        coefficient mass ``c_<fam>`` (its share of the chunk's daily-term weight
-        times daily_scale; monthly_scale for uf)."""
+        ``uf_monthly`` / ``cs_monthly``) — with each family's live entity count
+        ``n_<fam>`` and coefficient mass ``c_<fam>`` (its share of the chunk's
+        daily-term weight times daily_scale; its monthly term's scale for uf and
+        the CalSim3 arcs, tag ``cs``)."""
         res: dict[str, float] = {}
         tw = season_all[grid[k][0]:grid[k][1]]      # the chunk's Jul-Sep day window
         with torch.no_grad():
@@ -1403,14 +1652,13 @@ def train(
                     res[f"lt_{tag}"] = sc * (nlvt - nlv)
                     res[f"lp_{tag}"] = sc * (full - nlvt)
             if mt_targets is not None:
-                mb, mtgt, mfin = mt_targets[k]
-                n_m = int((mfin.sum(dim=1) >= 1).sum())
-                res["n_uf"] = n_m
-                res["c_uf"] = (monthly_scale * n_m / mt_total if mt_total is not None
-                               else monthly_scale if n_m else 0.0)
-                res["uf_monthly" if terms else "l_uf"] = monthly_scale * float(
-                    monthly_nnse_loss(basin_flow[m_rows] @ mb, mtgt, mfin,
-                                      eobs.var_monthly, n_total=mt_total))
+                for tag, sim_m, mtgt, mfin, var_m, scale, n_tot in _mt_terms(basin_flow, k):
+                    n_m = int((mfin.sum(dim=1) >= 1).sum())
+                    res[f"n_{tag}"] = n_m
+                    res[f"c_{tag}"] = (scale * n_m / n_tot if n_tot is not None
+                                       else scale if n_m else 0.0)
+                    res[f"{tag}_monthly" if terms else f"l_{tag}"] = scale * float(
+                        monthly_nnse_loss(sim_m, mtgt, mfin, var_m, n_total=n_tot))
         return res
 
     def _eval_terms(epoch: int) -> None:
@@ -1430,7 +1678,7 @@ def train(
                 acc[key] = acc.get(key, 0.0) + v
             n += 1
         row = {"epoch": epoch, **{key: v / max(n, 1) for key, v in acc.items()}}
-        pd.DataFrame([row]).reindex(columns=_EVAL_TERM_COLS).to_csv(
+        pd.DataFrame([row]).reindex(columns=eval_cols).to_csv(
             eval_terms_path, mode="a", index=False,
             header=not eval_terms_path.exists())
 
@@ -1691,10 +1939,10 @@ def train(
                         weight=fam_w if fam_w is not None else basin_w,
                         weight_total=w_total)
                     if mt_targets is not None:
-                        mb, mtgt, mfin = mt_targets[k]
-                        loss_t = loss_t + monthly_scale * monthly_nnse_loss(
-                            basin_flow[m_rows] @ mb, mtgt, mfin,
-                            eobs.var_monthly, n_total=mt_total)
+                        for _, sim_m, mtgt, mfin, var_m, scale, n_tot in _mt_terms(
+                                basin_flow, k):
+                            loss_t = loss_t + scale * monthly_nnse_loss(
+                                sim_m, mtgt, mfin, var_m, n_total=n_tot)
                     ri = 2
                     if et_tgt is not None:
                         et_monthly = (dom.W @ res[ri]) @ et_tgt[0]
@@ -1750,7 +1998,7 @@ def train(
                                        "loss": loss, "gnorm": float(norm), **split})
             sched.step()
         if chunk_rows:
-            pd.DataFrame(chunk_rows).reindex(columns=_CHUNK_LOG_COLS).to_csv(
+            pd.DataFrame(chunk_rows).reindex(columns=chunk_cols).to_csv(
                 chunk_log_path, mode="a", index=False,
                 header=not chunk_log_path.exists())
 
@@ -1762,6 +2010,8 @@ def train(
                "spinup_s": round(spin_s, 1),
                "epoch_s": round(time.time() - tic, 1),
                "peak_vram_mb": round(vram), "skipped_steps": skipped}
+        if base_hru is not None:        # a run with the arcs: the column every epoch
+            row["sel3"] = sel_extra.get("sel3", float("nan")) if do_eval else float("nan")
         if reg_lambda > 0.0:
             row["reg"] = (sum(reg_losses) / len(reg_losses)
                           if reg_losses else float("nan"))

@@ -954,6 +954,10 @@ UF9 second row scores the Yuba against the arcs its entity simulates):
 
 ## Multifamily training program: runs A–H and H95 (2026-09-22 → 29)
 
+*Names. Later sections call the two adopted bases by what they train on: run H is **dPL-26**
+and H95 is **dPL-95** (key in the CalSim3 rim-inflow product section). This section keeps the
+letters it was written with.*
+
 **Why.** The trained fields of the three runs of the section above share one regime: median riva
 0.85–0.90, pfree 0.99, lzsk at its 0.003 floor, lztwm at its 5,000 mm ceiling on 95 % or more of
 entity-cell rows and uztwm ≈ 1,000 mm, with tier-1 flows early in timing at 20 of 20 locations
@@ -1196,6 +1200,167 @@ sample for H95 at the 16 creek-covered locations, for H at none):
 | UF20: Chowchilla R. at Buchanan | arc sum | 78 | 0.776 | -8.3 | 0.774 | -14.2 |
 | UF22: San Joaquin R. at Millerton | FLOW-UNIMPAIRED | 1,879 | 0.853 | -13.3 | 0.823 | -12.9 |
 | UF21: Fresno R. near Daulton | arc sum | 95 | 0.881 | -3.0 | 0.839 | -4.2 |
+
+## CalSim3 rim-inflow product: dPL-CalSim, the sub-arc experiments and the adopted product (2026-09-28 → 10-01)
+
+**Names.** From this section on, a run is called by what it trains on. The sections above keep
+the letters they were written with.
+
+| name | was | run folder | trains on |
+|---|---|---|---|
+| **dPL-26** | run H | `noah_cdec_uf_sacx_carry_px_aef` | 26 entities: CDEC daily and DWR-unimpaired monthly |
+| **dPL-95** | H95 | `noah_cdec_uf_usgs_areaw_all_kref05_sacx_carry_px_aef` | dPL-26's entities + 69 USGS gauges |
+| **dPL-CalSim** | S1 | `s1_cs64_ho7685_ufx_areaw_all_kref05_sacx_carry_px_aef` | dPL-95's entities + 64 CalSim3 arcs, with WY1976–85 held out of every family |
+
+The **CalSim3 rim-inflow product** is dPL-CalSim's flow on the 196 rim arcs with the **share
+model** on the arcs of the multi-arc systems (`sacsma.dpl.calsim_product`).
+
+**Why.** CalSim3 takes monthly inflows on 196 rim arcs. The dPL has to supply them with skill
+against the CalSim3 arc series on a decade no fit has seen, and with a climate response that stays
+the dPL's own. dPL-95 could not be scored that way (50 of its USGS gauges trained inside any
+candidate holdout), and the dPL's tier-2 skill on the small arcs was low (dPL-95 median 0.657 over
+196 arcs). The program had two parts: a holdout-masked retrain (dPL-CalSim) and a series of
+preregistered experiments on how to turn the dPL's arc flows into the product.
+
+**Ground rules (user).** Holdout WY1976–85 in every family and every fit; nothing before WY1950;
+the CalSim3 INFLOW series is the truth on every arc-month, with no tier weighting. No WGEN test:
+the climate response is trained on ΔT {0, 1, 3, 4} °C × P {0.85, 1, 1.15} (11 points besides the
+base) and validated on points no fit saw. A correction's response is scored against the
+uncorrected dPL at the same point: dV (volume change, %) and dAJ (change of the April–July share,
+pp), summarized over units per point; full gate = median ≤ 1 and p90 ≤ 3 pp, half gate = half
+those. Each experiment has a prereg file frozen (sha256, read-only) before any of its holdout or
+validation numbers existed; the holdout and the validation points are read once, at the end.
+ET-observation products are in nothing below.
+
+**dPL-CalSim** (branch `dpl/s1-calsim-retrain`; prereg, bars, readout and deviations in the run's
+`provenance/`). dPL-95's recipe plus: `--holdout-wy 1976-1985`; the UF targets back-extended to
+WY1950 (`--uf-train-start 1949-10-01`); 64 CalSim3 arcs as a fourth trained family
+(`--calsim-arcs train_default`, absolute-volume loss); family shares re-solved so the realized
+coefficients equal the footprint-area shares (usgs .1967, cdec .5070, uf .2053, calsim .0911),
+selection at the same shares; seed 0. It trains on the region store after the second ×10 precip
+correction (main `c5fae09`); every dPL-26 / dPL-95 comparator is on the store before it.
+
+- *Interruption.* A thermal hibernation stopped the run in epoch 91 (2026-09-30 14:57). It was
+  resumed from `last.pt` (epoch 90) with the same flags + `--resume`; the RNG stream and the EMA
+  shadow are not restored.
+- *Readout* (best epoch 116 of 120, flagged "not converged"; selection 0.8337, three-family
+  0.8456 against dPL-95's 0.8522). Passes: the mechanism bars; the 64 trained arcs on training
+  years (mean 0.715, median 0.771); **the primary holdout bar, arcs WY1976–85: 0.727 (bar 0.691;
+  dPL-26 0.661)**; uf holdout 0.895 (bar 0.873); the USGS and second arc holdout guards.
+  Unreadable within the spreads: the cdec family and its named basins. Readable guard fails:
+  NHG 0.827 (bar 0.833; dPL-95 0.873, dPL-26 0.924) and the uf family on WY1986–2014, 0.896
+  (bar 0.926; uf_03, uf_04, uf_07, uf_20 below their bars). By era the uf median is 0.913 on
+  WY1950–84 (dPL-26 0.867) and 0.912 on WY1986–2014 (dPL-26 0.937): the back-extension buys the
+  earlier era at the later one's cost.
+- *Decision.* The frozen reading called for a no-arcs control after a readable guard fail. The
+  user adopted dPL-CalSim as is on 2026-09-30 without it; NHG and uf WY1986–2014 are recorded
+  as known costs (`provenance/DEVIATIONS.txt`).
+
+**Tier-2 passes for the experiments.** `calsim_tier2 --scenarios NAME=DT:PS,...` runs several
+climate points in one batched forward (identical to single passes at window 512). dPL-CalSim was
+run at the base, the 11 training points, the 5 points of the first validation set (ΔT 2; P 0.92,
+1.08 and their combinations) and a second, fresh validation set (ΔT 2.5; P 0.95, 1.05 and their
+combinations). The passes the product needs are local in `<run>/tier2_scenarios/` (regenerable).
+
+**Units.** 18 *systems*: 11 multi-arc closure groups, whose 139 arcs are the *share arcs*, and 7
+single-arc systems (Shasta, Trinity, Merced, San Joaquin, New Hogan, uf_02, uf_20; Shasta is
+anchored on SHA, not Bend Bridge). 50 *non-anchor arcs* have no closure group (the Bend
+Bridge-only arcs and I_WKYTN among them). 139 + 7 + 50 = 196.
+
+**The experiments.** Holdout numbers are the median monthly KGE over units, WY1976–85.
+
+| experiment (prereg) | dPL | what was tried | result | outcome |
+|---|---|---|---|---|
+| arc correction v1 → v3 (`PREREG_CORRECTION_v1/2/3`) | dPL-26 | per arc, four constant factors on the routed runoff parts (quick, interflow, supplemental, primary), bounded [0.5, 2], with response rows; v2 trained the response on a delta grid, v3 split it into training and validation points | all arcs 0.782 / 0.775 / 0.771 (v1 / v2 / v3); v3 passes the full gate at all 5 validation points, worst p90 0.68 pp | frozen record on dPL-26; not refit on dPL-CalSim |
+| LSTM hybrid (`PREREG_HYBRID_ALT_v1`) | dPL-26 | daily LSTM on the dPL states, daily + monthly loss on CDEC, UF and USGS, response loss | its first stage passes; the second fails its out-of-fold gate (uf 0.771 vs dPL-26 0.826, cdec 0.865 vs bar 0.895, usgs 0.483 vs 0.423) | stopped before any member run; validation points never read |
+| sub-arc pipeline (`PREREG_SUBARC_S1`) | dPL-CalSim | system flow: gradient-boosted trees on log(CalSim3 / dPL) with water-year closure to a constant volume factor; non-anchor arcs: the same per arc; share arcs: the share model, anchored on the corrected system flow | systems 0.922 → 0.891; non-anchor 0.604 → 0.657; share 0.699 → 0.815; all arcs 0.690 → 0.806; full gate passes | the system correction loses to the dPL; the share model is kept |
+| daily LSTM on the dPL (`PREREG_LSTM_S1`, two amendments) | dPL-CalSim | one pooled daily LSTM (dPL flow, precipitation, temperature), CalSim3 monthly targets, response penalty in training, systems ¾ of the loss; residual mode (dPL × bounded factor) and direct mode (flow outright); the share model re-fitted on the dPL and on the LSTM system flow | table below | frozen rule: the dPL at the systems, the residual LSTM at the non-anchor arcs, the share model on the dPL system flow (all arcs 0.827) |
+| **user adoption, 2026-10-01** | dPL-CalSim | the dPL everywhere except the share arcs | all arcs **0.813** | **the product** |
+
+`PREREG_LSTM_S1`, holdout WY1976–85 (median / mean / p10 of the unit KGEs):
+
+| units | dPL-CalSim | volume factor | LSTM residual | LSTM direct (report only) | share model |
+|---|---|---|---|---|---|
+| 18 systems | **0.922** / 0.913 / 0.864 | 0.886 / 0.886 / 0.792 | 0.913 / 0.899 / 0.829 | 0.891 | – |
+| 50 non-anchor arcs | **0.604** / 0.482 / 0.006 | 0.673 / 0.609 / 0.165 | 0.719 / 0.561 / 0.034 | 0.687 | – |
+| 139 share arcs | 0.699 / 0.616 / 0.226 | – | – | – | **0.834** / 0.800 / 0.641 (dPL system flow); 0.831 (LSTM system flow) |
+
+Bold = the adopted product. The volume factor is one constant per unit (training-year
+Σ CalSim3 / Σ dPL); it keeps the dPL's response exactly and its timing.
+
+- *Why every system correction loses.* On training years (out of fold) the corrections beat the
+  dPL (dPL 0.898, factor 0.952, residual LSTM 0.955). On the holdout they do not, because the
+  CalSim3 / dPL volume ratio drifts by decade (New Hogan 1.26–1.31 in the 1950s–70s, 1.02 in the
+  1980s; Trinity 0.74–0.85, then 0.99) and WY1976–85 sits near 1.0 for several systems. A factor
+  fitted on the other years moves those systems away from CalSim3. The factor beats the dPL in 5
+  of the 7 training blocks and loses in WY2000–15 and on the holdout.
+- *Share arcs.* The share model is the gain: 0.699 → 0.834 against the dPL arcs, with the dPL's
+  own shares inside the closure at 0.776. Each system's arcs sum to the dPL system flow over
+  every water year. Inside the year their sum differs from it by 2.5 % of the volume, and it
+  scores the same against CalSim3 (11 multi-arc systems, holdout median 0.924 against the
+  dPL's 0.928, mean 0.926 against 0.924).
+  Timing improves with it: seasonal mismatch 11.6 % → 7.3 %, monthly r 0.924 → 0.948.
+- *Non-anchor arcs.* The frozen rule adopted the residual LSTM on its median (0.719). The user
+  chose the dPL (0.604) instead, after the holdout was read: a departure from the frozen
+  adoption rule. Neither correction changes these arcs' timing (seasonal mismatch 10.9 % for the
+  dPL, centre of timing 0.4 month early).
+- *Direct mode.* Report-only by the second amendment. It trails the residual mode on both kinds
+  of unit and fails the gates at most candidates for the non-anchor arcs.
+- *Validation* (second, fresh set). The full gate passes for every model; for the adopted share
+  model the worst p90 is 0.42 pp (dV) and 0.64 pp (dAJ).
+
+**The adopted product (user, 2026-10-01).** dPL-CalSim's own flow at the 18 systems and the 50
+non-anchor arcs; the share model (μ 0.03) at the 139 share arcs. All 196 arcs on WY1976–85:
+median 0.813, mean 0.722, p10 0.425, 7 arcs below 0 (the dPL on every arc: 0.690 / 0.592 / 0.139,
+13 below 0; the frozen-rule product: 0.827 / 0.742 / 0.537, 6 below 0). The climate response is
+the dPL's own except at the share arcs, where it is held to the dPL's within the gate and each
+system's water-year volume is the dPL's exactly.
+
+`python -m sacsma.dpl.calsim_product fit <run>` refits it from the run's tier-2 passes and
+writes `<run>/calsim_product/`: `share_model.pt`, `rim_inflow_monthly.csv` (196 arcs, WY1950–2015,
+TAF), `product_metrics.csv`, `share_selection.csv`, `response_gate.csv`, `product_info.json`.
+`calsim_product apply <run> --tier2 <pass>` gives the product for any other tier-2 pass with
+runoff parts. The module's fit reproduces the experiment: the same selection table, and the
+share-arc flows to 5e-8 relative.
+
+**Against the original SAC-SMA** (Wi & Steinschneider GA optima mapped to the arcs,
+`artifacts/calsim/compare/monthly_calsets.csv`; common units, WY1976–85). That decade is inside
+the 11obs and 9unimp calibration periods and outside 15cdec's.
+
+| set (units) | systems: SAC-SMA | systems: dPL-CalSim | share arcs: SAC-SMA | share arcs: SAC-SMA + QMAP | share arcs: share model |
+|---|---|---|---|---|---|
+| 15cdec (10 systems, 115 arcs) | 0.896 | 0.931 | 0.653 | – | 0.814 |
+| 11obs (9, 109) | 0.885 | 0.933 | 0.682 | 0.813 | 0.819 |
+| 9unimp (7, 21) | 0.903 | 0.904 | 0.731 | 0.880 | 0.870 |
+
+**Temperature response at Shasta and Oroville** (uniform warming on every day, precipitation
+unchanged, WY1950–2015).
+
+| | +1 °C | +2 °C | +3 °C | +4 °C |
+|---|---|---|---|---|
+| volume, Shasta: SAC-SMA 11obs / 15cdec | −3.1 / −3.6 % | −6.0 / −7.0 | −9.0 / −10.4 | −11.8 / −13.7 |
+| volume, Shasta: dPL-CalSim | 0.0 % | −0.3 | −0.9 | −1.7 |
+| volume, Oroville: SAC-SMA 11obs / 15cdec | −4.4 / −3.0 % | −8.7 / −5.9 | −13.0 / −8.9 | −17.2 / −11.8 |
+| volume, Oroville: dPL-CalSim | −0.1 % | −0.5 | −1.2 | −2.0 |
+| April–July share, Shasta: SAC-SMA 11obs / 15cdec / dPL-CalSim | −1.2 / −2.9 / −3.0 pp | −2.0 / −4.6 / −5.0 | −2.5 / −5.6 / −6.2 | −2.8 / −6.3 / −6.9 |
+| April–July share, Oroville: SAC-SMA 11obs / 15cdec / dPL-CalSim | −5.3 / −4.1 / −5.1 pp | −8.5 / −6.3 / −8.3 | −10.4 / −7.4 / −10.2 | −11.5 / −7.9 / −11.2 |
+
+No warmed VIC run is on the machine; the only temperature-only VIC pair is the detrending
+experiment (WGEN Product A baseline minus Livneh-unsplit, WY1922–49, basin-mean ΔT 0.84 °C at
+Shasta and 1.24 °C at Oroville): VIC volume +0.6 % / −0.8 % against the original SAC-SMA's
+−3.9 % / −7.0 % in the same experiment, with April–July share changes of −2.5 / −8.7 pp (VIC) and
+−1.7 / −8.0 pp (SAC-SMA). The dPL's volume response is close to VIC's and several times weaker
+than the Hamon-PET SAC-SMA's; the timing shifts agree across the three.
+
+**Where it lives.** The run folder holds dPL-CalSim, its chain, its provenance and the product.
+The experiments' own code, prereg files, hash sets and reports (the correction, the LSTM hybrid,
+the sub-arc pipeline, the daily LSTM, the comparison scripts) are local-only, under
+`tmp/calsim_hybrid/`; the share model is the one piece of them that is in the package.
+
+**Open.** A longer product period (CalSim3 starts in WY1922, the product in WY1950); VIC on
+warmed scenario weather for a like-for-like response curve; the uniform perturbations are a
+placeholder for the WGEN daily scenario weather; the holdout WY1976–85 has now been read by
+three experiments, so a further design choice read against it is not a clean test.
 
 ## Open items
 - **Rename (2026-07-21):** the climate-adaptive physics and hybrid family

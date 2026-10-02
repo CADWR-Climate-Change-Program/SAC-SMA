@@ -130,6 +130,30 @@ def in_record_months(period_text, extension_text=None, *, train_wy=TRAIN_WY,
     return months[keep]
 
 
+#: derivation classes whose listed gauge record belongs to a donor gauge, not to the arc
+#: (``dataprep/build_calsim_arcs.py``: such arcs have no own-record months)
+DONOR_CLASSES = ("gauged_extended_split", "proportioned_ungauged")
+
+
+def own_record_months(data_dir: str | Path = "data", wy=HOLDOUT_WY) -> dict[str, pd.PeriodIndex]:
+    """arc -> its OWN observed months inside the water years ``wy`` (first, last): the rule of
+    ``arc_obs_mask.csv`` (a rim arc of the depth store whose derivation class is not a donor
+    class; its listed gauge period minus the extension years, :func:`in_record_months`)
+    applied to other water years — by default the holdout, which the mask leaves out.  Arcs
+    without such months are absent."""
+    der = pd.read_csv(Path(data_dir) / "calsim" / "calsim3_arc_derivation.csv").set_index("arc")
+    hier = load_hierarchy(data_dir)
+    own = hier[(hier["status"] == "rim_arc") & ~hier["method_class"].isin(DONOR_CLASSES)
+               & hier["arc"].isin(der.index)]["arc"]
+    out = {}
+    for arc in own:
+        ms = in_record_months(der.loc[arc, "period"], der.loc[arc, "extension_period"],
+                              train_wy=(tuple(int(v) for v in wy),))
+        if len(ms):
+            out[arc] = ms
+    return out
+
+
 # --------------------------------------------------------------------------- volume basis
 def taf_to_mm(taf, sq_mi):
     """TAF/month over ``sq_mi`` -> mm/month (the tier-1/tier-2 AF-per-mm-mi2 constant)."""

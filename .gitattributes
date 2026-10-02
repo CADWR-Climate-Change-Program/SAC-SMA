@@ -11,3 +11,5 @@ artifacts/**/*.html linguist-generated=true -diff
 # the multifamily dPL runs' atlases (~20 MB each) and daily-flow dumps (2-8 MB) are binary-sized
 artifacts/dpl/multifamily/**/*.html filter=lfs diff=lfs merge=lfs -text
 artifacts/dpl/multifamily/**/*.npz filter=lfs diff=lfs merge=lfs -text
+# the CalSim3 rim-inflow product of a run (196 arcs x 792 months, ~7 MB)
+artifacts/dpl/multifamily/**/rim_inflow_monthly.csv filter=lfs diff=lfs merge=lfs -text

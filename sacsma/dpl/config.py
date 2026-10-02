@@ -262,6 +262,27 @@ class DplConfig:
     #: list, so evaluation masks the identical days).  Multi-timescale domain
     #: only.  Empty = the stores as-is (default).
     obs_mask: tuple[str, ...] = ()
+    #: water years held out of EVERY family, as an inclusive ``(first, last)`` pair,
+    #: e.g. (1976, 1985) (calsim_arcs.HOLDOUT_WY): their targets are NaN after the
+    #: registry n_obs audit and the obs_mask, before the NNSE normalizers — so the
+    #: loss, the normalizers, the chunk liveness and selection never read them (a
+    #: held-out water year with no other target becomes a dead chunk).  The
+    #: checkpoint carries it; evaluation scores the same masked targets.
+    #: Multi-timescale domain only.  () = off (default).
+    holdout_wy: tuple[int, ...] = ()
+    #: back-extend the uf_monthly TRAINING targets to this date (a first of the
+    #: month, e.g. "1949-10-01" = WY1950): the months from it to each uf entity's
+    #: registry train_start join its target (minus holdout_wy), read from the same
+    #: store; the registry window and its n_obs audit are unchanged, the extension
+    #: months are counted separately and must all be observed.  Multi-timescale
+    #: domain only.  "" = off (default: the registry windows).
+    uf_train_start: str = ""
+    #: the CalSim3 rim-arc family (calsim_monthly) in the run: "train_default"
+    #: appends the train_default arcs of data/calsim/arc_hierarchy.csv (tier A, own
+    #: gauge record), in file order, as cs_<ARC> entities after the run's other
+    #: entities, so a resume rebuilds the same order.  Multi-timescale domain only.
+    #: "none" (default) = only the entities named or the 95 base entities.
+    calsim_arcs: str = "none"
 
     # -- regularizers (opt-in; ALL default-off => byte-identical baseline) ----
     #: attribute-weighted geographic smoothness of the per-HRU parameter FIELD
@@ -332,7 +353,9 @@ class DplConfig:
     #: family); the daily term is scaled by the daily families' shares and
     #: the monthly term by the monthly family's, and checkpoint selection is
     #: the same share-weighted mean of the family means ("equal": the plain
-    #: mean of the family means).  Guards against combining with
+    #: mean of the family means).  The CalSim3 arcs (calsim_monthly, key
+    #: "calsim") are a second monthly family with their own monthly term,
+    #: denominator and frozen scale.  Guards against combining with
     #: adaptive_loss (both drive the same per-basin weight vector).  Ignored
     #: outside the multi-timescale domain.
     mt_family_weight: str = "none"
@@ -351,6 +374,14 @@ class DplConfig:
     #: not the families' shares of the loss or gradient: the monthly NNSE runs
     #: ~10x smaller per entity than the daily NNSE + log + var terms.
     mt_share_norm: str = "present"
+    #: checkpoint-selection shares, when they must differ from the loss shares
+    #: (numeric mt_family_weight only): "area" = the footprint-area shares of
+    #: the run's families (the sum of each family's registry area_mi2 over the
+    #: run's entities, renormalized) — the rule dPL-95's shares were set by, kept
+    #: for selection when the loss shares are re-solved so their REALIZED
+    #: coefficient shares hit those area shares; or numeric shares in the
+    #: mt_family_weight syntax.  "" (default) = the mt_family_weight shares.
+    mt_select_weight: str = ""
     #: FROZEN per-family loss scale (needs mt_share_norm="all"): "usgs=a,cdec=b,
     #: uf=c" = each family's per-entity chunk loss per unit coefficient (the
     #: chunk_log's sum l_f / sum c_f) at a REFERENCE state.  Every family term
@@ -361,7 +392,8 @@ class DplConfig:
     #: loss there unchanged) — but not of the gradient: per unit loss the
     #: monthly NNSE gradient runs 1.4-1.9x the daily one at trained states, and
     #: p = 0.5 is what matches the optimizer-step shares there.  Selection keeps
-    #: the nominal shares.  "" (default) = off, byte-identical.
+    #: the nominal shares (or mt_select_weight's).  "" (default) = off,
+    #: byte-identical.
     mt_loss_ref: str = ""
     #: the exponent p of mt_loss_ref (0 < p <= 1) — REQUIRED with mt_loss_ref
     #: (no default: p = 1 and p = 0.5 differ by 2x in the monthly weight), None
@@ -667,6 +699,12 @@ class DplConfig:
         if self.mt_share_norm == "all" and self.mt_family_weight == "none":
             raise ValueError("mt_share_norm='all' normalizes family SHARES — it needs "
                              "mt_family_weight shares or 'equal'")
+        if self.mt_select_weight:
+            if self.mt_family_weight in ("none", "equal"):
+                raise ValueError("mt_select_weight sets the SELECTION shares of a numeric "
+                                 "mt_family_weight run — it needs numeric shares")
+            if self.mt_select_weight != "area":
+                family_shares(self.mt_select_weight)    # raises on a bad spec
         if self.mt_loss_ref:
             family_loss_refs(self.mt_loss_ref)          # raises on a bad spec
             if self.mt_share_norm != "all":
@@ -786,6 +824,21 @@ class DplConfig:
                 raise ValueError(f"obs_mask entry {s!r}: expected 'entity_id|YYYY-MM-DD'")
         if len(set(self.obs_mask)) != len(self.obs_mask):
             raise ValueError("obs_mask has duplicate entries")
+        if isinstance(self.holdout_wy, str):    # tolerate "1976-1985"
+            self.holdout_wy = tuple(int(v) for v in self.holdout_wy.split("-") if v)
+        self.holdout_wy = tuple(int(v) for v in self.holdout_wy)
+        if self.holdout_wy and not (len(self.holdout_wy) == 2
+                                    and 1950 <= self.holdout_wy[0] <= self.holdout_wy[1] <= 2018):
+            raise ValueError(f"holdout_wy {self.holdout_wy}: expected (first, last) water "
+                             "years with 1950 <= first <= last <= 2018")
+        if self.uf_train_start:
+            d = _date.fromisoformat(self.uf_train_start)
+            if d.day != 1 or d < _date(1949, 10, 1):
+                raise ValueError(f"uf_train_start {self.uf_train_start!r}: a first of the "
+                                 "month on or after 1949-10-01 (the envelope start)")
+            self.uf_train_start = d.isoformat()
+        if self.calsim_arcs not in ("none", "train_default"):
+            raise ValueError(f"calsim_arcs {self.calsim_arcs!r}: 'none' or 'train_default'")
         if isinstance(self.et_products, str):   # tolerate a bare CLI string
             self.et_products = tuple(p for p in self.et_products.split(",") if p)
         if (len(self.et_products) == 1
@@ -874,7 +927,11 @@ def pick_device(requested: str = "cuda"):
     return torch.device("cuda")
 
 
-FAMILY_KEYS = {"usgs": "usgs_daily", "cdec": "cdec_daily", "uf": "uf_monthly"}
+FAMILY_KEYS = {"usgs": "usgs_daily", "cdec": "cdec_daily", "uf": "uf_monthly",
+               "calsim": "calsim_monthly"}
+#: the monthly families: each is its own monthly NNSE term (own rows, share, denominator
+#: and frozen scale) — the rest are daily
+MONTHLY_FAMILIES = ("uf_monthly", "calsim_monthly")
 #: what ``mt_family_weight="equal"`` resolves to: shares 1:1:1, renormalized by the
 #: trainer over the families the run holds (the trainer's numeric-shares path)
 EQUAL_FAMILY_SHARES = {f: 1.0 for f in FAMILY_KEYS.values()}
@@ -896,7 +953,7 @@ def family_shares(spec: str) -> dict[str, float] | None:
         fam = FAMILY_KEYS.get(key, key)
         if fam not in FAMILY_KEYS.values():
             raise ValueError(f"mt_family_weight {spec!r}: unknown family "
-                             f"{key!r} (usgs, cdec, uf)")
+                             f"{key!r} (usgs, cdec, uf, calsim)")
         if fam in shares:
             raise ValueError(f"mt_family_weight {spec!r}: {key!r} repeated")
         try:
@@ -922,7 +979,8 @@ def family_loss_refs(spec: str) -> dict[str, float]:
         key, val = (t.strip() for t in item.split("=", 1))
         fam = FAMILY_KEYS.get(key, key)
         if fam not in FAMILY_KEYS.values():
-            raise ValueError(f"mt_loss_ref {spec!r}: unknown family {key!r} (usgs, cdec, uf)")
+            raise ValueError(f"mt_loss_ref {spec!r}: unknown family {key!r} "
+                             "(usgs, cdec, uf, calsim)")
         if fam in refs:
             raise ValueError(f"mt_loss_ref {spec!r}: {key!r} repeated")
         try:

@@ -95,6 +95,7 @@ Three tools score a trained `multifamily` run against CalSim3 over **WY1950–84
 python -m sacsma.dpl.calsim_tier1 <run>              # -> <run>/tier1/
 python -m sacsma.dpl.calsim_tier2 <run> [--no-extend] [--trace-python <python with rasterio>]   # -> <run>/tier2/   (re-runs the checkpoint forward)
 #   opt-in extras: [--dedup-cells] [--components [fastslow|parts]] [--temp-delta DT] [--precip-scale S] [--extension-cells CSV]
+#   several climate perturbations in one batched pass: --scenarios t1=1:1,p85=0:0.85,... [--batch-window DAYS]   # -> <run>/tier2_scenarios/<name>/
 python -m sacsma.dpl.calsim_atlas <run>              # -> <run>/atlas/calsim_validation_atlas.html
 python -m sacsma.dpl.calsim_windows                  # the trimmed-window rule against data/calsim/tier1_sets.csv (--write stores it; then re-run calsim_tier1)
 python -m sacsma.dpl.calsim_compare <run_a> <run_b>  # tier 1 of two scored runs side by side -> tier1_comparison.md/.html/.csv under --out (default: the current folder)
@@ -117,3 +118,27 @@ python -m sacsma.dpl.calsim_compare <run_a> <run_b>  # tier 1 of two scored runs
 | `tier2/tier2_{kge,pbias}_WY1950-84.png`, `tier2/figures/` | Arc maps and per-set regime figures. |
 | `tier2/tier2_components_monthly.csv` | Only with `--components`: per arc and month the routed fast and slow runoff (`fast_taf + slow_taf = total_taf = sim_taf`); `--components parts` adds `quick_taf` + `interflow_taf` (= fast) and `supplemental_taf` + `primary_taf` (= slow). All net of SAC-SMA's riparian et4 channel-ET deduction. |
 | `tier2/tier2_run_info.json` | Only when an extra or `--dedup-cells` is on: the extras, the dedup setting and the perturbation. `--temp-delta` / `--precip-scale` apply a uniform delta (°C added to tavg/tmin/tmax, precipitation multiplied, spin-up included), flagged `placeholder_perturbation`. |
+
+**Holdout runs.** A run trained with `--holdout-wy` (dPL-CalSim: WY1976–85 held out of every family) is validated over its held-out water years instead of WY1950–84. The evaluator adds `metrics_entities_holdout.csv` (USGS daily, DWR-unimpaired monthly and the CalSim3 arcs on those years). Tier 1 and tier 2 score the windows `WY1976-85`, `WY1976-84` (comparable with runs that trained WY1985) and `WY1950-84_mixed`, and leave the held-out years out of the `train` window (`excluded_wy`); tier 2 adds `WY1976-85_own` (each arc's own gauge-record months) and `tier2/tier2_anchor_rescaled.csv`, an evaluation-only score of each arc after its closure group is rescaled to the CalSim3 anchor. The maps, regime figures and the atlas are over the holdout.
+
+## The CalSim3 rim-inflow product (`sacsma.dpl.calsim_product`)
+
+The product is a run's monthly flow on the 196 CalSim3 rim arcs, WY1950–2015, in TAF. The dPL's own tier-2 flow is kept on the **systems** (the sum of a closure group's arcs, `closure_group` of `data/calsim/arc_hierarchy.csv`; seven systems are a single arc) and on the **non-anchor arcs** (the 50 arcs with no closure group to close to). On the 139 **share arcs**, the arcs of the eleven multi-arc systems, the **share model** re-divides the dPL system flow: a small network gives each arc's share of its system's flow in a month from the dPL's own shares and their lags, the runoff-part fractions, the system flow, the month and the arc area, and each arc's water-year volume is closed to its share of the system's. A system's arcs sum to the dPL system flow over every water year (inside the year their sum differs from it by 2.5 % of the volume for dPL-CalSim, with the same monthly KGE against CalSim3), so the volume response of every system is the dPL's; the arcs' response is held to the dPL's by a penalty in training and checked at climate points the fit never saw. Method, experiments and scores: [`dpl/RUNS.md`](dpl/RUNS.md), "CalSim3 rim-inflow product".
+
+```bash
+# the passes the fit needs: the base tier 2 with runoff parts, and the same at the 11 training + 5 validation climate points
+python -m sacsma.dpl.calsim_tier2 <run> --components parts
+python -m sacsma.dpl.calsim_tier2 <run> --components parts --scenarios t1=1:1,t3=3:1,...   # sacsma.dpl.calsim_product.scenario_spec() gives the full list; split it to fit the GPU (8 per pass at --batch-window 512 on 8 GB)
+python -m sacsma.dpl.calsim_product fit <run>                       # -> <run>/calsim_product/   (CPU, about 30 min; --mu 0.03 skips the selection)
+python -m sacsma.dpl.calsim_product apply <run> --tier2 <pass dir>  # the product for another tier-2 pass -> <pass dir>/rim_inflow_monthly.csv
+```
+
+| File | What |
+|------|------|
+| `calsim_product/rim_inflow_monthly.csv` | The product on the base pass: `arc, month, taf, dpl_taf, kind` (`kind` = `share`, `single-arc system` or `non-anchor`; `taf = dpl_taf` except on the share arcs). |
+| `calsim_product/share_model.pt` | The fitted share model and everything `apply` needs (arc and system order, input scaling, per-arc volume ratios). |
+| `calsim_product/product_metrics.csv` | Per arc: monthly KGE against CalSim3 of the dPL arc and of the product, on the held-out and on the training water years. |
+| `calsim_product/share_selection.csv` | The out-of-fold candidates (the dPL's own shares and each penalty weight μ): median and p10 arc KGE on training water years, and the response misses at the training climate points. |
+| `calsim_product/response_gate.csv` | Per validation climate point: median and p90 over the share arcs of the product's miss against the dPL arc in volume change (`V`, %) and April–July share change (`AJ`, pp), with the full gate (median ≤ 1, p90 ≤ 3) and the half gate. |
+| `calsim_product/product_info.json` | Settings, the passes used, and the summary scores by kind of arc. |
+| `tier2_scenarios/<name>/` | Local only: the tier-2 CSVs of each climate point (`--scenarios`), regenerable from the checkpoint. |
