@@ -47,7 +47,8 @@ banked units.  An empty or null result is never banked.  ``run.json`` pins
 spending quota on the same units.  Ctrl+C cancels the queued units (in-flight
 requests finish and are banked).
 
-Needs an authenticated earthengine-api (``sacsma`` env) and a registered cloud
+Needs an authenticated earthengine-api (the ``sacsma-gis`` env,
+``environment-gis.yml``) and a registered cloud
 project (``--project``).  Behind the DWR TLS proxy the Windows trust store has
 to be injected before ``import ee`` -- done below when pip's vendored
 truststore is importable.

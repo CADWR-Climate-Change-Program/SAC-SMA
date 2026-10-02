@@ -39,6 +39,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from ... import paths
 from ...cdec15 import CAL_END
 from ...io import load_forcing
 from ...model import attach_tminmax, load_domain_forcing, run_basin
@@ -58,7 +59,7 @@ MODELS: dict[str, dict] = {
                  canopy_csv="artifacts/dpl/noah/params_canopy.csv"),
 }
 #: explicit cache tag per MODELS label -- stable cache filenames independent
-#: of the (2026-07-21 renamed) legend text.
+#: of the legend text.
 _MODEL_TAG: dict[str, str] = {"Hamon": "hamon", "PT": "pt", "Noah": "noah"}
 #: the noah checkpoint: the ensembles' sac_sim channel is its TORCH daily run
 #: (``daily_sim_noah_torch.csv`` baked into the seed ckpts), so the detrended
@@ -193,7 +194,7 @@ def _hybrid_flow(data_dir, dT, dev, sim_detr: pd.DataFrame, ckpt: str):
     lo = int(dom.dates.searchsorted(pd.Timestamp(_CAL_START)))
     hi = int(dom.dates.searchsorted(pd.Timestamp(CAL_END))) + 1
     tavg = W @ dom.forcing.tavg[dom.cell_idx].astype(np.float64)
-    tmm = pd.read_csv(Path(data_dir) / "cdec15" / "basin_tminmax_livneh.csv",
+    tmm = pd.read_csv(paths.basin_tminmax(data_dir),
                       parse_dates=["date"]).set_index("date")
     tmin = np.vstack([tmm[f"tmin_{b}"].reindex(dom.dates).to_numpy() for b in dom.basins])
     tmax = np.vstack([tmm[f"tmax_{b}"].reindex(dom.dates).to_numpy() for b in dom.basins])

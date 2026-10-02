@@ -1,22 +1,41 @@
-# Conda environment for the GIS raster scripts, kept apart from `sacsma` because rasterio and
-# geopandas each bring their own GDAL and must not share a process:
-#   dataprep/sample_gis.py     POLARIS / LANDFIRE / 3DEP / MODIS-LAI sampling (rasterio + pyhdf)
-#   dataprep/reitz_et.py       Reitz et al. (2023) ET rasters (rasterio)
-#   dataprep/build_flowlens.py the HydroSHEDS flow-length tracer; `sacsma dpl calsim tier2` runs
-#                              it in this environment through --trace-python
+# Conda environment for the data-preparation scripts that read rasters with rasterio or pull
+# from Google Earth Engine.  They share nothing with the model, so they live apart from the
+# `sacsma` environment, for two reasons:
+#   - rasterio and geopandas/pyogrio each load their own GDAL, and the two must not share a
+#     process (or a PATH, on Windows). rasterio lives ONLY here; `sacsma` keeps the vector one.
+#   - earthengine-api brings the Google client stack, which the model has no use for.
+#
+#   dataprep/sample_gis.py       POLARIS / LANDFIRE / 3DEP / MODIS-LAI point sampling
+#                                (rasterio, pyhdf)
+#   dataprep/reitz_et.py         Reitz et al. (2023) ET rasters (rasterio)
+#   dataprep/build_flowlens.py   HydroSHEDS flow-length tracer (rasterio);
+#                                `sacsma dpl calsim tier2 --trace-python <this env's python>`
+#                                runs it as a subprocess
+#   dataprep/gee_obs_region.py   Earth Engine ET / SWE reference products (ee)
+#   dataprep/gee_aef_region.py   Earth Engine AlphaEarth embeddings (ee; pip's truststore
+#                                when a TLS-inspecting proxy sits in between)
 #
 #   conda env create -f environment-gis.yml
 #   conda activate sacsma-gis
+#
+# The raster packages are the list the environment was first made from (2026-07-11), pinned
+# to the minor versions it resolved to; every tracked output of the three raster scripts was
+# produced with them. rioxarray, pyproj, shapely and libgdal-hdf4 came with that install and
+# are kept so the file rebuilds the same environment; no script imports them today (MODIS
+# HDF4 is read with pyhdf, not through GDAL).
 name: sacsma-gis
 channels:
   - conda-forge
 dependencies:
   - python=3.14
-  - numpy
-  - pandas
-  - shapely
-  - pyproj
-  - rasterio
-  - rioxarray
-  - pyhdf
-  - libgdal-hdf4
+  - numpy=2.5
+  - pandas=3.0
+  - rasterio=1.5
+  - libgdal-core=3.12   # the GDAL rasterio 1.5 was tested on
+  - pyhdf=0.11
+  - rioxarray=0.22
+  - pyproj=3.7
+  - shapely=2.1
+  - libgdal-hdf4=3.12
+  - earthengine-api=1.7
+  - pip                 # gee_aef_region.py imports pip._vendor.truststore

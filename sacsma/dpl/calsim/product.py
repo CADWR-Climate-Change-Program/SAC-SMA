@@ -68,6 +68,7 @@ import pandas as pd
 import torch
 from torch import nn
 
+from ... import paths
 from ...metrics import kge
 from .tier1 import run_holdout_wy
 
@@ -108,7 +109,7 @@ def load_units(data_dir: str | Path = "data") -> pd.DataFrame:
     hierarchy table's order.  ``kind`` is ``share`` (an arc of a multi-arc system),
     ``single-arc system`` or ``non-anchor``; ``system`` is the closure group (NaN for a
     non-anchor arc)."""
-    h = pd.read_csv(Path(data_dir) / "calsim" / "arc_hierarchy.csv")
+    h = pd.read_csv(paths.calsim3_targets(data_dir, "arc_hierarchy.csv"))
     h = h[h.status == "rim_arc"].set_index("arc")
     n = h.closure_group.value_counts()
     anchored = h.closure_group.notna() & ~h.closure_group.isin(NON_ANCHOR_GROUPS)

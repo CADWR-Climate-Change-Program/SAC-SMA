@@ -18,8 +18,9 @@ import numpy as np
 import pandas as pd
 import torch
 
+from .. import paths
 from ..cdec15 import BASINS, CAL_END, load_gage
-from ..io import MULTI_TIMESCALE_DOMAIN, domain_dir, load_hru_table, load_params
+from ..io import MULTI_TIMESCALE_DOMAIN, load_hru_table, load_params
 from ..model import DomainForcing, load_domain_forcing
 from .config import PARAM_ORDER, validate_ga_optimum
 
@@ -427,7 +428,7 @@ def load_domain_tensors(
             # family (``build_entities.py --calsim-arcs``) is opt-in: its entities
             # load only when named, so the full domain stays the 95 base entities
             reg = pd.read_csv(
-                domain_dir(data_dir, domain) / "entities.csv",
+                paths.entities(data_dir),
                 usecols=["entity_id", "family"])
             basins = tuple(reg.loc[reg["family"] != "calsim_monthly", "entity_id"])
         else:

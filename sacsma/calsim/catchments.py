@@ -32,6 +32,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from .. import paths
 from ..io import (
     DEFAULT_DOMAIN,
     load_basin_area,
@@ -83,8 +84,7 @@ def load_catchments(
     """
     import geopandas as gpd
 
-    from . import calsim_dir
-    g = gpd.read_file(calsim_dir(data_dir) / "gis" / gpkg_name, layer=layer)
+    g = gpd.read_file(paths.calsim3_gpkg(data_dir, gpkg_name), layer=layer)
     if rim_only:
         g = g[g["Type"] == "Rim"]
     g = g.reset_index(drop=True)
@@ -158,8 +158,7 @@ def basin_areas(data_dir: str | Path = "data", domain: str = DEFAULT_DOMAIN) -> 
     re-derived from per-HRU ``area_weight``).  Falls back to summing reconstructed per-HRU areas.
     """
     from ..io import load_basin_area, read_table
-    from . import calsim_dir
-    calsim_csv = calsim_dir(data_dir) / f"basin_area_{domain}_calsim.csv"
+    calsim_csv = paths.calsim_basin_area(data_dir, domain)
     if calsim_csv.exists():
         d = read_table(calsim_csv)
         return {str(b): float(a) for b, a in zip(d["basin"], d["area_mi2"])}
@@ -206,8 +205,7 @@ def calsim_basin_areas(data_dir: str | Path = "data", domain: str = DEFAULT_DOMA
     if write:
         df = pd.DataFrame({"basin": list(out), "area_mi2": [out[b] for b in out],
                            "source": [src[b] for b in out]})
-        from . import calsim_dir
-        write_table(df, calsim_dir(data_dir) / f"basin_area_{domain}_calsim.csv")
+        write_table(df, paths.calsim_basin_area(data_dir, domain))
         print(f"calsim_basin_areas[{domain}]: {sum(v=='calsim' for v in src.values())} CalSim + "
               f"{sum(v=='authoritative' for v in src.values())} fallback -> {domain}_calsim.csv")
     return out
@@ -288,8 +286,7 @@ def screened_footprint(data_dir: str | Path = "data", domain: str = DEFAULT_DOMA
     out = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame(columns=cols)
     if write:
         from ..io import write_table
-        from . import calsim_dir
-        write_table(out, calsim_dir(data_dir) / f"screened_footprint_{domain}.csv")
+        write_table(out, paths.screened_footprint(data_dir, domain))
         print(f"screened_footprint[{domain}]: {out['basin'].nunique()} basins, {len(out)} HRU rows "
               f"-> screened_footprint_{domain}.csv")
     return out
@@ -522,8 +519,7 @@ def load_crosswalk(data_dir: str | Path = "data") -> pd.DataFrame:
     mapping, rim-system membership, and VIC node names — edit it by hand; nothing in the
     pipeline overwrites it.
     """
-    from . import calsim_dir
-    return pd.read_csv(calsim_dir(data_dir) / "calsim_crosswalk.csv")
+    return pd.read_csv(paths.crosswalk(data_dir))
 
 
 def _system_members(anchor: pd.DataFrame) -> dict[str, set[str]]:

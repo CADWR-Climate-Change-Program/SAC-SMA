@@ -60,9 +60,10 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from ... import paths
 from ...io import read_table
 from ...metrics import center_of_timing, kge, nse, pbias, pearson, seasonal_mismatch
-from ...calsim import calsim_dir, load_calsim3_monthly
+from ...calsim import load_calsim3_monthly
 from ...calsim.catchments import CALSIM_GPKG, MERGED_LAYER, series_arc
 
 #: 1 mm of depth over 1 mi^2 in acre-feet: 2,589,988.11 m^2 x 1e-3 m / 1,233.4818 m^3 per AF.
@@ -150,7 +151,7 @@ def _split(arcs) -> list[str]:
 def load_sets(data_dir: str | Path = "data") -> pd.DataFrame:
     """The tier-1 arc-set table, ``arcs`` split into lists."""
     # only an empty cell is a missing value: a word such as NA in a val_* cell must not pass for a blank
-    s = pd.read_csv(calsim_dir(data_dir) / "tier1_sets.csv", keep_default_na=False, na_values=[""])
+    s = pd.read_csv(paths.tier1_sets(data_dir), keep_default_na=False, na_values=[""])
     s["arcs"] = s["arcs"].map(_split)
     s["system"] = s["system"].fillna("")
     s["note"] = s["note"].fillna("")
@@ -214,26 +215,26 @@ def volume_rows(metrics: pd.DataFrame) -> pd.DataFrame:
 def arc_areas(data_dir: str | Path = "data") -> dict[str, float]:
     """``CalSim3_Merged`` ``SQ_MI`` keyed by INFLOW-series arc id."""
     import geopandas as gpd
-    g = gpd.read_file(calsim_dir(data_dir) / "gis" / CALSIM_GPKG, layer=MERGED_LAYER,
+    g = gpd.read_file(paths.calsim3_gpkg(data_dir, CALSIM_GPKG), layer=MERGED_LAYER,
                       ignore_geometry=True)
     return {series_arc(n): float(a) for n, a in zip(g["Connect_No"], g["SQ_MI"], strict=True)}
 
 
 def registry_arcs(data_dir: str | Path = "data") -> dict[str, list[str]]:
-    reg = pd.read_csv(Path(data_dir) / "multifamily" / "entities.csv", dtype={"site_id": str})
+    reg = pd.read_csv(paths.entities(data_dir), dtype={"site_id": str})
     return {e: _split(a) for e, a in zip(reg["entity_id"], reg["arcs"], strict=True)}
 
 
 def registry_windows(data_dir: str | Path = "data") -> dict[str, tuple[pd.Period, pd.Period]]:
     """Each entity's training window as (first month, last month) from the registry."""
-    reg = pd.read_csv(Path(data_dir) / "multifamily" / "entities.csv", dtype={"site_id": str},
+    reg = pd.read_csv(paths.entities(data_dir), dtype={"site_id": str},
                       parse_dates=["train_start", "train_end"])
     return {e: (pd.Period(s, "M"), pd.Period(t, "M"))
             for e, s, t in zip(reg["entity_id"], reg["train_start"], reg["train_end"], strict=True)}
 
 
 def footprint_areas(data_dir: str | Path = "data") -> dict[str, float]:
-    cells = pd.read_csv(Path(data_dir) / "multifamily" / "entity_cells.csv")
+    cells = pd.read_csv(paths.entity_cells(data_dir))
     return cells.groupby("entity_id")["overlap_mi2"].sum().to_dict()
 
 
@@ -254,7 +255,7 @@ def load_references(data_dir: str | Path = "data") -> tuple[pd.DataFrame, pd.Dat
     inflow = load_calsim3_monthly(data_dir)
     inflow["month"] = pd.to_datetime(inflow["date"]).dt.to_period("M")
     inflow = inflow.pivot(index="month", columns="arc", values="flow_taf")
-    unimp = read_table(calsim_dir(data_dir) / "calsim_unimpaired_monthly.csv")
+    unimp = read_table(paths.calsim3_targets(data_dir, "calsim_unimpaired_monthly.csv"))
     unimp["month"] = pd.to_datetime(unimp["date"]).dt.to_period("M")
     unimp = unimp.pivot(index="month", columns="system", values="flow_taf")
     return inflow, unimp
@@ -298,11 +299,11 @@ def training_record_taf(entity_id: str, data_dir: str | Path = "data",
     months and converted with the registry's published ``area_mi2`` for a daily entity.
     ``None`` for families without a monthly-comparable store.  ``obs_mask`` (the run's
     ``DplConfig.obs_mask``) drops those days, so their months come out incomplete."""
-    reg = pd.read_csv(Path(data_dir) / "multifamily" / "entities.csv",
+    reg = pd.read_csv(paths.entities(data_dir),
                       dtype={"site_id": str}).set_index("entity_id")
     r = reg.loc[entity_id]
     if r["family"] == "uf_monthly":
-        uf = pd.read_csv(Path(data_dir) / "dwr_unimpaired" / "uf_monthly.csv", parse_dates=["date"])
+        uf = pd.read_csv(paths.dwr_unimpaired(data_dir, "uf_monthly.csv"), parse_dates=["date"])
         s = uf[uf["uf"] == int(str(r["site_id"]).split()[-1])].set_index("date")["flow_taf"]
     elif r["family"] == "cdec_daily":
         path, col = str(r["obs_store"]).rsplit(":", 1)

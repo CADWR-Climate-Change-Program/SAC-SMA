@@ -1,20 +1,20 @@
-"""(Δprecip, ΔT) response surfaces + skill for the noah_ca hybrid family.
+"""(Δprecip, ΔT) response surfaces + skill for the hybrid family.
 
-All four models share the climate-ADAPTIVE ``noah_ca`` physics basis (the
-``physical_climate`` dPL-noah, params recomputed under the perturbed climate):
+All four models share the climate-ADAPTIVE ``noah`` physics (the
+``physical_climate`` inputs, params recomputed under the perturbed climate):
 
-  * ``noah_ca (physics)`` — the adaptive physics itself (the reference response);
-  * ``base hybrid``       — SAC×LSTM feature-hybrid, noah_ca sim channel, NO
-    response loss;
-  * ``dt·dp hybrid``      — base + the 14-anchor {−20%,−10%,0,+10%,+20%}×{0,+2,
-    +4 °C} response-consistency loss against the noah_ca ADAPTIVE teachers
+  * ``noah``      — the adaptive physics itself (the reference response);
+  * ``hybrid``    — SAC×LSTM feature-hybrid, ``noah`` sim channel, NO response
+    loss;
+  * ``hybrid_dt`` — ``hybrid`` + the 14-anchor {−20%,−10%,0,+10%,+20%}×{0,+2,
+    +4 °C} response-consistency loss against the ``noah`` ADAPTIVE teachers
     (λ=0.18; precip extended to ±20 % so the surface edges are supervised);
-  * ``pure LSTM``         — no physics sim channel (``use_sim=False``), but the
-    SAME climate-adaptive statics (pmean/snowf co-vary) — the no-physics ablation.
+  * ``lstm``      — no physics sim channel (``use_sim=False``), but the SAME
+    climate-adaptive statics (pmean/snowf co-vary) — the no-physics ablation.
 
 Per-watershed figure: 4 metrics × 4 model columns, % change vs each model's own
 present climate.  The physics + hybrid daily flows reuse the ``dtdp_response``
-machinery (frozen numba noah-lite physics via ``adaptive_physics.noah_ca_daily``;
+machinery (frozen numba noah-lite physics via ``adaptive_physics.noah_daily``;
 ``_ensemble_perturbed_daily`` for the LSTM forwards, with the climate statics
 co-varying).  Ensembles = mean over the seed members; scratch trains stay local.
 """
@@ -27,29 +27,24 @@ import pandas as pd
 
 from ..._figures import plt  # noqa: F401
 from ...io import load_basin_area
-from .adaptive_physics import noah_ca_daily
+from .adaptive_physics import noah_daily
 from .climatology import _basin_order
 from .dtdp_response import (DOMAIN, DP, DT, METRICS, REGIMES, _REGIME_TITLE,
                             _aggregate_regime, _ensemble_perturbed_daily,
                             _load_ensemble, _metrics_from_daily)
 
-# canonical noah_ca family (promoted out of testing/ 2026-07-19; noah_ca ->
-# noah/hybrid_base -> hybrid/hybrid_dtdp -> hybrid_dt renamed 2026-07-21, the
-# old frozen-noah-basis noah/hybrid/hybrid_pet_dt retained as
-# artifacts/dpl/superseded/{noah_noca,hybrid_noca,hybrid_dt_noca}).
-NOAH_CA_DIR = "artifacts/dpl/noah"                 # the adaptive physics
-NOAH_CA_DPL = "artifacts/dpl/noah/params_dpl.csv"  # present-climate SAC params
-NOAH_CA_SIM = "artifacts/dpl/noah/frozen_sim_noah.csv"  # present sim channel
-# noah_ca is the family's default basis, so the hybrid dirs carry no `_noah_ca`
-# infix; `lstm` has no physics channel at all (use_sim=False).
+# the runs the figures compare
+NOAH_DIR = "artifacts/dpl/noah"                 # the adaptive physics
+NOAH_DPL = "artifacts/dpl/noah/params_dpl.csv"  # present-climate SAC params
+NOAH_SIM = "artifacts/dpl/noah/frozen_sim_noah.csv"  # present sim channel
+# `lstm` has no physics channel at all (use_sim=False).
 BASE_DIR = "artifacts/dpl/hybrid"
 DTDP_DIR = "artifacts/dpl/hybrid_dt"
 LSTM_DIR = "artifacts/dpl/lstm"
 N_SEEDS = 3
 
-#: figure-facing labels (2026-07-21 canonicalized to the plain model names --
-#: PHYSICS/BASE/DTDP/LSTM stay the internal identifiers used as dict keys
-#: throughout this module).
+#: figure-facing labels; PHYSICS/BASE/DTDP/LSTM are the dict keys used
+#: throughout this module.
 PHYSICS = "Noah"
 BASE = "Hybrid"
 DTDP = "Hybrid DT"
@@ -92,9 +87,9 @@ def assemble(data_dir: str = "data", *, device: str = "cuda",
     grid = [(float(dp), float(dt)) for dp in DP for dt in DT]
     _HYBRID_CACHE.mkdir(parents=True, exist_ok=True)
 
-    # noah_ca ADAPTIVE physics over the grid (cached by the physics sweep) — the
+    # noah ADAPTIVE physics over the grid (cached by the physics sweep) — the
     # reference AND the hybrids' perturbed sim channel.
-    phys = {(dp, dt): noah_ca_daily(dp, dt, "adaptive", data_dir) for dp, dt in grid}
+    phys = {(dp, dt): noah_daily(dp, dt, "adaptive", data_dir) for dp, dt in grid}
     print(f"  physics: {len(grid)} (dp,dt) points", flush=True)
 
     # lazy holders — built only when a hybrid cache MISS actually needs them.
@@ -139,10 +134,10 @@ def assemble(data_dir: str = "data", *, device: str = "cuda",
         _emit(PHYSICS, dp, dt, _metrics_from_daily(phys[(dp, dt)], areas))
 
     for label, ens in ENSEMBLES.items():
-        # base/dt·dp carry the noah_ca present sim channel; override the stale
-        # training-time (testing/) paths with the canonical ones (LSTM has none).
+        # hybrid and hybrid_dt carry the noah present sim channel; override the
+        # training-time paths in the checkpoints with the tracked ones (LSTM has none).
         over = ({} if label == LSTM
-                else dict(physics_csv=NOAH_CA_DPL, sim_cache=NOAH_CA_SIM))
+                else dict(physics_csv=NOAH_DPL, sim_cache=NOAH_SIM))
         tag, n_miss = _ENS_TAG[label], 0
         for dp, dt in grid:
             cache = _hybrid_cache_path(tag, dp, dt)
@@ -235,7 +230,7 @@ def _mean_calval(csv: str | Path) -> tuple[float, float]:
 
 def _skill_pairs() -> dict[str, tuple[float, float]]:
     """Ensemble-mean cal/val KGE per model, from the tracked metrics CSVs."""
-    return {PHYSICS: _mean_calval(f"{NOAH_CA_DIR}/metrics_noah.csv"),
+    return {PHYSICS: _mean_calval(f"{NOAH_DIR}/metrics_noah.csv"),
             **{lab: _mean_calval(f"{d}/metrics_hybrid.csv")
                for lab, d in ENSEMBLES.items()}}
 
@@ -246,8 +241,8 @@ def _pooled(tbl: pd.DataFrame, model: str, col: str, dp: float, dt: float):
     return s.set_index("basin")[col]
 
 
-def make_noah_ca_summary(tbl: pd.DataFrame, out_dir: str | Path = "artifacts/dpl",
-                         ) -> Path:
+def make_summary(tbl: pd.DataFrame, out_dir: str | Path = "artifacts/dpl",
+                 ) -> Path:
     """3-panel headline: (1) ensemble-mean skill bars, (2) the warming-response
     CURVE (pooled annual %Δ vs present along ΔT at Δp=0), (3) the precip-response
     CURVE (pooled annual %Δ along Δp, held at ΔT=+2 °C, isolated vs the +2 °C
@@ -338,20 +333,16 @@ def make_regime_surfaces(tbl: pd.DataFrame, data_dir: str = "data",
 
 def make_hybrid_progression(tbl: pd.DataFrame, data_dir: str = "data",
                             out_dir: str | Path = "artifacts/dpl") -> Path:
-    """Two-panel progression exhibit for the CURRENT canonical chain
-    Noah (physics) -> Hybrid -> Hybrid DT: (a) per-basin validation skill,
-    (b) the pooled warming-response curve.  Replaces the superseded frozen-
-    noah-basis ``hybrid_progression`` figure, whose PET-input-only middle rung
-    has no counterpart in the current family (see the main text / RUNS.md for
-    the pooled response-ratio numbers -- this exhibit is the visual companion,
-    not a re-derivation of those figures)."""
+    """Two-panel progression exhibit for the chain Noah (physics) -> Hybrid ->
+    Hybrid DT: (a) per-basin validation skill, (b) the pooled warming-response
+    curve."""
     MODELS = [PHYSICS, BASE, DTDP]
     STY = {PHYSICS: dict(color="k", marker="o", mfc="none", mec="k", mew=1.4),
            BASE: dict(color="#2ca02c", marker="s", mfc="#2ca02c", mec="#2ca02c"),
            DTDP: dict(color="#1f77b4", marker="^", mfc="#1f77b4", mec="#1f77b4")}
 
     order = _basin_order(data_dir, sorted(tbl["basin"].unique()))
-    val = {PHYSICS: pd.read_csv(f"{NOAH_CA_DIR}/metrics_noah.csv"
+    val = {PHYSICS: pd.read_csv(f"{NOAH_DIR}/metrics_noah.csv"
                                 ).set_index("basin")["val_kge"],
            BASE: pd.read_csv(f"{BASE_DIR}/metrics_hybrid.csv"
                              ).set_index("basin")["val_kge"],
@@ -402,10 +393,10 @@ def make_hybrid_progression(tbl: pd.DataFrame, data_dir: str = "data",
     return out
 
 
-def make_noah_ca_hybrids(data_dir: str = "data",
-                         out_dir: str | Path = "artifacts/dpl",
-                         *, device: str = "cuda", n_seeds: int = N_SEEDS,
-                         regen: bool = False) -> pd.DataFrame:
+def make_hybrids(data_dir: str = "data",
+                 out_dir: str | Path = "artifacts/dpl",
+                 *, device: str = "cuda", n_seeds: int = N_SEEDS,
+                 regen: bool = False) -> pd.DataFrame:
     """Assemble (or reload) the metrics table, then render: one 4×4 response
     surface per watershed, one per hydroclimate regime, and the 3-panel skill /
     response summary."""
@@ -426,10 +417,10 @@ def make_noah_ca_hybrids(data_dir: str = "data",
         _plot_basin(b, tbl[tbl.basin == b], figdir / f"{b}.png")
     print(f"wrote {len(order)} figures -> {figdir}", flush=True)
     make_regime_surfaces(tbl, data_dir, out_dir)
-    make_noah_ca_summary(tbl, out_dir)
+    make_summary(tbl, out_dir)
     make_hybrid_progression(tbl, data_dir, out_dir)
     return tbl
 
 
 if __name__ == "__main__":
-    make_noah_ca_hybrids()
+    make_hybrids()

@@ -37,9 +37,8 @@ dependencies:
   - pip
   - pip:
       - -e .
-      - earthengine-api>=1.0   # dataprep/gee_*.py
-      # dataprep/build_flowlens.py (HydroSHEDS flow-length tracing). The pip wheel carries
-      # its own GDAL: keep it out of any process that also imports geopandas/pyogrio.
-      # The GIS raster scripts otherwise run in their own environment (environment-gis.yml),
-      # which `sacsma dpl calsim tier2 --trace-python` can use for the tracer.
-      - rasterio>=1.4
+# No rasterio and no earthengine-api here, on purpose: this environment's GDAL belongs to
+# geopandas/pyogrio, and the model has no use for the Google client stack. The scripts
+# that read rasters (sample_gis.py, reitz_et.py, build_flowlens.py) or pull from Earth
+# Engine (gee_*.py) run in the separate environment of environment-gis.yml;
+# `sacsma dpl calsim tier2` reaches its flow-length tracer there through --trace-python.

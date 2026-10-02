@@ -44,7 +44,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from ...calsim import calsim_dir
+from ... import paths
 from .tier1 import VALIDATION_WINDOW, load_sets
 
 MIN_YEARS = 20
@@ -90,7 +90,7 @@ def derive(data_dir: str | Path = "data", min_years: int = MIN_YEARS,
 
 def write_windows(data_dir: str | Path, windows: dict[str, tuple[int, int]]) -> Path:
     """Store ``val_start_wy`` and ``val_end_wy`` in the set table, leaving every other cell's value as written."""
-    path = calsim_dir(data_dir) / "tier1_sets.csv"
+    path = paths.tier1_sets(data_dir)
     eol = "\r\n" if b"\r\n" in path.read_bytes() else "\n"
     with open(path, newline="", encoding="utf-8-sig") as f:
         rows = [r for r in csv.reader(f) if r]

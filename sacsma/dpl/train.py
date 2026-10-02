@@ -59,6 +59,7 @@ import numpy as np
 import pandas as pd
 import torch
 
+from .. import paths
 from ..io import MULTI_TIMESCALE_DOMAIN, load_params, soilveg_path
 from .config import (
     CANOPY_LEARNED_PARAMS,
@@ -302,11 +303,10 @@ def _with_calsim_arcs(data_dir: str, basins: tuple[str, ...] | None) -> tuple[st
     """``DplConfig.calsim_arcs = "train_default"``: the run's entities (``basins``, or the
     registry's base entities) followed by the ``train_default`` arcs of
     ``arc_hierarchy.csv`` as ``cs_<ARC>`` registry entities, in hierarchy file order."""
-    from ..io import domain_dir
     from .calsim.arcs import load_hierarchy
     from .multi_timescale import CALSIM_FAMILY
 
-    reg = pd.read_csv(domain_dir(data_dir, MULTI_TIMESCALE_DOMAIN) / "entities.csv",
+    reg = pd.read_csv(paths.entities(data_dir),
                       usecols=["entity_id", "family", "site_id"])
     if basins is None:
         basins = tuple(reg.loc[reg["family"] != CALSIM_FAMILY, "entity_id"])
@@ -332,9 +332,7 @@ def _area_shares(data_dir: str, basins, families=None) -> dict[str, float]:
     """Footprint-area family shares: each family's registry ``area_mi2`` summed over
     ``basins`` (restricted to ``families`` when given), renormalized — the rule the
     dPL-95 shares were set by."""
-    from ..io import domain_dir
-
-    reg = pd.read_csv(domain_dir(data_dir, MULTI_TIMESCALE_DOMAIN) / "entities.csv",
+    reg = pd.read_csv(paths.entities(data_dir),
                       usecols=["entity_id", "family", "area_mi2"]).set_index("entity_id")
     area = reg.loc[list(basins)].groupby("family", sort=False)["area_mi2"].sum()
     area = {f: float(area[f]) for f in FAMILY_KEYS.values()

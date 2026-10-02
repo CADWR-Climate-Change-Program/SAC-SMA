@@ -40,8 +40,8 @@ import numpy as np
 import pandas as pd
 import torch
 
+from .. import paths
 from ..cdec15 import load_gage
-from ..io import MULTI_TIMESCALE_DOMAIN, domain_dir
 from .data import DomainTensors, month_chunk_target
 
 #: global training envelope (WY1950-2018; forcing ends 2018-12-31).
@@ -119,8 +119,7 @@ def load_entity_obs(
     (``DplConfig.uf_train_start``) adds each uf_monthly entity's months from that
     date to its registry train_start (minus the holdout) from the same store,
     after the audit; every one must be observed (``n_ext``)."""
-    ddir = domain_dir(data_dir, MULTI_TIMESCALE_DOMAIN)
-    reg = pd.read_csv(ddir / "entities.csv", dtype={"site_id": str},
+    reg = pd.read_csv(paths.entities(data_dir), dtype={"site_id": str},
                       parse_dates=["train_start", "train_end"])
     known_ids = set(reg["entity_id"])
     reg = reg.set_index("entity_id").loc[list(dom.basins)]
@@ -131,14 +130,14 @@ def load_entity_obs(
         raise ValueError(f"cal_end {cal_end} not in the forcing record")
     window = dom.dates[t0:t1]
 
-    ufmm = pd.read_csv(Path(data_dir) / "dwr_unimpaired" / "uf_monthly_mm.csv",
+    ufmm = pd.read_csv(paths.dwr_unimpaired(data_dir, "uf_monthly_mm.csv"),
                        parse_dates=["date"])
-    fnfmm = pd.read_csv(Path(data_dir) / "cdec_fnf" / "fnf_daily_mm.csv",
+    fnfmm = pd.read_csv(paths.cdec_fnf(data_dir, "fnf_daily_mm.csv"),
                         parse_dates=["date"])
     gage = load_gage(data_dir)
 
     import xarray as xr
-    usgs = xr.open_dataset(f"{data_dir}/usgs/flow_daily.nc")
+    usgs = xr.open_dataset(paths.usgs_flow(data_dir))
 
     daily_rows, monthly_rows = [], []
     daily_arrs, n_obs_want = [], []

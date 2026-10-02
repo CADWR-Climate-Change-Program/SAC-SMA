@@ -47,6 +47,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from ... import paths
 from ...calsim.catchments import MERGED_LAYER, load_catchments, series_arc
 from .tier1 import (TRIMMED_WINDOW, VALIDATION_WINDOW, arc_to_set, holdout_windows, load_sets,
                            run_holdout_wy, window_range)
@@ -71,7 +72,7 @@ def _set_geoms(catch, sets):
 
 
 def _outlets(data_dir):
-    reg = pd.read_csv(Path(data_dir) / "multifamily" / "entities.csv", dtype={"site_id": str})
+    reg = pd.read_csv(paths.entities(data_dir), dtype={"site_id": str})
     return {r.entity_id: (r.outlet_lat, r.outlet_lon) for r in reg.itertuples(index=False)
             if pd.notna(r.outlet_lat)}
 
@@ -89,7 +90,7 @@ def daily_monthly_overlap(data_dir: str | Path, run_dir: Path | None):
     ``calsim_monthly`` arcs train only when named, as in ``load_domain_tensors``)."""
     from shapely import box
     from shapely.ops import unary_union
-    reg = pd.read_csv(Path(data_dir) / "multifamily" / "entities.csv", dtype={"site_id": str})
+    reg = pd.read_csv(paths.entities(data_dir), dtype={"site_id": str})
     trained = None
     if run_dir is not None and (Path(run_dir) / "sim_daily_mm.npz").exists():
         trained = set(np.load(Path(run_dir) / "sim_daily_mm.npz")["entity_id"].tolist())
@@ -97,7 +98,7 @@ def daily_monthly_overlap(data_dir: str | Path, run_dir: Path | None):
         reg = reg[reg["entity_id"].isin(trained)]
     else:
         reg = reg[reg["family"] != "calsim_monthly"]
-    cells = pd.read_csv(Path(data_dir) / "multifamily" / "entity_cells.csv")
+    cells = pd.read_csv(paths.entity_cells(data_dir))
     cells = cells[cells["entity_id"].isin(reg["entity_id"])]
     fam = reg.set_index("entity_id")["timescale"]
     h = 0.03125
@@ -131,7 +132,7 @@ def run_recipe(run_dir: Path, data_dir: str | Path, trained=None) -> dict | None
     ck = torch.load(ckpt, map_location="cpu", weights_only=False)
     cfg = ck.get("cfg") or {}
     ids = [str(x) for x in (trained if trained is not None else ck.get("basins") or [])]
-    reg = pd.read_csv(Path(data_dir) / "multifamily" / "entities.csv", dtype={"site_id": str})
+    reg = pd.read_csv(paths.entities(data_dir), dtype={"site_id": str})
     fam_of = dict(zip(reg["entity_id"], reg["family"], strict=True))
     counts = {f: sum(fam_of.get(i) == f for i in ids)
               for f in ("usgs_daily", "cdec_daily", "uf_monthly", "calsim_monthly")}
@@ -215,12 +216,12 @@ def _entity_footprints(data_dir: str | Path, entity_ids=None):
     import geopandas as gpd
     from shapely import box
     from shapely.ops import unary_union
-    reg = pd.read_csv(Path(data_dir) / "multifamily" / "entities.csv", dtype={"site_id": str})
+    reg = pd.read_csv(paths.entities(data_dir), dtype={"site_id": str})
     if entity_ids is not None:
         reg = reg[reg["entity_id"].isin(entity_ids)]
     else:
         reg = reg[reg["family"] != "calsim_monthly"]
-    cells = pd.read_csv(Path(data_dir) / "multifamily" / "entity_cells.csv")
+    cells = pd.read_csv(paths.entity_cells(data_dir))
     cells = cells[cells["entity_id"].isin(reg["entity_id"])]
     h = 0.03125
     geoms = {eid: unary_union([box(x - h, y - h, x + h, y + h)
@@ -415,11 +416,11 @@ def creek_overlap(sets, geoms, data_dir: str | Path, trained=None, window: str =
     from shapely import make_valid
     from shapely.ops import unary_union
     data_dir = Path(data_dir)
-    reg = pd.read_csv(data_dir / "multifamily" / "entities.csv", dtype={"site_id": str})
+    reg = pd.read_csv(paths.entities(data_dir), dtype={"site_id": str})
     creeks = reg[reg["family"] == "usgs_daily"].set_index("entity_id")
     if not len(creeks):
         return {}
-    shp = gpd.read_file(data_dir / "usgs" / "gis" / "usgs_watersheds.gpkg")
+    shp = gpd.read_file(paths.usgs_watersheds(data_dir))
     shp["gid"] = shp["gid"].astype(str)
     shp = shp[shp["gid"].isin(creeks["site_id"])].set_index("gid")
     shp_eq = shp.to_crs("EPSG:3310")
@@ -429,7 +430,7 @@ def creek_overlap(sets, geoms, data_dir: str | Path, trained=None, window: str =
     w0, w1 = (pd.Period(m, "M") for m in window_range(window))
     win_months = pd.period_range(w0, w1, freq="M")
     n_val_months = len(win_months)
-    ds = xr.open_dataset(data_dir / "usgs" / "flow_daily.nc")
+    ds = xr.open_dataset(paths.usgs_flow(data_dir))
     rec = {}
     for eid, r in creeks.iterrows():
         s = ds["flow_mm"].sel(gauge=str(r["site_id"])).to_series()
@@ -1374,7 +1375,7 @@ def main(argv=None, prog=None) -> None:
     if (t2_dir / "tier2_metrics.csv").exists():
         t2 = pd.read_csv(t2_dir / "tier2_metrics.csv")
         t2 = t2[t2.window == vwin].copy()
-        deriv = Path(a.arc_derivation) if a.arc_derivation else Path(a.data_dir) / "calsim" / "calsim3_arc_derivation.csv"
+        deriv = Path(a.arc_derivation) if a.arc_derivation else paths.calsim3_targets(a.data_dir, "calsim3_arc_derivation.csv")
         if deriv.exists():
             keep = [c for c in ("arc", "method_class", "record_frac", "record_owner") if c in pd.read_csv(deriv, nrows=0).columns]
             d = pd.read_csv(deriv)[keep]
@@ -1416,7 +1417,7 @@ def main(argv=None, prog=None) -> None:
                        f"no {run_dir / 'checkpoints' / 'best.pt'}: the page will not state the training recipe"))
     # the full-against-trimmed tab reads the coverage of all the registry's creeks, which is what the
     # trimmed windows are picked from; a run that left creeks out gets that coverage computed apart
-    reg = pd.read_csv(Path(a.data_dir) / "multifamily" / "entities.csv")
+    reg = pd.read_csv(paths.entities(a.data_dir))
     reg_creeks = set(reg.loc[reg["family"] == "usgs_daily", "entity_id"])
     n_tr = len(reg_creeks) if trained is None else len(reg_creeks & set(trained))
     if ho:   # no trimmed windows: the holdout is out of every creek's training record

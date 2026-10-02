@@ -22,10 +22,7 @@ step against CalSim3 FNF:
 ``Hybrid`` / ``Hybrid DT`` are the CANONICAL seed ENSEMBLES (mean of member
 daily flows) on the noah physics baseline — the sim channel is the noah daily
 simulation each member checkpoint records
-(``artifacts/dpl/noah/frozen_sim_noah.csv``).  (``noah_ft``, the seasonal-melt
-fine-tune, was DEMOTED 2026-07-17: pooled val ties frozen noah, CalSim3 a
-wash, NHG + north-state volume worse — the head-to-head record lives in
-``artifacts/dpl/RUNS.md``.)
+(``artifacts/dpl/noah/frozen_sim_noah.csv``).
 Output: ``artifacts/dpl/figures/climatology_{a..e}.png``.
 
 A dPL-side artifact (needs torch for the hybrids) that reads the lightweight
@@ -63,16 +60,14 @@ FROZEN: dict[str, dict] = {
                            et_scheme="noah_lite",
                            canopy_csv="artifacts/dpl/noah/params_canopy.csv"),
 }
-#: explicit cache tag per FROZEN label -- the label is a chart legend (renamed
-#: 2026-07-21 to the canonical bare model names), the tag is a stable cache
-#: filename key independent of that text.
+#: explicit cache tag per FROZEN label -- the label is a chart legend, the tag
+#: is a stable cache filename key independent of that text.
 _FROZEN_TAG: dict[str, str] = {
     "GA SAC-SMA": "sac-sma", "Hamon (dense)": "hamon_dense", "Hamon": "hamon",
     "PT": "pt", "Noah": "noah",
 }
 #: torch-only sims: label -> canonical daily-sim CSV (for models the frozen
-#: run_basin cannot reconstruct).  Empty since the noah_ft demotion (2026-07-17);
-#: the ingestion route stays for future torch-only exports.
+#: run_basin cannot reconstruct).  Empty: no current run needs it.
 TORCH_SIM: dict[str, str] = {}
 #: hybrid sims: label -> canonical ENSEMBLE dir (seed*/checkpoints/best.pt
 #: averaged; physics settings read from the member ckpt cfg).  Both sit on the

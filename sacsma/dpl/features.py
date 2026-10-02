@@ -61,6 +61,7 @@ import zlib
 import numpy as np
 import pandas as pd
 
+from .. import paths
 from .physics.pet import hamon_raw_pet_numpy
 
 CONTINUOUS_STATICS = ("elev", "lat", "lon", "flowlen")
@@ -82,7 +83,6 @@ PHYSICAL_FEATURES = (
 )
 
 #: the AlphaEarth store under the data directory (dataprep/gee_aef_region.py)
-AEF_STORE = Path("region") / "aef" / "aef_cell_mean.npz"
 AEF_PCS = 16                       # principal components of the unit directions
 AEF_DIMS = 64                      # the embedding width (aef64 feeds all of it)
 AEF_VARIANTS = ("aef", "aef64", "aef_random")
@@ -206,7 +206,7 @@ def load_physical(hrus: pd.DataFrame, path: str | Path) -> pd.DataFrame:
 
 def aef_store(data_dir: str | Path = "data") -> Path:
     """The AlphaEarth cell-mean store under ``data_dir``."""
-    return Path(data_dir) / AEF_STORE
+    return paths.alphaearth(data_dir)
 
 
 def aef_pca(path: str | Path) -> tuple[np.ndarray, np.ndarray]:

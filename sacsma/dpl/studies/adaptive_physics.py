@@ -1,28 +1,27 @@
-"""Physics-only (Δprecip, ΔT) response surfaces: the canonical ``noah`` vs the
-climate-adaptive ``noah_ca``.
+"""Physics-only (Δprecip, ΔT) response surfaces: climate-frozen against
+climate-adaptive parameters.
 
-Canonical physics model-type labels (used here, in the figures, and in RUNS.md):
+Two runs, left to right in the figure:
 
-  * ``noah``            — the canonical dPL-noah (the ``physical`` feature
-    backbone: 23 physiographic soil/veg/terrain/LAI features).  Its learned SAC
-    + canopy parameters are a CLIMATE-FROZEN regionalization — under a (Δp, ΔT)
-    perturbation only the FORCING changes.  This is the Phase-1 physics reference.
-  * ``noah_ca``         — the climate-ADAPTIVE dPL-noah (the ``physical_climate``
-    backbone: the same 23 physiographic features PLUS the 4 climate indices
-    p_mean / aridity / snow_frac / seasonality).  Verified frozen cal/val
-    0.779/0.804 ≈ the canonical noah (0.767/0.799), so the added indices cost no
-    present-climate skill.  Under a perturbation its parameters are RECOMPUTED
-    from the perturbed climate indices (a space-for-time response) — so BOTH its
-    forcing and its parameters co-vary with the climate.
+  * ``superseded/noah_noca`` (column "Noah") — the ``physical`` inputs (23
+    physiographic soil/veg/terrain/LAI features).  Its learned SAC + canopy
+    parameters are a CLIMATE-FROZEN regionalization — under a (Δp, ΔT)
+    perturbation only the FORCING changes.
+  * ``noah`` (column "Noah (climate-adaptive)") — the ``physical_climate``
+    inputs: the same 23 physiographic features PLUS the 4 climate indices
+    p_mean / aridity / snow_frac / seasonality.  Frozen cal/val 0.779/0.804
+    against 0.767/0.799, so the added indices cost no present-climate skill.
+    Under a perturbation its parameters are RECOMPUTED from the perturbed
+    climate indices (a space-for-time response) — so BOTH its forcing and its
+    parameters co-vary with the climate.
 
-The per-watershed figure is 4 metrics × 2 columns ``[ noah | noah_ca ]``, each a
-filled contour of % change vs that model's own present climate — the canonical
-physics vs the climate-adaptive physics.
+The per-watershed figure is 4 metrics × 2 columns, each a filled contour of %
+change vs that run's own present climate.
 
 Physics is the fast frozen numba noah-lite core (``run_basin`` with
 ``et_scheme='noah_lite'``, PT potential) — the same core that scores the frozen
-checkpoints.  ``noah`` reuses the Phase-1 cache
-(:func:`dtdp_response._frozen_noah`); ``noah_ca`` runs are cached under
+checkpoints.  The first column reuses the cache of
+:func:`dtdp_response._frozen_noah`; the ``noah`` runs are cached under
 ``artifacts/dpl/_local/cache/adaptive/``.
 """
 from __future__ import annotations
@@ -47,18 +46,18 @@ NOAH = "Noah"
 CA_ADAPTIVE = "Noah (climate-adaptive)"
 COL_ORDER = [NOAH, CA_ADAPTIVE]
 
-#: the noah_ca dt·dp hybrid's 14 response-loss anchors (mirrors
-#: ``noah_ca_hybrids.ANCHORS``) — drawn on these physics surfaces too so the eye
+#: the 14 response-loss anchors of ``hybrid_dt`` (mirrors
+#: ``hybrids.ANCHORS``) — drawn on these physics surfaces too so the eye
 #: can cross-compare the same (Δp, ΔT) reference grid across all figure sets.
 ANCHORS = [(dp, dt) for dp in (-0.2, -0.1, 0.0, 0.1, 0.2) for dt in (0.0, 2.0, 4.0)
            if not (dp == 0.0 and dt == 0.0)]
 
-_CA: dict | None = None   # in-process cache of the loaded noah_ca net + baseline
-_FA = None                # in-process cache of the noah_ca numba forcing
+_CA: dict | None = None   # in-process cache of the loaded noah net + baseline
+_FA = None                # in-process cache of the noah numba forcing
 
 
 def _load_ca(data_dir: str = "data") -> dict:
-    """Load the noah_ca net + present-climate (baseline) params once."""
+    """Load the noah net + present-climate (baseline) params once."""
     global _CA
     if _CA is not None:
         return _CA
@@ -69,7 +68,7 @@ def _load_ca(data_dir: str = "data") -> dict:
     from ..features import FeatureSet
     net, x0, dom, cfg, ck = load_net_from_checkpoint(CA_CKPT, data_dir)
     if ck.get("variant") != "physical_climate":
-        raise ValueError(f"noah_ca ckpt must be physical_climate, got "
+        raise ValueError(f"noah ckpt must be physical_climate, got "
                          f"{ck.get('variant')!r}")
     stats = FeatureSet(x=_np.empty((0, 0), _np.float32), **ck["features"])
     _CA = dict(net=net, x0=x0, dom=dom, stats=stats,
@@ -100,9 +99,9 @@ def adaptive_params(dp: float, dt: float, data_dir: str = "data"):
     return export_params(net, dom, x), export_canopy_params(net, dom, x)
 
 
-def noah_ca_daily(dp: float, dt: float, mode: str,
-                  data_dir: str = "data") -> pd.DataFrame:
-    """noah_ca daily basin flow (date x basin, mm/day) under (dp,dt), ``mode`` in
+def noah_daily(dp: float, dt: float, mode: str,
+               data_dir: str = "data") -> pd.DataFrame:
+    """``noah`` daily basin flow (date x basin, mm/day) under (dp,dt), ``mode`` in
     {``static``, ``adaptive``}.  Static = present-climate params on perturbed
     forcing; adaptive = params recomputed under the perturbed climate.  Cached."""
     dp, dt = dp + 0.0, dt + 0.0    # normalize IEEE -0.0 -> +0.0 (arange artifact)
@@ -157,7 +156,7 @@ def assemble(data_dir: str = "data") -> pd.DataFrame:
     for i, (dp, dt) in enumerate(grid):
         _emit(NOAH, dp, dt, _metrics_from_daily(_frozen_noah(dp, dt, data_dir), areas))
         _emit(CA_ADAPTIVE, dp, dt,
-              _metrics_from_daily(noah_ca_daily(dp, dt, "adaptive", data_dir), areas))
+              _metrics_from_daily(noah_daily(dp, dt, "adaptive", data_dir), areas))
         print(f"  [{i + 1}/{len(grid)}] ({dp:+.2f},{dt:+.1f}) done", flush=True)
 
     tbl = pd.DataFrame(rows)
@@ -224,7 +223,7 @@ def _plot_basin(basin: str, sub: pd.DataFrame, out: Path,
 
 def make_regime_physics_surfaces(tbl: pd.DataFrame, data_dir: str = "data",
                                  out_dir: str | Path = "artifacts/dpl") -> None:
-    """One 4×2 ``[noah | noah_ca]`` physics response-surface figure per
+    """One 4×2 ``[noah_noca | noah]`` physics response-surface figure per
     hydroclimate regime (:data:`REGIMES`), the group's basins pooled by
     area-weighted % change."""
     areas = load_basin_area(data_dir, domain="15cdec").set_index(
@@ -242,7 +241,7 @@ def make_regime_physics_surfaces(tbl: pd.DataFrame, data_dir: str = "data",
 def make_adaptive_physics_surfaces(data_dir: str = "data",
                                    out_dir: str | Path = "artifacts/dpl",
                                    *, regen: bool = False) -> pd.DataFrame:
-    """Assemble (or reload) the noah / noah_ca metrics table + one 4×2 physics
+    """Assemble (or reload) the noah_noca / noah metrics table + one 4×2 physics
     response-surface figure per watershed (north → south) and per regime."""
     out_dir = Path(out_dir)
     csv = out_dir / "figures" / "noah_climate_adaptive_metrics.csv"

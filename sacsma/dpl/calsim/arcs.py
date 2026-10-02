@@ -38,6 +38,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from ... import paths
 from .tier1 import AF_PER_MM_MI2
 
 #: the dPL training water years (WY1976-85 is the holdout of every family; nothing
@@ -141,7 +142,7 @@ def own_record_months(data_dir: str | Path = "data", wy=HOLDOUT_WY) -> dict[str,
     class; its listed gauge period minus the extension years, :func:`in_record_months`)
     applied to other water years — by default the holdout, which the mask leaves out.  Arcs
     without such months are absent."""
-    der = pd.read_csv(Path(data_dir) / "calsim" / "calsim3_arc_derivation.csv").set_index("arc")
+    der = pd.read_csv(paths.calsim3_targets(data_dir, "calsim3_arc_derivation.csv")).set_index("arc")
     hier = load_hierarchy(data_dir)
     own = hier[(hier["status"] == "rim_arc") & ~hier["method_class"].isin(DONOR_CLASSES)
                & hier["arc"].isin(der.index)]["arc"]
@@ -168,7 +169,7 @@ def mm_to_taf(mm, sq_mi):
 
 
 def load_hierarchy(data_dir: str | Path = "data") -> pd.DataFrame:
-    return pd.read_csv(Path(data_dir) / "calsim" / HIERARCHY_CSV)
+    return pd.read_csv(paths.calsim3_targets(data_dir, HIERARCHY_CSV))
 
 
 def arc_areas(hier: pd.DataFrame) -> pd.Series:
@@ -210,10 +211,10 @@ def load_anchor_taf(data_dir: str | Path, hier: pd.DataFrame) -> pd.DataFrame:
     """Each closure group's anchor series, TAF/month (columns = closure groups): CalSim3
     FLOW-UNIMPAIRED for the ``FU_*`` groups, the DWR published unimpaired monthly (UF
     table) for the entity groups whose ``closure_anchor`` names one."""
-    fu = pd.read_csv(Path(data_dir) / "calsim" / "calsim_unimpaired_monthly.csv",
+    fu = pd.read_csv(paths.calsim3_targets(data_dir, "calsim_unimpaired_monthly.csv"),
                      parse_dates=["date"]).pivot(index="date", columns="system", values="flow_taf")
     fu.index = pd.PeriodIndex(fu.index, freq="M")
-    uf = pd.read_csv(Path(data_dir) / "dwr_unimpaired" / "uf_monthly.csv", parse_dates=["date"])
+    uf = pd.read_csv(paths.dwr_unimpaired(data_dir, "uf_monthly.csv"), parse_dates=["date"])
     uf = uf.pivot(index="date", columns="uf", values="flow_taf")
     uf.index = pd.PeriodIndex(uf.index, freq="M")
     out = {}
@@ -230,7 +231,7 @@ def load_anchor_taf(data_dir: str | Path, hier: pd.DataFrame) -> pd.DataFrame:
 
 def load_depth_store(data_dir: str | Path = "data") -> pd.DataFrame:
     """The arc depth store as a wide frame (monthly PeriodIndex x arcs), mm/month."""
-    t = pd.read_csv(Path(data_dir) / "calsim" / DEPTH_CSV, parse_dates=["date"])
+    t = pd.read_csv(paths.calsim3_targets(data_dir, DEPTH_CSV), parse_dates=["date"])
     w = t.pivot(index="date", columns="arc", values="depth_mm")
     w.index = pd.PeriodIndex(w.index, freq="M")
     return w
@@ -238,7 +239,7 @@ def load_depth_store(data_dir: str | Path = "data") -> pd.DataFrame:
 
 def load_arc_mask(data_dir: str | Path = "data") -> dict[str, pd.PeriodIndex]:
     """arc -> its trainable in-record months."""
-    t = pd.read_csv(Path(data_dir) / "calsim" / MASK_CSV, parse_dates=["date"])
+    t = pd.read_csv(paths.calsim3_targets(data_dir, MASK_CSV), parse_dates=["date"])
     return {a: pd.PeriodIndex(g["date"], freq="M") for a, g in t.groupby("arc", sort=False)}
 
 

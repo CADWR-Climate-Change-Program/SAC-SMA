@@ -55,6 +55,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from .. import paths
+
 #: water-year range of the comparison (inclusive), and the calendar window it implies.
 WY_RANGE = (1989, 2018)
 
@@ -222,7 +224,7 @@ def bcm_basin_monthly(data_dir: str | Path = "data", domain: str = "11obs", *,
     from ..io import mmday_to_cfs
     from .compare import _cfs_day_to_taf
 
-    path = Path(data_dir) / "region" / "bcm" / f"bcm_{scenario}_catchments_monthly.csv"
+    path = paths.bcm(data_dir, f"bcm_{scenario}_catchments_monthly.csv")
     raw = pd.read_csv(path, usecols=["cid", "month", *variables])
     raw["depth"] = sum(raw[v] for v in variables)
     dates = pd.to_datetime(raw["month"].astype(str), format="%Y%m").dt.to_period("M")

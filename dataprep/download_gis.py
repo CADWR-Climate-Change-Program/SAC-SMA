@@ -33,7 +33,7 @@ The classic e4ftl01 HTTPS archive is dead; granules are discovered through the
 CMR granule API and pulled from the protected cloud bucket.
 
 Only ``requests`` is needed -- this runs in the plain ``sacsma`` env.  The
-sampler itself needs the ``sacsma-gis`` env (rasterio + pyhdf + pyproj).
+sampler itself needs the ``sacsma-gis`` env (``environment-gis.yml``: rasterio + pyhdf).
 
 Usage
 -----

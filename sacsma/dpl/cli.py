@@ -32,7 +32,7 @@ STUDIES: dict[str, tuple[str, str, str]] = {
     "adaptive": ("adaptive_physics", "make_adaptive_physics_surfaces",
                  "physics-only (dp, dT) surfaces: climate-frozen vs climate-adaptive noah "
                  "-> artifacts/dpl/figures/noah_climate_adaptive*"),
-    "hybrids": ("noah_ca_hybrids", "make_noah_ca_hybrids",
+    "hybrids": ("hybrids", "make_hybrids",
                 "the hybrid family (hybrid, hybrid_dt, lstm) response surfaces and skill summary "
                 "-> artifacts/dpl/figures/hybrid*"),
     "forcing": ("forcing_sensitivity", "make_forcing_sensitivity",

@@ -2,7 +2,7 @@
 MODIS LAI) at each HRU point -> per-HRU continuous soil/veg/terrain features that
 replace the opaque one-hot ``soil_class``/``veg_class`` in the dPL parameter net.
 
-Runs in the ``sacsma-gis`` env (rasterio + pyhdf + pyproj); NOT importable by the
+Runs in the ``sacsma-gis`` env (``environment-gis.yml``: rasterio + pyhdf); NOT importable by the
 core ``sacsma`` package (keeps the model path torch/gdal-free).  Reusable across
 domains and for the future all-California extension.
 

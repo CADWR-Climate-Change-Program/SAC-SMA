@@ -12,14 +12,13 @@ local raw sources and their own ingest (dataprep/local_obs_region.py).
 versions current at export time (recorded in the npz ``meta`` field), months
 1988-01..2018-12, units converted to mm/month (ET) or mm mean monthly state
 (SWE; TerraClimate stays an end-of-month SNAPSHOT, not converted here).  The earlier
-per-cell npz under the local staging root are the frozen record of what the pre-region
-``noah_ft`` trained on: GEE assets drift (ERA5-Land was reprocessed — rel RMS
-~0.2 vs the snapshot under every reduction we tried, and the snapshot's exact
-pipeline is lost), so the snapshot is irreproducible and everything that
-consumed it (noah_ft -> the hybrids) is RETRAINED on this store instead.
+per-cell npz under the local staging root cannot be reproduced: GEE assets drift
+(ERA5-Land was reprocessed — rel RMS ~0.2 vs the snapshot under every reduction we
+tried, and the snapshot's exact pipeline is lost).  This store replaces them.
 
-RUN ORDER (needs an authenticated earthengine-api with a REGISTERED cloud
-project: ``earthengine authenticate`` + pass ``--project <your-ee-project>``):
+RUN ORDER (the ``sacsma-gis`` env, ``environment-gis.yml``; needs an authenticated
+earthengine-api with a REGISTERED cloud project: ``earthengine authenticate`` + pass
+``--project <your-ee-project>``):
   1. ``python dataprep/gee_obs_region.py --products all --project <id>``
      the region burn (4410 cells x 372 months; a few hours — one-time).
      Writes data/region/et_obs/<p>_cell_monthly.npz and

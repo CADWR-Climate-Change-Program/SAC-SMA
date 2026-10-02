@@ -30,6 +30,8 @@ from pathlib import Path
 
 import numpy as np
 
+from . import paths
+
 BASE_PRODUCT = "wgen_product_a"
 CODEC = "wgen_table_v1"
 SHIFT = 2 ** 20                       # h1 < 2**20 (region max 63,139 hundredths)
@@ -87,7 +89,7 @@ def load_region_subset(data_dir: str | Path, product: str, want: list[str],
     s = scenario_of(product)
     if s is None:
         raise ValueError(f"not a WGEN scenario product: {product!r}")
-    fdir = Path(data_dir) / "region" / "forcing"
+    fdir = paths.forcing_dir(data_dir)
     return decode_region(fdir / f"{BASE_PRODUCT}.nc", fdir / f"{product}.nc", want, variables)
 
 

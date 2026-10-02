@@ -27,6 +27,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from .. import paths
 from ..cdec15 import DOMAIN as CDEC15
 from ..io import read_table
 from ..metrics import center_of_timing, kge, nse, pbias, pearson, seasonal_mismatch
@@ -2197,8 +2198,7 @@ def make_anchor(data_dir: str | Path = "data", artifacts_dir: str | Path = "arti
     met.to_csv(out / "anchor_metrics.csv", index=False)
     # surface the canonical CalSim catchment areas (the basin total now sits on these)
     for s in sets:
-        from . import calsim_dir
-        area_csv = calsim_dir(data_dir) / f"basin_area_{s}_calsim.csv"
+        area_csv = paths.calsim_basin_area(data_dir, s)
         if area_csv.exists():
             pd.read_csv(area_csv).to_csv(out / f"basin_area_{s}_calsim.csv", index=False)
     msg = "  ".join(f"{s}={met[(met['set']==s)&(met['source']==s)]['kge'].median():.2f}"
@@ -2810,8 +2810,7 @@ UNIMP_MAP = {
 
 def load_unimpaired_monthly(data_dir: str | Path = "data") -> pd.DataFrame:
     """CalSim FLOW-UNIMPAIRED monthly TAF for the 11 rim systems [date, system, flow_taf]."""
-    from . import calsim_dir
-    return read_table(calsim_dir(data_dir) / "calsim_unimpaired_monthly.csv")
+    return read_table(paths.calsim3_targets(data_dir, "calsim_unimpaired_monthly.csv"))
 
 
 def main(argv: list[str] | None = None) -> int:

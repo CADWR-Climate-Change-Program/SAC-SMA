@@ -121,6 +121,7 @@ _LINK = re.compile(r"!?\[[^\]]*\]\(\s*<?([^)\s>]+)>?(?:\s+\"[^\"]*\")?\s*\)")
 _FENCE = re.compile(r"^(```|~~~).*?^\1\s*$", re.S | re.M)
 _INLINE = re.compile(r"`[^`\n]*`")
 _HEADING = re.compile(r"^#{1,6}\s+(.*?)\s*#*\s*$", re.M)
+_HTML_ID = re.compile(r"<a\s+(?:id|name)=\"([^\"]+)\"", re.I)
 
 
 def _slug(heading: str) -> str:
@@ -132,8 +133,9 @@ def _slug(heading: str) -> str:
 
 
 def _anchors(md: Path) -> set[str]:
+    """Heading anchors of a markdown file plus the explicit ``<a id="...">`` ones."""
     text = _FENCE.sub("", md.read_text(encoding="utf-8", errors="replace"))
-    out: set[str] = set()
+    out: set[str] = {a.lower() for a in _HTML_ID.findall(text)}
     for h in _HEADING.findall(text):
         s, k = _slug(h), 0
         while (s if k == 0 else f"{s}-{k}") in out:         # repeated headings get -1, -2, ...

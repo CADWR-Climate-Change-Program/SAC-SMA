@@ -34,7 +34,7 @@ month-to-month pattern of ONE equation (Fu-Zhang with Hamon PET) rescaled to sum
 to the water-year annual map -- no observed seasonal signal, no storage
 carry-over.  Irrigation supply enters only 1980-2018.
 
-RUN ORDER (``sacsma-gis`` env -- needs rasterio):
+RUN ORDER (``sacsma-gis`` env, ``environment-gis.yml`` -- needs rasterio):
   1. ``python dataprep/reitz_et.py --status``
   2. ``python dataprep/reitz_et.py --cut [--delete-source]``
      -> ``<stage>/ca/<zip stem>/<name>.tif`` + ``<stage>/ca/manifest.csv``

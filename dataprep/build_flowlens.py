@@ -32,11 +32,12 @@ HydroSHEDS v2 DIR + ACC tiles for the four 10-degree tiles covering the
 domain (~6 GB, auto-downloaded to ``tmp/hydrosheds/`` with size
 validation; not in git — re-fetched on demand).
 
-Requires ``rasterio`` (pip-installed in the sacsma env). Deliberately
-imports NO geopandas/pyogrio: the two GDAL stacks stay in separate
-processes.
+Requires ``rasterio``, which lives only in the ``sacsma-gis`` env
+(``environment-gis.yml``). Deliberately imports NO geopandas/pyogrio and
+nothing from the ``sacsma`` package: the raster and the vector GDAL stacks
+stay in separate environments and processes.
 
-Usage (sacsma conda env, from the repo root):
+Usage (``sacsma-gis`` conda env, from the repo root):
     python dataprep/build_flowlens.py [--data-dir data]
         [--tiles-dir tmp/hydrosheds] [--only cdec_MKM,uf_07]
         [--out data/multifamily/flowlens.csv] [--calsim-arcs]

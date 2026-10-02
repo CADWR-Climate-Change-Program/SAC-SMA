@@ -75,9 +75,11 @@ Needs the ``dpl`` extra (torch) and a source checkout: the extrapolated arcs run
 of ``dataprep/build_flowlens.py`` (``--trace-cells``) in a subprocess, which needs
 ``rasterio`` and the HydroSHEDS v2 tiles (read from ``--tiles-dir`` when complete, otherwise
 streamed from the HydroSHEDS server; the size check needs network, or a local tile's
-``.ok`` marker); ``--trace-python`` names an interpreter that has rasterio when this one
-does not (the ``sacsma-gis`` env).  Without them those arcs fall back to straight-line x 1.5
-lengths, which the log states; ``--no-extend`` needs neither.
+``.ok`` marker).  rasterio lives only in the ``sacsma-gis`` environment
+(``environment-gis.yml``), so pass that environment's interpreter as ``--trace-python``;
+the tracked results were made that way.  Without the tracer those arcs fall back to
+straight-line x 1.5 lengths, which the log states and ``tier2_extension_cells.csv``
+records (``flowlen_method``); ``--no-extend`` needs neither.
 """
 
 from __future__ import annotations
@@ -93,6 +95,7 @@ import numpy as np
 import pandas as pd
 import torch
 
+from ... import paths
 from ...metrics import center_of_timing, kge, nse, pbias, pearson, seasonal_mismatch
 from ...calsim.catchments import (_EQ_CRS, _GRID_STEP_DEG, EXCLUDE_ARCS, MERGED_LAYER,
                          _square_cell_overlap, load_catchments, load_crosswalk, series_arc)
@@ -124,7 +127,7 @@ def cell_arc_overlap(hrus: pd.DataFrame, catch) -> pd.DataFrame:
 
 def parent_entities(basins, data_dir: str | Path = "data") -> dict[str, str]:
     """arc -> the most local trained entity whose registry arc list holds the arc."""
-    reg = pd.read_csv(Path(data_dir) / "multifamily" / "entities.csv",
+    reg = pd.read_csv(paths.entities(data_dir),
                       dtype={"site_id": str}).set_index("entity_id")
     arcs = registry_arcs(data_dir)
     out = {}
@@ -167,7 +170,7 @@ def arc_weights(dom, catch, mapping: pd.DataFrame, parent: dict[str, str]):
 def region_arc_overlap(catch, data_dir: str | Path = "data") -> pd.DataFrame:
     """Square-cell x rim-polygon overlap of the whole region grid, ``[key, lat, lon, arc,
     area_mi2]``: every arc's cells whether or not the run trained on them."""
-    grid = pd.read_csv(Path(data_dir) / "region" / "grid_cells.csv", usecols=["key", "lat", "lon"])
+    grid = pd.read_csv(paths.grid_cells(data_dir), usecols=["key", "lat", "lon"])
     mapping, _ = _square_cell_overlap(grid, catch[["cid", "node", "geometry"]].to_crs(_EQ_CRS),
                                       "EPSG:4326", _GRID_STEP_DEG)
     mapping["arc"] = mapping["node"].map(series_arc)
@@ -237,9 +240,9 @@ def _tracer_env(trace_python: str | None) -> dict[str, str] | None:
 def _flowlens_for(cells: pd.DataFrame, tiles_dir: str | Path,
                   trace_python: str | None = None) -> pd.DataFrame:
     """Add ``flowlen`` (m) and ``flowlen_method`` to the extension HRU rows, tracing in a
-    subprocess (``dataprep/build_flowlens.py --trace-cells`` under ``trace_python``, default
-    this interpreter — an environment with rasterio; the raster and vector GDAL stacks must
-    not share a process); falls back to straight-line x 1.5 to each arc's lowest cell if
+    subprocess (``dataprep/build_flowlens.py --trace-cells`` under ``trace_python``, the
+    python of the ``sacsma-gis`` environment, which has rasterio — the raster and vector
+    GDAL stacks must not share a process; default this interpreter); falls back to straight-line x 1.5 to each arc's lowest cell if
     tracing fails, and says so.  Another interpreter gets a PATH without this environment's
     own directories: ``pick_device`` puts this env's ``Library/bin`` (its GDAL) on PATH for
     NVRTC, and rasterio in the child would bind to that ``gdal.dll`` instead of its own."""
@@ -257,7 +260,8 @@ def _flowlens_for(cells: pd.DataFrame, tiles_dir: str | Path,
             print(f"tier2: traced flow lengths for {n_tr}/{len(out)} extension cells", flush=True)
             return out
         print("tier2: flow-length tracing failed, using straight-line x 1.5 to each arc's lowest "
-              f"cell\n{r.stderr[-800:]}", flush=True)
+              "cell (the tracer needs rasterio: pass --trace-python <python of the sacsma-gis "
+              f"environment>)\n{r.stderr[-800:]}", flush=True)
     out = cells.copy()
     out["flowlen"] = np.nan
     for arc, sub in out.groupby("basin"):
@@ -1185,8 +1189,10 @@ def main(argv=None, prog=None) -> None:
                    help="do not simulate the arcs outside every trained footprint")
     p.add_argument("--tiles-dir", default="tmp/hydrosheds", help="HydroSHEDS DIR/ACC tiles")
     p.add_argument("--trace-python", default=None,
-                   help="interpreter for the flow-length tracer subprocess (an environment "
-                        "with rasterio, e.g. the sacsma-gis env; default: this one)")
+                   help="interpreter for the flow-length tracer subprocess: the python of "
+                        "the sacsma-gis environment (environment-gis.yml), which has "
+                        "rasterio; without it the extension arcs get straight-line "
+                        "x 1.5 flow lengths")
     p.add_argument("--spinup", default="cycle", choices=["cycle", "window"],
                    help="state at the envelope start: cycle = loop its first ten water years "
                         "20 times from the cold start (timing-independent, default); window = "

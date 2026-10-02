@@ -87,7 +87,7 @@ TRAIN_ANCHORS = [(-ANCHOR_DP, 0.0), (ANCHOR_DP, 0.0), (0.0, ANCHOR_DT),
                  (-ANCHOR_DP, ANCHOR_DT), (ANCHOR_DP, ANCHOR_DT)]
 
 #: hydroclimate regimes — freshet-fraction terciles (Apr–Jul runoff / annual of
-#: the noah_ca physics baseline, the snowmelt-timing signature; 5 basins each,
+#: the ``noah`` physics baseline, the snowmelt-timing signature; 5 basins each,
 #: snowmelt-strongest → weakest).  Shared by the hybrid-family and physics
 #: regime-aggregate figures.
 REGIMES: dict[str, list[str]] = {

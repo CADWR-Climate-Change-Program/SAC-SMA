@@ -1,5 +1,5 @@
 """Fidelity benchmark: the archived GA parameters through the torch forward
-vs the frozen reference model — the Phase-1 go/no-go gate.
+vs the frozen reference model.
 
 For each named numerics config the whole domain (7891 HRUs) is streamed
 through the differentiable pipeline under ``torch.no_grad()`` over the full

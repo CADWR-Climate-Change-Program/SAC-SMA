@@ -1,0 +1,127 @@
+# Learned parameters
+
+Differentiable parameter learning ("dPL", [Tsai et al., 2021](references.md#tsai2021);
+[Feng et al., 2022](references.md#feng2022)) replaces the genetic-algorithm search with a small
+neural network trained by gradient descent. The network reads the attributes of a modeling unit
+and returns its SAC-SMA parameters; the model chain is unchanged. Code: `sacsma.dpl`.
+
+```math
+\phi_i = g_\theta(A_i), \qquad \hat{Q} = \mathcal{M}(\phi, F), \qquad
+\theta^* = \arg\min_\theta \; \mathcal{L}\big(\hat{Q}, Q^{obs}\big)
+```
+
+$A_i$ are the attributes of unit $i$, $\phi_i$ its parameters, $\mathcal{M}$ the model driven
+by forcing $F$. No watershed identity enters the network, so one trained network gives
+parameters for any place with the same attributes.
+
+## How it is built
+
+**The network.** A per-unit multilayer perceptron (hidden width 64, embedding 32). It emits 28
+of the 31 parameters inside the ranges the GA searched ([parameter table](equations.md#6-parameter-table));
+two ranges were widened (`rexp` up to 15, `lzsk` down to 0.003). The untrained network returns
+the area-weighted median of the archived GA parameters, so training starts from a plausible
+field.
+
+**Inputs.** Three sets are in use (`sacsma dpl train <inputs>`):
+
+| Inputs | What the network reads |
+|---|---|
+| `physical` | elevation, position, POLARIS soil properties ([Chaney et al., 2019](references.md#chaney2019)), LANDFIRE vegetation, 3DEP terrain, MODIS leaf-area statistics |
+| `physical_climate` | the same plus four climate indices computed from the forcing, so the parameters change when the climate is perturbed |
+| `aef` | AlphaEarth satellite embeddings alone: 16 principal components and the vector length |
+
+**The physics.** PyTorch, all units in one batch, forward values equal to the reference model
+([The model](model.md)). Training fixes the number of percolation sub-steps at 10, the one
+place where the reference numerics cannot be batched. Options on top of the reference chain:
+Priestley–Taylor PET ([Priestley & Taylor, 1972](references.md#priestleytaylor1972)) with
+radiation from the daily temperature range
+([Bristow & Campbell, 1984](references.md#bristowcampbell1984); [Allen et al., 1998](references.md#allen1998)),
+a soil-moisture-limited ET on observed vegetation in the manner of the Noah model
+([Ek et al., 2003](references.md#ek2003); [Koren et al., 2014](references.md#koren2014)), and a
+learned rain/snow threshold.
+
+**Training.** The loss is a squared error normalized by each watershed's observed variance,
+plus a log-flow term and a variance-matching term. Optimization is AdamW over year-long
+chunks, with the model state carried from chunk to chunk. The network kept is the one with the
+best calibration-period KGE.
+
+**Scoring.** For the 15-CDEC runs the learned parameter table is run through the reference
+model, and the reported skill is that run's (`sacsma dpl evaluate <checkpoint>`). Validation
+years are never read in training or selection.
+
+## Results on the 15 CDEC watersheds
+
+Each row changes one thing. Mean daily KGE over the 15 watersheds, calibration WY1989–2003 and
+validation WY2004–2018, from each run's `metrics_*.csv` under `artifacts/dpl/`.
+
+| Run | What changed | Calibration | Validation |
+|---|---|---|---|
+| GA parameters | the archived calibration, 7,891 HRUs | 0.805 | 0.768 |
+| `superseded/hamon_dense` | the network in place of the GA, nothing else | 0.806 | 0.840 |
+| `hamon` | 1/16° grid cells in place of HRUs, CalSim3 catchment outlines | 0.817 | 0.836 |
+| `pt` | Priestley–Taylor PET | 0.799 | 0.826 |
+| `noah` | soil-moisture-limited ET; `physical_climate` inputs | 0.779 | 0.804 |
+| `hybrid` | an LSTM on top of `noah`'s simulated flow | 0.922 | 0.877 |
+| `hybrid_dt` | `hybrid` trained to keep `noah`'s response to climate | 0.873 | 0.849 |
+| `lstm` | the LSTM without the simulated flow (a control) | 0.909 | 0.835 |
+
+What these runs showed:
+
+- **The network generalizes better than the GA with the same physics.** Validation KGE rises
+  from 0.77 to 0.84 with the calibration score unchanged.
+- **The grid costs almost nothing.** One parameter set per grid cell keeps the validation
+  score (0.836 against 0.840), and it is the form that covers the CalSim3 catchments.
+- **Better physics costs a little skill here.** Priestley–Taylor PET and the Noah-type ET
+  lower the 15-watershed score slightly. They are kept because PET then responds to radiation
+  and snow cover, and ET to modeled soil moisture.
+- **An LSTM adds skill but not a trustworthy response to climate.** See below.
+- **Weaknesses that stayed.** FOL's variability is damped in every run. SCC has the lowest
+  validation score from `noah` on (0.63, in the hybrids too). NHG's validation volume bias fell
+  from +18 % to +6 % along the physics runs and turned negative in the LSTM runs.
+
+## The LSTM hybrids and their response to warming
+
+`hybrid` feeds the forcing and `noah`'s simulated flow to an LSTM
+([Hochreiter & Schmidhuber, 1997](references.md#hochreiter1997);
+[Kratzert et al., 2019](references.md#kratzert2019)) and scores an ensemble of three seeds.
+`hybrid_dt` adds a loss term that pulls the network's change in flow under 14 combinations of
+precipitation change (−20 to +20 %) and warming (0, +2, +4 °C) toward the change the `noah`
+physics gives. `lstm` drops the simulated flow from the inputs.
+
+Change in annual runoff at +3 °C with precipitation unchanged, mean over the 15 watersheds
+(`artifacts/dpl/figures/hybrids_metrics.csv`):
+
+| Model | Change | Same sign as `noah` |
+|---|---|---|
+| `noah` | −5.7 % | – |
+| `hybrid` | −8.5 % | 13 of 15 |
+| `hybrid_dt` | −6.5 % | 15 of 15 |
+| `lstm` | +6.7 % | 5 of 15 |
+
+The LSTM without physics gains runoff under warming, which is wrong. `hybrid` responds too
+strongly. `hybrid_dt` follows the physics, at a cost of about 0.03 validation KGE.
+
+![Skill and response of the hybrid family](../artifacts/dpl/figures/hybrid_summary.png)
+
+## From 15 watersheds to the CalSim3 arcs
+
+The runs above train on 15 daily records. The current work trains one network on several kinds
+of record at once (daily gauges, monthly unimpaired flows, CalSim3 arc inflows) and turns its
+flow into monthly inflows on the CalSim3 rim arcs: [CalSim3 rim inflows](calsim3_rim_inflows.md).
+
+## Where things are
+
+| | |
+|---|---|
+| Runs | `artifacts/dpl/<run>/`, earlier generation in `artifacts/dpl/superseded/` |
+| Current state of every run, and what was tried and not adopted | [`artifacts/dpl/RUNS.md`](../artifacts/dpl/RUNS.md) |
+| Figures | [`artifacts/dpl/figures/`](../artifacts/dpl/figures/) |
+
+```bash
+sacsma dpl benchmark                         # differentiable model against the reference model
+sacsma dpl train physical_climate --domain 15cdec_grid --et noah \
+    --noah-pet priestley_taylor --canopy-lite --calsim-footprint
+sacsma dpl evaluate <run>/checkpoints/best.pt
+sacsma dpl hybrid --physics <params_dpl.csv> ...   # see --help
+sacsma dpl study climatology                 # and: response, adaptive, hybrids, forcing
+```
