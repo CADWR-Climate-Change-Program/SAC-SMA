@@ -192,10 +192,6 @@ def apply_response_perturbation(feat: np.ndarray, names: tuple[str, ...], *,
     return fa
 
 
-#: hybrid static columns, in build order (see load_hybrid_data use_statics).
-STATIC_COLS = ("elev", "flowlen", "pmean", "snowf")
-
-
 def perturbed_static(ing: dict, dp: float, dt: float) -> np.ndarray:
     """Climate-perturbed z-scored statics (B, 4) under (Δp, ΔT): the two CLIMATE
     statics co-vary — ``pmean → pmean×(1+dp)`` and ``snowf`` is recomputed with the

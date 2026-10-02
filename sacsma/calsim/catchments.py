@@ -687,42 +687,6 @@ def calsim_basin_polygons(data_dir: str | Path = "data", domain: str = DEFAULT_D
     return out
 
 
-def screened_basin_footprints(data_dir: str | Path = "data", domain: str = DEFAULT_DOMAIN,
-                              *, simplify_deg: float = 0.01):
-    """Per-basin **GIS-screened** footprint (lon/lat): :func:`basin_footprints` clipped to
-    the basin's own CalSim catchment polygons — the geometry counterpart of
-    :func:`screened_footprint`, for building external eval sets on the clipped-HRU
-    footprint.  Superseded for the LSTM comparison by :func:`calsim_basin_polygons`
-    (the catchment delineation itself, 2026-07-08).  Node selection mirrors
-    :func:`screened_footprint` exactly (crosswalk arcs + the valley-accretion node);
-    basins with no usable catchment (e.g. Tulare/Kern) keep their full footprint.
-    NOTE: clips EVERY basin — unlike the anchor, which screens only
-    :data:`SCREENED_BASINS`.
-    """
-    from shapely.geometry import MultiPolygon, Polygon
-    from shapely.ops import unary_union
-
-    full = basin_footprints(data_dir, domain, simplify_deg=simplify_deg)
-    catch = load_catchments(data_dir, layer=MERGED_LAYER, rim_only=True)
-    nodes = derive_basin_nodes(data_dir, domain)
-    sysmap = BASIN_RIM_SYSTEM.get(domain, {})
-    out = {}
-    for basin, geom in full.items():
-        own = set(nodes.loc[nodes["basin"] == basin, "node"].astype(str))
-        sysn = sysmap.get(basin)
-        if sysn in VALLEY_SYSTEMS:
-            own.add(valley_arc_for_system(sysn)[2:])
-        catch_b = catch[catch["node"].astype(str).isin(own)]
-        if not own or catch_b.empty:
-            out[basin] = geom                            # same fallback as screened_footprint
-            continue
-        clipped = geom.intersection(unary_union(list(catch_b.geometry.values)))
-        polys = ([clipped] if isinstance(clipped, Polygon)
-                 else [p for p in getattr(clipped, "geoms", []) if isinstance(p, Polygon)])
-        out[basin] = MultiPolygon([p for p in polys if p.area > 0]) if polys else geom
-    return out
-
-
 # --------------------------------------------------------------------------
 # Special CalSim flowlens (for optional channel routing to the CalSim node)
 # --------------------------------------------------------------------------

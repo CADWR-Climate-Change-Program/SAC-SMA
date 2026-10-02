@@ -132,14 +132,3 @@ def route(
     return F.conv1d(x, w, groups=n).squeeze(0)[:, -t_len:]
 
 
-def lohmann_route(
-    surf: torch.Tensor, base: torch.Tensor,
-    params: dict[str, torch.Tensor],       # Nres, Kres, Velo, Diff — (N,) each
-    flowlen: torch.Tensor,                  # (N,)
-    history: tuple[torch.Tensor, torch.Tensor] | None = None,
-) -> torch.Tensor:
-    """Routed total flow (N, T): direct (hill+channel UH) + base (channel UH)."""
-    uh_direct, uh_base = build_uh(params["Nres"], params["Kres"],
-                                  params["Velo"], params["Diff"], flowlen)
-    hist_s, hist_b = history if history is not None else (None, None)
-    return route(surf, uh_direct, hist_s) + route(base, uh_base, hist_b)

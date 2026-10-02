@@ -35,8 +35,6 @@ from ..parameters import _ROUT_COLS, _SMA_COLS, _SNOW_COLS
 #: All 31 parameters in ga_optimum.csv column order: Kpet, 16 SMA, 10 Snow-17, 4 routing.
 PARAM_ORDER: tuple[str, ...] = ("Kpet", *_SMA_COLS, *_SNOW_COLS, *_ROUT_COLS)
 
-#: The 34 columns of data/cdec15/ga_optimum.csv (and of exported dPL tables).
-GA_OPTIMUM_COLUMNS: tuple[str, ...] = ("key", "lat", "lon", *PARAM_ORDER)
 
 #: GA feasible ranges (lo, hi) — archived setup file, verbatim.
 BOUNDS: dict[str, tuple[float, float]] = {
@@ -194,9 +192,6 @@ class DplConfig:
     #: (exact frozen numerics apart from n_inc); "implicit" = implicit-Euler
     #: saturator exp(-k); "tanh" = tanh(k) saturator (both bound the Jacobian).
     perc_mode: str = "reference"
-    #: epsilon of the smooth-relu ``0.5*(x + sqrt(x^2 + eps^2))`` used for
-    #: storage floors during training; 0.0 -> exact relu/min/max clamps.
-    smooth_eps: float = 0.0
     #: floor on the LZ free-water fill-fraction denominator (reference: none;
     #: training needs ~0.1 to bound the division backward at double saturation).
     fracp_floor: float = 0.0

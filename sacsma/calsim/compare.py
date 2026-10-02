@@ -845,21 +845,6 @@ def _basin_to_product_medians(basin: pd.DataFrame, products=_ROLLING_PRODUCTS) -
     return agg[cols]
 
 
-def rolling_anchor_skill_table(anchor_long: pd.DataFrame, *, window_years: int = 30,
-                               step_months: int = 1, products=_ROLLING_PRODUCTS,
-                               min_frac: float = 0.9) -> pd.DataFrame:
-    """Rolling-window KGE / NSE / pbias / seasonal-mismatch vs CalSim3 at the basin-level anchor,
-    reduced by **median across each product's basins**.  ``products`` is ``(label, set,
-    sim_source)`` — each anchor set's own SAC run plus VIC scored on that same set's basins (VIC
-    split into a 11obs-basins and a 9unimp-basins line).  Returns ``[center, start, end, source,
-    metric, value, n_basins]`` (``source`` = product label).  Built on
-    :func:`rolling_anchor_basin_table`."""
-    sets = tuple(dict.fromkeys(p[1] for p in products))
-    basin = rolling_anchor_basin_table(anchor_long, sets=sets, window_years=window_years,
-                                       step_months=step_months, min_frac=min_frac)
-    return _basin_to_product_medians(basin, products)
-
-
 def _rolling_skill_fig(tbl, products, window_years, path):
     """Four stacked panels (KGE / NSE / pbias / seasonal mismatch), one line per product
     (x = window centre).  SAC sets keep their palette colour; VIC is split into two lines by
@@ -1125,7 +1110,6 @@ _COLORS = {"calsim3": "#111111", "15cdec": "#2c7fb8", "9unimp": "#41ab5d",
            "11obs": "#d95f0e", "12rim": "#756bb1", "vic": "#984ea3"}
 _LABELS = {"calsim3": "CalSim3", "15cdec": "SAC-SMA 15cdec", "9unimp": "SAC-SMA 9unimp",
            "11obs": "SAC-SMA 11obs", "12rim": "SAC-SMA 12rim", "vic": "VIC"}
-_SET_COLORS = _COLORS                       # back-compat alias
 _MAP_W, _MAP_DPI = 6.5, 300                 # every figure <=6.5in wide; all figures at 300 dpi
 
 

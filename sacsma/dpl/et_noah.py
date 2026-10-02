@@ -46,7 +46,6 @@ import torch
 _RCMAX = 5000.0        # cuticular (maximum) stomatal resistance, s/m
 _RA = 230.0            # bulk atmospheric resistance, s/m (NWS 53 p.19)
 _TREF_C = 25.0         # optimal transpiration temperature, degC
-_CHI = 2.0             # Ek et al. (2003) nonlinear bare-soil exponent
 _N_CANOPY = 0.5        # Noilhan-Planton wet-fraction exponent
 _GSC = 0.0820          # solar constant, MJ m-2 min-1 (FAO-56)
 # Bristow-Campbell transmittance coefficients (NWS 53 p.17)

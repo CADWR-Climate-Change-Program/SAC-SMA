@@ -475,8 +475,7 @@ def score_noah_torch(net: torch.nn.Module, x: torch.Tensor, dom: DomainTensors,
     csv = out / f"metrics_{lab}.csv"
     metrics.round(4).to_csv(csv, index=False)
     # daily sim (date x basin, mm/day) — the torch reporting path's only route to
-    # a daily series (run_basin can't reconstruct a seasonal/Noah net); consumed
-    # by the seasonal-vs-LSTM comparison (sacsma.dpl.seasonal_compare).
+    # a daily series (run_basin can't reconstruct a seasonal/Noah net).
     daily_csv = out / f"daily_sim_{lab}.csv"
     pd.DataFrame(sim.T, index=dom.dates, columns=list(dom.basins)).rename_axis(
         "date").to_csv(daily_csv)

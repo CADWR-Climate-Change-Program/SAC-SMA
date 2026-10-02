@@ -169,7 +169,7 @@ def score_ensemble(ens_dir: str | Path, *, data_dir: str = "data",
 def compare_all(out_dir: str | Path = "artifacts/dpl",
                 *, ga_csv: str | Path = "artifacts/cdec15/metrics_15cdec.csv",
                 dpl_csv: str | Path =
-                "artifacts/dpl/hamon_dense/metrics_hamon_dense.csv",
+                "artifacts/dpl/superseded/hamon_dense/metrics_hamon_dense.csv",
                 hybrid_csv: str | Path =
                 "artifacts/dpl/hybrid/metrics_hybrid.csv",
                 pet_dt_csv: str | Path =

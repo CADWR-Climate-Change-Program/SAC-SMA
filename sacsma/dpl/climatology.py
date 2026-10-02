@@ -20,9 +20,9 @@ step against CalSim3 FNF:
   e  Noah -> Hybrid -> Hybrid DT          (the LSTM step on the noah physics)
 
 ``Hybrid`` / ``Hybrid DT`` are the CANONICAL seed ENSEMBLES (mean of member
-daily flows) on the noah physics baseline — the sim channel is noah's TORCH
-daily dump (``artifacts/dpl/noah/daily_sim_noah_torch.csv``), numerics-matched
-to the +2 °C torch teacher.  (``noah_ft``, the obs-steered seasonal-melt
+daily flows) on the noah physics baseline — the sim channel is the noah daily
+simulation each member checkpoint records
+(``artifacts/dpl/noah/frozen_sim_noah.csv``).  (``noah_ft``, the seasonal-melt
 fine-tune, was DEMOTED 2026-07-17: pooled val ties frozen noah, CalSim3 a
 wash, NHG + north-state volume worse — the head-to-head record lives in
 ``artifacts/dpl/RUNS.md``.)
@@ -52,7 +52,7 @@ _WY_LABELS = ["O", "N", "D", "J", "F", "M", "A", "M", "J", "J", "A", "S"]
 #: the Noah-lite external-ET canopy on PT potential.
 FROZEN: dict[str, dict] = {
     "GA SAC-SMA":     dict(csv=None, domain="15cdec", pet="hamon", alb=0.0, dew=0.0),
-    "Hamon (dense)":  dict(csv="artifacts/dpl/hamon_dense/params_dpl.csv",
+    "Hamon (dense)":  dict(csv="artifacts/dpl/superseded/hamon_dense/params_dpl.csv",
                            domain="15cdec", pet="hamon", alb=0.0, dew=0.0),
     "Hamon":          dict(csv="artifacts/dpl/hamon/params_dpl.csv",
                            domain="15cdec_grid", pet="hamon", alb=0.0, dew=0.0),

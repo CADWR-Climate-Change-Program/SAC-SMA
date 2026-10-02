@@ -183,12 +183,6 @@ def closure_members(hier: pd.DataFrame) -> dict[str, list[str]]:
     return {g: list(s["arc"]) for g, s in h.groupby("closure_group", sort=True)}
 
 
-def group_area(hier: pd.DataFrame, group: str) -> float:
-    """A closure group's CalSim3 area: the sum of its members' ``SQ_MI``."""
-    h = hier[hier["closure_group"] == group]
-    return float(h["sq_mi"].sum())
-
-
 def depth_to_taf(depth_mm: pd.DataFrame, area_mi2) -> pd.DataFrame:
     """Monthly model depths (mm/month; columns = arcs or systems) -> TAF/month with each
     column's CalSim3 area (a Series/dict keyed by column, or one scalar)."""
@@ -210,17 +204,6 @@ def monthly_depth_from_daily(daily_mm: pd.DataFrame) -> pd.DataFrame:
     full = n.to_numpy() == s.index.days_in_month
     s.loc[~full] = np.nan
     return s
-
-
-# --------------------------------------------------------------------------- stores
-def load_arc_taf(data_dir: str | Path = "data", arcs=None) -> pd.DataFrame:
-    """CalSim3 INFLOW TAF/month, rows = monthly PeriodIndex, columns = arcs."""
-    t = pd.read_csv(Path(data_dir) / "calsim" / "calsim3_inflow_monthly.csv", parse_dates=["date"])
-    if arcs is not None:
-        t = t[t["arc"].isin(set(arcs))]
-    w = t.pivot(index="date", columns="arc", values="flow_taf")
-    w.index = pd.PeriodIndex(w.index, freq="M")
-    return w
 
 
 def load_anchor_taf(data_dir: str | Path, hier: pd.DataFrame) -> pd.DataFrame:
@@ -257,32 +240,6 @@ def load_arc_mask(data_dir: str | Path = "data") -> dict[str, pd.PeriodIndex]:
     """arc -> its trainable in-record months."""
     t = pd.read_csv(Path(data_dir) / "calsim" / MASK_CSV, parse_dates=["date"])
     return {a: pd.PeriodIndex(g["date"], freq="M") for a, g in t.groupby("arc", sort=False)}
-
-
-def wy_system_sums(arc_taf: pd.DataFrame, anchor_taf: pd.DataFrame, hier: pd.DataFrame,
-                   *, wy_range: tuple[int, int] = (1950, 2015)) -> pd.DataFrame:
-    """Per closure group and complete water year: the arc sum vs the anchor (TAF),
-    ``[group, wy, n_arcs, arcs_taf, anchor_taf, ratio]`` — the volume-basis system
-    score before any closure.  Pass model arcs through :func:`depth_to_taf` first."""
-    idx = pd.PeriodIndex(arc_taf.index, freq="M")
-    wy = water_year(idx)
-    members = closure_members(hier)
-    rows = []
-    for g, mem in members.items():
-        mem = [a for a in mem if a in arc_taf.columns]
-        if not mem or g not in anchor_taf.columns:
-            continue
-        s = arc_taf[mem]
-        a = anchor_taf[g].reindex(idx)
-        for y in range(wy_range[0], wy_range[1] + 1):
-            sel = wy == y
-            blk, am = s.loc[sel].to_numpy(np.float64), a.to_numpy(np.float64)[sel]
-            if sel.sum() != 12 or not (np.isfinite(blk).all() and np.isfinite(am).all()):
-                continue
-            A, F = float(blk.sum()), float(am.sum())
-            rows.append(dict(group=g, wy=y, n_arcs=len(mem), arcs_taf=A, anchor_taf=F,
-                             ratio=A / F if F else np.nan))
-    return pd.DataFrame(rows)
 
 
 # --------------------------------------------------------------------------- closure
