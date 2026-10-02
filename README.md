@@ -76,12 +76,15 @@ The diagnostic behind these claims is a per-watershed (Δp, ΔT) response surfac
 
 Checkpoints, per-model metrics, and a chronological log of every experiment live in [`artifacts/dpl/`](artifacts/dpl/); see [`RUNS.md`](artifacts/dpl/RUNS.md). This variant is torch-only and GPU-oriented; the core `sacsma` package stays torch-free.
 
+**CalSim3 rim inflows.** The multifamily dPL runs train one parameter network on several observation families at once: CDEC daily flows, DWR-unimpaired monthly flows, USGS daily gauges and, in dPL-CalSim, CalSim3 arc series. dPL-CalSim holds water years 1976–85 out of every family and is scored on them. The CalSim3 rim-inflow product is its monthly flow on the 196 rim arcs (WY1950–2015), with a share model on the arcs of the multi-arc systems. Holdout monthly KGE against CalSim3: median 0.813 over all 196 arcs (0.690 for the dPL's own flow on the same arcs, without the share model), 0.834 on the 139 share arcs. See [`RUNS.md`](artifacts/dpl/RUNS.md) and [`artifacts/README.md`](artifacts/README.md).
+
 ```bash
 sacsma dpl benchmark                                   # fidelity vs the frozen reference
 sacsma dpl train physical --pet priestley_taylor       # train a parameter net
 sacsma dpl hybrid --physics <params.csv> --statics     # train a hybrid LSTM seed
 sacsma dpl evaluate artifacts/dpl/noah/checkpoints/best.pt
 python -m sacsma.dpl.noah_ca_hybrids                   # noah/hybrid family + (Δp, ΔT) response surfaces
+python -m sacsma.dpl.calsim_product fit <run>          # the CalSim3 rim-inflow product of a multifamily run
 ```
 
 ## License

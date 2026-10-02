@@ -1,6 +1,6 @@
 # `artifacts/`: simulated outputs and diagnostic figures
 
-Generated outputs, organized by application: `cdec15/` (the 15-CDEC diagnostics) and `calsim/` (the CalLite domains `9unimp`/`11obs`/`12rim`, the cross-compare `compare/`, and the alternate-forcing runs `wgen_product_a/` + `historical_lto/` with their `forcing_compare/`), plus `dwr_unimpaired/` (checks of the DWR unimpaired-flow location table). The committed copies are the published results of the current data and model. Regenerate with:
+Generated outputs, organized by application: `cdec15/` (the 15-CDEC diagnostics) and `calsim/` (the CalLite domains `9unimp`/`11obs`/`12rim`, the cross-compare `compare/`, and the alternate-forcing runs `wgen_product_a/` + `historical_lto/` with their `forcing_compare/`), plus `dwr_unimpaired/` (checks of the DWR unimpaired-flow location table) and `dpl/` (the dPL runs, including the multifamily runs and the CalSim3 rim-inflow product of dPL-CalSim; their manifest is [`dpl/RUNS.md`](dpl/RUNS.md), and the last two sections below give the file tables of the multifamily runs and the product). The committed copies are the published results of the current data and model. Regenerate with:
 
 ```bash
 sacsma plots --domain 15cdec              # -> artifacts/cdec15/
@@ -9,7 +9,7 @@ sacsma calsim                             # -> artifacts/calsim/compare/
 python -m sacsma.calsim.forcing_compare   # -> artifacts/calsim/forcing_compare/
 ```
 
-Throughout, "simulated" is `sacsma.model.run_basin` from the archived GA optimum, "observed" is the daily CDEC gage (`cdec15`) or the domain's monthly FNF (`calsim`), and "reference" (parity) is the MATLAB `simflow` tables. The full method and conventions are in the [documentation report](https://cadwr-climate-change-program.github.io/SAC-SMA/) and `data/INVENTORY.md`; the model guardrails are in `CLAUDE.md`. The dPL outputs have their own manifest in [`dpl/RUNS.md`](dpl/RUNS.md).
+Throughout, "simulated" is `sacsma.model.run_basin` from the archived GA optimum, "observed" is the daily CDEC gage (`cdec15`) or the domain's monthly FNF (`calsim`), and "reference" (parity) is the MATLAB `simflow` tables. The full method and conventions are in the [documentation report](https://cadwr-climate-change-program.github.io/SAC-SMA/) and `data/INVENTORY.md`; the model guardrails are in `CLAUDE.md`.
 
 ## Per-domain diagnostics (`cdec15/`, `calsim/<domain>/`)
 
