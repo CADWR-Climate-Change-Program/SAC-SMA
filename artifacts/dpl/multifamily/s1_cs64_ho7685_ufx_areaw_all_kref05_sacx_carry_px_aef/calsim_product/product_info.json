@@ -1,0 +1,163 @@
+{
+ "run": "s1_cs64_ho7685_ufx_areaw_all_kref05_sacx_carry_px_aef",
+ "mu": 0.03,
+ "epochs": 300,
+ "threads": 8,
+ "holdout_wy": [
+  1976,
+  1985
+ ],
+ "product_wy": [
+  1950,
+  2015
+ ],
+ "train_points": {
+  "t1": [
+   1.0,
+   1.0
+  ],
+  "t3": [
+   3.0,
+   1.0
+  ],
+  "t4": [
+   4.0,
+   1.0
+  ],
+  "p85": [
+   0.0,
+   0.85
+  ],
+  "p115": [
+   0.0,
+   1.15
+  ],
+  "t1p85": [
+   1.0,
+   0.85
+  ],
+  "t1p115": [
+   1.0,
+   1.15
+  ],
+  "t3p85": [
+   3.0,
+   0.85
+  ],
+  "t3p115": [
+   3.0,
+   1.15
+  ],
+  "t4p85": [
+   4.0,
+   0.85
+  ],
+  "t4p115": [
+   4.0,
+   1.15
+  ]
+ },
+ "validation_points": {
+  "t25": [
+   2.5,
+   1.0
+  ],
+  "p95": [
+   0.0,
+   0.95
+  ],
+  "p105": [
+   0.0,
+   1.05
+  ],
+  "t25p95": [
+   2.5,
+   0.95
+  ],
+  "t25p105": [
+   2.5,
+   1.05
+  ]
+ },
+ "passes": {
+  "base": "artifacts\\dpl\\multifamily\\s1_cs64_ho7685_ufx_areaw_all_kref05_sacx_carry_px_aef\\tier2",
+  "t1": "artifacts\\dpl\\multifamily\\s1_cs64_ho7685_ufx_areaw_all_kref05_sacx_carry_px_aef\\tier2_scenarios\\t1",
+  "t3": "artifacts\\dpl\\multifamily\\s1_cs64_ho7685_ufx_areaw_all_kref05_sacx_carry_px_aef\\tier2_scenarios\\t3",
+  "t4": "artifacts\\dpl\\multifamily\\s1_cs64_ho7685_ufx_areaw_all_kref05_sacx_carry_px_aef\\tier2_scenarios\\t4",
+  "p85": "artifacts\\dpl\\multifamily\\s1_cs64_ho7685_ufx_areaw_all_kref05_sacx_carry_px_aef\\tier2_scenarios\\p85",
+  "p115": "artifacts\\dpl\\multifamily\\s1_cs64_ho7685_ufx_areaw_all_kref05_sacx_carry_px_aef\\tier2_scenarios\\p115",
+  "t1p85": "artifacts\\dpl\\multifamily\\s1_cs64_ho7685_ufx_areaw_all_kref05_sacx_carry_px_aef\\tier2_scenarios\\t1p85",
+  "t1p115": "artifacts\\dpl\\multifamily\\s1_cs64_ho7685_ufx_areaw_all_kref05_sacx_carry_px_aef\\tier2_scenarios\\t1p115",
+  "t3p85": "artifacts\\dpl\\multifamily\\s1_cs64_ho7685_ufx_areaw_all_kref05_sacx_carry_px_aef\\tier2_scenarios\\t3p85",
+  "t3p115": "artifacts\\dpl\\multifamily\\s1_cs64_ho7685_ufx_areaw_all_kref05_sacx_carry_px_aef\\tier2_scenarios\\t3p115",
+  "t4p85": "artifacts\\dpl\\multifamily\\s1_cs64_ho7685_ufx_areaw_all_kref05_sacx_carry_px_aef\\tier2_scenarios\\t4p85",
+  "t4p115": "artifacts\\dpl\\multifamily\\s1_cs64_ho7685_ufx_areaw_all_kref05_sacx_carry_px_aef\\tier2_scenarios\\t4p115",
+  "t25": "artifacts\\dpl\\multifamily\\s1_cs64_ho7685_ufx_areaw_all_kref05_sacx_carry_px_aef\\tier2_scenarios\\t25",
+  "p95": "artifacts\\dpl\\multifamily\\s1_cs64_ho7685_ufx_areaw_all_kref05_sacx_carry_px_aef\\tier2_scenarios\\p95",
+  "p105": "artifacts\\dpl\\multifamily\\s1_cs64_ho7685_ufx_areaw_all_kref05_sacx_carry_px_aef\\tier2_scenarios\\p105",
+  "t25p95": "artifacts\\dpl\\multifamily\\s1_cs64_ho7685_ufx_areaw_all_kref05_sacx_carry_px_aef\\tier2_scenarios\\t25p95",
+  "t25p105": "artifacts\\dpl\\multifamily\\s1_cs64_ho7685_ufx_areaw_all_kref05_sacx_carry_px_aef\\tier2_scenarios\\t25p105"
+ },
+ "n_arcs": 196,
+ "kge_dpl_holdout": {
+  "non-anchor": {
+   "n": 50,
+   "median": 0.6038,
+   "mean": 0.4823,
+   "p10": 0.0059,
+   "below_0": 5
+  },
+  "share": {
+   "n": 139,
+   "median": 0.6989,
+   "mean": 0.6164,
+   "p10": 0.2257,
+   "below_0": 8
+  },
+  "single-arc system": {
+   "n": 7,
+   "median": 0.8699,
+   "mean": 0.8961,
+   "p10": 0.864,
+   "below_0": 0
+  },
+  "all rim arcs": {
+   "n": 196,
+   "median": 0.6901,
+   "mean": 0.5922,
+   "p10": 0.1388,
+   "below_0": 13
+  }
+ },
+ "kge_product_holdout": {
+  "non-anchor": {
+   "n": 50,
+   "median": 0.6038,
+   "mean": 0.4823,
+   "p10": 0.0059,
+   "below_0": 5
+  },
+  "share": {
+   "n": 139,
+   "median": 0.834,
+   "mean": 0.7996,
+   "p10": 0.6412,
+   "below_0": 2
+  },
+  "single-arc system": {
+   "n": 7,
+   "median": 0.8699,
+   "mean": 0.8961,
+   "p10": 0.864,
+   "below_0": 0
+  },
+  "all rim arcs": {
+   "n": 196,
+   "median": 0.8134,
+   "mean": 0.7221,
+   "p10": 0.4248,
+   "below_0": 7
+  }
+ },
+ "validation_full_gate": true
+}
