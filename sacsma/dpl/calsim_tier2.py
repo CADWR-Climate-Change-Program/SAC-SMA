@@ -788,7 +788,8 @@ def score_run(ckpt: str | Path, data_dir: str | Path = "data", *, device=None, r
     def _finish(sres, sres2, out, perturbed, arcs):
         arcs = arcs.copy()
         sim_arc, sim_ent, t0, t1, bad = sres[:5]
-        sim_arc, arcs["n_nan_cells"], arcs["nan_weight_frac"] = _drop_bad_cells(sim_arc, W_arc, bad, dom.hrus, "trained-footprint")
+        sim_arc, arcs["n_nan_cells"], arcs["nan_weight_frac"] = _drop_bad_cells(
+            sim_arc, W_arc, bad, dom.hrus, "trained-footprint")
         if mode:   # [fast, slow] (+ [quick, interflow, supplemental, primary]) arc depths
             comp_arc = [_renorm_like_bad(c, W_arc, bad) for c in sres[5:]]
         dates = dom.dates[t0:t1]
@@ -808,7 +809,8 @@ def score_run(ckpt: str | Path, data_dir: str | Path = "data", *, device=None, r
                     for j, a in enumerate(dom2.basins)]
             arcs = pd.concat([arcs, pd.DataFrame(rows)], ignore_index=True)
             sim_arc = np.concatenate([sim_arc, sim_ext], axis=0)
-        if out is not None:   # the daily arc series, so scoring and figures can be redone without the forward pass
+        # the daily arc series, so scoring and figures can be redone without the forward pass
+        if out is not None:
             np.savez_compressed(out / "tier2_sim_daily.npz", arc=np.array(arcs["arc"]),
                                 date=dates.to_numpy().astype("datetime64[D]").astype(str),
                                 sim_mm=sim_arc.astype(np.float32))
@@ -819,12 +821,14 @@ def score_run(ckpt: str | Path, data_dir: str | Path = "data", *, device=None, r
                   "forcing)", flush=True)
         elif run_dir is not None and (Path(run_dir) / "sim_daily_mm.npz").exists():
             z = np.load(Path(run_dir) / "sim_daily_mm.npz")
-            ref = pd.DataFrame(np.asarray(z["sim_mm"]).T.astype(float), columns=list(z["entity_id"]))
+            ref = pd.DataFrame(np.asarray(z["sim_mm"]).T.astype(float),
+                               columns=list(z["entity_id"]))
             mine = pd.DataFrame(sim_ent.T, columns=list(dom.basins))
             common = [b for b in dom.basins if b in ref.columns]
             d = (mine[common].to_numpy() - ref[common].to_numpy())
             entity_check = dict(n_entities=len(common), max_abs_diff_mm=float(np.nanmax(np.abs(d))),
-                                rel_rmse=float(np.sqrt(np.nanmean(d ** 2)) / np.nanmean(ref[common].to_numpy())))
+                                rel_rmse=float(np.sqrt(np.nanmean(d ** 2))
+                                               / np.nanmean(ref[common].to_numpy())))
             print(f"tier2: entity re-run vs archived sim_daily_mm.npz over {len(common)} entities: "
                   f"max |diff| {entity_check['max_abs_diff_mm']:.3g} mm/day, relative RMSE "
                   f"{entity_check['rel_rmse']:.2e}", flush=True)
@@ -832,7 +836,8 @@ def score_run(ckpt: str | Path, data_dir: str | Path = "data", *, device=None, r
         inflow, _ = load_references(data_dir)
         xw = load_crosswalk(data_dir).set_index("arc")
         sets = load_sets(data_dir)
-        in_set = arc_to_set(sets)      # the smallest set names an arc that several list (I_SHSTA -> SHA)
+        # the smallest set names an arc that several list (I_SHSTA -> SHA)
+        in_set = arc_to_set(sets)
         train_win = registry_windows(data_dir)
         taf = _monthly_taf(sim_arc, dates, arcs["sq_mi"].to_numpy())
         taf.columns = list(arcs["arc"])
@@ -846,16 +851,19 @@ def score_run(ckpt: str | Path, data_dir: str | Path = "data", *, device=None, r
             ref = inflow[a.arc] if a.arc in inflow.columns else pd.Series(np.nan, index=taf.index)
             # in-sample window: the parent entity's training window; for an extrapolated arc there
             # is none, so the monthly family's window stands in as the comparison period
-            t0m, t1m = train_win[a.entity] if a.entity else (pd.Period("1984-10", "M"), pd.Period("2014-09", "M"))
+            t0m, t1m = (train_win[a.entity] if a.entity
+                        else (pd.Period("1984-10", "M"), pd.Period("2014-09", "M")))
             if ho_win is not None:
-                # a holdout run: the held-out water years (all months, and the arc's own gauge-record
-                # months among them), WY1950-84 as mixed, and the train window without the holdout
+                # a holdout run: the held-out water years (all months, and the arc's own
+                # gauge-record months among them), WY1950-84 as mixed, and the train window
+                # without the holdout
                 hw = next(iter(ho_win))
                 windows = dict(ho_win)
                 windows[hw + OWN_SUFFIX] = ho_win[hw]
                 windows["train"] = (str(t0m), str(t1m))
             else:
-                windows = {VALIDATION_WINDOW: WINDOWS[VALIDATION_WINDOW], "train": (str(t0m), str(t1m))}
+                windows = {VALIDATION_WINDOW: WINDOWS[VALIDATION_WINDOW],
+                           "train": (str(t0m), str(t1m))}
             for wname, (m0, m1) in windows.items():
                 idx = pd.period_range(m0, m1, freq="M")
                 s_w, r_w = taf[a.arc].reindex(idx).to_numpy(), ref.reindex(idx).to_numpy()
@@ -872,9 +880,11 @@ def score_run(ckpt: str | Path, data_dir: str | Path = "data", *, device=None, r
                 met = _score(idx, s_w, r_w)
                 rows.append(dict(arc=a.arc, node=a.node, entity=a.entity, basis=a.basis,
                                  trained_cell_frac=float(a.trained_cell_frac),
-                                 system=xw["system"].get(a.arc, ""), tier1_set=in_set.get(a.arc, ""),
+                                 system=xw["system"].get(a.arc, ""),
+                                 tier1_set=in_set.get(a.arc, ""),
                                  sq_mi=a.sq_mi, cover_frac=a.cover_frac, n_cells=a.n_cells,
-                                 n_nan_cells=int(a.n_nan_cells), nan_weight_frac=float(a.nan_weight_frac),
+                                 n_nan_cells=int(a.n_nan_cells),
+                                 nan_weight_frac=float(a.nan_weight_frac),
                                  has_series=a.arc in inflow.columns, window=wname,
                                  win_start=m0, win_end=m1, **met, **extra))
             monthly.append(pd.DataFrame({"arc": a.arc, "month": taf.index.astype(str),
@@ -897,7 +907,8 @@ def score_run(ckpt: str | Path, data_dir: str | Path = "data", *, device=None, r
             tafs = dict(zip(names, (_monthly_taf(c, dates, area) for c in comp_arc), strict=True))
             order = (list(PART_COLUMNS) if mode == "parts" else []) + ["fast", "slow"]
             comp = pd.concat([pd.DataFrame({"arc": a, "month": taf.index.astype(str),
-                                            **{f"{n}_taf": tafs[n].iloc[:, j].to_numpy() for n in order},
+                                            **{f"{n}_taf": tafs[n].iloc[:, j].to_numpy()
+                                               for n in order},
                                             "total_taf": taf[a].to_numpy()})
                               for j, a in enumerate(arcs["arc"])], ignore_index=True)
             return metrics, pd.concat(monthly, ignore_index=True), arcs, not_sim, entity_check, comp
@@ -1138,9 +1149,9 @@ def _main_batch(a, ckpt: Path, run_dir: Path) -> None:
     if a.extension_cells:
         extra["extension_cells"] = a.extension_cells
     results = score_run(ckpt, a.data_dir, device=a.device, run_dir=run_dir, extend=not a.no_extend,
-                        tiles_dir=a.tiles_dir, out=None, trace_python=a.trace_python, spinup=a.spinup,
-                        scenarios=[(t, s) for _, t, s in sc], outs=outs, batch_window=a.batch_window,
-                        **extra)
+                        tiles_dir=a.tiles_dir, out=None, trace_python=a.trace_python,
+                        spinup=a.spinup, scenarios=[(t, s) for _, t, s in sc], outs=outs,
+                        batch_window=a.batch_window, **extra)
     ho = run_holdout_wy(ckpt)
     ho_win = holdout_windows(ho) if ho else None
     vwin = next(iter(ho_win)) if ho_win else VALIDATION_WINDOW
