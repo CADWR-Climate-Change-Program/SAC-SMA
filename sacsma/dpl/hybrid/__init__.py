@@ -1,10 +1,7 @@
 """Hybrid SAC-SMA x LSTM on the 15cdec daily basis.
 
 An LSTM is coupled to the FROZEN SAC-SMA daily simulation as an extra input
-feature; the net predicts streamflow directly (Softplus head).  A second
-"residual" coupling (net predicts ``obs - sim``, flow = sim + correction) was
-retired 2026-07-16: it re-injected regime-conditional volume bias on every
-physics baseline (RUNS.md, Track B + B3).
+feature; the net predicts streamflow directly (Softplus head).
 
 Scored through ``metrics.kge`` / ``_figures._period_stats`` with the temporal
 split at :data:`sacsma.cdec15.CAL_END`, so the numbers are directly comparable

@@ -13,7 +13,8 @@ from pathlib import Path
 
 import pandas as pd
 
-from ..io import domain_dir, read_table
+from .. import paths
+from ..io import read_table
 
 #: the modeling domain / calibration-set name (data files, forcing store).
 DOMAIN = "15cdec"
@@ -30,7 +31,7 @@ CAL_END = "2003-09-30"
 
 def load_gage(data_dir: str | Path = "data", basin: str | None = None) -> pd.DataFrame:
     """Observed daily CDEC gage FNF (calibration target, mm/day); optionally one basin."""
-    df = read_table(domain_dir(data_dir, DOMAIN) / "gage.csv")
+    df = read_table(paths.gage_15cdec(data_dir))
     if basin is not None:
         df = df[df["basin"] == basin].reset_index(drop=True)
     return df

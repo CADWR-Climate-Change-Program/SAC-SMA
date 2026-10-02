@@ -5,39 +5,52 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "sacsma"
 version = "0.1.0"
-description = "Distributed SAC-SMA (Hamon PET / Snow-17 / SAC-SMA / Lohmann routing) applications for California watersheds: the 15-CDEC daily calibration and the CalSim/CalLite monthly domains with CalSim3 cross-comparison"
+description = "Distributed SAC-SMA (Hamon PET / Snow-17 / SAC-SMA / Lohmann routing) for California watersheds: the calibrated model on the 15-CDEC and CalSim/CalLite domains with its CalSim3 cross-comparison, and the differentiable (dPL) model with the CalSim3 rim-inflow product"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
 authors = [{ name = "DWR / Steinschneider Lab port" }]
 keywords = ["hydrology", "sac-sma", "snow17", "lohmann-routing", "streamflow"]
 
+# The core model (pet/snow17/sma/routing/model) runs on these alone, on in-memory arrays.
 dependencies = [
     "numpy>=1.24",
     "numba>=0.59",
     "pandas>=2.2",     # the "ME"/"MS" offset aliases (the old "M" is gone in 3.x)
-    "matplotlib>=3.7",   # sacsma.plots calibration/validation diagnostics
+    "matplotlib>=3.7",   # calibration/validation diagnostics
 ]
 
 [project.optional-dependencies]
+io = [
+    # every run from the data/ store needs these: the forcing is NetCDF
+    "xarray>=2024.1",
+    "netcdf4>=1.6",
+]
 gis = [
     "geopandas>=0.14",   # CalSim catchment layers (HRU->catchment mapping, coverage maps)
     "shapely>=2.0",      # Voronoi tessellation for HRU->catchment area overlap
     "pyproj>=3.6",
     "scipy>=1.10",       # Voronoi buffer spacing + per-month gamma-tail QMAP
 ]
-io = [
-    # the data/ tables are plain CSV (pandas built-in); only the gridded forcing needs these:
-    "xarray>=2024.1",    # NetCDF forcing stores (the Livneh-unsplit historical grids)
-    "netcdf4>=1.6",      # NetCDF engine xarray reads the forcing store with
+dpl = [
+    # sacsma.dpl: the differentiable model, training, the CalSim3 rim-arc tools.  Prefer the
+    # conda-forge CUDA build of torch (environment.yml).
+    "torch>=2.10",
+    "sacsma[io,gis]",
+    "pillow>=10",        # the validation atlas embeds its figures
+]
+dataprep = [
+    # the build scripts under data/ (not part of the package) that run in the `sacsma`
+    # environment.  The raster scripts (sample_gis.py, reitz_et.py, build_flowlens.py) and
+    # the Earth Engine scripts (gee_*.py) run in their own environment, environment-gis.yml;
+    # usgs_flows.py reads a zarr store with the neuralhyd-ca environment.
+    "sacsma[io,gis]",
+    "requests>=2.31",
+    "pypdf>=4.0",
+    "zstandard>=0.22",
 ]
 dev = [
     "ruff>=0.4",
-]
-dpl = [
-    # differentiable SAC-SMA + parameter-learning network (sacsma.dpl); the core
-    # package runs without it. Prefer the conda-forge CUDA build (environment.yml).
-    "torch>=2.10",
 ]
 
 [project.scripts]

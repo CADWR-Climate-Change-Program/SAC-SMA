@@ -39,8 +39,9 @@ import numpy as np
 import pandas as pd
 import torch
 
+from .. import paths
 from .._figures import _period_stats, basin_diagnostics_fig, plt
-from ..io import MULTI_TIMESCALE_DOMAIN, domain_dir
+from ..io import MULTI_TIMESCALE_DOMAIN
 from ..metrics import kge, nse, pbias, pearson
 from .evaluate import export_canopy_params, export_params, load_net_from_checkpoint
 from .forward import routing_uh
@@ -121,7 +122,7 @@ def holdout_metrics(sim: np.ndarray, dates: pd.DatetimeIndex, basins, data_dir: 
       over the held-out water years before the entity's registry train_start (``WY1976-84``
       for a WY1985 start: the window runs trained on the registry window never saw).
     * ``calsim_monthly`` — the arc depth store on the arc's OWN gauge-record months inside the
-      holdout (``own_record``, :func:`sacsma.dpl.calsim_arcs.own_record_months`) and on every
+      holdout (``own_record``, :func:`sacsma.dpl.calsim.arcs.own_record_months`) and on every
       held-out month (``calsim3``: CalSim3 INFLOW whether gauged or not).
 
     Monthly rows are calendar-month sums of the simulated flow (complete months), KGE from
@@ -129,14 +130,14 @@ def holdout_metrics(sim: np.ndarray, dates: pd.DatetimeIndex, basins, data_dir: 
     import xarray as xr
 
     from ..cdec15 import load_gage
-    from .calsim_arcs import load_depth_store, monthly_depth_from_daily, own_record_months
-    from .calsim_tier1 import wy_label
+    from .calsim.arcs import load_depth_store, monthly_depth_from_daily, own_record_months
+    from .calsim.tier1 import wy_label
     a_wy, b_wy = int(holdout_wy[0]), int(holdout_wy[1])
     basins = list(basins)
     dates = pd.DatetimeIndex(dates)
     wy_d = np.asarray(dates.year + (dates.month >= 10))
     ho_d = (wy_d >= a_wy) & (wy_d <= b_wy)
-    reg = pd.read_csv(domain_dir(data_dir, MULTI_TIMESCALE_DOMAIN) / "entities.csv",
+    reg = pd.read_csv(paths.entities(data_dir),
                       dtype={"site_id": str}, parse_dates=["train_start", "train_end"])
     reg = reg.set_index("entity_id").loc[basins]
     msim = monthly_depth_from_daily(pd.DataFrame(np.asarray(sim, np.float64).T, index=dates,
@@ -146,11 +147,11 @@ def holdout_metrics(sim: np.ndarray, dates: pd.DatetimeIndex, basins, data_dir: 
     ho_m = (wy_m >= a_wy) & (wy_m <= b_wy)
     label = wy_label(a_wy, b_wy)
     fams = set(reg["family"])
-    usgs = (xr.open_dataset(f"{data_dir}/usgs/flow_daily.nc") if "usgs_daily" in fams else None)
+    usgs = (xr.open_dataset(paths.usgs_flow(data_dir)) if "usgs_daily" in fams else None)
     gage = load_gage(data_dir) if "cdec_daily" in fams else None
-    fnfmm = (pd.read_csv(Path(data_dir) / "cdec_fnf" / "fnf_daily_mm.csv", parse_dates=["date"])
+    fnfmm = (pd.read_csv(paths.cdec_fnf(data_dir, "fnf_daily_mm.csv"), parse_dates=["date"])
              if "cdec_daily" in fams else None)
-    ufmm = (pd.read_csv(Path(data_dir) / "dwr_unimpaired" / "uf_monthly_mm.csv",
+    ufmm = (pd.read_csv(paths.dwr_unimpaired(data_dir, "uf_monthly_mm.csv"),
                         parse_dates=["date"]) if "uf_monthly" in fams else None)
     arcs = load_depth_store(data_dir) if "calsim_monthly" in fams else None
     own = own_record_months(data_dir, (a_wy, b_wy)) if arcs is not None else {}
@@ -262,7 +263,7 @@ def evaluate_checkpoint_mt(
     ckp = Path(ckpt_path).resolve()
     out = Path(out_dir) if out_dir is not None else (
         ckp.parent.parent if ckp.parent.name == "checkpoints"
-        else Path("artifacts/multifamily/eval"))
+        else Path("artifacts/dpl/_local/eval"))
     figdir = out / "figures" / "entities"
     figdir.mkdir(parents=True, exist_ok=True)
 
@@ -293,8 +294,7 @@ def evaluate_checkpoint_mt(
         date=dates.to_numpy().astype("datetime64[D]").astype(str),
         sim_mm=sim.astype(np.float32))
 
-    reg = pd.read_csv(domain_dir(data_dir, MULTI_TIMESCALE_DOMAIN)
-                      / "entities.csv", dtype={"site_id": str})
+    reg = pd.read_csv(paths.entities(data_dir), dtype={"site_id": str})
     reg = reg.set_index("entity_id").loc[list(dom.basins)]
     midx = (dates.year * 12 + (dates.month - 1)).to_numpy() \
         - int(eobs.month_code[0])

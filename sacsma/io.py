@@ -1,12 +1,12 @@
 """Data-store loaders, date helpers, and unit conversions.
 
-The ``data/`` store is split by application — ``data/cdec15/`` (the 15-CDEC
-domain) and ``data/calsim/`` (the CalSim/CalLite domains ``9unimp``/``11obs``/
-``12rim`` plus the CalSim3/VIC references).  Everything is plain CSV (openable
-in Excel / a text editor) except the gridded forcing stores (NetCDF, git-LFS).
-The per-domain loaders (:func:`load_hru_table`, :func:`load_params`,
-:func:`load_reference`, ...) resolve a modeling ``domain`` string to its file;
-see ``data/INVENTORY.md`` for the full manifest and provenance.
+The ``data/`` store is laid out by role (:mod:`sacsma.paths`; ``data/README.md`` is the
+manifest): ``inputs/`` (forcing, the grid, the modeling domains, the CalSim3 geometry),
+``targets/`` (the flow records models are fitted to) and ``reference/`` (series that
+results are compared with).  Tables are plain CSV (openable in Excel / a text editor);
+the gridded stores are NetCDF or npz (git-LFS).  The per-domain loaders
+(:func:`load_hru_table`, :func:`load_params`, :func:`load_reference`, ...) resolve a
+modeling ``domain`` string to its file.
 """
 
 from __future__ import annotations
@@ -16,50 +16,28 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from . import paths
+
 #: Default modeling domain (the 15 CDEC reservoir watersheds).
 DEFAULT_DOMAIN = "15cdec"
 #: the 15-CDEC application's domain.
 CDEC15_DOMAIN = "15cdec"
 #: the coarse 1/16-deg grid-aligned parallel of 15cdec — one unit per native
-#: Livneh cell (vs the ~3.8x-denser off-grid HRU cloud); see data/cdec15_grid
-#: and data/INVENTORY.md.
+#: Livneh cell (vs the ~3.8x-denser off-grid HRU cloud); see data/inputs/domains/15cdec_grid
+#: and data/README.md.
 CDEC15_GRID_DOMAIN = "15cdec_grid"
 #: the CalSim/CalLite application's domains.
 CALSIM_DOMAINS = ("9unimp", "11obs", "12rim")
-#: the multi-timescale training domain (``data/multifamily``): one
+#: the multi-timescale training domain (``data/inputs/domains/multifamily``): one
 #: "basin" per training entity, cells/weights from ``entity_cells.csv``,
 #: flow lengths from ``flowlens.csv``.
 MULTI_TIMESCALE_DOMAIN = "multifamily"
 #: 1/16-deg-grid-based domains — these read the UNIFIED region forcing stores
-#: (``data/region/forcing/<product>.nc``: one file per product at the region
+#: (``data/inputs/forcing/<product>.nc``: one file per product at the region
 #: grid, prcp/tmin/tmax with tavg derived; built by
-#: dataprep/build_region_forcing.py).  The fine ``15cdec`` domain keeps its
+#: data/inputs/forcing/build_region_forcing.py).  The fine ``15cdec`` domain keeps its
 #: own dense off-grid store (special interpolation treatment upstream).
 REGION_DOMAINS = (CDEC15_GRID_DOMAIN, *CALSIM_DOMAINS, MULTI_TIMESCALE_DOMAIN)
-
-
-def domain_dir(data_dir: str | Path = "data", domain: str = DEFAULT_DOMAIN) -> Path:
-    """Application data directory: ``data/cdec15`` for 15cdec, ``data/cdec15_grid``
-    for its grid parallel, ``data/calsim`` for the CalSim domains,
-    ``data/multifamily`` for the multi-timescale domain."""
-    if domain == CDEC15_DOMAIN:
-        return Path(data_dir) / "cdec15"
-    if domain == CDEC15_GRID_DOMAIN:
-        return Path(data_dir) / "cdec15_grid"
-    if domain in CALSIM_DOMAINS:
-        return Path(data_dir) / "calsim"
-    if domain == MULTI_TIMESCALE_DOMAIN:
-        return Path(data_dir) / "multifamily"
-    raise ValueError(
-        f"unknown domain {domain!r} (expected {CDEC15_DOMAIN}, {CDEC15_GRID_DOMAIN}, "
-        f"{MULTI_TIMESCALE_DOMAIN}, or one of {CALSIM_DOMAINS})"
-    )
-
-
-def _sfx(domain: str) -> str:
-    """Filename suffix: the 15cdec domains are unsuffixed (one domain per app dir);
-    the calsim files carry ``_<domain>`` (three domains share the dir)."""
-    return "" if domain in (CDEC15_DOMAIN, CDEC15_GRID_DOMAIN) else f"_{domain}"
 
 
 #: Default forcing product (filename stem): the historical **Livneh-unsplit**
@@ -67,31 +45,20 @@ def _sfx(domain: str) -> str:
 DEFAULT_FORCING = "historical_livneh_unsplit"
 
 
-def forcing_name(domain: str = DEFAULT_DOMAIN, product: str = DEFAULT_FORCING) -> str:
-    """Forcing store filename for a ``product`` (the filename stem).
+def forcing_path(
+    data_dir: str | Path = "data", domain: str = DEFAULT_DOMAIN, product: str = DEFAULT_FORCING
+) -> Path:
+    """Full path of a domain's forcing store for a ``product`` (the filename stem).
 
     Products: :data:`DEFAULT_FORCING` (the historical Livneh-unsplit grid),
     ``wgen_product_a`` (WGEN Product A scenario 1 — the same unsplit
     precipitation, temperature detrended to the 1991-2020 baseline; CalSim
     domains only) and ``wgen_product_a_sNN`` (WGEN Product A climate scenario
     NN, a compact table store decoded against ``wgen_product_a`` by
-    :mod:`sacsma.wgen_scenarios`; region domains only).  See
-    ``data/INVENTORY.md``.
-    """
-    return f"{product}{_sfx(domain)}.nc"
-
-
-def forcing_path(
-    data_dir: str | Path = "data", domain: str = DEFAULT_DOMAIN, product: str = DEFAULT_FORCING
-) -> Path:
-    """Full path of a domain's forcing store.
-
-    Grid-based domains (:data:`REGION_DOMAINS`) share the unified region store
-    ``data/region/forcing/<product>.nc``; the fine ``15cdec`` domain keeps its
-    per-domain ``<app dir>/forcing/<name>.nc``."""
-    if domain in REGION_DOMAINS:
-        return Path(data_dir) / "region" / "forcing" / f"{product}.nc"
-    return domain_dir(data_dir, domain) / "forcing" / forcing_name(domain, product)
+    :mod:`sacsma.wgen_scenarios`; region domains only).  Grid-based domains
+    (:data:`REGION_DOMAINS`) share one store per product; the fine ``15cdec``
+    domain keeps its own dense store.  The layout is in :mod:`sacsma.paths`."""
+    return paths.forcing(data_dir, domain, product)
 
 
 def norm_grid_key(k: str) -> str:
@@ -103,22 +70,18 @@ def norm_grid_key(k: str) -> str:
 
 def soilveg_path(data_dir: str | Path = "data", domain: str = DEFAULT_DOMAIN) -> Path:
     """Per-HRU continuous soil/veg/terrain feature table (POLARIS + LANDFIRE +
-    3DEP + MODIS-LAI sampled at each HRU point; see ``data/raw_gis/SOURCES.md``).
+    3DEP + MODIS-LAI sampled at each HRU point; see ``data/inputs/grid/README.md``).
     One row per HRU in ``hruinfo`` order, keyed (non-uniquely) by ``key``.
     The multi-timescale domain reads the full-coverage REGION table (one row per grid
     cell, all 4,410 cells)."""
-    if domain == MULTI_TIMESCALE_DOMAIN:
-        return Path(data_dir) / "region" / "soilveg_continuous.csv"
-    return domain_dir(data_dir, domain) / f"soilveg_continuous{_sfx(domain)}.csv"
+    return paths.soilveg(data_dir, domain)
 
 
 def lai_climatology_path(data_dir: str | Path = "data", domain: str = DEFAULT_DOMAIN) -> Path:
     """Per-HRU 46-value 8-day MODIS-LAI day-of-year climatology (companion to
     :func:`soilveg_path`; the Noah-ET canopy driver).  The multi-timescale domain reads
     the full-coverage REGION table."""
-    if domain == MULTI_TIMESCALE_DOMAIN:
-        return Path(data_dir) / "region" / "lai_climatology.csv"
-    return domain_dir(data_dir, domain) / f"lai_climatology{_sfx(domain)}.csv"
+    return paths.lai_climatology(data_dir, domain)
 
 
 #: Noah-lite observed-canopy clamps — keep in sync with dpl.config.CANOPY_BOUNDS
@@ -225,10 +188,9 @@ def load_hru_table(data_dir: str | Path = "data", domain: str = DEFAULT_DOMAIN) 
     ``flowlen`` from ``flowlens.csv`` (traced, meters), and ``elev`` joined
     per cell from the region statics (``dem_elev``)."""
     if domain != MULTI_TIMESCALE_DOMAIN:
-        return read_table(domain_dir(data_dir, domain) / f"hruinfo{_sfx(domain)}.csv")
-    ddir = domain_dir(data_dir, domain)
-    cells = read_table(ddir / "entity_cells.csv")
-    fl = read_table(ddir / "flowlens.csv")
+        return read_table(paths.hruinfo(data_dir, domain))
+    cells = read_table(paths.entity_cells(data_dir))
+    fl = read_table(paths.flowlens(data_dir))
     hrus = cells.merge(fl[["entity_id", "key", "flowlen_m"]],
                        on=["entity_id", "key"], validate="one_to_one")
     if len(hrus) != len(cells):
@@ -244,7 +206,7 @@ def load_hru_table(data_dir: str | Path = "data", domain: str = DEFAULT_DOMAIN) 
     if out["elev"].isna().any():
         n = int(out["elev"].isna().sum())
         raise ValueError(f"{n} entity cells missing dem_elev in the region "
-                         "statics — rebuild data/region/soilveg_continuous.csv")
+                         "statics — rebuild data/inputs/grid/soilveg_continuous.csv")
     return out
 
 
@@ -256,14 +218,14 @@ def load_params(data_dir: str | Path = "data", domain: str = DEFAULT_DOMAIN) -> 
     params per ``basin``, so callers index by ``key`` (after filtering to a basin
     where a ``basin`` column is present).
     """
-    return read_table(domain_dir(data_dir, domain) / f"ga_optimum{_sfx(domain)}.csv")
+    return read_table(paths.ga_optimum(data_dir, domain))
 
 
 def load_reference(
     data_dir: str | Path = "data", basin: str | None = None, domain: str = DEFAULT_DOMAIN
 ) -> pd.DataFrame:
     """Reference MATLAB simulated flow for a ``domain`` (optionally one basin)."""
-    df = read_table(domain_dir(data_dir, domain) / f"simflow{_sfx(domain)}.csv")
+    df = read_table(paths.simflow(data_dir, domain))
     if basin is not None:
         df = df[df["basin"] == basin].reset_index(drop=True)
     return df
@@ -271,7 +233,7 @@ def load_reference(
 
 def load_basin_area(data_dir: str | Path = "data", domain: str = DEFAULT_DOMAIN) -> pd.DataFrame:
     """Per-basin drainage area table [basin, area_mi2] for a ``domain``."""
-    return read_table(domain_dir(data_dir, domain) / f"basin_area{_sfx(domain)}.csv")
+    return read_table(paths.basin_area(data_dir, domain))
 
 
 def _ffill_axis(a: np.ndarray, axis: int) -> np.ndarray:
@@ -292,7 +254,7 @@ def fill_missing_days(ds):
     cells or the whole domain.  A leading gap has no previous day, so it takes
     the first observed day instead (back-fill).
 
-    Only ``aorc`` currently carries NaN (see ``dataprep/README.md``: an AORC
+    Only ``aorc`` currently carries NaN (see ``data/inputs/forcing/README.md``: an AORC
     source outage, not an artifact of our aggregation — the fill-masking fix
     turns unreported hours into NaN rather than fabricating 0.0).  The Livneh /
     WGEN / LTO stores are gap-free, and for them this returns each variable
@@ -354,7 +316,7 @@ def load_forcing(
     from . import wgen_scenarios
 
     if name:
-        return xr.open_dataset(domain_dir(data_dir, domain) / "forcing" / name)
+        return xr.open_dataset(paths.forcing(data_dir, domain, product).with_name(name))
     path = forcing_path(data_dir, domain, product)
     scen = wgen_scenarios.scenario_of(product) is not None
     if scen and domain not in REGION_DOMAINS:

@@ -10,20 +10,20 @@ Daily entities (usgs_daily + cdec_daily) form a dense ``(D, T_env)`` matrix
 like :class:`sacsma.dpl.data.CalObs`; monthly entities (uf_monthly) get a
 ``(M, n_months)`` matrix over the envelope's calendar months, consumed by
 the monthly flow-loss term (simulated daily flow bucketed to complete
-months, the ``et_chunk_target`` machinery).
+months, the ``month_chunk_target`` machinery).
 
 Sources, per family (the registry's ``obs_store`` column):
 
-* ``usgs_daily``  — ``data/usgs/flow_daily.nc`` ``flow_mm`` by gauge id.
-* ``cdec_daily``  — the 15 committed basins from ``data/cdec15/gage.csv``
-  (mm/day); CLE + CSN from ``data/cdec_fnf/fnf_daily_mm.csv`` (the
+* ``usgs_daily``  — ``data/targets/usgs/flow_daily.nc`` ``flow_mm`` by gauge id.
+* ``cdec_daily``  — the 15 committed basins from ``data/targets/cdec/gage_15cdec.csv``
+  (mm/day); CLE + CSN from ``data/targets/cdec/fnf_daily_mm.csv`` (the
   derived depth companion of the raw cfs store).
-* ``uf_monthly``  — ``data/dwr_unimpaired/uf_monthly_mm.csv`` (mm/month,
+* ``uf_monthly``  — ``data/targets/dwr_unimpaired/uf_monthly_mm.csv`` (mm/month,
   month-end stamps; the derived depth companion of ``uf_monthly.csv``).
-* ``calsim_monthly`` — ``data/calsim/calsim3_inflow_monthly_mm.csv`` (the
+* ``calsim_monthly`` — ``data/targets/calsim3/calsim3_inflow_monthly_mm.csv`` (the
   CalSim3 rim INFLOW arcs as mm/month over each arc's ``SQ_MI``), kept only on
-  the arc-months of ``data/calsim/arc_obs_mask.csv`` (the arc's own gauge
-  record in the training water years; see :mod:`sacsma.dpl.calsim_arcs`).
+  the arc-months of ``data/targets/calsim3/arc_obs_mask.csv`` (the arc's own gauge
+  record in the training water years; see :mod:`sacsma.dpl.calsim.arcs`).
   Registry rows exist only when the registry was built with
   ``--calsim-arcs``; they load only when a run names them (``--basins``).
 
@@ -40,9 +40,9 @@ import numpy as np
 import pandas as pd
 import torch
 
+from .. import paths
 from ..cdec15 import load_gage
-from ..io import MULTI_TIMESCALE_DOMAIN, domain_dir
-from .data import DomainTensors, et_chunk_target
+from .data import DomainTensors, month_chunk_target
 
 #: global training envelope (WY1950-2018; forcing ends 2018-12-31).
 ENVELOPE_START = "1949-10-01"
@@ -53,7 +53,7 @@ CALSIM_FAMILY = "calsim_monthly"
 
 def _calsim_store(data_dir: str, obs_store: str) -> tuple[pd.DataFrame, dict]:
     """The arc depth store (wide, monthly PeriodIndex x arc) and the arc mask."""
-    from .calsim_arcs import load_arc_mask
+    from .calsim.arcs import load_arc_mask
     path, col = obs_store.rsplit(":", 1)
     t = pd.read_csv(Path(data_dir) / path, parse_dates=["date"])
     w = t.pivot(index="date", columns="arc", values=col)
@@ -119,8 +119,7 @@ def load_entity_obs(
     (``DplConfig.uf_train_start``) adds each uf_monthly entity's months from that
     date to its registry train_start (minus the holdout) from the same store,
     after the audit; every one must be observed (``n_ext``)."""
-    ddir = domain_dir(data_dir, MULTI_TIMESCALE_DOMAIN)
-    reg = pd.read_csv(ddir / "entities.csv", dtype={"site_id": str},
+    reg = pd.read_csv(paths.entities(data_dir), dtype={"site_id": str},
                       parse_dates=["train_start", "train_end"])
     known_ids = set(reg["entity_id"])
     reg = reg.set_index("entity_id").loc[list(dom.basins)]
@@ -131,14 +130,14 @@ def load_entity_obs(
         raise ValueError(f"cal_end {cal_end} not in the forcing record")
     window = dom.dates[t0:t1]
 
-    ufmm = pd.read_csv(Path(data_dir) / "dwr_unimpaired" / "uf_monthly_mm.csv",
+    ufmm = pd.read_csv(paths.dwr_unimpaired(data_dir, "uf_monthly_mm.csv"),
                        parse_dates=["date"])
-    fnfmm = pd.read_csv(Path(data_dir) / "cdec_fnf" / "fnf_daily_mm.csv",
+    fnfmm = pd.read_csv(paths.cdec_fnf(data_dir, "fnf_daily_mm.csv"),
                         parse_dates=["date"])
     gage = load_gage(data_dir)
 
     import xarray as xr
-    usgs = xr.open_dataset(f"{data_dir}/usgs/flow_daily.nc")
+    usgs = xr.open_dataset(paths.usgs_flow(data_dir))
 
     daily_rows, monthly_rows = [], []
     daily_arrs, n_obs_want = [], []
@@ -295,7 +294,7 @@ def monthly_chunk_target(
     """Day->month bucket for one TBPTT chunk plus each slot's COLUMN in the
     envelope month grid (:attr:`EntityObs.month_code`).
 
-    Wraps :func:`sacsma.dpl.data.et_chunk_target` — a calendar month gets a
+    Wraps :func:`sacsma.dpl.data.month_chunk_target` — a calendar month gets a
     slot only when it lies completely inside both the chunk and the cal
     window, so split/partial months never enter the loss (a fixed 366-day grid
     from 1 Oct 1949 splits one month most years; the water-year grid,
@@ -305,10 +304,10 @@ def monthly_chunk_target(
     (length, maxm), cols (maxm,), mask (maxm,))``; masked slots have ``cols``
     0 (gate on ``mask`` before comparing).
     """
-    bucket, _, mask = et_chunk_target(dates, c0, length, cal_t0, cal_t1)
+    bucket, _, mask = month_chunk_target(dates, c0, length, cal_t0, cal_t1)
     if mask.sum() >= bucket.shape[1]:
         # all slots used ⇒ a further complete month may have been dropped
-        # silently (et_chunk_target caps at maxm without error); DplConfig
+        # silently (month_chunk_target caps at maxm without error); DplConfig
         # bounds train_chunk_days <= 366 exactly to keep this unreachable (a
         # 1-Oct-aligned 365/366-day chunk holds twelve complete months)
         raise ValueError(f"monthly bucket slots exhausted for a {length}-day "

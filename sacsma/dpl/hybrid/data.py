@@ -32,6 +32,7 @@ import numpy as np
 import pandas as pd
 import torch
 
+from ... import paths
 from ...cdec15 import BASINS, CAL_END, load_gage
 from ...model import load_domain_forcing, run_basin
 from ..data import load_domain_tensors
@@ -68,7 +69,6 @@ def feature_names(use_doy: bool, use_pet: bool,
 #: basin-average daily Tmin/Tmax (pre-ingested from the WGEN 1/16-deg grid;
 #: see scratchpad/ingest_tminmax.py).  Adds the diurnal-range signal a single
 #: tavg discards; basin tavg reproduces the stored forcing to 0.37 degC.
-TMINMAX_CSV = "basin_tminmax_livneh.csv"
 
 
 def build_frozen_sim(
@@ -190,10 +190,6 @@ def apply_response_perturbation(feat: np.ndarray, names: tuple[str, ...], *,
     if "sac_sim" in idx:                         # absent for a pure LSTM
         fa[:, :, idx["sac_sim"]] = sim_pert / scale[:, None]
     return fa
-
-
-#: hybrid static columns, in build order (see load_hybrid_data use_statics).
-STATIC_COLS = ("elev", "flowlen", "pmean", "snowf")
 
 
 def perturbed_static(ing: dict, dp: float, dt: float) -> np.ndarray:
@@ -339,7 +335,7 @@ def load_hybrid_data(
     tavg = W @ dom.forcing.tavg[dom.cell_idx].astype(np.float64)   # (B, T) degC
 
     # basin-average Tmin/Tmax (same W-average as tavg, pre-ingested to CSV)
-    tmm = pd.read_csv(Path(data_dir) / "cdec15" / TMINMAX_CSV,
+    tmm = pd.read_csv(paths.basin_tminmax(data_dir),
                       parse_dates=["date"]).set_index("date")
     tmin = np.vstack([tmm[f"tmin_{b}"].reindex(dates).to_numpy(np.float64)
                       for b in basins])                     # (B, T) degC
@@ -396,7 +392,7 @@ def load_hybrid_data(
     # use_pet adds the raw PT potential (the physics' energy-demand signal) as
     # an input channel — recomputed from the forcing (deterministic, cached).
     if use_pet:
-        pet_cache = (Path("artifacts/dpl/_climatology_cache")
+        pet_cache = (Path("artifacts/dpl/_local/cache/climatology")
                      / f"basin_pet_pt_{domain}.csv")
         if pet_cache.exists():
             pdf = pd.read_csv(pet_cache, parse_dates=["date"]).set_index("date")

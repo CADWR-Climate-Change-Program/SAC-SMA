@@ -1,5 +1,5 @@
 """Priestley-Taylor potential ET (Numba) — frozen-pipeline mirror of the torch
-``sacsma.dpl.et_noah.potential_et_priestley_taylor`` (with its snow-cover-albedo
+``sacsma.dpl.physics.et_noah.potential_et_priestley_taylor`` (with its snow-cover-albedo
 and arid dewpoint-depression refinements) so PT-trained dPL exports score
 through the fast ``run_basin`` path instead of streaming the full record
 through the torch pipeline.
@@ -27,7 +27,7 @@ import numpy as np
 
 from ._compat import njit
 
-# constants — verbatim from sacsma.dpl.et_noah (keep in sync)
+# constants — verbatim from sacsma.dpl.physics.et_noah (keep in sync)
 _ALPHA_PT = 1.26       # Priestley-Taylor coefficient
 _ALBEDO = 0.23         # FAO-56 reference-surface (snow-free) albedo
 _SIGMA_SB = 4.903e-9   # Stefan-Boltzmann, MJ K-4 m-2 day-1

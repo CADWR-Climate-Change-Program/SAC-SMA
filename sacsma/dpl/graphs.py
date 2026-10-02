@@ -42,14 +42,14 @@ from __future__ import annotations
 import torch
 
 from .config import DplConfig
-from .data import ET_MAXM, DomainTensors
-from .et_noah import NoahCanopyState
+from .data import CHUNK_MAXM, DomainTensors
+from .physics.et_noah import NoahCanopyState
 from .forward import PipelineState, routing_uh, run_window
-from .loss import jul_sep_window, level_hinge_loss, masked_basin_loss, shape_pull_loss
+from .loss import jul_sep_window, masked_basin_loss
 from .multi_timescale import monthly_nnse_loss
-from .routing import N_TAPS
-from .sma import SacState
-from .snow17 import Snow17State
+from .physics.routing import N_TAPS
+from .physics.sma import SacState
+from .physics.snow17 import Snow17State
 
 _STATE_FIELDS = (
     ("snow", "w_i"), ("snow", "ati"), ("snow", "w_q"), ("snow", "deficit"),
@@ -226,7 +226,6 @@ class TrainChunk(_WindowBase):
     def __init__(self, net: torch.nn.Module, dom: DomainTensors,
                  cfg: DplConfig, length: int, x: torch.Tensor,
                  obs_var: torch.Tensor, weight: torch.Tensor | None = None,
-                 swe_basin_w: torch.Tensor | None = None,
                  mt_rows: torch.Tensor | None = None,
                  mt_var: torch.Tensor | None = None,
                  daily_scale: float = 1.0, monthly_scale: float = 1.0,
@@ -251,33 +250,9 @@ class TrainChunk(_WindowBase):
         #: SAME tensor is passed here and updated in place via set_weights, so
         #: the captured loss reads the current weights on every replay.
         self.weight = weight
-        #: ET/SWE auxiliary losses (opt-in): static per-chunk target buffers,
-        #: copied in on every replay via set_et_target / set_swe_target.  Init so
-        #: capture sees no NaN and every obs term is 0 at capture (sig=1, mask=0,
-        #: lo=0/hi=1) while its tet/swe backward path IS captured.
-        self.et = cfg.et_loss_lambda > 0.0 or cfg.et_level_lambda > 0.0
-        self.et_shape_lambda = cfg.et_loss_lambda
-        self.et_level_lambda = cfg.et_level_lambda
-        self.swe = cfg.swe_loss_lambda > 0.0
-        self.swe_lambda = cfg.swe_loss_lambda
         dev, dt = dom.device, dom.dtype
-        if self.et:
-            self.et_bucket = torch.zeros(length, ET_MAXM, device=dev, dtype=dt)
-            self.et_mu = torch.zeros(b, ET_MAXM, device=dev, dtype=dt)
-            self.et_sig = torch.ones(b, ET_MAXM, device=dev, dtype=dt)
-            self.et_mask = torch.zeros(ET_MAXM, device=dev, dtype=dt)
-            self.et_lo = torch.zeros(b, device=dev, dtype=dt)
-            self.et_hi = torch.ones(b, device=dev, dtype=dt)
-        if self.swe:
-            if swe_basin_w is None:
-                raise ValueError("swe_loss_lambda > 0 requires swe_basin_w")
-            self.swe_bucket = torch.zeros(length, ET_MAXM, device=dev, dtype=dt)
-            self.swe_mu = torch.zeros(b, ET_MAXM, device=dev, dtype=dt)
-            self.swe_sig = torch.ones(b, ET_MAXM, device=dev, dtype=dt)
-            self.swe_mask = torch.zeros(ET_MAXM, device=dev, dtype=dt)
-            self.swe_w = swe_basin_w.detach().clone()   # (B,) static snow mask
         #: monthly-flow term (multi-timescale domain): static per-chunk target
-        #: buffers like the ET/SWE ones.  Init tgt=0/fin=0 -> the term is 0 at
+        #: buffers.  Init tgt=0/fin=0 -> the term is 0 at
         #: capture while its backward path IS captured (mask-zero pattern).
         self.mt = mt_rows is not None
         self.daily_scale = daily_scale
@@ -286,9 +261,9 @@ class TrainChunk(_WindowBase):
             m = int(mt_rows.numel())
             self.mt_rows = mt_rows.detach().clone()
             self.mt_var = mt_var.detach().clone()
-            self.mt_bucket = torch.zeros(length, ET_MAXM, device=dev, dtype=dt)
-            self.mt_tgt = torch.zeros(m, ET_MAXM, device=dev, dtype=dt)
-            self.mt_fin = torch.zeros(m, ET_MAXM, device=dev, dtype=dt)
+            self.mt_bucket = torch.zeros(length, CHUNK_MAXM, device=dev, dtype=dt)
+            self.mt_tgt = torch.zeros(m, CHUNK_MAXM, device=dev, dtype=dt)
+            self.mt_fin = torch.zeros(m, CHUNK_MAXM, device=dev, dtype=dt)
 
         def _step():
             out = net(self.x)
@@ -309,7 +284,7 @@ class TrainChunk(_WindowBase):
                 sac_pet=cfg.sac_pet, pt_snow_albedo=cfg.pt_snow_albedo,
                 pt_dewpoint_depression=cfg.pt_dewpoint_depression,
                 canopy_lite=cfg.canopy_lite, sac_exchanges=cfg.noah_sac_exchanges, state_idx=self.state_idx,
-                return_tet=self.et, return_swe=self.swe, row_cell=dom.row_cell)
+                row_cell=dom.row_cell)
             flow, st = (res[0], res[1])
             basin = dom.W @ flow
             loss = masked_basin_loss(basin, self.obs, self.obs_var,
@@ -324,22 +299,6 @@ class TrainChunk(_WindowBase):
                                      peak_lambda=cfg.peak_loss_lambda, **shape_kw,
                                      timing_window=jul_sep_window(self.doy, self.leap),
                                      weight=self.weight, weight_total=self.weight_total)
-            k = 2
-            if self.et:
-                et_monthly = (dom.W @ res[k]) @ self.et_bucket   # (B, MAXM) mm/mo
-                k += 1
-                if self.et_shape_lambda > 0.0:
-                    loss = loss + self.et_shape_lambda * shape_pull_loss(
-                        et_monthly, self.et_mu, self.et_sig, self.et_mask)
-                if self.et_level_lambda > 0.0:
-                    loss = loss + self.et_level_lambda * level_hinge_loss(
-                        et_monthly, self.et_mask, self.et_lo, self.et_hi)
-            if self.swe:
-                # swe_bucket columns are pre-divided by day counts -> monthly MEAN
-                swe_monthly = (dom.W @ res[k]) @ self.swe_bucket
-                loss = loss + self.swe_lambda * shape_pull_loss(
-                    swe_monthly, self.swe_mu, self.swe_sig, self.swe_mask,
-                    basin_w=self.swe_w)
             if self.mt:
                 # multi-timescale monthly NNSE on the same simulated flow; the
                 # scales only depart from 1.0 under family weighting
@@ -399,26 +358,6 @@ class TrainChunk(_WindowBase):
         if self.weight is not None:
             self.weight.copy_(w)
 
-    def set_et_target(self, bucket, mu, sig, mask, lo, hi) -> None:
-        """Copy this chunk's ET target (day->month bucket, normalized-shape
-        mu/sig, slot mask, level envelope lo/hi) into the static buffers."""
-        if self.et:
-            self.et_bucket.copy_(bucket)
-            self.et_mu.copy_(mu)
-            self.et_sig.copy_(sig)
-            self.et_mask.copy_(mask)
-            self.et_lo.copy_(lo)
-            self.et_hi.copy_(hi)
-
-    def set_swe_target(self, bucket_mean, mu, sig, mask) -> None:
-        """Copy this chunk's SWE target (day->month MEAN bucket + normalized-
-        shape mu/sig/mask) into the static buffers."""
-        if self.swe:
-            self.swe_bucket.copy_(bucket_mean)
-            self.swe_mu.copy_(mu)
-            self.swe_sig.copy_(sig)
-            self.swe_mask.copy_(mask)
-
     def set_mt_target(self, bucket, tgt, fin) -> None:
         """Copy this chunk's monthly-flow target (day->month bucket, observed
         mm/month 0-filled, finite-slot mask) into the static buffers."""
@@ -428,19 +367,12 @@ class TrainChunk(_WindowBase):
             self.mt_fin.copy_(fin)
 
     def run(self, pr, ta, doy, leap, obs, tmin=None, tmax=None,
-            lai=None, state_idx=None, et_target=None, swe_target=None,
-            mt_target=None) -> float:
+            lai=None, state_idx=None, mt_target=None) -> float:
         """One chunk: replay forward+backward, carry state, return the loss.
-        Gradients are left in the net's static ``.grad`` tensors.  ``et_target``
-        (bucket, mu, sig, mask, lo, hi), ``swe_target`` (bucket_mean, mu, sig,
-        mask) and ``mt_target`` (bucket, tgt, fin) are copied in when the
-        respective loss terms are active."""
+        Gradients are left in the net's static ``.grad`` tensors.  ``mt_target``
+        (bucket, tgt, fin) is copied in when the monthly-flow term is active."""
         self._copy_forcing(pr, ta, doy, leap, tmin, tmax, lai, state_idx)
         self.obs.copy_(obs)
-        if et_target is not None:
-            self.set_et_target(*et_target)
-        if swe_target is not None:
-            self.set_swe_target(*swe_target)
         if mt_target is not None:
             self.set_mt_target(*mt_target)
         self.graph.replay()
@@ -473,7 +405,7 @@ class SegmentedTrainWindow:
     Only the day-stepped pipeline is graphed.  ``net(x)``, ``routing_uh`` and the
     loss stay eager (they are tiny), so no static ``.grad`` buffers, no static
     target buffers and no graph-side RNG are involved.  ``return_tet`` /
-    ``return_swe`` (ET/SWE auxiliary losses) are not supported.
+    ``return_swe`` are not supported.
     """
 
     def __init__(self, dom: DomainTensors, cfg: DplConfig, length: int,

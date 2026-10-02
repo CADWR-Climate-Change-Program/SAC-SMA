@@ -2,10 +2,7 @@
 
 Entity-aware, many-to-one: a 365-day window of [basin forcing + SAC-SMA sim
 (+ static embedding)] -> the final hidden state -> a small MLP head ->
-streamflow (Softplus, >= 0).  The physics sim enters ONLY as an input channel
-(the retired "residual" variant, which predicted an additive correction on the
-sim, re-injected regime-conditional volume bias on every baseline and was
-dropped 2026-07-16 — see RUNS.md).
+streamflow (Softplus, >= 0).  The physics sim enters ONLY as an input channel.
 
 The net emits a NORMALIZED prediction (the trainer scales the target by each
 basin's cal-window std); denormalization back to mm/day lives in the trainer/

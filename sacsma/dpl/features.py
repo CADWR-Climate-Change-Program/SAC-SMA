@@ -14,7 +14,7 @@ soil/veg, the one-hots), so their parameter field is climate-frozen:
 
 * ``aef`` — AlphaEarth Foundations satellite embeddings (Google/DeepMind,
   ``GOOGLE/SATELLITE_EMBEDDING/V1/ANNUAL``, CC-BY 4.0; the 2017-2025 mean 64-d
-  vector per region cell, ``data/region/aef/aef_cell_mean.npz``): the first
+  vector per region cell, ``data/inputs/grid/aef_cell_mean.npz``): the first
   :data:`AEF_PCS` principal components of the unit DIRECTIONS plus the mean
   vector's LENGTH (how consistent the land surface is across the cell and the
   years).  The PCA is fit once on all 4410 region cells — no training data
@@ -61,13 +61,14 @@ import zlib
 import numpy as np
 import pandas as pd
 
-from .pet import hamon_raw_pet_numpy
+from .. import paths
+from .physics.pet import hamon_raw_pet_numpy
 
 CONTINUOUS_STATICS = ("elev", "lat", "lon", "flowlen")
 CLIMATE_INDICES = ("p_mean", "aridity", "snow_frac", "seasonality")
 
 # -- physical variant: continuous soil/veg/terrain/LAI, sampled per HRU from the
-#    CA raster stack (data/raw_gis; see sacsma.io.soilveg_path).  These REPLACE
+#    CA raster stack (data/inputs/grid/raw_gis; see sacsma.io.soilveg_path).  These REPLACE
 #    the opaque one-hot soil_class/veg_class of the static/climate variants. --
 #: POLARIS depth zones aggregated to SAC-SMA storage layers (depth weights, cm).
 _POLARIS_PROPS = ("sand", "clay", "ksat", "theta_s")
@@ -81,8 +82,7 @@ PHYSICAL_FEATURES = (
     "lai_mean", "lai_amp", "lai_peak_sin", "lai_peak_cos",    # MODIS LAI
 )
 
-#: the AlphaEarth store under the data directory (dataprep/gee_aef_region.py)
-AEF_STORE = Path("region") / "aef" / "aef_cell_mean.npz"
+#: the AlphaEarth store under the data directory (data/inputs/grid/gee_aef_region.py)
 AEF_PCS = 16                       # principal components of the unit directions
 AEF_DIMS = 64                      # the embedding width (aef64 feeds all of it)
 AEF_VARIANTS = ("aef", "aef64", "aef_random")
@@ -206,7 +206,7 @@ def load_physical(hrus: pd.DataFrame, path: str | Path) -> pd.DataFrame:
 
 def aef_store(data_dir: str | Path = "data") -> Path:
     """The AlphaEarth cell-mean store under ``data_dir``."""
-    return Path(data_dir) / AEF_STORE
+    return paths.alphaearth(data_dir)
 
 
 def aef_pca(path: str | Path) -> tuple[np.ndarray, np.ndarray]:

@@ -31,7 +31,7 @@ Scope, all three fixed by the study request:
   area.
 * *BCM* — total discharge ``run + rch`` (the repo's established BCM discharge
   convention) on **the CalSim3 catchments themselves**: the per-polygon
-  aggregation ``dataprep/bcm_region.py`` already produces, area-weighted over
+  aggregation ``data/reference/bcm/bcm_region.py`` already produces, area-weighted over
   the catchments each basin owns, which sum to exactly that same canonical
   area.  No footprint and no screening enter — the endorheic Goose Lake block
   is its own polygon belonging to no rim catchment, so it is excluded by
@@ -55,6 +55,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from .. import paths
+
 #: water-year range of the comparison (inclusive), and the calendar window it implies.
 WY_RANGE = (1989, 2018)
 
@@ -73,7 +75,7 @@ PRODUCT = "wgen_product_a"
 #: BCM scenario driven by that same WGEN sequence (Scenario 1, Baseline).
 BCM_SCENARIO = "s01"
 
-#: BCM total discharge = fast runoff + recharge (see ``dataprep/README.md``).
+#: BCM total discharge = fast runoff + recharge (see ``data/reference/bcm/README.md``).
 BCM_DISCHARGE = ("run", "rch")
 
 #: the three models plus the reference, in plot order.
@@ -118,7 +120,7 @@ def bcm_catchment_nodes(data_dir: str | Path = "data") -> pd.DataFrame:
     inside a rim catchment (the rest — Tulare, the valley watersheds, Goose Lake
     — get no row and so enter no basin).
 
-    ``dataprep/bcm_region.py`` aggregated BCM to the **``CalSim3_And_GooseLake``**
+    ``data/reference/bcm/bcm_region.py`` aggregated BCM to the **``CalSim3_And_GooseLake``**
     layer (386 polygons, ``cid`` = row order), while the canonical basin areas and
     the screened footprint use **``CalSim3_Merged``** (200 polygons).  Merged is
     the *dissolve* of the rim part of And_GooseLake, so the two are the same
@@ -208,7 +210,7 @@ def bcm_basin_monthly(data_dir: str | Path = "data", domain: str = "11obs", *,
     """BCM basin discharge as monthly TAF — ``[date, basin, flow_taf]``.
 
     Built **directly on the CalSim3 catchments** (``bcm_<scenario>_catchments_
-    monthly.csv``, the per-polygon aggregation ``dataprep/bcm_region.py`` already
+    monthly.csv``, the per-polygon aggregation ``data/reference/bcm/bcm_region.py`` already
     produces), not on a grid re-aggregation: each basin's volume is the
     area-weighted ``run + rch`` depth over the catchments it owns, times the same
     canonical CalSim3 area SAC-SMA's anchor uses.  Since those catchments sum to
@@ -222,7 +224,7 @@ def bcm_basin_monthly(data_dir: str | Path = "data", domain: str = "11obs", *,
     from ..io import mmday_to_cfs
     from .compare import _cfs_day_to_taf
 
-    path = Path(data_dir) / "region" / "bcm" / f"bcm_{scenario}_catchments_monthly.csv"
+    path = paths.bcm(data_dir, f"bcm_{scenario}_catchments_monthly.csv")
     raw = pd.read_csv(path, usecols=["cid", "month", *variables])
     raw["depth"] = sum(raw[v] for v in variables)
     dates = pd.to_datetime(raw["month"].astype(str), format="%Y%m").dt.to_period("M")

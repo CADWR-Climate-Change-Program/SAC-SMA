@@ -20,15 +20,11 @@ from pathlib import Path
 
 import pandas as pd
 
+from .. import paths
 from ..io import DEFAULT_DOMAIN, read_table
 
 #: the CalSim/CalLite calibration domains.
 DOMAINS = ("9unimp", "11obs", "12rim")
-
-
-def calsim_dir(data_dir: str | Path = "data") -> Path:
-    """The CalSim/CalLite application's data directory (``data/calsim``)."""
-    return Path(data_dir) / "calsim"
 
 
 def load_calib_monthly(data_dir: str | Path = "data", domain: str = DEFAULT_DOMAIN,
@@ -39,7 +35,7 @@ def load_calib_monthly(data_dir: str | Path = "data", domain: str = DEFAULT_DOMA
     monthly simulation (``sim_mm``) extracted from each CalLite watershed's
     calibration log; ``cal_start``/``cal_end`` bound the calibration period.
     """
-    df = read_table(calsim_dir(data_dir) / f"calib_{domain}_monthly.csv")
+    df = read_table(paths.callite_calib(data_dir, domain))
     if basin is not None:
         df = df[df["basin"] == basin].reset_index(drop=True)
     return df
@@ -48,7 +44,7 @@ def load_calib_monthly(data_dir: str | Path = "data", domain: str = DEFAULT_DOMA
 def load_fnf_monthly(data_dir: str | Path = "data", domain: str = DEFAULT_DOMAIN,
                      basin: str | None = None) -> pd.DataFrame:
     """Full-period monthly observed FNF [date, basin, obs_mm, cal_start, cal_end] (mm/month)."""
-    df = read_table(calsim_dir(data_dir) / f"fnf_{domain}_monthly.csv")
+    df = read_table(paths.callite_fnf(data_dir, domain))
     if basin is not None:
         df = df[df["basin"] == basin].reset_index(drop=True)
     return df
@@ -64,8 +60,7 @@ def load_vic_monthly(data_dir: str | Path = "data",
     split-precipitation ``Historical`` run, 1915–2021) and ``wgen_product_a``
     (the detrended-temperature ``Product_A`` validation run).
     """
-    sfx = f"_{product}" if product else ""
-    return read_table(calsim_dir(data_dir) / f"vic_routed_monthly{sfx}.csv")
+    return read_table(paths.vic_routed(data_dir, product))
 
 
 def load_vic_gridinfo(data_dir: str | Path = "data", node: str = "I_SHSTA", *,
@@ -79,9 +74,9 @@ def load_vic_gridinfo(data_dir: str | Path = "data", node: str = "I_SHSTA", *,
     over-reach (the basis of the ``_no_gooselake`` routed series).
     """
     sfx = "_no_gooselake" if no_gooselake else ""
-    return read_table(calsim_dir(data_dir) / f"vic_gridinfo_{node}{sfx}.csv")
+    return read_table(paths.vic_gridinfo(data_dir, node, sfx))
 
 
 def load_calsim3_monthly(data_dir: str | Path = "data") -> pd.DataFrame:
     """CalSim3 historical monthly inflow [date, arc, flow_taf] (TAF/month)."""
-    return read_table(calsim_dir(data_dir) / "calsim3_inflow_monthly.csv")
+    return read_table(paths.calsim3_targets(data_dir, "calsim3_inflow_monthly.csv"))

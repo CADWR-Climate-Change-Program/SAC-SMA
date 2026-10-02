@@ -19,16 +19,16 @@ from dataclasses import dataclass
 import torch
 
 from .config import BOUNDS, CANOPY_BOUNDS
-from .et_noah import (
+from .physics.et_noah import (
     NoahCanopyState,
     dewpoint_depression_field,
     potential_et_priestley_taylor,
     snow_cover_albedo,
 )
-from .pet import hamon_raw_pet
-from .routing import N_TAPS, build_uh, route
-from .sma import SacState, run_sacsma
-from .snow17 import Snow17State, run_snow17
+from .physics.pet import hamon_raw_pet
+from .physics.routing import N_TAPS, build_uh, route
+from .physics.sma import SacState, run_sacsma
+from .physics.snow17 import Snow17State, run_snow17
 
 #: angular frequency of the annual day-of-year cycle (mirrors sacsma.parameters).
 _SEASONAL_OMEGA = 2.0 * math.pi / 365.0
@@ -141,7 +141,7 @@ def run_window(
                                            # resupply and ADIMP ET(5) (DplConfig.noah_sac_exchanges)
     state_idx: torch.Tensor | None = None,  # (N, T) climate-state index (dynamic params)
     return_tet: bool = False,              # also return total ET (N, T) for closure
-    return_swe: bool = False,              # also return Snow-17 SWE (N, T) (obs loss)
+    return_swe: bool = False,              # also return Snow-17 SWE (N, T)
     return_components: bool = False,       # also return the routed (fast, slow) pair
     return_parts: bool = False,            # also return the 4 routed runoff parts
     row_cell: torch.Tensor | None = None,  # (R,) cell dedup: the physics row of each
@@ -162,7 +162,7 @@ def run_window(
     NET of SAC-SMA's riparian et4 channel-ET deduction and dry-channel clamp,
     which act on the aggregate direct inflow / baseflow before routing.
 
-    The parts split those two further (:func:`sacsma.dpl.sma.sacsma_step`
+    The parts split those two further (:func:`sacsma.dpl.physics.sma.sacsma_step`
     ``return_parts``; the net inflow apportioned in proportion to the
     pre-deduction parts): ``quick`` = impervious + ADIMP direct + surface runoff
     and ``interflow``, each routed through the hillslope x channel UH (``quick +
@@ -187,7 +187,7 @@ def run_window(
     missing pair raises — there is no synthetic tavg fallback).
     """
     # Snow-17 first: its SWE trajectory drives the snow-cover albedo of the
-    # Priestley-Taylor PET below (and the SWE-observation loss via return_swe).
+    # Priestley-Taylor PET below (and is returned under return_swe).
     # Snow-17 does not depend on the PET, so this reordering is value-identical
     # for every path that does not raise the albedo over snow (pt_snow_albedo == 0).
     albedo_swe = (raw_pet is None and pt_snow_albedo > 0.0

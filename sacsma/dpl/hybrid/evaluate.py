@@ -5,7 +5,7 @@ Reconstruct the daily flow (net output, clipped >= 0), split at
 used for GA/dPL -> ``metrics_hybrid.csv`` (identical columns to
 ``metrics_15cdec.csv``).  ``compare_all`` merges the GA, dPL and hybrid tables
 into one cal/val KGE comparison table (the per-basin dumbbell view is now
-``figures/hybrid_progression.png``, :func:`sacsma.dpl.noah_ca_hybrids.make_hybrid_progression`).
+``figures/hybrid_progression.png``, :func:`sacsma.dpl.studies.hybrids.make_hybrid_progression`).
 """
 
 from __future__ import annotations
@@ -169,7 +169,7 @@ def score_ensemble(ens_dir: str | Path, *, data_dir: str = "data",
 def compare_all(out_dir: str | Path = "artifacts/dpl",
                 *, ga_csv: str | Path = "artifacts/cdec15/metrics_15cdec.csv",
                 dpl_csv: str | Path =
-                "artifacts/dpl/hamon_dense/metrics_hamon_dense.csv",
+                "artifacts/dpl/superseded/hamon_dense/metrics_hamon_dense.csv",
                 hybrid_csv: str | Path =
                 "artifacts/dpl/hybrid/metrics_hybrid.csv",
                 pet_dt_csv: str | Path =

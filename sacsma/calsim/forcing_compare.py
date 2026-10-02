@@ -22,7 +22,7 @@ Inputs:
 * SAC-SMA — the committed run tables: the parity-exact ``simflow`` reference
   (the Livneh-unsplit run) and ``artifacts/calsim/<product>/flow_daily_<domain>.csv``
   (regenerate with ``sacsma run ALL --domain <d> --forcing <product>``).
-* VIC — the routed monthly tables ``data/calsim/vic_routed_monthly[_<product>].csv``
+* VIC — the routed monthly tables ``data/reference/vic/vic_routed_monthly[_<product>].csv``
   (TAF/month; the ``Historical_Unsplit`` baseline / ``Historical`` split /
   ``Product_A`` detrended runs), aggregated to basins exactly like the
   cross-compare anchor (crosswalk ``vic_basin`` major-basin series; a rim basin
@@ -54,7 +54,7 @@ vs CalSim3 per basin (KGE/NSE/pbias; full + pre/post-WY1950, identical months).
 
 Usage::
 
-    python -m sacsma.calsim.forcing_compare
+    sacsma calsim --forcing-compare
 """
 
 from __future__ import annotations

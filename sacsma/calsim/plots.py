@@ -24,7 +24,7 @@ fnf-target diagnostics are untouched.  See ``tmp/CALSIM3_FNF_FOOTPRINT.md``.
 Usage::
 
     sacsma plots --domain 11obs                  # all 11 watersheds
-    python -m sacsma.calsim.plots --domain 9unimp --basins CacheCreek
+    sacsma plots --domain 9unimp --basins CacheCreek
     sacsma plots --domain 15cdec --fnf-check      # + the FNF cross-check
 """
 
@@ -177,7 +177,7 @@ def _make_calsim3_diagnostics(basins, data_dir, domain, figdir, *, screened, cal
 
 
 #: 15cdec basin -> (calsim domain, calsim basin code) for the basins with a monthly
-#: full-natural-flow counterpart, per ``data/calsim/calsim_crosswalk.csv``'s
+#: full-natural-flow counterpart, per ``data/inputs/calsim3/calsim_crosswalk.csv``'s
 #: ``basin_15cdec``/``basin_11obs``/``basin_9unimp`` columns (deduplicated).  ORO/FOL/
 #: NML/MIL carry a *different* code in 11obs than in 15cdec (rim-gauge naming); MKM/NHG
 #: only match in 9unimp.  PNF/TRM/SCC/ISB (Tulare Basin) have no CalSim3 rim arc and thus

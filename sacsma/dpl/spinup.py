@@ -166,7 +166,7 @@ def stream_rows(
     precip) are a uniform climate perturbation of the forcing, the scalar path of
     ``evaluate._noah_stream``; the defaults leave the forcing untouched.  Either may
     also be a ``(n_phys,)`` tensor, one value per physics row (the scenario batch of
-    :func:`sacsma.dpl.calsim_tier2.stream_batch`: each row's forcing perturbed by its
+    :func:`sacsma.dpl.calsim.tier2.stream_batch`: each row's forcing perturbed by its
     own scenario's value, the same arithmetic as the scalar path)."""
     out: list[torch.Tensor] = []
     pscale, tdelta = _pert_col(precip_scale, 1.0), _pert_col(temp_delta, 0.0)
