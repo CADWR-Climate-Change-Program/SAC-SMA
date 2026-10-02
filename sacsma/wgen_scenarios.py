@@ -1,12 +1,12 @@
 """WGEN Product A climate scenarios (``wgen_product_a_sNN``): exact decode from the compact store.
 
 The DWR WGEN Product A scenarios 2-30 are thermodynamic perturbations of scenario 1, which is the
-committed ``data/region/forcing/wgen_product_a.nc``:
+committed ``data/inputs/forcing/wgen_product_a.nc``:
 
 - **temperature** is exactly scenario 1 + dT on every day and cell (tmin and tmax alike), so it is not
   stored; only dT is (in hundredths of a degree, ``dT_hundredths``);
 - **precipitation** is a per-cell, per-calendar-month quantile map of the scenario-1 value, so each
-  scenario file ``data/region/forcing/wgen_product_a_sNN.nc`` stores it as a TABLE: for every
+  scenario file ``data/inputs/forcing/wgen_product_a_sNN.nc`` stores it as a TABLE: for every
   (cell, calendar month), the scenario value at each distinct scenario-1 wet value (0.01 mm),
   delta-coded (int32), plus an int8 residual per scenario-1 wet day (rounding-tie splits; almost all
   zero) and an override list of exact (cell, day, value) triples (the days where WGEN's q99
@@ -20,7 +20,7 @@ exactly, with the release's inverted tmin/tmax pairs sorted as in scenario 1.
 Table order (defined here, never stored): per cell, the sorted distinct codes
 ``month * 2**20 + h1`` over the cell's scenario-1 wet days (h1 = scenario-1 hundredths); the store
 concatenates cells in its ``key`` order (``table_count`` / ``wet_count`` give the slices). Built and
-verified by ``dataprep/wgen_product_a_scenarios.py``; see ``data/INVENTORY.md``.
+verified by ``data/inputs/forcing/wgen_product_a_scenarios.py``; see ``data/inputs/forcing/README.md``.
 """
 from __future__ import annotations
 

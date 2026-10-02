@@ -72,7 +72,7 @@ it does not combine with ``--dedup-cells``.  ``--batch-window`` is the days per 
 and bounds device memory only (results differ between windows by round-off).
 
 Needs the ``dpl`` extra (torch) and a source checkout: the extrapolated arcs run the tracer
-of ``dataprep/build_flowlens.py`` (``--trace-cells``) in a subprocess, which needs
+of ``data/inputs/domains/multifamily/build_flowlens.py`` (``--trace-cells``) in a subprocess, which needs
 ``rasterio`` and the HydroSHEDS v2 tiles (read from ``--tiles-dir`` when complete, otherwise
 streamed from the HydroSHEDS server; the size check needs network, or a local tile's
 ``.ok`` marker).  rasterio lives only in the ``sacsma-gis`` environment
@@ -210,13 +210,15 @@ def uncovered_arc_cells(catch, parent: dict[str, str], data_dir: str | Path = "d
     return out
 
 
-_BUILD_FLOWLENS = Path(__file__).resolve().parents[3] / "dataprep" / "build_flowlens.py"
+#: the tracer script, which sits beside the flow-length store it builds
+_BUILD_FLOWLENS = paths.flowlens(
+    Path(__file__).resolve().parents[3] / "data").with_name("build_flowlens.py")
 
 
 def trace_arc_cells(cells_csv: str | Path, out_csv: str | Path, tiles_dir: str | Path = "tmp/hydrosheds") -> None:
     """Flow length of every row of ``cells_csv`` to where its HydroSHEDS flow path leaves its
     arc's cell footprint (``build_flowlens.trace_cells_to_exit``).  Kept for the in-process
-    case; :func:`_flowlens_for` runs the tracer as ``dataprep/build_flowlens.py --trace-cells``
+    case; :func:`_flowlens_for` runs the tracer as ``data/inputs/domains/multifamily/build_flowlens.py --trace-cells``
     in a subprocess, which needs rasterio and pandas only."""
     sys.path.insert(0, str(_BUILD_FLOWLENS.parent))
     import build_flowlens as bf  # noqa: E402
@@ -240,7 +242,7 @@ def _tracer_env(trace_python: str | None) -> dict[str, str] | None:
 def _flowlens_for(cells: pd.DataFrame, tiles_dir: str | Path,
                   trace_python: str | None = None) -> pd.DataFrame:
     """Add ``flowlen`` (m) and ``flowlen_method`` to the extension HRU rows, tracing in a
-    subprocess (``dataprep/build_flowlens.py --trace-cells`` under ``trace_python``, the
+    subprocess (``data/inputs/domains/multifamily/build_flowlens.py --trace-cells`` under ``trace_python``, the
     python of the ``sacsma-gis`` environment, which has rasterio — the raster and vector
     GDAL stacks must not share a process; default this interpreter); falls back to straight-line x 1.5 to each arc's lowest cell if
     tracing fails, and says so.  Another interpreter gets a PATH without this environment's
@@ -629,7 +631,7 @@ def anchor_rescaled(monthly: pd.DataFrame, data_dir: str | Path = "data", *,
     """Eval-only ANCHOR-RESCALED arc scores beside the absolute ones.
 
     ``monthly`` is ``tier2_monthly.csv`` (``arc, month, sim_taf, ref_taf``).  Per closure group
-    of ``data/calsim/arc_hierarchy.csv`` and complete water year, every simulated member arc is
+    of ``data/targets/calsim3/arc_hierarchy.csv`` and complete water year, every simulated member arc is
     scaled by anchor / simulated arc sum (:func:`sacsma.dpl.calsim.arcs.close_water_years`,
     ``mode="proportional"``: the arcs' volume-weighted shares of the anchor, the anchor being
     CalSim3 FLOW-UNIMPAIRED or the DWR unimpaired record of the group), so the score measures the

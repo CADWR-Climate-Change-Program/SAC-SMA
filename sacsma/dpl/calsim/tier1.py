@@ -1,6 +1,6 @@
 """Tier-1 CalSim3 validation of a multifamily dPL run.
 
-The twenty tier-1 locations (``data/calsim/tier1_sets.csv``) are the training-target
+The twenty tier-1 locations (``data/inputs/calsim3/tier1_sets.csv``) are the training-target
 watersheds expressed as CalSim3 arc sets.  They are scored in **volume** (TAF/month)
 over the held-out water years 1950-1984 against CalSim3: the ``FLOW-UNIMPAIRED`` series
 where a system carries one (ten anchors), the sum of the member ``INFLOW`` arcs

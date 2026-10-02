@@ -4,7 +4,7 @@ Tier 2 (:mod:`sacsma.dpl.calsim.tier2`) gives the dPL's own flow on each of the 
 arcs.  The product keeps that flow as it is wherever the dPL is the best estimate of the
 CalSim3 series, and re-divides it among the arcs where it is not:
 
-* **System flow** — the sum of a closure group's arcs (``data/calsim/arc_hierarchy.csv``,
+* **System flow** — the sum of a closure group's arcs (``data/targets/calsim3/arc_hierarchy.csv``,
   ``closure_group``) — is the dPL's, uncorrected.  A closure group of one arc is a
   *single-arc system* and takes the dPL arc flow.
 * **Non-anchor arcs** — rim arcs with no closure group, and the groups of
@@ -432,7 +432,7 @@ def apply(model: dict, tier2_dir: str | Path, data_dir: str | Path = "data") -> 
     hm = units[units.kind == "share"]
     arcs, systems = model["arcs"], model["systems"]
     if sorted(arcs) != sorted(hm.index):
-        raise ValueError("the share arcs of data/calsim/arc_hierarchy.csv differ from the model's")
+        raise ValueError("the share arcs of data/targets/calsim3/arc_hierarchy.csv differ from the model's")
     D = load_pass(tier2_dir, arcs)
     D["system"] = D.arc.map(hm.system)
     as_s = lambda v: pd.Series(v, index=arcs)   # noqa: E731

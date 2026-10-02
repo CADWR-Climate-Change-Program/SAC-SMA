@@ -12,6 +12,9 @@ The store has three parts (see ``data/README.md``):
 * ``targets/``    flow records a model is fitted to (all from outside this repository);
 * ``reference/``  series that results are only compared with (all from outside).
 
+Nothing in the package writes under ``targets/`` or ``reference/``: those folders change only
+through the ingest script that sits in them.
+
 Every function takes the store root (``data_dir``, default ``"data"``) and returns a
 :class:`pathlib.Path`; none of them touches the file system.
 """
@@ -30,63 +33,61 @@ DOMAINS = (CDEC15, CDEC15_GRID, *CALLITE, MULTIFAMILY)
 
 # ----------------------------------------------------------------------------- the layout
 #: folder of each part, relative to the store root
-FORCING = "region/forcing"
-GRID = "region"
-CALSIM3_INPUTS = "calsim"
-T_CDEC = "cdec_fnf"
-T_CALLITE = "calsim"
-T_DWR = "dwr_unimpaired"
-T_USGS = "usgs"
-T_CALSIM3 = "calsim"
-R_MATLAB = None            # the MATLAB simulations sit in the domain folders
-R_VIC = "calsim"
-R_BCM = "region/bcm"
-R_ET = "region/et_obs"
-R_SWE = "region/swe_obs"
-R_DWR_SWAT = "dwr_unimpaired"
-
-
-def _domain(domain: str) -> tuple[str, str]:
-    """(folder, file-name suffix) of a modeling domain."""
-    if domain == CDEC15:
-        return "cdec15", ""
-    if domain == CDEC15_GRID:
-        return "cdec15_grid", ""
-    if domain in CALLITE:
-        return "calsim", f"_{domain}"
-    if domain == MULTIFAMILY:
-        return "multifamily", ""
-    raise ValueError(f"unknown domain {domain!r} (expected one of {DOMAINS})")
+FORCING = "inputs/forcing"
+GRID = "inputs/grid"
+DOMAIN_ROOT = "inputs/domains"
+CALSIM3_INPUTS = "inputs/calsim3"
+T_CDEC = "targets/cdec"
+T_CALLITE = "targets/callite"
+T_DWR = "targets/dwr_unimpaired"
+T_USGS = "targets/usgs"
+T_CALSIM3 = "targets/calsim3"
+R_MATLAB = "reference/matlab"
+R_VIC = "reference/vic"
+R_BCM = "reference/bcm"
+R_ET = "reference/et"
+R_SWE = "reference/swe"
+R_DWR_SWAT = "reference/dwr_swat"
 
 
 def _root(data_dir) -> Path:
     return Path("data" if data_dir is None else data_dir)
 
 
+def _check(domain: str) -> str:
+    if domain not in DOMAINS:
+        raise ValueError(f"unknown domain {domain!r} (expected one of {DOMAINS})")
+    return domain
+
+
 # ------------------------------------------------------------------------ inputs: forcing
 def forcing_dir(data_dir="data") -> Path:
-    """Folder of the 1/16-degree forcing stores (one NetCDF per product)."""
+    """Folder of the forcing stores (one NetCDF per product)."""
     return _root(data_dir) / FORCING
 
 
 def forcing(data_dir="data", domain: str = CDEC15, product: str = "historical_livneh_unsplit") -> Path:
-    """Forcing store of a domain: the shared grid store, or the dense store of the
-    15cdec HRU points."""
-    if domain in GRID_DOMAINS:
+    """Forcing store of a domain: the shared 1/16-degree store of the product, or, for the
+    fine 15cdec domain, the dense store of its off-grid HRU points."""
+    if _check(domain) in GRID_DOMAINS:
         return forcing_dir(data_dir) / f"{product}.nc"
-    folder, sfx = _domain(domain)
-    return _root(data_dir) / folder / "forcing" / f"{product}{sfx}.nc"
+    return forcing_dir(data_dir) / f"{product}_{domain}_hru.nc"
 
 
 def wgen_scenario_key(data_dir="data") -> Path:
-    return _root(data_dir) / GRID / "wgen_product_a_scenarios.csv"
+    return _root(data_dir) / FORCING / "wgen_product_a_scenarios.csv"
 
 
 def prcp_x10_artifacts(data_dir="data") -> Path:
-    return _root(data_dir) / GRID / "prcp_x10_artifacts.csv"
+    return _root(data_dir) / FORCING / "prcp_x10_artifacts.csv"
 
 
 # --------------------------------------------------------------------------- inputs: grid
+def grid_dir(data_dir="data") -> Path:
+    """Folder of the 1/16-degree grid: the cell list and the per-cell static attributes."""
+    return _root(data_dir) / GRID
+
+
 def grid_cells(data_dir="data") -> Path:
     return _root(data_dir) / GRID / "grid_cells.csv"
 
@@ -96,68 +97,73 @@ def soilveg(data_dir="data", domain: str = CDEC15) -> Path:
     per grid cell (all 4,410) for the multifamily domain."""
     if domain == MULTIFAMILY:
         return _root(data_dir) / GRID / "soilveg_continuous.csv"
-    folder, sfx = _domain(domain)
-    return _root(data_dir) / folder / f"soilveg_continuous{sfx}.csv"
+    return domain_dir(data_dir, domain) / "soilveg_continuous.csv"
 
 
 def lai_climatology(data_dir="data", domain: str = CDEC15) -> Path:
     """46-value 8-day leaf-area climatology, companion of :func:`soilveg`."""
     if domain == MULTIFAMILY:
         return _root(data_dir) / GRID / "lai_climatology.csv"
-    folder, sfx = _domain(domain)
-    return _root(data_dir) / folder / f"lai_climatology{sfx}.csv"
+    return domain_dir(data_dir, domain) / "lai_climatology.csv"
+
+
+def raster_sample(data_dir="data", stem: str = "soilveg_continuous") -> Path:
+    """Every grid cell sampled from the raw rasters (``<stem>_raster.csv``; not tracked: the
+    tracked per-cell tables are built from it)."""
+    return _root(data_dir) / GRID / f"{stem}_raster.csv"
 
 
 def alphaearth(data_dir="data") -> Path:
-    return _root(data_dir) / GRID / "aef" / "aef_cell_mean.npz"
+    return _root(data_dir) / GRID / "aef_cell_mean.npz"
+
+
+def raw_gis(data_dir="data") -> Path:
+    """Default stage of the raw rasters the grid attributes are sampled from (not tracked;
+    usually kept on another drive, see ``data/local_paths.example.toml``)."""
+    return _root(data_dir) / GRID / "raw_gis"
 
 
 # ------------------------------------------------------------------------ inputs: domains
 def domain_dir(data_dir="data", domain: str = CDEC15) -> Path:
-    return _root(data_dir) / _domain(domain)[0]
-
-
-def _domain_file(data_dir, domain: str, stem: str) -> Path:
-    folder, sfx = _domain(domain)
-    return _root(data_dir) / folder / f"{stem}{sfx}.csv"
+    return _root(data_dir) / DOMAIN_ROOT / _check(domain)
 
 
 def hruinfo(data_dir="data", domain: str = CDEC15) -> Path:
-    return _domain_file(data_dir, domain, "hruinfo")
+    return domain_dir(data_dir, domain) / "hruinfo.csv"
 
 
 def ga_optimum(data_dir="data", domain: str = CDEC15) -> Path:
-    return _domain_file(data_dir, domain, "ga_optimum")
+    return domain_dir(data_dir, domain) / "ga_optimum.csv"
 
 
 def basin_area(data_dir="data", domain: str = CDEC15) -> Path:
-    return _domain_file(data_dir, domain, "basin_area")
+    return domain_dir(data_dir, domain) / "basin_area.csv"
 
 
 def basin_tminmax(data_dir="data") -> Path:
     """Watershed-mean daily Tmin / Tmax of the 15 CDEC watersheds."""
-    return _root(data_dir) / _domain(CDEC15)[0] / "basin_tminmax_livneh.csv"
+    return domain_dir(data_dir, CDEC15) / "basin_tminmax_livneh.csv"
 
 
 def footprints_15cdec(data_dir="data") -> Path:
-    return _root(data_dir) / _domain(CDEC15)[0] / "gis" / "SACSMA_15CDEC.geojson"
+    return domain_dir(data_dir, CDEC15) / "SACSMA_15CDEC.geojson"
 
 
 def entities(data_dir="data") -> Path:
-    return _root(data_dir) / _domain(MULTIFAMILY)[0] / "entities.csv"
+    return domain_dir(data_dir, MULTIFAMILY) / "entities.csv"
 
 
 def entity_cells(data_dir="data") -> Path:
-    return _root(data_dir) / _domain(MULTIFAMILY)[0] / "entity_cells.csv"
+    return domain_dir(data_dir, MULTIFAMILY) / "entity_cells.csv"
 
 
 def flowlens(data_dir="data") -> Path:
-    return _root(data_dir) / _domain(MULTIFAMILY)[0] / "flowlens.csv"
+    return domain_dir(data_dir, MULTIFAMILY) / "flowlens.csv"
 
 
 # ------------------------------------------------- inputs: CalSim3 geometry and mappings
 def calsim3_gpkg(data_dir="data", name: str = "calsim3.gpkg") -> Path:
-    return _root(data_dir) / CALSIM3_INPUTS / "gis" / name
+    return _root(data_dir) / CALSIM3_INPUTS / name
 
 
 def crosswalk(data_dir="data") -> Path:
@@ -179,8 +185,14 @@ def tier1_sets(data_dir="data") -> Path:
 
 # -------------------------------------------------------------------------------- targets
 def gage_15cdec(data_dir="data") -> Path:
-    """Daily CDEC full natural flow of the 15 CDEC watersheds."""
-    return _root(data_dir) / "cdec15" / "gage.csv"
+    """Daily CDEC full natural flow of the 15 CDEC watersheds (the calibration target)."""
+    return _root(data_dir) / T_CDEC / "gage_15cdec.csv"
+
+
+def cdec_fnf(data_dir="data", name: str = "fnf_daily_mm.csv") -> Path:
+    """A file of the CDEC daily full-natural-flow store: ``stations.csv``,
+    ``fnf_daily.csv`` (cfs), ``fnf_daily_mm.csv``, ``fnf_daily_mask.csv``."""
+    return _root(data_dir) / T_CDEC / name
 
 
 def callite_calib(data_dir="data", domain: str = "11obs") -> Path:
@@ -189,12 +201,6 @@ def callite_calib(data_dir="data", domain: str = "11obs") -> Path:
 
 def callite_fnf(data_dir="data", domain: str = "11obs") -> Path:
     return _root(data_dir) / T_CALLITE / f"fnf_{domain}_monthly.csv"
-
-
-def cdec_fnf(data_dir="data", name: str = "fnf_daily_mm.csv") -> Path:
-    """A file of the CDEC daily full-natural-flow store: ``stations.csv``,
-    ``fnf_daily.csv`` (cfs), ``fnf_daily_mm.csv``, ``fnf_daily_mask.csv``."""
-    return _root(data_dir) / T_CDEC / name
 
 
 def dwr_unimpaired(data_dir="data", name: str = "uf_monthly_mm.csv") -> Path:
@@ -212,7 +218,7 @@ def usgs_gauges(data_dir="data") -> Path:
 
 
 def usgs_watersheds(data_dir="data") -> Path:
-    return _root(data_dir) / T_USGS / "gis" / "usgs_watersheds.gpkg"
+    return _root(data_dir) / T_USGS / "usgs_watersheds.gpkg"
 
 
 def calsim3_targets(data_dir="data", name: str = "calsim3_inflow_monthly.csv") -> Path:
@@ -225,7 +231,7 @@ def calsim3_targets(data_dir="data", name: str = "calsim3_inflow_monthly.csv") -
 # ------------------------------------------------------------------------------ reference
 def simflow(data_dir="data", domain: str = CDEC15) -> Path:
     """The archived MATLAB simulation of a calibration domain (the parity baseline)."""
-    return _domain_file(data_dir, domain, "simflow")
+    return _root(data_dir) / R_MATLAB / f"simflow_{_check(domain)}.csv"
 
 
 def vic_routed(data_dir="data", product: str | None = None) -> Path:

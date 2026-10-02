@@ -24,7 +24,7 @@ DWR-unimpaired targets are in training.  What it leaves is not always small: the
 inside the trimmed window is reported next to the coverage over the full one, and where the
 two are close the trimmed score mostly measures the change of years.  The first and last
 water year of each location's window are the ``val_start_wy`` and ``val_end_wy`` columns of
-``data/calsim/tier1_sets.csv``, which :mod:`sacsma.dpl.calsim.tier1` scores as
+``data/inputs/calsim3/tier1_sets.csv``, which :mod:`sacsma.dpl.calsim.tier1` scores as
 ``window = trimmed``.
 
 Usage::

@@ -14,15 +14,15 @@ months, the ``month_chunk_target`` machinery).
 
 Sources, per family (the registry's ``obs_store`` column):
 
-* ``usgs_daily``  — ``data/usgs/flow_daily.nc`` ``flow_mm`` by gauge id.
-* ``cdec_daily``  — the 15 committed basins from ``data/cdec15/gage.csv``
-  (mm/day); CLE + CSN from ``data/cdec_fnf/fnf_daily_mm.csv`` (the
+* ``usgs_daily``  — ``data/targets/usgs/flow_daily.nc`` ``flow_mm`` by gauge id.
+* ``cdec_daily``  — the 15 committed basins from ``data/targets/cdec/gage_15cdec.csv``
+  (mm/day); CLE + CSN from ``data/targets/cdec/fnf_daily_mm.csv`` (the
   derived depth companion of the raw cfs store).
-* ``uf_monthly``  — ``data/dwr_unimpaired/uf_monthly_mm.csv`` (mm/month,
+* ``uf_monthly``  — ``data/targets/dwr_unimpaired/uf_monthly_mm.csv`` (mm/month,
   month-end stamps; the derived depth companion of ``uf_monthly.csv``).
-* ``calsim_monthly`` — ``data/calsim/calsim3_inflow_monthly_mm.csv`` (the
+* ``calsim_monthly`` — ``data/targets/calsim3/calsim3_inflow_monthly_mm.csv`` (the
   CalSim3 rim INFLOW arcs as mm/month over each arc's ``SQ_MI``), kept only on
-  the arc-months of ``data/calsim/arc_obs_mask.csv`` (the arc's own gauge
+  the arc-months of ``data/targets/calsim3/arc_obs_mask.csv`` (the arc's own gauge
   record in the training water years; see :mod:`sacsma.dpl.calsim.arcs`).
   Registry rows exist only when the registry was built with
   ``--calsim-arcs``; they load only when a run names them (``--basins``).

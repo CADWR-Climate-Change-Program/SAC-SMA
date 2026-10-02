@@ -385,7 +385,7 @@ def creek_overlap(sets, geoms, data_dir: str | Path, trained=None, window: str =
     model saw at that location through them while training.
 
     The overlap is the exact intersection of the gauge's delineated watershed
-    (``data/usgs/gis/usgs_watersheds.gpkg``, keyed by site id) with the location's dissolved arc
+    (``data/targets/usgs/usgs_watersheds.gpkg``, keyed by site id) with the location's dissolved arc
     polygon, in an equal-area projection (EPSG:3310).  A creek is listed when at least 5% of its
     watershed and at least 1 mi² lie inside.  Three coverages, all as a share of the location's
     area with nested gauges counted once: ``covered`` = under any listed creek; ``covered_val`` =
@@ -775,7 +775,7 @@ def windows_table(sets, metrics, cover: dict, window: str) -> tuple[list[dict], 
         # the creek columns follow the set table's window: the scores must be over the same one
         scored = (int(str(r.win_start)[:4]) + 1, int(str(r.win_end)[:4]))
         if len(t) and scored != (int(s.val_start_wy), int(s.val_end_wy)):
-            raise ValueError(f"{s.set_id}: tier 1 scored WY{scored[0]}-{scored[1]}, data/calsim/tier1_sets.csv has "
+            raise ValueError(f"{s.set_id}: tier 1 scored WY{scored[0]}-{scored[1]}, data/inputs/calsim3/tier1_sets.csv has "
                              f"WY{s.val_start_wy}-{s.val_end_wy}: re-run sacsma dpl calsim tier1")
         sm = cover.get(s.set_id, {})
         recs.append(dict(
@@ -814,7 +814,7 @@ def _windows_block(sets, metrics, cover: dict, window: str, e, fmt: str = "html"
              f"targets start after it. The {window} scores " + ("on the other tabs" if fmt == "html" else "above")
              + " are over the full window. This table sets them against each location's trimmed window: the run of at "
              f"least 20 water years inside {window} in which the registry's creek gauges covered the least of the "
-             "location (sacsma.dpl.calsim.windows; val_start_wy and val_end_wy in data/calsim/tier1_sets.csv, the same "
+             "location (sacsma.dpl.calsim.windows; val_start_wy and val_end_wy in data/inputs/calsim3/tier1_sets.csv, the same "
              "for every run). Creek coverage is the share of the location's area-months under creek gauges with data; "
              "the coverage left inside the trimmed window is the lowest that any run of 20 or more water years allows. "
              "The two scores are over different years, so a change between them is first of all a change of years: in a "
@@ -1349,7 +1349,7 @@ def main(argv=None, prog=None) -> None:
                    help="a tier-2 output folder (tier2_metrics.csv, maps, figures/) to embed per set; "
                         "default <run-dir>/tier2 when it exists")
     p.add_argument("--arc-derivation", default=None,
-                   help="per-arc derivation table (default data/calsim/calsim3_arc_derivation.csv when present)")
+                   help="per-arc derivation table (default data/targets/calsim3/calsim3_arc_derivation.csv when present)")
     a = p.parse_args(argv)
     given = Path(a.run_dir_or_tier1)
     t1 = given if (given / "tier1_metrics.csv").exists() else given / "tier1"

@@ -5,14 +5,14 @@
 #     process (or a PATH, on Windows). rasterio lives ONLY here; `sacsma` keeps the vector one.
 #   - earthengine-api brings the Google client stack, which the model has no use for.
 #
-#   dataprep/sample_gis.py       POLARIS / LANDFIRE / 3DEP / MODIS-LAI point sampling
+#   data/inputs/grid/sample_gis.py       POLARIS / LANDFIRE / 3DEP / MODIS-LAI point sampling
 #                                (rasterio, pyhdf)
-#   dataprep/reitz_et.py         Reitz et al. (2023) ET rasters (rasterio)
-#   dataprep/build_flowlens.py   HydroSHEDS flow-length tracer (rasterio);
+#   data/reference/et/reitz_et.py         Reitz et al. (2023) ET rasters (rasterio)
+#   data/inputs/domains/multifamily/build_flowlens.py   HydroSHEDS flow-length tracer (rasterio);
 #                                `sacsma dpl calsim tier2 --trace-python <this env's python>`
 #                                runs it as a subprocess
-#   dataprep/gee_obs_region.py   Earth Engine ET / SWE reference products (ee)
-#   dataprep/gee_aef_region.py   Earth Engine AlphaEarth embeddings (ee; pip's truststore
+#   data/reference/et/gee_obs_region.py   Earth Engine ET / SWE reference products (ee)
+#   data/inputs/grid/gee_aef_region.py   Earth Engine AlphaEarth embeddings (ee; pip's truststore
 #                                when a TLS-inspecting proxy sits in between)
 #
 #   conda env create -f environment-gis.yml

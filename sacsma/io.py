@@ -1,12 +1,12 @@
 """Data-store loaders, date helpers, and unit conversions.
 
-The ``data/`` store is split by application — ``data/cdec15/`` (the 15-CDEC
-domain) and ``data/calsim/`` (the CalSim/CalLite domains ``9unimp``/``11obs``/
-``12rim`` plus the CalSim3/VIC references).  Everything is plain CSV (openable
-in Excel / a text editor) except the gridded forcing stores (NetCDF, git-LFS).
-The per-domain loaders (:func:`load_hru_table`, :func:`load_params`,
-:func:`load_reference`, ...) resolve a modeling ``domain`` string to its file;
-see ``data/INVENTORY.md`` for the full manifest and provenance.
+The ``data/`` store is laid out by role (:mod:`sacsma.paths`; ``data/README.md`` is the
+manifest): ``inputs/`` (forcing, the grid, the modeling domains, the CalSim3 geometry),
+``targets/`` (the flow records models are fitted to) and ``reference/`` (series that
+results are compared with).  Tables are plain CSV (openable in Excel / a text editor);
+the gridded stores are NetCDF or npz (git-LFS).  The per-domain loaders
+(:func:`load_hru_table`, :func:`load_params`, :func:`load_reference`, ...) resolve a
+modeling ``domain`` string to its file.
 """
 
 from __future__ import annotations
@@ -23,19 +23,19 @@ DEFAULT_DOMAIN = "15cdec"
 #: the 15-CDEC application's domain.
 CDEC15_DOMAIN = "15cdec"
 #: the coarse 1/16-deg grid-aligned parallel of 15cdec — one unit per native
-#: Livneh cell (vs the ~3.8x-denser off-grid HRU cloud); see data/cdec15_grid
-#: and data/INVENTORY.md.
+#: Livneh cell (vs the ~3.8x-denser off-grid HRU cloud); see data/inputs/domains/15cdec_grid
+#: and data/README.md.
 CDEC15_GRID_DOMAIN = "15cdec_grid"
 #: the CalSim/CalLite application's domains.
 CALSIM_DOMAINS = ("9unimp", "11obs", "12rim")
-#: the multi-timescale training domain (``data/multifamily``): one
+#: the multi-timescale training domain (``data/inputs/domains/multifamily``): one
 #: "basin" per training entity, cells/weights from ``entity_cells.csv``,
 #: flow lengths from ``flowlens.csv``.
 MULTI_TIMESCALE_DOMAIN = "multifamily"
 #: 1/16-deg-grid-based domains — these read the UNIFIED region forcing stores
-#: (``data/region/forcing/<product>.nc``: one file per product at the region
+#: (``data/inputs/forcing/<product>.nc``: one file per product at the region
 #: grid, prcp/tmin/tmax with tavg derived; built by
-#: dataprep/build_region_forcing.py).  The fine ``15cdec`` domain keeps its
+#: data/inputs/forcing/build_region_forcing.py).  The fine ``15cdec`` domain keeps its
 #: own dense off-grid store (special interpolation treatment upstream).
 REGION_DOMAINS = (CDEC15_GRID_DOMAIN, *CALSIM_DOMAINS, MULTI_TIMESCALE_DOMAIN)
 
@@ -70,7 +70,7 @@ def norm_grid_key(k: str) -> str:
 
 def soilveg_path(data_dir: str | Path = "data", domain: str = DEFAULT_DOMAIN) -> Path:
     """Per-HRU continuous soil/veg/terrain feature table (POLARIS + LANDFIRE +
-    3DEP + MODIS-LAI sampled at each HRU point; see ``data/raw_gis/SOURCES.md``).
+    3DEP + MODIS-LAI sampled at each HRU point; see ``data/inputs/grid/README.md``).
     One row per HRU in ``hruinfo`` order, keyed (non-uniquely) by ``key``.
     The multi-timescale domain reads the full-coverage REGION table (one row per grid
     cell, all 4,410 cells)."""
@@ -206,7 +206,7 @@ def load_hru_table(data_dir: str | Path = "data", domain: str = DEFAULT_DOMAIN) 
     if out["elev"].isna().any():
         n = int(out["elev"].isna().sum())
         raise ValueError(f"{n} entity cells missing dem_elev in the region "
-                         "statics — rebuild data/region/soilveg_continuous.csv")
+                         "statics — rebuild data/inputs/grid/soilveg_continuous.csv")
     return out
 
 
@@ -254,7 +254,7 @@ def fill_missing_days(ds):
     cells or the whole domain.  A leading gap has no previous day, so it takes
     the first observed day instead (back-fill).
 
-    Only ``aorc`` currently carries NaN (see ``dataprep/README.md``: an AORC
+    Only ``aorc`` currently carries NaN (see ``data/inputs/forcing/README.md``: an AORC
     source outage, not an artifact of our aggregation — the fill-masking fix
     turns unreported hours into NaN rather than fabricating 0.0).  The Livneh /
     WGEN / LTO stores are gap-free, and for them this returns each variable

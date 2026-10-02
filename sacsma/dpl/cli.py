@@ -16,7 +16,7 @@ CALSIM_TOOLS: dict[str, tuple[str, str]] = {
     "tier1": ("tier1", "score a run against CalSim3 at the anchors (set sums) -> <run>/tier1/"),
     "tier2": ("tier2", "simulate and score every rim arc -> <run>/tier2/ (or --scenarios)"),
     "atlas": ("atlas", "the validation atlas of a run (HTML) -> <run>/atlas/"),
-    "windows": ("windows", "the trimmed validation window of each set -> data/calsim/tier1_sets.csv"),
+    "windows": ("windows", "the trimmed validation window of each set -> data/inputs/calsim3/tier1_sets.csv"),
     "compare": ("compare", "two runs side by side on tier 1"),
     "product": ("product", "the CalSim3 rim-inflow product: fit <run> | apply <run> --tier2 DIR"),
 }
@@ -312,7 +312,7 @@ def register(sub) -> None:
                     help="training domain: 15cdec HRU cloud (7891), the native "
                          "1/16-deg Livneh grid (2074 cells), or the "
                          "multi-timescale training entities (the registry in "
-                         "data/multifamily, restrict with --basins; "
+                         "data/inputs/domains/multifamily, restrict with --basins; "
                          "daily + monthly targets on the registry envelope; "
                          "physical variants only); baked into the "
                          "checkpoint so evaluate scores the same domain")
@@ -525,7 +525,7 @@ def register(sub) -> None:
     tr.add_argument("--obs-mask", default=None, metavar="CSV",
                     help="hand-edited CSV (entity_id,date,...) of daily observations "
                          "to mask out of training and scoring, e.g. "
-                         "data/cdec_fnf/fnf_daily_mask.csv; the checkpoint carries the "
+                         "data/targets/cdec/fnf_daily_mask.csv; the checkpoint carries the "
                          "list")
     tr.add_argument("--holdout-wy", default="", metavar="FIRST-LAST",
                     help="water years held out of EVERY family (multifamily), e.g. "
@@ -540,7 +540,7 @@ def register(sub) -> None:
                          "--holdout-wy); the registry windows are unchanged. '' = off")
     tr.add_argument("--calsim-arcs", default="none", choices=["none", "train_default"],
                     help="train_default: append the train_default CalSim3 rim arcs of "
-                         "data/calsim/arc_hierarchy.csv (tier A) as the calsim_monthly "
+                         "data/targets/calsim3/arc_hierarchy.csv (tier A) as the calsim_monthly "
                          "family (cs_<ARC>, hierarchy order) after the other entities "
                          "(multifamily; share runs name it 'calsim=' in "
                          "--mt-family-weight and --mt-loss-ref)")

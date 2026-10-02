@@ -524,7 +524,7 @@ def _load_canopy_obs(data_dir: str, domain: str, forcing):
 
 def _load_percell_tminmax(data_dir: str, domain: str, forcing):
     """Per-cell (n_cells, T) Tmin/Tmax aligned to ``forcing`` cell order, from
-    the unified region forcing store (``data/region/forcing``) — or
+    the unified region forcing store (``data/inputs/forcing``) — or
     (None, None) for non-grid domains (the Noah/PT paths then RAISE at run
     time; there is no tavg fallback)."""
     from ..io import REGION_DOMAINS, forcing_path, norm_grid_key

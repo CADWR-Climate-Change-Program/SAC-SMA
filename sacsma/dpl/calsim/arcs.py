@@ -1,15 +1,15 @@
 """CalSim3 rim-arc target set: record masks, volume basis and water-year closure.
 
 The CalSim3 rim ``INFLOW`` arcs as a training / scoring target, built on three committed
-tables (all written by ``dataprep/build_calsim_arcs.py``):
+tables (all written by ``data/targets/calsim3/build_calsim_arcs.py``):
 
-* ``data/calsim/arc_hierarchy.csv`` — one row per arc: ``SQ_MI``, containing anchors,
+* ``data/targets/calsim3/arc_hierarchy.csv`` — one row per arc: ``SQ_MI``, containing anchors,
   FLOW-UNIMPAIRED system, residual (by-difference) flag, closure group, entity
   duplicates, training-USGS-gauge provenance, record tier (A-F) and ``train_default``;
-* ``data/calsim/arc_obs_mask.csv`` — the arc-months that are an arc's OWN observed
+* ``data/targets/calsim3/arc_obs_mask.csv`` — the arc-months that are an arc's OWN observed
   record inside the training water years (listed gauge period minus the report's
   correlation-extension years);
-* ``data/calsim/calsim3_inflow_monthly_mm.csv`` — the INFLOW series as depth over each
+* ``data/targets/calsim3/calsim3_inflow_monthly_mm.csv`` — the INFLOW series as depth over each
   arc's ``SQ_MI`` (TAF -> mm with :data:`AF_PER_MM_MI2`, the tier-1/tier-2 constant).
 
 The helpers here are torch-free: the builder, the ``calsim_monthly`` loader
@@ -132,7 +132,7 @@ def in_record_months(period_text, extension_text=None, *, train_wy=TRAIN_WY,
 
 
 #: derivation classes whose listed gauge record belongs to a donor gauge, not to the arc
-#: (``dataprep/build_calsim_arcs.py``: such arcs have no own-record months)
+#: (``data/targets/calsim3/build_calsim_arcs.py``: such arcs have no own-record months)
 DONOR_CLASSES = ("gauged_extended_split", "proportioned_ungauged")
 
 

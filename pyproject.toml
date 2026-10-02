@@ -40,7 +40,7 @@ dpl = [
     "pillow>=10",        # the validation atlas embeds its figures
 ]
 dataprep = [
-    # the build scripts in dataprep/ (not part of the package) that run in the `sacsma`
+    # the build scripts under data/ (not part of the package) that run in the `sacsma`
     # environment.  The raster scripts (sample_gis.py, reitz_et.py, build_flowlens.py) and
     # the Earth Engine scripts (gee_*.py) run in their own environment, environment-gis.yml;
     # usgs_flows.py reads a zarr store with the neuralhyd-ca environment.

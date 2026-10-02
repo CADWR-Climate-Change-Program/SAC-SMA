@@ -15,20 +15,18 @@ __pycache__/
 docs/_build/
 
 # --- data/ ------------------------------------------------------------------------------
-# Everything under data/ is tracked (data/INVENTORY.md; the large stores through git-LFS,
+# Everything under data/ is tracked (data/README.md; the large stores through git-LFS,
 # .gitattributes) except:
-# the raw GIS stage (large, staged locally; only its provenance note is tracked)
-data/raw_gis/*
-!data/raw_gis/SOURCES.md
-# the region raster samples: an input of dataprep/build_region_statics.py that the tracked
-# data/region/{soilveg_continuous,lai_climatology}.csv fully contain
-data/region/soilveg_continuous_raster.csv
-data/region/lai_climatology_raster.csv
-# any forcing file beside the tracked store
-data/cdec15/forcing/*
-!data/cdec15/forcing/historical_livneh_unsplit.nc
-# this machine's paths for the dataprep scripts (dataprep/local_paths.example.toml)
-dataprep/local_paths.toml
+# the raw raster stage the grid attributes are sampled from (large; usually on another drive)
+data/inputs/grid/raw_gis/
+# the raster samples of every grid cell: an input of data/inputs/grid/build_region_statics.py
+# that the tracked data/inputs/grid/{soilveg_continuous,lai_climatology}.csv fully contain
+data/inputs/grid/soilveg_continuous_raster.csv
+data/inputs/grid/lai_climatology_raster.csv
+# the workbook delivered with the BCM release (local; no code reads it)
+data/reference/bcm/CalBasins_v8_DWR_FNF_PRISM19.xlsx
+# this machine's paths for the build scripts (data/local_paths.example.toml)
+data/local_paths.toml
 
 # --- artifacts/ -------------------------------------------------------------------------
 # Outputs are tracked folder by folder (artifacts/README.md).
@@ -38,7 +36,7 @@ artifacts/*
 !artifacts/calsim
 !artifacts/dwr_unimpaired
 !artifacts/dpl
-# written by dataprep/check_uf_locations.py for GIS viewing; carries a write timestamp
+# written by data/targets/dwr_unimpaired/check_uf_locations.py for GIS viewing; carries a write timestamp
 artifacts/dwr_unimpaired/verification/uf_dissolved.gpkg
 
 # artifacts/dpl/: tracked, except the one local folder that holds the caches, the

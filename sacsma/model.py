@@ -576,7 +576,7 @@ def attach_tminmax(data_dir: str | Path, domain: str, forcing: DomainForcing,
     already attached) — required by the Priestley-Taylor PET
     (``pet_source="priestley_taylor"``).  Grid-based domains read them from
     the same unified region forcing store the prcp/tavg came from
-    (``data/region/forcing/<product>.nc``); the fine ``15cdec`` domain has no
+    (``data/inputs/forcing/<product>.nc``); the fine ``15cdec`` domain has no
     per-cell tmin/tmax (its HRU points are off the 1/16-deg grid)."""
     if forcing.tmin is not None and forcing.tmax is not None:
         return

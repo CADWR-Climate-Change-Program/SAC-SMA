@@ -3,7 +3,7 @@
 Bounds are the ORIGINAL GA feasible ranges from the archived calibration setup
 (``tmp/sacsma_module/sacramento_ga_15cdec_pool.txt``, parameter-description
 block) — the same box the pooled optimum was drawn from, so every value in
-``data/cdec15/ga_optimum.csv`` lies inside them (asserted by
+``data/inputs/domains/15cdec/ga_optimum.csv`` lies inside them (asserted by
 :func:`validate_ga_optimum`).  ``side``, ``SCF`` and ``PXTEMP`` had degenerate
 ranges there (held fixed) and stay fixed here.
 
@@ -264,7 +264,7 @@ class DplConfig:
     timing_vol_gate: float = 0.05
     #: daily-target observations MASKED out of training and scoring, as
     #: ``"entity_id|YYYY-MM-DD"`` strings (the CLI reads them from a hand-edited
-    #: CSV such as data/cdec_fnf/fnf_daily_mask.csv; the checkpoint carries the
+    #: CSV such as data/targets/cdec/fnf_daily_mask.csv; the checkpoint carries the
     #: list, so evaluation masks the identical days).  Multi-timescale domain
     #: only.  Empty = the stores as-is (default).
     obs_mask: tuple[str, ...] = ()
@@ -284,7 +284,7 @@ class DplConfig:
     #: domain only.  "" = off (default: the registry windows).
     uf_train_start: str = ""
     #: the CalSim3 rim-arc family (calsim_monthly) in the run: "train_default"
-    #: appends the train_default arcs of data/calsim/arc_hierarchy.csv (tier A, own
+    #: appends the train_default arcs of data/targets/calsim3/arc_hierarchy.csv (tier A, own
     #: gauge record), in file order, as cs_<ARC> entities after the run's other
     #: entities, so a resume rebuilds the same order.  Multi-timescale domain only.
     #: "none" (default) = only the entities named or the 95 base entities.

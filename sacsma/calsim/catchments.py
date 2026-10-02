@@ -2,7 +2,7 @@
 
 The 15-CDEC GA optimum gives every meteo grid cell (HRU) a calibrated parameter
 set + forcing.  This module re-aggregates those HRUs onto the **CalSim3 inflow
-catchments** in ``data/gis/calsim3.gpkg`` instead of the 15 CDEC reservoir
+catchments** in ``data/inputs/calsim3/calsim3.gpkg`` instead of the 15 CDEC reservoir
 gauges, so the same physics produces an inflow series at each CalSim node.
 
 Pipeline
@@ -246,7 +246,7 @@ def screened_footprint(data_dir: str | Path = "data", domain: str = DEFAULT_DOMA
 
     Returns ``[basin, key, overlap_area_mi2]`` (one row per retained HRU per screened basin).
     It does **not** replace the full-footprint :func:`sacsma.model.run_basin` (the calibration
-    basis).  ``write=True`` saves ``data/calsim/screened_footprint_<domain>.csv``.
+    basis).  ``write=True`` saves ``data/inputs/calsim3/screened_footprint_<domain>.csv``.
     """
     catch = load_catchments(data_dir, layer=MERGED_LAYER, rim_only=True)
     nodes = derive_basin_nodes(data_dir, domain)
@@ -615,7 +615,7 @@ def derive_basin_nodes(
 
 #: name of the merged "whole-basin" catchment layer (series-less sub-arcs dissolved into
 #: the node carrying their flow + the ``<SYS>_VAL`` valley-accretion nodes); it lives in
-#: ``calsim3.gpkg`` alongside the original layer.  See ``data/INVENTORY.md`` for how it
+#: ``calsim3.gpkg`` alongside the original layer.  See ``data/README.md`` for how it
 #: was derived.
 MERGED_LAYER = "CalSim3_Merged"
 
