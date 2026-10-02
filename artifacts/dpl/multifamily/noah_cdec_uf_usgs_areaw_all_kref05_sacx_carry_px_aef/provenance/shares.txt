@@ -1,0 +1,77 @@
+realized coefficient shares C (all, nominal): [0.234 0.546 0.22 ]
+level init      usgs 1.8513 cdec 1.4509 uf 0.2341   ratio to uf 7.91 : 6.20 : 1
+level smoke_e1  usgs 1.7559 cdec 0.9749 uf 0.1972   ratio to uf 8.91 : 4.94 : 1
+level areaw     usgs 0.7368 cdec 0.4202 uf 0.0980   ratio to uf 7.52 : 4.29 : 1
+level usgs_unw  usgs 0.7334 cdec 0.4223 uf 0.1010   ratio to uf 7.26 : 4.18 : 1
+level H_hybrid  usgs 0.4935 cdec 0.2490 uf 0.0656   ratio to uf 7.52 : 3.79 : 1
+kappa none          usgs 1.000 cdec 1.000 uf 1.000
+kappa ref=init      usgs 0.690 cdec 0.881 uf 5.457
+kappa ref=areaw     usgs 0.575 cdec 1.008 uf 4.322
+kappa ref=H_hybrid  usgs 0.539 cdec 1.068 uf 4.053
+kappa sqrt ref=areaw usgs 0.758 cdec 1.004 uf 2.079
+kappa gradnorm@areaw usgs 0.455 cdec 0.826 uf 2.013
+kappa proj@areaw    usgs 0.758 cdec 0.683 uf 2.047
+
+== loss shares (usgs/cdec/uf), target C = [0.234 0.546 0.22 ]
+  init     none          0.339 / 0.620 / 0.040
+  init     ref=init      0.234 / 0.546 / 0.220
+  init     ref=areaw     0.196 / 0.629 / 0.175
+  init     ref=H_hybrid  0.181 / 0.657 / 0.162
+  init     sqrt ref=areaw 0.267 / 0.646 / 0.087
+  init     gradnorm@areaw 0.207 / 0.685 / 0.108
+  init     proj@areaw    0.337 / 0.555 / 0.108
+  trained  none          0.407 / 0.542 / 0.051
+  trained  ref=init      0.272 / 0.461 / 0.268
+  trained  ref=areaw     0.234 / 0.546 / 0.220
+  trained  ref=H_hybrid  0.219 / 0.576 / 0.205
+  trained  sqrt ref=areaw 0.322 / 0.568 / 0.110
+  trained  gradnorm@areaw 0.252 / 0.609 / 0.139
+  trained  proj@areaw    0.394 / 0.473 / 0.133
+
+== norm shares (usgs/cdec/uf), target C = [0.234 0.546 0.22 ]
+  init     none          0.245 / 0.693 / 0.062
+  init     ref=init      0.151 / 0.545 / 0.304
+  init     ref=areaw     0.127 / 0.630 / 0.243
+  init     ref=H_hybrid  0.117 / 0.658 / 0.225
+  init     sqrt ref=areaw 0.184 / 0.688 / 0.128
+  init     gradnorm@areaw 0.138 / 0.707 / 0.155
+  init     proj@areaw    0.236 / 0.602 / 0.162
+  trained  none          0.400 / 0.515 / 0.085
+  trained  ref=init      0.232 / 0.380 / 0.388
+  trained  ref=areaw     0.206 / 0.465 / 0.329
+  trained  ref=H_hybrid  0.195 / 0.495 / 0.310
+  trained  sqrt ref=areaw 0.305 / 0.518 / 0.177
+  trained  gradnorm@areaw 0.234 / 0.546 / 0.220
+  trained  proj@areaw    0.366 / 0.424 / 0.210
+
+== proj shares (usgs/cdec/uf), target C = [0.234 0.546 0.22 ]
+  init     none          0.076 / 0.864 / 0.061
+  init     ref=init      0.031 / 0.530 / 0.439
+  init     ref=areaw     0.024 / 0.657 / 0.319
+  init     ref=H_hybrid  0.021 / 0.695 / 0.284
+  init     sqrt ref=areaw 0.045 / 0.811 / 0.144
+  init     gradnorm@areaw 0.027 / 0.797 / 0.176
+  init     proj@areaw    0.073 / 0.716 / 0.211
+  trained  none          0.255 / 0.687 / 0.058
+  trained  ref=init      0.100 / 0.400 / 0.500
+  trained  ref=areaw     0.085 / 0.536 / 0.379
+  trained  ref=H_hybrid  0.078 / 0.582 / 0.340
+  trained  sqrt ref=areaw 0.163 / 0.679 / 0.158
+  trained  gradnorm@areaw 0.104 / 0.691 / 0.205
+  trained  proj@areaw    0.234 / 0.546 / 0.220
+
+== adam shares (usgs/cdec/uf), target C = [0.234 0.546 0.22 ]
+  init     none          0.244 / 0.685 / 0.071   clip 0.00
+  init     ref=init      0.120 / 0.500 / 0.380   clip 0.03
+  init     ref=areaw     0.097 / 0.584 / 0.319   clip 0.01
+  init     ref=H_hybrid  0.089 / 0.613 / 0.299   clip 0.01
+  init     sqrt ref=areaw 0.160 / 0.664 / 0.177   clip 0.00
+  init     gradnorm@areaw 0.109 / 0.675 / 0.216   clip 0.00
+  init     proj@areaw    0.211 / 0.566 / 0.222   clip 0.00
+  trained  none          0.372 / 0.540 / 0.088   clip 0.27
+  trained  ref=init      0.209 / 0.450 / 0.340   clip 0.37
+  trained  ref=areaw     0.161 / 0.532 / 0.307   clip 0.37
+  trained  ref=H_hybrid  0.145 / 0.560 / 0.295   clip 0.37
+  trained  sqrt ref=areaw 0.253 / 0.558 / 0.189   clip 0.29
+  trained  gradnorm@areaw 0.143 / 0.613 / 0.244   clip 0.26
+  trained  proj@areaw    0.302 / 0.471 / 0.227   clip 0.21

@@ -15,6 +15,28 @@ Runs on the multi-timescale `multifamily` domain sit in the group folder
 `artifacts/dpl/multifamily/<label>`; their layout and the CalSim3 validation outputs they
 carry are described in the multifamily section below.
 
+The six tracked multifamily runs (folders under `artifacts/dpl/multifamily/`):
+
+| name | run folder | trains on | status |
+|---|---|---|---|
+| `noah_cdec_uf_usgs` | `noah_cdec_uf_usgs` | 95 entities: 69 USGS daily gauges, 17 CDEC daily, 9 DWR-unimpaired monthly; family shares by observed water volume | first multifamily recipe (2026-09), kept for the record |
+| `noah_cdec_uf_usgs_areaw` | `noah_cdec_uf_usgs_areaw` | the same 95 entities; family shares by footprint area | first multifamily recipe; the source of dPL-95's family shares and loss reference levels |
+| `noah_cdec_uf` | `noah_cdec_uf` | 26 entities: 17 CDEC daily, 9 DWR-unimpaired monthly | first multifamily recipe; the control of the training program |
+| **dPL-26** | `noah_cdec_uf_sacx_carry_px_aef` | the same 26 entities, on the recipe the training program ended with | adopted as base 2026-09-28 (then "run H"); replaced as base by dPL-95 |
+| **dPL-95** | `noah_cdec_uf_usgs_areaw_all_kref05_sacx_carry_px_aef` | dPL-26's recipe on the 95 entities, family influence equalized | adopted as base 2026-09-29 (then "H95"); the recipe dPL-CalSim starts from |
+| **dPL-CalSim** | `noah_cdec_uf_usgs_cs64_ho7685_ufx_areaw_all_kref05_sacx_carry_px_aef` | dPL-95's entities + 64 CalSim3 arcs, with WY1976–85 held out of every family | adopted 2026-09-30; the current CalSim dPL, carries the CalSim3 rim-inflow product in `calsim_product/` |
+
+Each run tracks the ten files of the multifamily layout (the selected checkpoint, the training log,
+the entity metrics, the two parameter tables, `sim_daily_mm.npz`, the tier-1 and tier-2 score tables
+and the atlas). dPL-CalSim adds its holdout scores (`metrics_entities_holdout.csv`,
+`tier2/tier2_anchor_rescaled.csv`), `provenance/` and `calsim_product/`; dPL-95 has a small
+`provenance/` with its share and loss-scale derivation. Every other folder under
+`artifacts/dpl/multifamily/` is local and git-ignored: the other runs of the training program (R1,
+R2, `noah_cdec_uf_sacx` and A–G2) and the `_failed_` / `_stopped_` / `_aborted_` / `_old_` folders.
+The first three runs and the layout are in "Multi-timescale training on the multifamily domain",
+dPL-26 and dPL-95 in "Multifamily training program: runs A–H and H95", dPL-CalSim and the product
+in "CalSim3 rim-inflow product".
+
 **2026-07-21 rename** (see Open items, below, for the full record): the
 climate-adaptive physics and its hybrid family, canonicalized 2026-07-19 under the
 `noah_ca`/`hybrid_base`/`hybrid_dtdp` names below, were promoted to the plain
@@ -1110,7 +1132,7 @@ footprints that no 26-entity run trains on. The control is `noah_cdec_uf`: tier 
   of `noah_cdec_uf_usgs_areaw`'s best.pt re-scored with this loss; p = 0.5 is the power that brings
   each family's share of the optimizer step to its share at trained states (p = 1 would give uf
   about 1.4–1.5× its share). Selection keeps the nominal shares, never κ; the loss columns of
-  `train_log.csv` are on the κ scale, so compare runs on KGE and selection only. The run's local
+  `train_log.csv` are on the κ scale, so compare runs on KGE and selection only. The run's
   `provenance/` keeps the reference levels (`shares.txt`, `final_numbers.txt`) and the script that
   computed them (`levels_sim.py`).
 
@@ -1210,7 +1232,13 @@ the letters they were written with.
 |---|---|---|---|
 | **dPL-26** | run H | `noah_cdec_uf_sacx_carry_px_aef` | 26 entities: CDEC daily and DWR-unimpaired monthly |
 | **dPL-95** | H95 | `noah_cdec_uf_usgs_areaw_all_kref05_sacx_carry_px_aef` | dPL-26's entities + 69 USGS gauges |
-| **dPL-CalSim** | S1 | `s1_cs64_ho7685_ufx_areaw_all_kref05_sacx_carry_px_aef` | dPL-95's entities + 64 CalSim3 arcs, with WY1976–85 held out of every family |
+| **dPL-CalSim** | S1 | `noah_cdec_uf_usgs_cs64_ho7685_ufx_areaw_all_kref05_sacx_carry_px_aef` (named `s1_cs64_ho7685_ufx_areaw_all_kref05_sacx_carry_px_aef` when the run was made and until 2026-10-01; `provenance/RENAMED.txt`) | dPL-95's entities + 64 CalSim3 arcs, with WY1976–85 held out of every family |
+
+dPL-CalSim's folder follows the naming of the training-program section (the families, then the
+recipe) with three new parts: `_cs64` = the 64 CalSim3 arcs as a trained family (`--calsim-arcs
+train_default`), `_ho7685` = `--holdout-wy 1976-1985`, `_ufx` = `--uf-train-start 1949-10-01`. The
+files in the run's `provenance/` keep the old folder name: they are the record of the run as it was
+made.
 
 The **CalSim3 rim-inflow product** is dPL-CalSim's flow on the 196 rim arcs with the **share
 model** on the arcs of the multi-arc systems (`sacsma.dpl.calsim_product`).
