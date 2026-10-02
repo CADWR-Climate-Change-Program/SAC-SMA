@@ -24,7 +24,7 @@ fnf-target diagnostics are untouched.  See ``tmp/CALSIM3_FNF_FOOTPRINT.md``.
 Usage::
 
     sacsma plots --domain 11obs                  # all 11 watersheds
-    python -m sacsma.calsim.plots --domain 9unimp --basins CacheCreek
+    sacsma plots --domain 9unimp --basins CacheCreek
     sacsma plots --domain 15cdec --fnf-check      # + the FNF cross-check
 """
 

@@ -121,7 +121,7 @@ def holdout_metrics(sim: np.ndarray, dates: pd.DatetimeIndex, basins, data_dir: 
       over the held-out water years before the entity's registry train_start (``WY1976-84``
       for a WY1985 start: the window runs trained on the registry window never saw).
     * ``calsim_monthly`` — the arc depth store on the arc's OWN gauge-record months inside the
-      holdout (``own_record``, :func:`sacsma.dpl.calsim_arcs.own_record_months`) and on every
+      holdout (``own_record``, :func:`sacsma.dpl.calsim.arcs.own_record_months`) and on every
       held-out month (``calsim3``: CalSim3 INFLOW whether gauged or not).
 
     Monthly rows are calendar-month sums of the simulated flow (complete months), KGE from
@@ -129,8 +129,8 @@ def holdout_metrics(sim: np.ndarray, dates: pd.DatetimeIndex, basins, data_dir: 
     import xarray as xr
 
     from ..cdec15 import load_gage
-    from .calsim_arcs import load_depth_store, monthly_depth_from_daily, own_record_months
-    from .calsim_tier1 import wy_label
+    from .calsim.arcs import load_depth_store, monthly_depth_from_daily, own_record_months
+    from .calsim.tier1 import wy_label
     a_wy, b_wy = int(holdout_wy[0]), int(holdout_wy[1])
     basins = list(basins)
     dates = pd.DatetimeIndex(dates)

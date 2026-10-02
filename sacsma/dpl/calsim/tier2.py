@@ -24,8 +24,8 @@ simulated for its volume but has no series to score against.  The converse is ``
 2 does not simulate it, and ``tier2_not_simulated.csv`` (polygons only) does not list it.
 
 A checkpoint with ``DplConfig.holdout_wy`` (water years held out of training in every family) is
-scored over them instead (:func:`sacsma.dpl.calsim_tier1.holdout_windows`): ``WY1976-85``, the
-same on each arc's own gauge-record months only (``WY1976-85_own``, :func:`sacsma.dpl.calsim_arcs.
+scored over them instead (:func:`sacsma.dpl.calsim.tier1.holdout_windows`): ``WY1976-85``, the
+same on each arc's own gauge-record months only (``WY1976-85_own``, :func:`sacsma.dpl.calsim.arcs.
 own_record_months`), ``WY1976-84`` and ``WY1950-84_mixed``, and the ``train`` window without the
 held-out water years (``excluded_wy``); the maps, regime figures and summary are over
 ``WY1976-85``, and ``tier2_anchor_rescaled.csv`` (:func:`anchor_rescaled`, eval-only) is written
@@ -34,7 +34,7 @@ own parent (the smallest listing entity), so its rows are the trained cs_ rows.
 
 Usage::
 
-    python -m sacsma.dpl.calsim_tier2 <run_dir | checkpoint.pt> [--out DIR] [--data-dir data]
+    sacsma dpl calsim tier2 <run_dir | checkpoint.pt> [--out DIR] [--data-dir data]
                                   [--device cpu|cuda] [--no-maps] [--no-extend]
                                   [--tiles-dir tmp/hydrosheds] [--trace-python PY] [--figures-only]
                                   [--label NAME] [--dedup-cells] [--components [fastslow|parts]]
@@ -93,15 +93,15 @@ import numpy as np
 import pandas as pd
 import torch
 
-from ..metrics import center_of_timing, kge, nse, pbias, pearson, seasonal_mismatch
-from ..calsim.catchments import (_EQ_CRS, _GRID_STEP_DEG, EXCLUDE_ARCS, MERGED_LAYER,
+from ...metrics import center_of_timing, kge, nse, pbias, pearson, seasonal_mismatch
+from ...calsim.catchments import (_EQ_CRS, _GRID_STEP_DEG, EXCLUDE_ARCS, MERGED_LAYER,
                          _square_cell_overlap, load_catchments, load_crosswalk, series_arc)
-from .calsim_tier1 import (AF_PER_MM_MI2, VALIDATION_WINDOW, WINDOWS, arc_to_set,
+from .tier1 import (AF_PER_MM_MI2, VALIDATION_WINDOW, WINDOWS, arc_to_set,
                     holdout_month_mask, holdout_windows, load_references, load_sets, registry_arcs,
                     registry_windows, run_holdout_wy, window_range)
 
 #: suffix of the window that scores an arc on its OWN gauge-record months inside the holdout
-#: (:func:`sacsma.dpl.calsim_arcs.own_record_months`), for a run with ``holdout_wy``
+#: (:func:`sacsma.dpl.calsim.arcs.own_record_months`), for a run with ``holdout_wy``
 OWN_SUFFIX = "_own"
 
 
@@ -194,7 +194,7 @@ def uncovered_arc_cells(catch, parent: dict[str, str], data_dir: str | Path = "d
     square overlaps the polygon, weight = overlap area, elevation from the region statics.
     Columns ``[basin, key, lat, lon, area_weight, elev]`` (basin = the arc id).  Pass the
     :func:`region_arc_overlap` table to reuse it."""
-    from ..io import soilveg_path
+    from ...io import soilveg_path
     if region_map is None:
         region_map = region_arc_overlap(catch, data_dir)
     unc = region_map[~region_map["arc"].isin(parent)]
@@ -207,7 +207,7 @@ def uncovered_arc_cells(catch, parent: dict[str, str], data_dir: str | Path = "d
     return out
 
 
-_BUILD_FLOWLENS = Path(__file__).resolve().parents[2] / "dataprep" / "build_flowlens.py"
+_BUILD_FLOWLENS = Path(__file__).resolve().parents[3] / "dataprep" / "build_flowlens.py"
 
 
 def trace_arc_cells(cells_csv: str | Path, out_csv: str | Path, tiles_dir: str | Path = "tmp/hydrosheds") -> None:
@@ -277,11 +277,11 @@ def _net_for_hrus(ckpt: str | Path, hrus: pd.DataFrame, data_dir: str | Path, de
     import dataclasses as _dc
 
     import sacsma.dpl.data as D
-    from .config import DplConfig
-    from .data import load_domain_tensors
-    from .features import AEF_STORE_VARIANTS, FeatureSet, aef_store, build_features
-    from .parameter_net import ParameterNet
-    from ..io import soilveg_path
+    from ..config import DplConfig
+    from ..data import load_domain_tensors
+    from ..features import AEF_STORE_VARIANTS, FeatureSet, aef_store, build_features
+    from ..parameter_net import ParameterNet
+    from ...io import soilveg_path
     ck = torch.load(ckpt, map_location="cpu", weights_only=False)
     known = {f.name for f in _dc.fields(DplConfig)}
     cfg = DplConfig(**{k: v for k, v in ck["cfg"].items() if k in known})
@@ -369,10 +369,10 @@ def stream(net, x, dom, cfg, W_arc: np.ndarray, *, spinup: str = "cycle",
     ``temp_delta`` / ``precip_scale`` are a PLACEHOLDER uniform climate perturbation (degC
     added to tavg/tmin/tmax, precip multiplied), applied to the spin-up and the envelope
     alike, until the WGEN daily scenario weather is supplied."""
-    from .data import with_cell_dedup
-    from .forward import routing_uh
-    from .multi_timescale import ENVELOPE_END, ENVELOPE_START
-    from .spinup import spin_state, stream_rows
+    from ..data import with_cell_dedup
+    from ..forward import routing_uh
+    from ..multi_timescale import ENVELOPE_END, ENVELOPE_START
+    from ..spinup import spin_state, stream_rows
 
     mode = _component_mode(components)
     parts = mode == "parts"
@@ -461,9 +461,9 @@ def stream_batch(net, x, dom, cfg, W_arc: np.ndarray, scenarios, *, spinup: str 
     evaluated ONCE on the original rows and tiled, so every scenario sees bit-identical
     parameters; each scenario's flow slice is aggregated exactly as :func:`stream` does.
     ``window`` (days per streamed chunk) bounds device memory only."""
-    from .forward import routing_uh
-    from .multi_timescale import ENVELOPE_END, ENVELOPE_START
-    from .spinup import spin_state, stream_rows
+    from ..forward import routing_uh
+    from ..multi_timescale import ENVELOPE_END, ENVELOPE_START
+    from ..spinup import spin_state, stream_rows
 
     mode = _component_mode(components)
     parts = mode == "parts"
@@ -626,7 +626,7 @@ def anchor_rescaled(monthly: pd.DataFrame, data_dir: str | Path = "data", *,
 
     ``monthly`` is ``tier2_monthly.csv`` (``arc, month, sim_taf, ref_taf``).  Per closure group
     of ``data/calsim/arc_hierarchy.csv`` and complete water year, every simulated member arc is
-    scaled by anchor / simulated arc sum (:func:`sacsma.dpl.calsim_arcs.close_water_years`,
+    scaled by anchor / simulated arc sum (:func:`sacsma.dpl.calsim.arcs.close_water_years`,
     ``mode="proportional"``: the arcs' volume-weighted shares of the anchor, the anchor being
     CalSim3 FLOW-UNIMPAIRED or the DWR unimpaired record of the group), so the score measures the
     split of the anchor's water-year volume among arcs and months, not the system volume.  Groups
@@ -634,7 +634,7 @@ def anchor_rescaled(monthly: pd.DataFrame, data_dir: str | Path = "data", *,
     simulate, arcs in no group and water years the closure skips have no rescaled value.  Both scores are over the same months (those with a rescaled
     value) per window; ``own`` (arc -> months) adds ``own_window``, the window of that name in
     ``windows`` restricted to each arc's own months."""
-    from .calsim_arcs import (close_water_years, closure_members, load_anchor_taf, load_hierarchy,
+    from .arcs import (close_water_years, closure_members, load_anchor_taf, load_hierarchy,
                               water_year)
     mon = monthly.copy()
     mon["period"] = pd.PeriodIndex(mon["month"], freq="M")
@@ -706,7 +706,7 @@ def score_run(ckpt: str | Path, data_dir: str | Path = "data", *, device=None, r
     ``temp_delta`` / ``precip_scale`` are then ignored) and returns a list with one
     result per scenario, each exactly what the single-scenario call returns.
     ``batch_window`` is the batched stream's chunk length (device memory only)."""
-    from .evaluate import load_net_from_checkpoint
+    from ..evaluate import load_net_from_checkpoint
     mode = _component_mode(components)
     batch = scenarios is not None
     if batch:
@@ -844,7 +844,7 @@ def score_run(ckpt: str | Path, data_dir: str | Path = "data", *, device=None, r
         ho_win = holdout_windows(ho) if ho else None
         own = {}
         if ho:
-            from .calsim_arcs import own_record_months
+            from .arcs import own_record_months
             own = own_record_months(data_dir, ho)
         rows, monthly = [], []
         for a in arcs.itertuples(index=False):
@@ -928,7 +928,7 @@ def _write_run_info(out: Path, **info) -> Path:
     from datetime import datetime, timezone
     perturbed = bool(info["temp_delta"]) or info["precip_scale"] != 1.0
     rec = dict(
-        tool="sacsma.dpl.calsim_tier2",
+        tool="sacsma.dpl.calsim.tier2",
         written_utc=datetime.now(timezone.utc).isoformat(timespec="seconds"),
         checkpoint=str(info["ckpt"]), data_dir=str(info["data_dir"]), spinup=info["spinup"],
         extend=bool(info["extend"]), dedup_cells=bool(info["dedup_cells"]),
@@ -1002,7 +1002,7 @@ def summarize(metrics: pd.DataFrame, not_sim: pd.DataFrame, window: str = VALIDA
 
 def maps(metrics: pd.DataFrame, out: Path, label: str, data_dir: str | Path = "data",
          window: str = VALIDATION_WINDOW) -> None:
-    from ..calsim.compare import _arc_choropleth
+    from ...calsim.compare import _arc_choropleth
     m = metrics[(metrics.window == window) & metrics.has_series].set_index("arc")
     _arc_choropleth(data_dir, m["kge"], f"Tier 2 — KGE per rim arc, {window}  [{label}]", "KGE",
                     out / f"tier2_kge_{window}.png", cmap="plasma", vmin=0.0, vmax=1.0)
@@ -1164,7 +1164,7 @@ def _main_batch(a, ckpt: Path, run_dir: Path) -> None:
         if a.components:
             res[5].to_csv(o / "tier2_components_monthly.csv", index=False)
         if ho or a.anchor_rescaled:
-            from .calsim_arcs import own_record_months
+            from .arcs import own_record_months
             wins = ho_win or {VALIDATION_WINDOW: WINDOWS[VALIDATION_WINDOW]}
             ar = anchor_rescaled(monthly, a.data_dir, windows=wins,
                                  own=own_record_months(a.data_dir, ho) if ho else None,
@@ -1173,8 +1173,8 @@ def _main_batch(a, ckpt: Path, run_dir: Path) -> None:
         print(f"tier2 batch: {name} ({t:+g} degC, precip x{s:g}) -> {o}", flush=True)
 
 
-def main(argv=None) -> None:
-    p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+def main(argv=None, prog=None) -> None:
+    p = argparse.ArgumentParser(prog=prog, description=__doc__.split("\n\n")[0])
     p.add_argument("run", nargs="?", help="run folder (uses checkpoints/best.pt) or a checkpoint file")
     p.add_argument("--out", default=None, help="output folder (default <run>/tier2)")
     p.add_argument("--data-dir", default="data")
@@ -1272,7 +1272,7 @@ def main(argv=None) -> None:
     else:
         metrics = pd.read_csv(out / "tier2_metrics.csv")
     if (ho or a.anchor_rescaled) and (out / "tier2_monthly.csv").exists():
-        from .calsim_arcs import own_record_months
+        from .arcs import own_record_months
         wins = ho_win or {VALIDATION_WINDOW: WINDOWS[VALIDATION_WINDOW]}
         ar = anchor_rescaled(pd.read_csv(out / "tier2_monthly.csv"), a.data_dir, windows=wins,
                              own=own_record_months(a.data_dir, ho) if ho else None,

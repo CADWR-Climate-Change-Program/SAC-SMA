@@ -39,9 +39,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from ..cdec15 import CAL_END
-from ..io import load_forcing
-from ..model import attach_tminmax, load_domain_forcing, run_basin
+from ...cdec15 import CAL_END
+from ...io import load_forcing
+from ...model import attach_tminmax, load_domain_forcing, run_basin
 from .climatology import _WY, _WY_LABELS, _monthly_taf
 
 DOMAIN = "15cdec_grid"
@@ -161,9 +161,9 @@ def _hybrid_flow(data_dir, dT, dev, sim_detr: pd.DataFrame, ckpt: str):
     checkpoint."""
     import torch
 
-    from .hybrid.data import _CAL_START, feature_names, load_hybrid_data
-    from .hybrid.model import HybridLSTM
-    from .hybrid.train import predict_days
+    from ..hybrid.data import _CAL_START, feature_names, load_hybrid_data
+    from ..hybrid.model import HybridLSTM
+    from ..hybrid.train import predict_days
 
     ck = torch.load(ckpt, map_location="cpu", weights_only=False)
     cfg = ck["cfg"]
@@ -186,7 +186,7 @@ def _hybrid_flow(data_dir, dT, dev, sim_detr: pd.DataFrame, ckpt: str):
     model.load_state_dict(ck["model"])
 
     # basin-level dT and the historical cal-window sigmas used in normalisation
-    from .data import load_domain_tensors
+    from ..data import load_domain_tensors
     dom = load_domain_tensors(data_dir, domain=DOMAIN, device="cpu", dtype=torch.float64)
     W = dom.W.numpy()
     dTb = W @ dT[dom.cell_idx].astype(np.float64)                 # (B, T) basin dT
@@ -212,7 +212,7 @@ def _hybrid_flow(data_dir, dT, dev, sim_detr: pd.DataFrame, ckpt: str):
     if use_pet:
         # PET is deterministic in T — recompute exactly under the dT field,
         # normalized with the trained (historical cal-window) stats.
-        from .hybrid.data import basin_pet_pt
+        from ..hybrid.data import basin_pet_pt
         pet_h = basin_pet_pt(dom)
         pet_d = basin_pet_pt(dom, delta_t=dT)
         mu_p = pet_h[:, lo:hi].mean()
@@ -252,10 +252,10 @@ def _ensemble_flow(data_dir, dT, dev, sim_detr: pd.DataFrame, ens_dir: str):
 
 def assemble(data_dir: str = "data", *, device: str = "cuda") -> dict:
     """dQ (detrended - historical) daily mm/day per model, on the covered basins."""
-    from ..calsim.catchments import basin_areas
-    from ..cdec15 import BASINS
-    from ..io import load_hru_table
-    from .config import pick_device
+    from ...calsim.catchments import basin_areas
+    from ...cdec15 import BASINS
+    from ...io import load_hru_table
+    from ..config import pick_device
 
     areas = basin_areas(data_dir, domain="15cdec")
     f_hist, f_detr, dT = _forcings(data_dir)
@@ -284,7 +284,7 @@ def assemble(data_dir: str = "data", *, device: str = "cuda") -> dict:
     if nt_detr_csv.exists():
         nt_detr = pd.read_csv(nt_detr_csv, parse_dates=["date"]).set_index("date")
     else:
-        from .evaluate import noah_torch_daily
+        from ..evaluate import noah_torch_daily
         nt_detr = noah_torch_daily(NOAH_CKPT, data_dir=data_dir,
                                    temp_delta=dT)
         nt_detr_csv.parent.mkdir(parents=True, exist_ok=True)

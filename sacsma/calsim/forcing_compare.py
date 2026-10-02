@@ -54,7 +54,7 @@ vs CalSim3 per basin (KGE/NSE/pbias; full + pre/post-WY1950, identical months).
 
 Usage::
 
-    python -m sacsma.calsim.forcing_compare
+    sacsma calsim --forcing-compare
 """
 
 from __future__ import annotations

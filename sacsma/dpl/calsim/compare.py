@@ -1,16 +1,16 @@
 """Tier-1 CalSim3 validation of two multifamily runs side by side.
 
-Reads the ``tier1/tier1_metrics.csv`` of two runs scored by :mod:`sacsma.dpl.calsim_tier1` and
+Reads the ``tier1/tier1_metrics.csv`` of two runs scored by :mod:`sacsma.dpl.calsim.tier1` and
 writes one comparison: the aggregate statistics and the twenty locations, each over the full
 validation window and over the **trimmed windows** (the trimmed window at the locations that
-have one, the full window elsewhere; see :mod:`sacsma.dpl.calsim_windows`).  The two runs are
+have one, the full window elsewhere; see :mod:`sacsma.dpl.calsim.windows`).  The two runs are
 always compared over the same months.  The creek-coverage columns are the share of each
 location's area-months under the registry's USGS creek gauges with data, which is what the
 trimmed windows are chosen from; they do not depend on either run.
 
 Usage::
 
-    python -m sacsma.dpl.calsim_compare <run_a> <run_b> [--label-a A] [--label-b B]
+    sacsma dpl calsim compare <run_a> <run_b> [--label-a A] [--label-b B]
                                         [--out DIR] [--data-dir data] [--no-coverage]
 
 Writes ``tier1_comparison.md``, ``tier1_comparison.html`` and ``tier1_comparison.csv`` under
@@ -26,7 +26,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from .calsim_tier1 import TRIMMED_WINDOW, VALIDATION_WINDOW, load_sets, volume_rows
+from .tier1 import TRIMMED_WINDOW, VALIDATION_WINDOW, load_sets, volume_rows
 
 _MAIN = ["anchor", "arcsum"]
 
@@ -44,7 +44,7 @@ def _trimmed(m: pd.DataFrame) -> pd.DataFrame:
 
 
 def _coverage(data_dir: str | Path) -> dict[str, dict[int, float]]:
-    from .calsim_atlas import _rim, _set_geoms, creek_overlap
+    from .atlas import _rim, _set_geoms, creek_overlap
     sets = load_sets(data_dir)
     geoms = _set_geoms(_rim(data_dir), sets)
     creeks = creek_overlap(sets, geoms, data_dir, trained=None, window=VALIDATION_WINDOW)
@@ -60,7 +60,7 @@ def compare(run_a: str | Path, run_b: str | Path, data_dir: str | Path = "data",
     if list(fa.index) != list(fb.index):
         raise ValueError("the two runs do not score the same tier-1 locations")
     if not (ra.win_start.equals(rb.win_start) and ra.win_end.equals(rb.win_end)):
-        raise ValueError("the two runs were scored over different trimmed windows: re-run calsim_tier1 on both")
+        raise ValueError("the two runs were scored over different trimmed windows: re-run sacsma dpl calsim tier1 on both")
     cov = _coverage(data_dir) if coverage else {}
     rows = []
     for s in fa.index:
@@ -215,8 +215,8 @@ def to_html(loc: pd.DataFrame, summ: pd.DataFrame, label_a: str, label_b: str) -
     return "\n".join(p)
 
 
-def main(argv=None) -> None:
-    p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+def main(argv=None, prog=None) -> None:
+    p = argparse.ArgumentParser(prog=prog, description=__doc__.split("\n\n")[0])
     p.add_argument("run_a")
     p.add_argument("run_b")
     p.add_argument("--label-a", default="")

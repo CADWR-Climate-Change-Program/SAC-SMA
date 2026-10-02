@@ -5,7 +5,7 @@ Reconstruct the daily flow (net output, clipped >= 0), split at
 used for GA/dPL -> ``metrics_hybrid.csv`` (identical columns to
 ``metrics_15cdec.csv``).  ``compare_all`` merges the GA, dPL and hybrid tables
 into one cal/val KGE comparison table (the per-basin dumbbell view is now
-``figures/hybrid_progression.png``, :func:`sacsma.dpl.noah_ca_hybrids.make_hybrid_progression`).
+``figures/hybrid_progression.png``, :func:`sacsma.dpl.studies.noah_ca_hybrids.make_hybrid_progression`).
 """
 
 from __future__ import annotations

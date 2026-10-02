@@ -37,11 +37,11 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from .._figures import plt  # noqa: F401  (applies the house rcParams)
-from ..cdec15 import CAL_END
-from ..io import load_basin_area
+from ..._figures import plt  # noqa: F401  (applies the house rcParams)
+from ...cdec15 import CAL_END
+from ...io import load_basin_area
 from .climatology import _WY, _basin_order, _monthly_taf
-from .evaluate import teacher_cache_path
+from ..evaluate import teacher_cache_path
 
 DOMAIN = "15cdec_grid"
 NOAH_DPL_CSV = "artifacts/dpl/superseded/noah_noca/params_dpl.csv"       # frozen noah-lite SAC params
@@ -144,8 +144,8 @@ def _frozen_noah(dp: float, dt: float, data_dir: str = "data") -> pd.DataFrame:
     if cache.exists():
         return pd.read_csv(cache, parse_dates=["date"]).set_index("date")
     global _F0
-    from ..cdec15 import BASINS
-    from ..model import attach_tminmax, load_domain_forcing, run_basin
+    from ...cdec15 import BASINS
+    from ...model import attach_tminmax, load_domain_forcing, run_basin
     if _F0 is None:
         f = load_domain_forcing(data_dir, domain=DOMAIN)
         attach_tminmax(data_dir, DOMAIN, f)
@@ -198,8 +198,8 @@ def _load_ensemble(ens_dir: str, data_dir: str, dev, n_seeds: int,
     canonicalized out of ``testing/`` (their training-time paths are now stale)."""
     import torch
 
-    from .hybrid.data import feature_names, load_hybrid_data
-    from .hybrid.model import HybridLSTM
+    from ..hybrid.data import feature_names, load_hybrid_data
+    from ..hybrid.model import HybridLSTM
 
     ckpts = sorted(Path(ens_dir).glob("seed*/checkpoints/best.pt"))[:n_seeds]
     if not ckpts:
@@ -247,9 +247,9 @@ def _ensemble_perturbed_daily(h, dom, models, cfg, names, dp: float, dt: float,
     model uses PET and none is given."""
     import torch
 
-    from .hybrid.data import (apply_response_perturbation, basin_pet_pt,
+    from ..hybrid.data import (apply_response_perturbation, basin_pet_pt,
                               perturbed_static)
-    from .hybrid.train import predict_days
+    from ..hybrid.train import predict_days
 
     use_pet = cfg.get("use_pet", False)
     base_feat = h.feat.cpu().numpy()
@@ -335,8 +335,8 @@ def assemble(data_dir: str = "data", *, device: str = "cuda",
     metrics + their signed % change vs the (0, 0) baseline."""
     import torch
 
-    from .config import pick_device
-    from .data import load_domain_tensors
+    from ..config import pick_device
+    from ..data import load_domain_tensors
 
     dev = pick_device(device)
     areas = load_basin_area(data_dir, domain="15cdec").set_index(
@@ -365,7 +365,7 @@ def assemble(data_dir: str = "data", *, device: str = "cuda",
         _emit(PHYSICS, dp, dt, _metrics_from_daily(phys[(dp, dt)], areas))
 
     # PET depends only on ΔT — precompute once per distinct dt and reuse.
-    from .hybrid.data import basin_pet_pt
+    from ..hybrid.data import basin_pet_pt
     pet_by_dt = {float(dt): basin_pet_pt(dom, delta_t=float(dt)) for dt in DT}
 
     for label, ens in [(RAW, RAW_DIR), (DTDP, dtdp_dir)]:

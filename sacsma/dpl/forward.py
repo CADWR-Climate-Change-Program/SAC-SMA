@@ -19,16 +19,16 @@ from dataclasses import dataclass
 import torch
 
 from .config import BOUNDS, CANOPY_BOUNDS
-from .et_noah import (
+from .physics.et_noah import (
     NoahCanopyState,
     dewpoint_depression_field,
     potential_et_priestley_taylor,
     snow_cover_albedo,
 )
-from .pet import hamon_raw_pet
-from .routing import N_TAPS, build_uh, route
-from .sma import SacState, run_sacsma
-from .snow17 import Snow17State, run_snow17
+from .physics.pet import hamon_raw_pet
+from .physics.routing import N_TAPS, build_uh, route
+from .physics.sma import SacState, run_sacsma
+from .physics.snow17 import Snow17State, run_snow17
 
 #: angular frequency of the annual day-of-year cycle (mirrors sacsma.parameters).
 _SEASONAL_OMEGA = 2.0 * math.pi / 365.0
@@ -162,7 +162,7 @@ def run_window(
     NET of SAC-SMA's riparian et4 channel-ET deduction and dry-channel clamp,
     which act on the aggregate direct inflow / baseflow before routing.
 
-    The parts split those two further (:func:`sacsma.dpl.sma.sacsma_step`
+    The parts split those two further (:func:`sacsma.dpl.physics.sma.sacsma_step`
     ``return_parts``; the net inflow apportioned in proportion to the
     pre-deduction parts): ``quick`` = impervious + ADIMP direct + surface runoff
     and ``interflow``, each routed through the hillslope x channel UH (``quick +

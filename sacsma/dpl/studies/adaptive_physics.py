@@ -33,8 +33,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from .._figures import plt  # noqa: F401  (house rcParams)
-from ..io import load_basin_area
+from ..._figures import plt  # noqa: F401  (house rcParams)
+from ...io import load_basin_area
 from .climatology import _basin_order
 from .dtdp_response import (DOMAIN, DP, DT, METRICS, REGIMES, _REGIME_TITLE,
                             _aggregate_regime, _frozen_noah, _metrics_from_daily)
@@ -64,9 +64,9 @@ def _load_ca(data_dir: str = "data") -> dict:
         return _CA
     import numpy as _np
 
-    from .evaluate import (export_canopy_params, export_params,
+    from ..evaluate import (export_canopy_params, export_params,
                            load_net_from_checkpoint)
-    from .features import FeatureSet
+    from ..features import FeatureSet
     net, x0, dom, cfg, ck = load_net_from_checkpoint(CA_CKPT, data_dir)
     if ck.get("variant") != "physical_climate":
         raise ValueError(f"noah_ca ckpt must be physical_climate, got "
@@ -83,9 +83,9 @@ def adaptive_params(dp: float, dt: float, data_dir: str = "data"):
     forcing (physiographic features + z-scoring unchanged); exact at (0,0)."""
     import torch
 
-    from ..io import soilveg_path
-    from .evaluate import export_canopy_params, export_params
-    from .features import build_features
+    from ...io import soilveg_path
+    from ..evaluate import export_canopy_params, export_params
+    from ..features import build_features
     C = _load_ca(data_dir)
     if dp == 0.0 and dt == 0.0:
         return C["base_dpl"], C["base_can"]
@@ -110,8 +110,8 @@ def noah_ca_daily(dp: float, dt: float, mode: str,
     if cache.exists():
         return pd.read_csv(cache, parse_dates=["date"]).set_index("date")
     global _FA
-    from ..cdec15 import BASINS
-    from ..model import attach_tminmax, load_domain_forcing, run_basin
+    from ...cdec15 import BASINS
+    from ...model import attach_tminmax, load_domain_forcing, run_basin
     if _FA is None:
         f = load_domain_forcing(data_dir, domain=DOMAIN)
         attach_tminmax(data_dir, DOMAIN, f)

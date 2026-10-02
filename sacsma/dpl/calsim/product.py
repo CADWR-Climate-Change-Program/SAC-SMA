@@ -1,6 +1,6 @@
 """The CalSim3 rim-inflow product of a multifamily dPL run: monthly TAF on every rim arc.
 
-Tier 2 (:mod:`sacsma.dpl.calsim_tier2`) gives the dPL's own flow on each of the 196 rim INFLOW
+Tier 2 (:mod:`sacsma.dpl.calsim.tier2`) gives the dPL's own flow on each of the 196 rim INFLOW
 arcs.  The product keeps that flow as it is wherever the dPL is the best estimate of the
 CalSim3 series, and re-divides it among the arcs where it is not:
 
@@ -30,8 +30,8 @@ the dPL arc's own.  No temperature or precipitation enters the model; the respon
 through the dPL flows of each pass.
 
 ``fit`` needs the run's base tier-2 pass with runoff parts (``<run>/tier2``, written by
-``calsim_tier2 --components parts``) and the same at the eleven training climate points of
-:data:`TRAIN_POINTS` (``calsim_tier2 --components parts --scenarios ...`` writes them to
+``sacsma dpl calsim tier2 --components parts``) and the same at the eleven training climate points of
+:data:`TRAIN_POINTS` (``sacsma dpl calsim tier2 --components parts --scenarios ...`` writes them to
 ``<run>/tier2_scenarios/<name>``; :func:`scenario_spec` gives the argument).  It fits on water
 years 1950-2015 without the run's held-out water years (``DplConfig.holdout_wy``, or
 ``--holdout-wy``), selects ``mu`` out of fold over seven blocks of training water years
@@ -42,10 +42,10 @@ p90 <= 3 pp on both.
 
 Usage::
 
-    python -m sacsma.dpl.calsim_product fit <run_dir> [--scenarios DIR ...] [--out DIR]
+    sacsma dpl calsim product fit <run_dir> [--scenarios DIR ...] [--out DIR]
                                   [--data-dir data] [--mu MU] [--holdout-wy A-B] [--epochs N]
                                   [--threads N]
-    python -m sacsma.dpl.calsim_product apply <run_dir> --tier2 DIR [--out CSV] [--data-dir data]
+    sacsma dpl calsim product apply <run_dir> --tier2 DIR [--out CSV] [--data-dir data]
 
 ``fit`` writes to ``<run>/calsim_product``: ``share_model.pt`` (the network and everything
 :func:`apply` needs), ``rim_inflow_monthly.csv`` (``arc, month, taf, dpl_taf, kind``: the product
@@ -68,8 +68,8 @@ import pandas as pd
 import torch
 from torch import nn
 
-from ..metrics import kge
-from .calsim_tier1 import run_holdout_wy
+from ...metrics import kge
+from .tier1 import run_holdout_wy
 
 #: closure groups whose arcs are NOT closed to a system: Whiskeytown (``I_WKYTN``) lies inside
 #: the Bend Bridge anchor, which no arc is closed to
@@ -96,7 +96,7 @@ _APR_JUL = (4, 5, 6, 7)
 
 
 def scenario_spec(points: dict[str, tuple[float, float]] | None = None) -> str:
-    """The ``calsim_tier2 --scenarios`` argument for ``points`` (default: the training and the
+    """The ``sacsma dpl calsim tier2 --scenarios`` argument for ``points`` (default: the training and the
     validation points)."""
     points = points or {**TRAIN_POINTS, **VALIDATION_POINTS}
     return ",".join(f"{k}={t:g}:{s:g}" for k, (t, s) in points.items())
@@ -124,7 +124,7 @@ def load_pass(tier2_dir: str | Path, arcs) -> pd.DataFrame:
     d = Path(tier2_dir)
     comp = d / "tier2_components_monthly.csv"
     if not comp.exists():
-        raise FileNotFoundError(f"{comp}: the pass needs calsim_tier2 --components parts")
+        raise FileNotFoundError(f"{comp}: the pass needs sacsma dpl calsim tier2 --components parts")
     m = pd.read_csv(d / "tier2_monthly.csv")
     c = pd.read_csv(comp)
     m = m[m.arc.isin(arcs)].merge(
@@ -476,7 +476,7 @@ def fit_product(run_dir: str | Path, scenario_dirs=None, out: str | Path | None 
     absent = [p for p in ["base", *TRAIN_POINTS] if passes[p] is None]
     if absent:
         raise FileNotFoundError(
-            f"no tier-2 pass for the training points {absent}; run calsim_tier2 "
+            f"no tier-2 pass for the training points {absent}; run sacsma dpl calsim tier2 "
             f"--components parts --scenarios {scenario_spec(TRAIN_POINTS)}")
     passes = {p: d for p, d in passes.items() if d is not None}
     val_points = [p for p in VALIDATION_POINTS if p in passes]
@@ -547,9 +547,9 @@ def fit_product(run_dir: str | Path, scenario_dirs=None, out: str | Path | None 
     return dict(model=model, product=prod, metrics=M, Q=Q, frame=F.B, info=info)
 
 
-def main(argv=None) -> None:
+def main(argv=None, prog=None) -> None:
     p = argparse.ArgumentParser(
-        prog="sacsma.dpl.calsim_product",
+        prog=prog or "sacsma dpl calsim product",
         description="The CalSim3 rim-inflow product of a multifamily dPL run")
     sub = p.add_subparsers(dest="cmd", required=True)
     f = sub.add_parser("fit", help="fit the share model and write the product of the base pass")

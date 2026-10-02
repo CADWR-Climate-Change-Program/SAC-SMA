@@ -303,7 +303,7 @@ def _with_calsim_arcs(data_dir: str, basins: tuple[str, ...] | None) -> tuple[st
     registry's base entities) followed by the ``train_default`` arcs of
     ``arc_hierarchy.csv`` as ``cs_<ARC>`` registry entities, in hierarchy file order."""
     from ..io import domain_dir
-    from .calsim_arcs import load_hierarchy
+    from .calsim.arcs import load_hierarchy
     from .multi_timescale import CALSIM_FAMILY
 
     reg = pd.read_csv(domain_dir(data_dir, MULTI_TIMESCALE_DOMAIN) / "entities.csv",

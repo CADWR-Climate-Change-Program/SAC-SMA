@@ -39,7 +39,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from ..io import load_hru_table, mmday_to_cfs
+from ...io import load_hru_table, mmday_to_cfs
 
 _AF_PER_CFS_DAY = 1.98347          # cfs-day -> acre-feet; /1000 -> TAF
 #: combined out-of-calibration period (WY1950-1987 + WY2004-2018), cal excluded.
@@ -117,7 +117,7 @@ COMPARISONS: list[tuple[str, str, list[str]]] = [
 # daily model sims (mm/day, date x basin) -- all cached to CSV
 # --------------------------------------------------------------------------- #
 def _daily_frozen(spec: dict, data_dir: str, cache: Path) -> pd.DataFrame:
-    from .hybrid.data import build_frozen_sim
+    from ..hybrid.data import build_frozen_sim
     return build_frozen_sim(data_dir, spec["csv"], cache=cache, domain=spec["domain"],
                             pet_source=spec["pet"], pt_snow_albedo=spec["alb"],
                             pt_dewpoint_depression=spec["dew"],
@@ -133,9 +133,9 @@ def _daily_ensemble(ens_dir: str, data_dir: str, device, cache: Path) -> pd.Data
         return pd.read_csv(cache, parse_dates=["date"]).set_index("date")
     import torch
 
-    from .hybrid.data import load_hybrid_data
-    from .hybrid.model import HybridLSTM
-    from .hybrid.train import predict_days
+    from ..hybrid.data import load_hybrid_data
+    from ..hybrid.model import HybridLSTM
+    from ..hybrid.train import predict_days
 
     ckpts = sorted(Path(ens_dir).glob("seed*/checkpoints/best.pt"))
     if not ckpts:
@@ -215,7 +215,7 @@ def _score(sim_m: pd.Series, obs_m: pd.Series) -> tuple[float, float, float, flo
     """Monthly (KGE, NSE, pbias %, seasonal misplaced volume 0-1) of a model vs
     CalSim3 FNF over the combined period.  Aligns on monthly Periods (model sims
     are month-start, CalSim3 month-end)."""
-    from ..metrics import kge, nse, pbias, seasonal_mismatch
+    from ...metrics import kge, nse, pbias, seasonal_mismatch
     s, o = sim_m.copy(), obs_m.copy()
     s.index, o.index = s.index.to_period("M"), o.index.to_period("M")
     df = pd.concat({"s": s, "o": o}, axis=1).dropna()
@@ -232,7 +232,7 @@ def _calsim3_fnf(data_dir: str, cache: Path) -> pd.DataFrame:
     """CalSim3 monthly FNF (date x basin, TAF) for the mapped basins; cached."""
     if cache.exists():
         return pd.read_csv(cache, parse_dates=["date"]).set_index("date")
-    from ..calsim.compare import build_anchor_long
+    from ...calsim.compare import build_anchor_long
     al = build_anchor_long(data_dir, sets=("15cdec",))
     c3 = al[al["source"] == "calsim3"]
     piv = c3.pivot_table(index="date", columns="basin", values="flow_taf", aggfunc="sum")
@@ -246,7 +246,7 @@ def _calsim3_fnf(data_dir: str, cache: Path) -> pd.DataFrame:
 # assembly + plotting
 # --------------------------------------------------------------------------- #
 def _basin_order(data_dir: str, keep: list[str]) -> list[str]:
-    from .._figures import folsom_before_yuba
+    from ..._figures import folsom_before_yuba
     hru = load_hru_table(data_dir, domain="15cdec")
     lat = hru.groupby("basin")["lat"].mean().sort_values(ascending=False)
     order = folsom_before_yuba("15cdec", lat.index.tolist())
@@ -257,8 +257,8 @@ def assemble(data_dir: str = "data", *, device: str = "cuda") -> dict:
     """Compute every series' combined-period WY mean-monthly regime (TAF).
     Returns ``clim`` (label -> DataFrame[12 x basin]) and ``order`` (the 11
     CalSim3-mapped basins, north->south)."""
-    from ..calsim.catchments import basin_areas
-    from .config import pick_device
+    from ...calsim.catchments import basin_areas
+    from ..config import pick_device
 
     areas = basin_areas(data_dir, domain="15cdec")
     cachedir = Path("artifacts/dpl/_climatology_cache")

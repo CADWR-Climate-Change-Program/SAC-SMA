@@ -10,7 +10,7 @@ stay comparable:
 
 * the creek coverage of a location in a water year is the share of its area under creek
   gauges that have data, averaged over the year's months
-  (:func:`sacsma.dpl.calsim_atlas.creek_overlap`, all registry creeks taken as trained);
+  (:func:`sacsma.dpl.calsim.atlas.creek_overlap`, all registry creeks taken as trained);
 * every contiguous run of at least ``--min-years`` (20) water years inside the validation
   window is a candidate; the pick is the lowest mean coverage, ties going to the longer and
   then the later window;
@@ -24,12 +24,12 @@ DWR-unimpaired targets are in training.  What it leaves is not always small: the
 inside the trimmed window is reported next to the coverage over the full one, and where the
 two are close the trimmed score mostly measures the change of years.  The first and last
 water year of each location's window are the ``val_start_wy`` and ``val_end_wy`` columns of
-``data/calsim/tier1_sets.csv``, which :mod:`sacsma.dpl.calsim_tier1` scores as
+``data/calsim/tier1_sets.csv``, which :mod:`sacsma.dpl.calsim.tier1` scores as
 ``window = trimmed``.
 
 Usage::
 
-    python -m sacsma.dpl.calsim_windows [--data-dir data] [--min-years 20] [--min-gain 0] [--write]
+    sacsma dpl calsim windows [--data-dir data] [--min-years 20] [--min-gain 0] [--write]
 
 Prints the per-location table and checks it against the set table (exit status 1 on a
 difference); ``--write`` stores the derived values in the set table instead.
@@ -44,8 +44,8 @@ from pathlib import Path
 
 import pandas as pd
 
-from ..calsim import calsim_dir
-from .calsim_tier1 import VALIDATION_WINDOW, load_sets
+from ...calsim import calsim_dir
+from .tier1 import VALIDATION_WINDOW, load_sets
 
 MIN_YEARS = 20
 MIN_GAIN = 0.0
@@ -76,7 +76,7 @@ def pick_window(cover_by_wy: dict[int, float], min_years: int = MIN_YEARS,
 def derive(data_dir: str | Path = "data", min_years: int = MIN_YEARS,
            min_gain: float = MIN_GAIN) -> pd.DataFrame:
     """One row per tier-1 location: its creek coverage and the window the rule gives."""
-    from .calsim_atlas import _rim, _set_geoms, creek_overlap
+    from .atlas import _rim, _set_geoms, creek_overlap
     sets = load_sets(data_dir)
     geoms = _set_geoms(_rim(data_dir), sets)
     creeks = creek_overlap(sets, geoms, data_dir, trained=None, window=VALIDATION_WINDOW)
@@ -113,8 +113,8 @@ def write_windows(data_dir: str | Path, windows: dict[str, tuple[int, int]]) -> 
     return path
 
 
-def main(argv=None) -> None:
-    p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+def main(argv=None, prog=None) -> None:
+    p = argparse.ArgumentParser(prog=prog, description=__doc__.split("\n\n")[0])
     p.add_argument("--data-dir", default="data")
     p.add_argument("--min-years", type=int, default=MIN_YEARS,
                    help="shortest window in water years (default 20, the value the atlas, the comparison page "

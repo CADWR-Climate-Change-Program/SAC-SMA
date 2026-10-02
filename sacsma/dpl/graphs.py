@@ -43,13 +43,13 @@ import torch
 
 from .config import DplConfig
 from .data import CHUNK_MAXM, DomainTensors
-from .et_noah import NoahCanopyState
+from .physics.et_noah import NoahCanopyState
 from .forward import PipelineState, routing_uh, run_window
 from .loss import jul_sep_window, masked_basin_loss
 from .multi_timescale import monthly_nnse_loss
-from .routing import N_TAPS
-from .sma import SacState
-from .snow17 import Snow17State
+from .physics.routing import N_TAPS
+from .physics.sma import SacState
+from .physics.snow17 import Snow17State
 
 _STATE_FIELDS = (
     ("snow", "w_i"), ("snow", "ati"), ("snow", "w_q"), ("snow", "deficit"),

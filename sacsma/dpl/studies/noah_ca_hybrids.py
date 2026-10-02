@@ -25,8 +25,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from .._figures import plt  # noqa: F401
-from ..io import load_basin_area
+from ..._figures import plt  # noqa: F401
+from ...io import load_basin_area
 from .adaptive_physics import noah_ca_daily
 from .climatology import _basin_order
 from .dtdp_response import (DOMAIN, DP, DT, METRICS, REGIMES, _REGIME_TITLE,
@@ -103,21 +103,21 @@ def assemble(data_dir: str = "data", *, device: str = "cuda",
     def _dom():
         if "dom" not in _lazy:
             import torch
-            from .data import load_domain_tensors
+            from ..data import load_domain_tensors
             _lazy["dom"] = load_domain_tensors(data_dir, domain=DOMAIN,
                                                device="cpu", dtype=torch.float64)
         return _lazy["dom"]
 
     def _dev():
         if "dev" not in _lazy:
-            from .config import pick_device
+            from ..config import pick_device
             _lazy["dev"] = pick_device(device)
         return _lazy["dev"]
 
     def _pet(dt):
         key = ("pet", float(dt))
         if key not in _lazy:
-            from .hybrid.data import basin_pet_pt
+            from ..hybrid.data import basin_pet_pt
             _lazy[key] = basin_pet_pt(_dom(), delta_t=float(dt))
         return _lazy[key]
 

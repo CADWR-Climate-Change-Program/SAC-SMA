@@ -25,7 +25,7 @@ TRIN = ``I_TRNTY`` alone — plus WH = ``I_WKYTN``) and every cdec_daily / uf_mo
 registry entity with an arc list.  ``innermost_anchor`` = the smallest containing arc
 set, ``top_anchor`` = the largest (ties: FU, then uf, then cdec).
 
-Closure groups (the water-year closure of ``sacsma.dpl.calsim_arcs``): an arc in a
+Closure groups (the water-year closure of ``sacsma.dpl.calsim.arcs``): an arc in a
 FLOW-UNIMPAIRED system closes in its innermost FU system other than SRBB (so Shasta and
 Whiskeytown close on their own); an SRBB-only arc is excluded (the rim arcs sit ~973
 TAF/yr under FU SRBB by design, the valley node holds it); an arc outside every FU
@@ -65,7 +65,7 @@ from sacsma.calsim.catchments import (  # noqa: E402
     load_catchments,
     series_arc,
 )
-from sacsma.dpl.calsim_arcs import (  # noqa: E402
+from sacsma.dpl.calsim.arcs import (  # noqa: E402
     AF_PER_MM_MI2,
     CLOSURE_EXCLUDED,
     TRAIN_WY,

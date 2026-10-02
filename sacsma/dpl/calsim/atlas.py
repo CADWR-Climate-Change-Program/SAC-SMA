@@ -1,7 +1,7 @@
 """CalSim3 validation atlas: where every validated location is, and how the run scored on it.
 
-Builds, from a run's tier-1 outputs (:mod:`sacsma.dpl.calsim_tier1`) and, when present, its tier-2
-outputs (:mod:`sacsma.dpl.calsim_tier2`), the folder ``<run>/atlas/`` beside ``tier1/`` and ``tier2/``:
+Builds, from a run's tier-1 outputs (:mod:`sacsma.dpl.calsim.tier1`) and, when present, its tier-2
+outputs (:mod:`sacsma.dpl.calsim.tier2`), the folder ``<run>/atlas/`` beside ``tier1/`` and ``tier2/``:
 
 * ``atlas/tier1_map_kge_<window>.png`` and ``atlas/tier1_map_pbias_<window>.png`` — the
   CalSim3 rim domain with every tier-1 arc set dissolved and coloured by its score, the
@@ -15,7 +15,7 @@ outputs (:mod:`sacsma.dpl.calsim_tier2`), the folder ``<run>/atlas/`` beside ``t
   tab with the tier-1 and tier-2 maps and the summary table, one tab per location with its
   tier-1 metrics, time series, tier-2 sub-arc table and regime figure and its maps, a tab for
   the unconstrained arcs, a tab of training footprints by family, and a tab that sets the full
-  validation window against each location's trimmed window (:mod:`sacsma.dpl.calsim_windows`):
+  validation window against each location's trimmed window (:mod:`sacsma.dpl.calsim.windows`):
   the scores over both and the USGS creek coverage that remains inside the trimmed one;
 * ``atlas/atlas.md`` — the tier-1 content as Markdown with image links.
 
@@ -24,13 +24,13 @@ each arc's area on cells the run trained on, written by tier 2) to tell the arcs
 loss never saw from those that overlap a trained creek footprint.
 
 A run with ``DplConfig.holdout_wy`` is shown over its held-out water years (``WY1976-85``; the
-location tables also list ``WY1976-84`` and ``WY1950-84_mixed``, :mod:`sacsma.dpl.calsim_tier1`),
+location tables also list ``WY1976-84`` and ``WY1950-84_mixed``, :mod:`sacsma.dpl.calsim.tier1`),
 its creek records leave the holdout out (so the creek columns read out of sample there), there is
 no full-against-trimmed tab, and its ``calsim_monthly`` arcs get their own footprint map.
 
 Usage::
 
-    python -m sacsma.dpl.calsim_atlas <run_dir> [--data-dir data] [--out DIR] [--tier2-dir ...] [--label ...]
+    sacsma dpl calsim atlas <run_dir> [--data-dir data] [--out DIR] [--tier2-dir ...] [--label ...]
 
 ``<run_dir>`` is the run folder holding ``tier1/``; its ``tier1/`` folder is accepted as well.
 """
@@ -47,8 +47,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from ..calsim.catchments import MERGED_LAYER, load_catchments, series_arc
-from .calsim_tier1 import (TRIMMED_WINDOW, VALIDATION_WINDOW, arc_to_set, holdout_windows, load_sets,
+from ...calsim.catchments import MERGED_LAYER, load_catchments, series_arc
+from .tier1 import (TRIMMED_WINDOW, VALIDATION_WINDOW, arc_to_set, holdout_windows, load_sets,
                            run_holdout_wy, window_range)
 
 
@@ -127,7 +127,7 @@ def run_recipe(run_dir: Path, data_dir: str | Path, trained=None) -> dict | None
         return None
     import torch
 
-    from .config import family_shares
+    from ..config import family_shares
     ck = torch.load(ckpt, map_location="cpu", weights_only=False)
     cfg = ck.get("cfg") or {}
     ids = [str(x) for x in (trained if trained is not None else ck.get("basins") or [])]
@@ -167,7 +167,7 @@ def run_recipe(run_dir: Path, data_dir: str | Path, trained=None) -> dict | None
                 "differ from the nominal ones by era")
     kappa = None
     if cfg.get("mt_loss_ref") and spec != "none":
-        from .config import family_loss_refs
+        from ..config import family_loss_refs
         refs = family_loss_refs(cfg["mt_loss_ref"])
         pw = float(cfg.get("mt_loss_ref_power") or 1.0)
         lbar = sum(share[f] * refs[f] ** pw for f in share if f in refs)
@@ -395,7 +395,7 @@ def creek_overlap(sets, geoms, data_dir: str | Path, trained=None, window: str =
     training window (first and last day, complete water years with >= 300 days).
 
     The summary also carries ``cover_by_wy`` (the same area-month coverage for each water year of
-    the window, which :mod:`sacsma.dpl.calsim_windows` picks the trimmed window from), ``trim_wy``
+    the window, which :mod:`sacsma.dpl.calsim.windows` picks the trimmed window from), ``trim_wy``
     (the set table's ``val_start_wy``, ``val_end_wy``; None where the location keeps the full
     window), ``trim_cover`` (the coverage inside it) and ``n_seen_trim`` (the seen creeks with data
     inside it).
@@ -500,7 +500,7 @@ def creek_overlap(sets, geoms, data_dir: str | Path, trained=None, window: str =
                 by_key.setdefault(key, []).append(m)
             cov = {key: _cover(key) for key in by_key}
             window_cover = sum(cov[key] * len(ms) for key, ms in by_key.items()) / n_val_months
-            # the same coverage by water year (what calsim_windows picks the trimmed window from)
+            # the same coverage by water year (what sacsma dpl calsim windows picks the trimmed window from)
             for key, ms in by_key.items():
                 for m in ms:
                     cover_by_wy[m.year + (m.month >= 10)] += cov[key] / 12.0
@@ -508,7 +508,7 @@ def creek_overlap(sets, geoms, data_dir: str | Path, trained=None, window: str =
         # inside it and the creeks that still have data there
         trim_wy = (int(getattr(st, "val_start_wy", min(cover_by_wy))), int(getattr(st, "val_end_wy", max(cover_by_wy))))
         if trim_wy == (min(cover_by_wy), max(cover_by_wy)) or holdout_wy:
-            trim_wy = None   # a holdout run has no trimmed window (calsim_tier1)
+            trim_wy = None   # a holdout run has no trimmed window (sacsma dpl calsim tier1)
         trim_cover = float(np.mean([c for y, c in cover_by_wy.items() if trim_wy is None or trim_wy[0] <= y <= trim_wy[1]]))
         n_seen_trim = sum(1 for e in seen_ids if trim_wy is None or any(
             trim_wy[0] <= m.year + (m.month >= 10) <= trim_wy[1] for m in rec[e]["months"]))
@@ -775,7 +775,7 @@ def windows_table(sets, metrics, cover: dict, window: str) -> tuple[list[dict], 
         scored = (int(str(r.win_start)[:4]) + 1, int(str(r.win_end)[:4]))
         if len(t) and scored != (int(s.val_start_wy), int(s.val_end_wy)):
             raise ValueError(f"{s.set_id}: tier 1 scored WY{scored[0]}-{scored[1]}, data/calsim/tier1_sets.csv has "
-                             f"WY{s.val_start_wy}-{s.val_end_wy}: re-run calsim_tier1")
+                             f"WY{s.val_start_wy}-{s.val_end_wy}: re-run sacsma dpl calsim tier1")
         sm = cover.get(s.set_id, {})
         recs.append(dict(
             set_id=s.set_id, entity_id=s.entity_id, location=str(s.name).split(" (")[0], counted=bool(s.volume_scored),
@@ -813,7 +813,7 @@ def _windows_block(sets, metrics, cover: dict, window: str, e, fmt: str = "html"
              f"targets start after it. The {window} scores " + ("on the other tabs" if fmt == "html" else "above")
              + " are over the full window. This table sets them against each location's trimmed window: the run of at "
              f"least 20 water years inside {window} in which the registry's creek gauges covered the least of the "
-             "location (sacsma.dpl.calsim_windows; val_start_wy and val_end_wy in data/calsim/tier1_sets.csv, the same "
+             "location (sacsma.dpl.calsim.windows; val_start_wy and val_end_wy in data/calsim/tier1_sets.csv, the same "
              "for every run). Creek coverage is the share of the location's area-months under creek gauges with data; "
              "the coverage left inside the trimmed window is the lowest that any run of 20 or more water years allows. "
              "The two scores are over different years, so a change between them is first of all a change of years: in a "
@@ -1333,8 +1333,8 @@ def write_markdown(sets, metrics, out: Path, label: str, window: str, maps: list
     return path
 
 
-def main(argv=None) -> None:
-    p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+def main(argv=None, prog=None) -> None:
+    p = argparse.ArgumentParser(prog=prog, description=__doc__.split("\n\n")[0])
     p.add_argument("run_dir_or_tier1", metavar="run_dir",
                    help="the run folder holding tier1/ (tier1_metrics.csv + figures/<set>.png); "
                         "the tier1/ folder itself is accepted as well")
@@ -1353,13 +1353,13 @@ def main(argv=None) -> None:
     given = Path(a.run_dir_or_tier1)
     t1 = given if (given / "tier1_metrics.csv").exists() else given / "tier1"
     if not (t1 / "tier1_metrics.csv").exists():
-        p.error(f"no tier1_metrics.csv under {given} or {given / 'tier1'}: run calsim_tier1 first")
+        p.error(f"no tier1_metrics.csv under {given} or {given / 'tier1'}: run sacsma dpl calsim tier1 first")
     out = Path(a.out) if a.out else t1.parent / "atlas"
     out.mkdir(parents=True, exist_ok=True)
     label = a.label or t1.parent.name
     metrics = pd.read_csv(t1 / "tier1_metrics.csv")
     run_dir = Path(a.run_dir) if a.run_dir else t1.parent
-    # a run that held water years out of training is validated over them (calsim_tier1)
+    # a run that held water years out of training is validated over them (sacsma dpl calsim tier1)
     ho = run_holdout_wy(run_dir)
     ho_win = holdout_windows(ho) if ho else None
     vwin = next(iter(ho_win)) if ho_win else VALIDATION_WINDOW
@@ -1427,7 +1427,7 @@ def main(argv=None) -> None:
         window_cover = {sid: v[1] for sid, v in all_creeks.items()}
     if not ho and not (metrics.window == TRIMMED_WINDOW).any() and any(v.get("trim_wy") for v in window_cover.values()):
         print("atlas: tier1_metrics.csv has no trimmed rows: the page will not have the full-against-trimmed tab "
-              "(re-run calsim_tier1)")
+              "(re-run sacsma dpl calsim tier1)")
     creek_note = ("" if n_tr == len(reg_creeks) else
                   "This run trained no USGS creeks, so it saw none of these locations inside either window: the creek "
                   "columns describe the registry's gauges, which set the windows, and the two scores differ by the "

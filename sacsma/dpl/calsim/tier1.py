@@ -32,7 +32,7 @@ The USGS creek gauges train over their whole records, which reach into 1950-1984
 location they reach is therefore also scored over a trimmed window, water years ``val_start_wy`` to
 ``val_end_wy`` of the set table: the run of at least 20 water years inside 1950-1984 in
 which the creeks covered the least of the location (``window = trimmed``; the rule is
-:mod:`sacsma.dpl.calsim_windows`).  A location the creeks never reached keeps the full
+:mod:`sacsma.dpl.calsim.windows`).  A location the creeks never reached keeps the full
 window and has no ``trimmed`` row.  The full-window score is always reported; the summary
 gives the aggregate both ways.
 
@@ -45,7 +45,7 @@ no trimmed window, and the ``train`` window scored without the held-out water ye
 
 Usage::
 
-    python -m sacsma.dpl.calsim_tier1 <run_dir> [--out DIR] [--data-dir data]
+    sacsma dpl calsim tier1 <run_dir> [--out DIR] [--data-dir data]
 
 Writes ``tier1_metrics.csv`` (one row per set x reference x window), ``tier1_monthly.csv``
 (the aligned monthly volumes) and ``tier1_regime_WY1950-84.png`` under ``--out``
@@ -60,10 +60,10 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from ..io import read_table
-from ..metrics import center_of_timing, kge, nse, pbias, pearson, seasonal_mismatch
-from ..calsim import calsim_dir, load_calsim3_monthly
-from ..calsim.catchments import CALSIM_GPKG, MERGED_LAYER, series_arc
+from ...io import read_table
+from ...metrics import center_of_timing, kge, nse, pbias, pearson, seasonal_mismatch
+from ...calsim import calsim_dir, load_calsim3_monthly
+from ...calsim.catchments import CALSIM_GPKG, MERGED_LAYER, series_arc
 
 #: 1 mm of depth over 1 mi^2 in acre-feet: 2,589,988.11 m^2 x 1e-3 m / 1,233.4818 m^3 per AF.
 AF_PER_MM_MI2 = 2589988.110336e-3 / 1233.48183754752
@@ -73,7 +73,7 @@ AF_PER_MM_MI2 = 2589988.110336e-3 / 1233.48183754752
 WINDOWS = {"WY1950-84": ("1949-10", "1984-09")}
 VALIDATION_WINDOW = "WY1950-84"
 #: a location the USGS creek gauges reached inside the validation window is also scored over water
-#: years ``val_start_wy`` .. ``val_end_wy`` of the set table (see :mod:`sacsma.dpl.calsim_windows`)
+#: years ``val_start_wy`` .. ``val_end_wy`` of the set table (see :mod:`sacsma.dpl.calsim.windows`)
 TRIMMED_WINDOW = "trimmed"
 #: a run that held water years out of training in every family (``DplConfig.holdout_wy``) is
 #: validated over them instead: window ``WY<first>-<last>`` (e.g. ``WY1976-85``), plus the same
@@ -166,7 +166,7 @@ def load_sets(data_dir: str | Path = "data") -> pd.DataFrame:
         odd = s[(num.isna() & ~blank) | (num.notna() & (num % 1 != 0))]
         if len(odd):
             raise ValueError(f"tier1_sets.csv: {col} is not a water year at {', '.join(odd.set_id)} "
-                             "(blank the cell and run python -m sacsma.dpl.calsim_windows --write)")
+                             "(blank the cell and run sacsma dpl calsim windows --write)")
         s[col] = num.fillna(wy).astype(int)
     bad = s[(s.val_start_wy < bounds["val_start_wy"]) | (s.val_end_wy > bounds["val_end_wy"]) | (s.val_start_wy > s.val_end_wy)]
     if len(bad):
@@ -426,7 +426,7 @@ def location_figure(panel: dict, out: Path, run_label: str = "") -> None:
     mean-monthly regimes.  The entity's own gauge record is overlaid where one exists,
     with its volume ratio to the CalSim3 reference in the legend; for a partial footprint
     the sum of the covered arcs is drawn dashed."""
-    from .._figures import _period_stats, _stat_text, plt
+    from ..._figures import _period_stats, _stat_text, plt
     st, sim, ref = panel["row"], panel["sim"], panel["ref"]
     idx = sim.index
     d = idx.to_timestamp()
@@ -617,8 +617,8 @@ def regime_figure(monthly: pd.DataFrame, metrics: pd.DataFrame, path: Path,
     plt.close(fig)
 
 
-def main(argv=None) -> None:
-    p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+def main(argv=None, prog=None) -> None:
+    p = argparse.ArgumentParser(prog=prog, description=__doc__.split("\n\n")[0])
     p.add_argument("run_dir", help="run folder holding sim_daily_mm.npz")
     p.add_argument("--out", default=None, help="output folder (default <run_dir>/tier1)")
     p.add_argument("--data-dir", default="data")

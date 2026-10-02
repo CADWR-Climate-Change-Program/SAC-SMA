@@ -23,7 +23,7 @@ Sources, per family (the registry's ``obs_store`` column):
 * ``calsim_monthly`` — ``data/calsim/calsim3_inflow_monthly_mm.csv`` (the
   CalSim3 rim INFLOW arcs as mm/month over each arc's ``SQ_MI``), kept only on
   the arc-months of ``data/calsim/arc_obs_mask.csv`` (the arc's own gauge
-  record in the training water years; see :mod:`sacsma.dpl.calsim_arcs`).
+  record in the training water years; see :mod:`sacsma.dpl.calsim.arcs`).
   Registry rows exist only when the registry was built with
   ``--calsim-arcs``; they load only when a run names them (``--basins``).
 
@@ -53,7 +53,7 @@ CALSIM_FAMILY = "calsim_monthly"
 
 def _calsim_store(data_dir: str, obs_store: str) -> tuple[pd.DataFrame, dict]:
     """The arc depth store (wide, monthly PeriodIndex x arc) and the arc mask."""
-    from .calsim_arcs import load_arc_mask
+    from .calsim.arcs import load_arc_mask
     path, col = obs_store.rsplit(":", 1)
     t = pd.read_csv(Path(data_dir) / path, parse_dates=["date"])
     w = t.pivot(index="date", columns="arc", values=col)

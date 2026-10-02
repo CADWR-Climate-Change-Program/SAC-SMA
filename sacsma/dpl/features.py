@@ -61,7 +61,7 @@ import zlib
 import numpy as np
 import pandas as pd
 
-from .pet import hamon_raw_pet_numpy
+from .physics.pet import hamon_raw_pet_numpy
 
 CONTINUOUS_STATICS = ("elev", "lat", "lon", "flowlen")
 CLIMATE_INDICES = ("p_mean", "aridity", "snow_frac", "seasonality")

@@ -10,7 +10,7 @@ Writes per-basin diagnostics, a domain skill-summary, and a metrics CSV under
 Usage::
 
     sacsma plots --domain 15cdec                 # all 15 basins
-    python -m sacsma.cdec15.plots --basins BND TRM
+    sacsma plots --basins BND TRM
 """
 
 from __future__ import annotations

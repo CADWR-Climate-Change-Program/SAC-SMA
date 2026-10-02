@@ -38,7 +38,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from .calsim_tier1 import AF_PER_MM_MI2
+from .tier1 import AF_PER_MM_MI2
 
 #: the dPL training water years (WY1976-85 is the holdout of every family; nothing
 #: before WY1950) — inclusive (first, last) pairs

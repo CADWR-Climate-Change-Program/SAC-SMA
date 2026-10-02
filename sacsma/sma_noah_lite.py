@@ -1,6 +1,6 @@
 """Noah-LITE evapotranspiration SAC-SMA core (Numba) — frozen-pipeline mirror of
-the torch ``et_mode='noah'`` + ``canopy_lite`` path (``sacsma.dpl.et_noah.
-noah_lite_et_step`` interleaved with ``sacsma.dpl.sma.sacsma_step(et_mode=
+the torch ``et_mode='noah'`` + ``canopy_lite`` path (``sacsma.dpl.physics.et_noah.
+noah_lite_et_step`` interleaved with ``sacsma.dpl.physics.sma.sacsma_step(et_mode=
 'external')``) so a Noah-lite-trained dPL export scores through the fast
 ``run_basin`` path instead of streaming the full record through the torch
 pipeline.
@@ -38,7 +38,7 @@ import numpy as np
 
 from ._compat import njit
 
-# -- pinned Noah-lite constants — verbatim from sacsma.dpl.et_noah (keep in sync)
+# -- pinned Noah-lite constants — verbatim from sacsma.dpl.physics.et_noah (keep in sync)
 _BEER_K = 0.5      # canopy extinction: sig = min(veg_frac, 1 - exp(-k*LAI))
 _LITE_WILT = 0.05  # wilting point (fraction of tension capacity)
 _LITE_FROOT = 0.7  # upper-zone root fraction

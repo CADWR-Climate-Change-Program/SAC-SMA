@@ -95,7 +95,7 @@ assert tuple(p for ps in PARAM_GROUPS.values() for p in ps) == FREE_PARAMS
 # ---------------------------------------------------------------------------
 # Noah canopy-resistance ET (et_mode="noah") — a SEPARATE parameter set
 # ---------------------------------------------------------------------------
-# These drive sacsma.dpl.et_noah and are NEVER part of PARAM_ORDER / the
+# These drive sacsma.dpl.physics.et_noah and are NEVER part of PARAM_ORDER / the
 # ga_optimum export (the frozen model has no Noah ET).  Bounds from NWS 53
 # (Koren et al. 2010) and the Noah land-surface parameter tables.
 CANOPY_BOUNDS: dict[str, tuple[float, float]] = {
@@ -269,7 +269,7 @@ class DplConfig:
     #: only.  Empty = the stores as-is (default).
     obs_mask: tuple[str, ...] = ()
     #: water years held out of EVERY family, as an inclusive ``(first, last)`` pair,
-    #: e.g. (1976, 1985) (calsim_arcs.HOLDOUT_WY): their targets are NaN after the
+    #: e.g. (1976, 1985) (calsim.arcs.HOLDOUT_WY): their targets are NaN after the
     #: registry n_obs audit and the obs_mask, before the NNSE normalizers — so the
     #: loss, the normalizers, the chunk liveness and selection never read them (a
     #: held-out water year with no other target becomes a dead chunk).  The
