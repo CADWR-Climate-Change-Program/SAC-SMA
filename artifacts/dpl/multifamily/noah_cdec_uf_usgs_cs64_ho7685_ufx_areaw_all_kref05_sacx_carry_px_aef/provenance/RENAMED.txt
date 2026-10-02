@@ -1,0 +1,14 @@
+RENAMED 2026-10-01
+
+This run was trained, scored and preregistered under the folder name
+  s1_cs64_ho7685_ufx_areaw_all_kref05_sacx_carry_px_aef
+On 2026-10-01 the folder was renamed to
+  noah_cdec_uf_usgs_cs64_ho7685_ufx_areaw_all_kref05_sacx_carry_px_aef
+so that it follows the multifamily naming rule: families first, then the recipe
+(cs64 = the 64 CalSim3 arcs trained as a family, ho7685 = water years 1976-85 held out,
+ufx = the UF targets back-extended to WY1950).
+
+The files in this provenance/ folder keep the old name: they are the record of the run as it
+was made (the preregistration files among them are covered by prereg_SHA256SUMS). No file
+content changed with the rename other than the run label in calsim_product/product_info.json,
+calsim_product/share_model.pt and the atlas page (atlas/calsim_validation_atlas.html).
