@@ -141,7 +141,7 @@ def run_window(
                                            # resupply and ADIMP ET(5) (DplConfig.noah_sac_exchanges)
     state_idx: torch.Tensor | None = None,  # (N, T) climate-state index (dynamic params)
     return_tet: bool = False,              # also return total ET (N, T) for closure
-    return_swe: bool = False,              # also return Snow-17 SWE (N, T) (obs loss)
+    return_swe: bool = False,              # also return Snow-17 SWE (N, T)
     return_components: bool = False,       # also return the routed (fast, slow) pair
     return_parts: bool = False,            # also return the 4 routed runoff parts
     row_cell: torch.Tensor | None = None,  # (R,) cell dedup: the physics row of each
@@ -187,7 +187,7 @@ def run_window(
     missing pair raises — there is no synthetic tavg fallback).
     """
     # Snow-17 first: its SWE trajectory drives the snow-cover albedo of the
-    # Priestley-Taylor PET below (and the SWE-observation loss via return_swe).
+    # Priestley-Taylor PET below (and is returned under return_swe).
     # Snow-17 does not depend on the PET, so this reordering is value-identical
     # for every path that does not raise the albedo over snow (pt_snow_albedo == 0).
     albedo_swe = (raw_pet is None and pt_snow_albedo > 0.0

@@ -168,12 +168,6 @@ def _dpl_train(args: argparse.Namespace) -> int:
         pxtemp_box=tuple(float(v) for v in args.pxtemp_box.split(":")),
         pxtemp_tau=args.pxtemp_tau,
         var_gate_frac=args.var_gate_frac, var_huber_cap=args.var_huber_cap,
-        et_loss_lambda=args.et_loss_lambda,
-        et_level_lambda=args.et_level_lambda,
-        swe_loss_lambda=args.swe_loss_lambda,
-        shape_sigma_floor=args.shape_sigma_floor,
-        et_anchor_band=args.et_anchor_band,
-        et_products=args.et_products,
         init_from=args.init_from, init_gate=args.init_gate,
         lr=args.lr,
         lr_warmup_epochs=args.warmup_epochs, n_epochs=args.epochs,
@@ -563,31 +557,6 @@ def main(argv: list[str] | None = None) -> int:
     tr.add_argument("--timing-vol-gate", type=float, default=0.05,
                     help="the timing term skips a basin-chunk whose observed Jul-Sep mean "
                          "flow is under this share of the basin's record mean flow")
-    tr.add_argument("--et-loss-lambda", type=float, default=0.0,
-                    help="ET seasonal-SHAPE loss weight: inverse-variance pull of "
-                         "the model's NORMALIZED monthly ET cycle to the 5-product "
-                         "consensus shape — level-blind (0 disables)")
-    tr.add_argument("--et-level-lambda", type=float, default=0.0,
-                    help="ET volume envelope hinge weight: zero inside the product "
-                         "min-max total, quadratic outside (catches arid basins "
-                         "above every product; 0 disables)")
-    tr.add_argument("--swe-loss-lambda", type=float, default=0.0,
-                    help="SWE seasonal-SHAPE loss weight: normalized accumulation/"
-                         "melt-cycle pull to the 4-product consensus (snow basins "
-                         "only, no level term; 0 disables)")
-    tr.add_argument("--shape-sigma-floor", type=float, default=0.1,
-                    help="absolute floor on the normalized-cycle ensemble sigma "
-                         "(hedges correlated-products over-confidence; default 0.1)")
-    tr.add_argument("--et-anchor-band", type=float, default=0.0,
-                    help="re-target the ET level hinge to the WATER-BALANCE "
-                         "anchor: per-basin annual ET = cal mean(P) - mean(Q_obs) "
-                         "over gage days, +/- this fractional band (needs "
-                         "--et-level-lambda > 0; 0 = product min-max envelope)")
-    tr.add_argument("--et-products", default="",
-                    help="comma list restricting the ET obs target to named "
-                         "products (e.g. fluxcom = the single-product steering "
-                         "arm; one product requires --et-anchor-band > 0). "
-                         "Empty = all 5 (consensus)")
     tr.add_argument("--init-from", default="",
                     help="warm-start checkpoint (e.g. a baseline best.pt): net "
                          "weights load strict=False so fresh zero-init heads "

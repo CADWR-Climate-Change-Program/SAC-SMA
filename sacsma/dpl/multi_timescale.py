@@ -10,7 +10,7 @@ Daily entities (usgs_daily + cdec_daily) form a dense ``(D, T_env)`` matrix
 like :class:`sacsma.dpl.data.CalObs`; monthly entities (uf_monthly) get a
 ``(M, n_months)`` matrix over the envelope's calendar months, consumed by
 the monthly flow-loss term (simulated daily flow bucketed to complete
-months, the ``et_chunk_target`` machinery).
+months, the ``month_chunk_target`` machinery).
 
 Sources, per family (the registry's ``obs_store`` column):
 
@@ -42,7 +42,7 @@ import torch
 
 from ..cdec15 import load_gage
 from ..io import MULTI_TIMESCALE_DOMAIN, domain_dir
-from .data import DomainTensors, et_chunk_target
+from .data import DomainTensors, month_chunk_target
 
 #: global training envelope (WY1950-2018; forcing ends 2018-12-31).
 ENVELOPE_START = "1949-10-01"
@@ -295,7 +295,7 @@ def monthly_chunk_target(
     """Day->month bucket for one TBPTT chunk plus each slot's COLUMN in the
     envelope month grid (:attr:`EntityObs.month_code`).
 
-    Wraps :func:`sacsma.dpl.data.et_chunk_target` — a calendar month gets a
+    Wraps :func:`sacsma.dpl.data.month_chunk_target` — a calendar month gets a
     slot only when it lies completely inside both the chunk and the cal
     window, so split/partial months never enter the loss (a fixed 366-day grid
     from 1 Oct 1949 splits one month most years; the water-year grid,
@@ -305,10 +305,10 @@ def monthly_chunk_target(
     (length, maxm), cols (maxm,), mask (maxm,))``; masked slots have ``cols``
     0 (gate on ``mask`` before comparing).
     """
-    bucket, _, mask = et_chunk_target(dates, c0, length, cal_t0, cal_t1)
+    bucket, _, mask = month_chunk_target(dates, c0, length, cal_t0, cal_t1)
     if mask.sum() >= bucket.shape[1]:
         # all slots used ⇒ a further complete month may have been dropped
-        # silently (et_chunk_target caps at maxm without error); DplConfig
+        # silently (month_chunk_target caps at maxm without error); DplConfig
         # bounds train_chunk_days <= 366 exactly to keep this unreachable (a
         # 1-Oct-aligned 365/366-day chunk holds twelve complete months)
         raise ValueError(f"monthly bucket slots exhausted for a {length}-day "

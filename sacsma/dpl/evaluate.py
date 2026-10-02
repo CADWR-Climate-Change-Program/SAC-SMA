@@ -27,7 +27,8 @@ import torch
 from ..cdec15 import BASINS, CAL_END, load_gage
 from ..metrics import kge, nse, pbias
 from ..model import run_basin
-from .config import CANOPY_LEARNED_PARAMS, PARAM_ORDER, DplConfig, pick_device
+from .config import (CANOPY_LEARNED_PARAMS, PARAM_ORDER, RETIRED_CFG_DEFAULTS, DplConfig,
+                     pick_device)
 from .data import DomainTensors, load_domain_tensors, with_cell_dedup
 from .forward import initial_state, routing_uh, run_window
 
@@ -547,6 +548,11 @@ def score_sac_torch(net: torch.nn.Module, x: torch.Tensor, dom: DomainTensors,
     return metrics
 
 
+def _plain(v):
+    """A checkpoint cfg value in comparable form (lists and tuples alike)."""
+    return tuple(v) if isinstance(v, (list, tuple)) else v
+
+
 def load_net_from_checkpoint(
     ckpt_path: str | Path,
     data_dir: str = "data",
@@ -569,10 +575,15 @@ def load_net_from_checkpoint(
     domain = ck.get("domain", "15cdec")
     nc = ck.get("net_config", {})
     # rebuild the training config tolerantly: checkpoints persist the cfg dict
-    # verbatim, so fields REMOVED in later schema versions (e.g. the retired
-    # et_loss_sigma_floor) must be dropped, not crash the scoring.
+    # verbatim, so fields REMOVED in later schema versions must be dropped, not
+    # crash the scoring.  A retired field at its inert default is dropped
+    # silently; anything else is named (a checkpoint trained with a retired
+    # option — e.g. the ET/SWE observation losses — still scores, since the
+    # forward does not depend on the loss).
     known = {f.name for f in _dc.fields(DplConfig)}
-    dropped = sorted(set(ck["cfg"]) - known)
+    dropped = sorted(k for k in set(ck["cfg"]) - known
+                     if k not in RETIRED_CFG_DEFAULTS
+                     or _plain(ck["cfg"][k]) != RETIRED_CFG_DEFAULTS[k])
     if dropped:
         print(f"note: dropping retired cfg keys from checkpoint: {dropped}",
               flush=True)

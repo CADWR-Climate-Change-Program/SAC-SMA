@@ -153,6 +153,17 @@ CANOPY_LITE_LEARNED: tuple[str, ...] = ("soil_chi",)
 DYNAMIC_SAC_PARAMS: tuple[str, ...] = ("Kpet",)
 
 
+#: DplConfig fields retired from the schema, with the inert default each had.  A
+#: checkpoint that records one at this value loads without comment; any other value
+#: is named when the field is dropped (evaluate.load_net_from_checkpoint).
+RETIRED_CFG_DEFAULTS: dict[str, object] = {
+    "smooth_eps": 0.0,
+    # the ET/SWE observation losses (removed 2026-10)
+    "et_loss_lambda": 0.0, "et_level_lambda": 0.0, "swe_loss_lambda": 0.0,
+    "shape_sigma_floor": 0.1, "et_anchor_band": 0.0, "et_products": (),
+}
+
+
 def validate_ga_optimum(params_df) -> None:
     """Assert every archived GA value lies inside BOUNDS (call at startup)."""
     for name in PARAM_ORDER:
@@ -297,46 +308,6 @@ class DplConfig:
     adaptive_loss_momentum: float = 0.5
     adaptive_loss_floor: float = 0.05    # min (1 - KGE) so strong basins keep weight
     adaptive_loss_clip: float = 5.0      # per-basin weight clamp [1/clip, clip]
-    #: ET/SWE-observation auxiliary losses (multi-product, cal-window ONLY,
-    #: leakage-safe; obs are training regularizers, NEVER a selection criterion).
-    #: Redesigned 2026-07-13 after the raw monthly central pull degraded
-    #: streamflow (it pulled LEVEL, which the products disagree on 38-85%, as
-    #: hard as PHASE, which they agree on to ~0.5 month).  Three separable terms:
-    #: * ``et_loss_lambda`` — ET seasonal-SHAPE pull: model's monthly ET is
-    #:   normalized by its own masked-month mean and pulled toward the products'
-    #:   consensus NORMALIZED cycle (inverse-variance; sigma inflated by the
-    #:   products' interannual shape spread, floored at ``shape_sigma_floor``).
-    #:   Level-blind by construction — no volume fight with streamflow.
-    #: * ``et_level_lambda`` — ET volume envelope HINGE: zero force inside the
-    #:   product min-max total, quadratic outside (width-scaled).  Catches the
-    #:   arid basins whose ET sits ABOVE every product without pulling anyone
-    #:   toward the (untrustworthy) ensemble-mean volume.
-    #: * ``swe_loss_lambda`` — SWE seasonal-SHAPE pull (same normalized form) on
-    #:   the model's monthly-MEAN Snow-17 SWE vs 4 products; ~snow-free basins
-    #:   masked out; NO SWE level term ever (85% peak-magnitude disagreement).
-    #: 0.0 each disables; all zero => the obs path is absent = byte-identical.
-    et_loss_lambda: float = 0.0
-    et_level_lambda: float = 0.0
-    swe_loss_lambda: float = 0.0
-    shape_sigma_floor: float = 0.1   # absolute floor on the normalized-cycle sigma
-    #: replace the level hinge's product min-max envelope with a WATER-BALANCE
-    #: anchor: per-basin annual ET = cal-window mean(P) - mean(Q_obs) over the
-    #: gage-covered days, spread over months by the products' consensus cycle,
-    #: hinged at anchor*(1 -/+ band).  Observed and flow-consistent — far
-    #: tighter than the product bracket (which spans up to 72% of Q in the arid
-    #: basins and measurably could not stop the shape term's level leak: the
-    #: 2026-07-15 seasonal-Kpet arm drifted annual ET 10-17% inside it).
-    #: 0 = off (product envelope, exact prior behavior).
-    et_anchor_band: float = 0.0
-    #: restrict the ET obs target to a SUBSET of the 5 training products
-    #: (e.g. ("fluxcom",) — the A2 single-product arm; the 2026-07-15 pre-
-    #: registered pick minimizes RMS |annual product ET - (P-Q_obs)| over the
-    #: 15 basins).  () = all 5 (consensus, prior behavior).  A SINGLE product
-    #: has no cross-product spread — sigma degrades to the interannual spread
-    #: floored at ``shape_sigma_floor`` (an intrinsically harder pull) and the
-    #: min-max level envelope is degenerate, so one product REQUIRES the P-Q
-    #: anchor (``et_anchor_band`` > 0) as the level constraint.
-    et_products: tuple[str, ...] = ()
     #: multi-timescale family weighting (multifamily domain only): "none" =
     #: every valid daily entity weighs equally in the chunk mean and the
     #: monthly term adds with coefficient 1 (the baseline); "equal" = shares
@@ -400,9 +371,7 @@ class DplConfig:
     #: parameter field).  The donor's feature standardization is reused, so
     #: the start is exact even when this run trains a different entity subset
     #: (--basins) than the donor.  Optimizer/scheduler start fresh; combine
-    #: with a low lr for the fine-tune regime (obs losses select within the
-    #: donor's flow-optimal plateau instead of fighting a from-scratch
-    #: descent).  "" = off.
+    #: with a low lr for the fine-tune regime.  "" = off.
     init_from: str = ""
     #: ep0-donor gate action when the epoch-0 selection does not reproduce
     #: the donor's sel cal KGE (|d| > 1e-3): "warn" prints and continues;
@@ -676,15 +645,6 @@ class DplConfig:
             raise ValueError(f"noah_pet {self.noah_pet!r}")
         if self.sac_pet not in ("hamon", "priestley_taylor"):
             raise ValueError(f"sac_pet {self.sac_pet!r}")
-        if min(self.et_loss_lambda, self.et_level_lambda,
-               self.swe_loss_lambda, self.shape_sigma_floor) < 0.0:
-            raise ValueError("obs-loss lambdas / shape_sigma_floor must be >= 0")
-        if not 0.0 <= self.et_anchor_band < 1.0:
-            raise ValueError("et_anchor_band must be in [0, 1)")
-        if self.et_anchor_band > 0.0 and self.et_level_lambda <= 0.0:
-            raise ValueError(
-                "et_anchor_band re-targets the level hinge — it needs "
-                "et_level_lambda > 0 to have any effect")
         if self.init_gate not in ("warn", "abort"):
             raise ValueError(f"init_gate {self.init_gate!r}")
         if self.mt_family_weight not in ("none", "equal"):
@@ -724,9 +684,9 @@ class DplConfig:
             raise ValueError(f"nograd_window {self.nograd_window} < 1")
         if not 30 <= self.train_chunk_days <= 366:
             # > 366 days can hold a 14th complete calendar month, overflowing
-            # the fixed 13-slot monthly buckets (ET_MAXM) — months past the
-            # 13th would be dropped from the ET/SWE/monthly-flow targets
-            # SILENTLY (et_chunk_target caps at maxm without error)
+            # the fixed 13-slot monthly buckets (CHUNK_MAXM) — months past the
+            # 13th would be dropped from the monthly-flow targets SILENTLY
+            # (month_chunk_target caps at maxm without error)
             raise ValueError(f"train_chunk_days {self.train_chunk_days} "
                              "outside [30, 366]")
         if self.chunk_grid not in ("fixed", "water_year"):
@@ -834,15 +794,6 @@ class DplConfig:
             self.uf_train_start = d.isoformat()
         if self.calsim_arcs not in ("none", "train_default"):
             raise ValueError(f"calsim_arcs {self.calsim_arcs!r}: 'none' or 'train_default'")
-        if isinstance(self.et_products, str):   # tolerate a bare CLI string
-            self.et_products = tuple(p for p in self.et_products.split(",") if p)
-        if (len(self.et_products) == 1
-                and (self.et_loss_lambda > 0.0 or self.et_level_lambda > 0.0)
-                and self.et_anchor_band <= 0.0):
-            raise ValueError(
-                "a single ET product has a degenerate min-max level envelope — "
-                "et_products of length 1 requires the P-Q anchor "
-                "(et_anchor_band > 0)")
         from datetime import date
         if date.fromisoformat(self.spinup_start) >= \
                 date.fromisoformat(self.cal_start):
