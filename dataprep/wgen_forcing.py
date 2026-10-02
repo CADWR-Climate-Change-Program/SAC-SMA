@@ -1,7 +1,7 @@
 """The daily forcing MASTER (Livneh-unsplit, non-detrended) — build / verify / cut.
 
 The local WGEN NonDetrend-Unsplit statewide store
-(``C:\\Users\\warnold_la\\Local\\WGEN_NonDetrend_Unsplit_Statewide``, one
+(``wgen_ascii`` in ``dataprep/local_paths.toml``, one
 ``data_<lat>_<lon>`` ASCII per cell: year month day prcp tmax tmin, daily
 1915-01-01..2018-12-31) is the PROVEN source of every committed historical
 forcing store (verified 2026-07-16: ``prcp`` matches to float32 rounding and
@@ -39,7 +39,8 @@ compact processed layers only; the master is ~1 GB):
       # + tminmax_livneh_percell_<name>.nc for the cells listed in <csv> (col
       # ``key``), in the committed cdec15_grid schema (coords key/time)
 
-Default master path: ``D:\\sacsma-data\\forcing\\livneh_unsplit_nondetrend_daily_region.nc``.
+Default master path: ``forcing/livneh_unsplit_nondetrend_daily_region.nc`` under ``staging``
+(``dataprep/local_paths.toml``).
 """
 
 from __future__ import annotations
@@ -51,9 +52,11 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
-WGEN_DIR = r"C:\Users\warnold_la\Local\WGEN_NonDetrend_Unsplit_Statewide"
+from _paths import local_path
+
+WGEN_DIR = str(local_path("wgen_ascii"))
 GRID_CSV = "data/region/grid_cells.csv"
-MASTER = r"D:\sacsma-data\forcing\livneh_unsplit_nondetrend_daily_region.nc"
+MASTER = str(local_path("staging") / "forcing" / "livneh_unsplit_nondetrend_daily_region.nc")
 X10_CSV = "data/region/prcp_x10_artifacts.csv"
 DAYS = pd.date_range("1915-01-01", "2018-12-31", freq="D")
 CALSIM_DOMAINS = ("9unimp", "11obs", "12rim")

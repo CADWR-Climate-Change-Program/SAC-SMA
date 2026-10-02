@@ -18,7 +18,7 @@ Stages (sacsma env; run from the repo root):
   --build S [S ...]     table-encode each S (see sacsma/wgen_scenarios.py) -> <out>/wgen_product_a_sNN.nc
   --verify S [S ...]    reopen each file and decode EVERY cell with sacsma.wgen_scenarios (all cells, and a
                         random subset in random order) against the checkpoints: 0 mismatches, every CRC.
-Options: --box DIR (default C:/Users/warnold_la/Box/Statewide_Effort/ProductA_100yr),
+Options: --box DIR (the release folder; default ``wgen_scenarios`` in dataprep/local_paths.toml),
          --checkpoint-dir DIR (default tmp/wgen_product_a_scen/pull; local only, not committed),
          --out DIR (default data/region/forcing).
 Timing (2026-09-29): pull about 80 s per 147-cell block for s1 + one scenario (about 40 min); build and
@@ -41,6 +41,8 @@ import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from _paths import local_path  # noqa: E402
+
 from sacsma import wgen_scenarios as W  # noqa: E402
 
 NT = 37986
@@ -319,7 +321,7 @@ def main():
     ap.add_argument("--pull", nargs="+", type=int)
     ap.add_argument("--build", nargs="+", type=int)
     ap.add_argument("--verify", nargs="+", type=int)
-    ap.add_argument("--box", default="C:/Users/warnold_la/Box/Statewide_Effort/ProductA_100yr")
+    ap.add_argument("--box", default=str(local_path("wgen_scenarios")))
     ap.add_argument("--checkpoint-dir", default="tmp/wgen_product_a_scen/pull")
     ap.add_argument("--out", default="data/region/forcing")
     a = ap.parse_args()

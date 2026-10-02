@@ -66,7 +66,7 @@ ANCHORS = [(dp, dt) for dp in (-0.2, -0.1, 0.0, 0.1, 0.2) for dt in (0.0, 2.0, 4
 
 #: gitignored per-(dp,dt) ensemble daily-flow cache — lets a metric-only change
 #: (e.g. a different percentile) reduce on CPU instead of re-running the GPU sweep.
-_HYBRID_CACHE = Path("artifacts/dpl/_hybrid_daily_cache")
+_HYBRID_CACHE = Path("artifacts/dpl/_local/cache/hybrid_daily")
 _ENS_TAG = {BASE: "base", DTDP: "dtdp", LSTM: "lstm"}
 
 

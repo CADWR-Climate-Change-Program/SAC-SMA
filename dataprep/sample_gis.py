@@ -38,7 +38,6 @@ import argparse
 import glob
 import math
 import os
-import sys
 import time
 from collections import defaultdict
 from pathlib import Path
@@ -46,11 +45,12 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-REPO = Path("C:/Users/warnold_la/local/repos/SAC-SMA")
-#: Staging root.  ``SACSMA_RAW_GIS`` overrides it -- the 89 GB stage lives on
-#: ``D:\sacsma-data\raw_gis``, off the repo drive.  Mirrors the precedent in
-#: dataprep/download_gis.py (same env var, same fallback).
-RAW = Path(os.environ.get("SACSMA_RAW_GIS") or REPO / "data" / "raw_gis")
+from _paths import local_path
+
+REPO = Path(__file__).resolve().parents[1]
+#: Staging root: ``raw_gis`` in dataprep/local_paths.toml (or ``SACSMA_RAW_GIS``), else
+#: data/raw_gis -- the same lookup as dataprep/download_gis.py.
+RAW = local_path("raw_gis", REPO / "data" / "raw_gis")
 POLARIS = RAW / "polaris" / "PROPERTIES" / "v1.0"
 LANDFIRE = RAW / "landfire"
 DEM = RAW / "dem" / "3dep_1as"

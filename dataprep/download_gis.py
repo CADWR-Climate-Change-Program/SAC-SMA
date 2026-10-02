@@ -1,4 +1,4 @@
-"""Stage the raw California/CONUS GIS rasters that ``data/raw_gis/sample_gis.py`` samples.
+"""Stage the raw California/CONUS GIS rasters that ``dataprep/sample_gis.py`` samples.
 
 Fetches the four products behind the continuous soil/veg/terrain HRU features
 (the dPL ``physical`` feature variant) into exactly the tree the sampler reads.
@@ -51,7 +51,6 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures as cf
-import os
 import sys
 import threading
 import time
@@ -59,12 +58,13 @@ from pathlib import Path
 
 import requests
 
+from _paths import local_path
+
 REPO = Path(__file__).resolve().parents[1]
 
-#: Staging root.  ``SACSMA_RAW_GIS`` overrides it -- the 2026-07 stage lives on
-#: ``D:\sacsma-data\raw_gis``, off the repo drive, because the tree is ~89 GB.
-#: Mirrors the SACSMA_ET_DIR / SACSMA_SWE_DIR precedent in dataprep/README.md.
-DEFAULT_ROOT = Path(os.environ.get("SACSMA_RAW_GIS") or REPO / "data" / "raw_gis")
+#: Staging root: ``raw_gis`` in dataprep/local_paths.toml (or ``SACSMA_RAW_GIS``), else
+#: data/raw_gis.  The tree is ~89 GB, so it usually sits off the repo drive.
+DEFAULT_ROOT = local_path("raw_gis", REPO / "data" / "raw_gis")
 
 # --- California extent: 1-degree tiles ---------------------------------------
 LAT_S = range(32, 42)      # south edge of each tile row

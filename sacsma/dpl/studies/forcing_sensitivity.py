@@ -259,7 +259,7 @@ def assemble(data_dir: str = "data", *, device: str = "cuda") -> dict:
 
     areas = basin_areas(data_dir, domain="15cdec")
     f_hist, f_detr, dT = _forcings(data_dir)
-    cd = Path("artifacts/dpl/_climatology_cache")
+    cd = Path("artifacts/dpl/_local/cache/climatology")
     # basins covered by WGEN: dT non-zero for >=50% of their cells
     hru = load_hru_table(data_dir, domain=DOMAIN)
     covered = {_norm_key(k) for k, r in f_hist.pos.items() if np.any(dT[r] != 0.0)}

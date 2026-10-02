@@ -23,7 +23,7 @@ Physics is the fast frozen numba noah-lite core (``run_basin`` with
 ``et_scheme='noah_lite'``, PT potential) — the same core that scores the frozen
 checkpoints.  ``noah`` reuses the Phase-1 cache
 (:func:`dtdp_response._frozen_noah`); ``noah_ca`` runs are cached under
-``artifacts/dpl/_adaptive_cache/``.
+``artifacts/dpl/_local/cache/adaptive/``.
 """
 from __future__ import annotations
 
@@ -40,7 +40,7 @@ from .dtdp_response import (DOMAIN, DP, DT, METRICS, REGIMES, _REGIME_TITLE,
                             _aggregate_regime, _frozen_noah, _metrics_from_daily)
 
 CA_CKPT = "artifacts/dpl/noah/checkpoints/best.pt"
-_CA_CACHE = Path("artifacts/dpl/_adaptive_cache")
+_CA_CACHE = Path("artifacts/dpl/_local/cache/adaptive")
 
 #: canonical physics model-type labels (left → right in the figure).
 NOAH = "Noah"

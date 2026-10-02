@@ -261,7 +261,7 @@ def assemble(data_dir: str = "data", *, device: str = "cuda") -> dict:
     from ..config import pick_device
 
     areas = basin_areas(data_dir, domain="15cdec")
-    cachedir = Path("artifacts/dpl/_climatology_cache")
+    cachedir = Path("artifacts/dpl/_local/cache/climatology")
     cachedir.mkdir(parents=True, exist_ok=True)
 
     monthly: dict[str, pd.DataFrame] = {}

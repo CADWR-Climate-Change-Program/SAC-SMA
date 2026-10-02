@@ -47,9 +47,9 @@ DOMAIN = "15cdec_grid"
 NOAH_DPL_CSV = "artifacts/dpl/superseded/noah_noca/params_dpl.csv"       # frozen noah-lite SAC params
 NOAH_CANOPY_CSV = "artifacts/dpl/superseded/noah_noca/params_canopy.csv"  # + soil_chi
 BASE_TORCH_CSV = "artifacts/dpl/superseded/noah_noca/daily_sim_noah_noca_torch.csv"  # torch present-climate base
-RAW_DIR = "artifacts/dpl/testing/hybrid_pet_noah"        # PET input, no response loss
-DTDP_DIR = "artifacts/dpl/testing/hybrid_pet_dtdp"       # + dp/dt response loss, λ=0.1
-DTDP_L03_DIR = "artifacts/dpl/testing/hybrid_pet_dtdp_l0.3"   # + response loss, λ=0.3
+RAW_DIR = "artifacts/dpl/_local/testing/hybrid_pet_noah"        # PET input, no response loss
+DTDP_DIR = "artifacts/dpl/_local/testing/hybrid_pet_dtdp"       # + dp/dt response loss, λ=0.1
+DTDP_L03_DIR = "artifacts/dpl/_local/testing/hybrid_pet_dtdp_l0.3"   # + response loss, λ=0.3
 N_SEEDS = 3
 
 #: model columns, left → right.

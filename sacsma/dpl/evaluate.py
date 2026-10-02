@@ -669,7 +669,7 @@ def noah_torch_daily(ckpt_path: str | Path, *, data_dir: str = "data",
 
 
 #: cache root for the (Δprecip, ΔT) noah physics teachers / response-surface runs.
-_DTDP_CACHE = "artifacts/dpl/testing/dtdp_cache"
+_DTDP_CACHE = "artifacts/dpl/_local/cache/dtdp"
 
 
 def teacher_cache_path(dp: float, dt: float,

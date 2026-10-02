@@ -1,0 +1,22 @@
+# Conda environment for the GIS raster scripts, kept apart from `sacsma` because rasterio and
+# geopandas each bring their own GDAL and must not share a process:
+#   dataprep/sample_gis.py     POLARIS / LANDFIRE / 3DEP / MODIS-LAI sampling (rasterio + pyhdf)
+#   dataprep/reitz_et.py       Reitz et al. (2023) ET rasters (rasterio)
+#   dataprep/build_flowlens.py the HydroSHEDS flow-length tracer; `sacsma dpl calsim tier2` runs
+#                              it in this environment through --trace-python
+#
+#   conda env create -f environment-gis.yml
+#   conda activate sacsma-gis
+name: sacsma-gis
+channels:
+  - conda-forge
+dependencies:
+  - python=3.14
+  - numpy
+  - pandas
+  - shapely
+  - pyproj
+  - rasterio
+  - rioxarray
+  - pyhdf
+  - libgdal-hdf4

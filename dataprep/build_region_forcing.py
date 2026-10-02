@@ -22,11 +22,12 @@ Products / sources / conventions:
   the unified store carries the corrected convention everywhere — the
   committed calsim stores already did; the raw cdec15_grid convention is
   retired with its store, and its dPL consumers are retrained).
-* ``wgen_product_a`` — verbatim from the OneDrive release
+* ``wgen_product_a`` — verbatim from the stochastic-input release (``climate_release`` in
+  ``dataprep/local_paths.toml`` = its ``BASE`` folder)
   (``BASE/WGEN/Product_A/1/meteo_<lat>_<lon>``, 1915-2018): all 4410 region
   cells present, and the release is ALREADY x10-corrected (verified at the
   artifact pairs).
-* ``historical_lto`` — verbatim from the OneDrive LTO release
+* ``historical_lto`` — verbatim from the LTO release in the same ``BASE`` folder
   (``BASE/Historical_Climate_LTO/1_Historical/data_<lat>_<lon>``, columns
   prcp tmax tmin wind [wind dropped], implicit daily 1915-2021): its own
   precipitation realization (split lineage) with its own upstream
@@ -54,15 +55,16 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
+from _paths import local_path
+
 ROOT = Path(".")
 GRID_CSV = "data/region/grid_cells.csv"
 X10_CSV = "data/region/prcp_x10_artifacts.csv"
-MASTER = r"D:\sacsma-data\forcing\livneh_unsplit_nondetrend_daily_region.nc"
-ONEDRIVE = Path(r"C:\Users\warnold_la\OneDrive - California Department of Water"
-                r" Resources\CalSim Synthetic Hydroclimate"
-                r"\calsim3-stochastic-input-generation\data\BASE")
-LTO_DIR = ONEDRIVE / "Historical_Climate_LTO" / "1_Historical"
-PA_DIR = ONEDRIVE / "WGEN" / "Product_A" / "1"
+#: the forcing master (dataprep/wgen_forcing.py) and the release folder, both outside the repo
+MASTER = local_path("staging") / "forcing" / "livneh_unsplit_nondetrend_daily_region.nc"
+RELEASE = local_path("climate_release")
+LTO_DIR = RELEASE / "Historical_Climate_LTO" / "1_Historical"
+PA_DIR = RELEASE / "WGEN" / "Product_A" / "1"
 OUT_DIR = Path("data/region/forcing")
 CALSIM_DOMAINS = ("9unimp", "11obs", "12rim")
 

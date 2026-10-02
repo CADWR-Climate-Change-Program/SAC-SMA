@@ -262,7 +262,7 @@ def evaluate_checkpoint_mt(
     ckp = Path(ckpt_path).resolve()
     out = Path(out_dir) if out_dir is not None else (
         ckp.parent.parent if ckp.parent.name == "checkpoints"
-        else Path("artifacts/multifamily/eval"))
+        else Path("artifacts/dpl/_local/eval"))
     figdir = out / "figures" / "entities"
     figdir.mkdir(parents=True, exist_ok=True)
 

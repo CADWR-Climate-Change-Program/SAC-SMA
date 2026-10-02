@@ -14,7 +14,7 @@ COMMITTED per-domain sidecars plus a full-coverage raster layer:
   convention (``dem_elev`` = 3DEP at the cell center; verified 2026-07-16).
   Fills the calsim-only cells.
 * ``data/region/{soilveg_continuous,lai_climatology}_raster.csv`` — produced by
-  ``data/raw_gis/sample_gis.py region`` (the ``sacsma-gis`` env): EVERY region
+  ``dataprep/sample_gis.py region`` (the ``sacsma-gis`` env): EVERY region
   cell, point-sampled at its center from the raw POLARIS/LANDFIRE/3DEP/MODIS-LAI
   stack, same convention as the calsim sidecars (verified to reproduce them
   exactly, see ``dataprep/README.md``).  Fills whatever the four sidecars above

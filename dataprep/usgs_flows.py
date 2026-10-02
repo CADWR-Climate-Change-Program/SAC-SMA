@@ -60,7 +60,6 @@ from __future__ import annotations
 
 import argparse
 import io
-import os
 import sys
 from pathlib import Path
 
@@ -68,9 +67,11 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 
+from _paths import local_path
+
 REPO = Path(__file__).resolve().parents[1]
-NH_DIR = Path(os.environ.get("SACSMA_NEURALHYD_DIR")
-              or r"C:\Users\warnold_la\Local\repos\neuralhyd-ca\data\training")
+#: data/training of the neuralhyd-ca repository (SACSMA_NEURALHYD_DIR or local_paths.toml)
+NH_DIR = local_path("neuralhyd_dir")
 OUT_DIR = REPO / "data" / "usgs"
 CALSIM_GPKG = REPO / "data" / "calsim" / "gis" / "calsim3.gpkg"
 CALSIM_LAYER = "CalSim3_And_GooseLake"

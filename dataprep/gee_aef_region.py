@@ -55,9 +55,9 @@ truststore is importable.
 Usage
 -----
     python dataprep/gee_aef_region.py --dry-run                      # what would run
-    python dataprep/gee_aef_region.py --project ee-warnold --years 2021 --max-units 2   # smoke test
-    python dataprep/gee_aef_region.py --project ee-warnold --check 30 --check-year 2021
-    python dataprep/gee_aef_region.py --project ee-warnold           # the burn, resumable
+    python dataprep/gee_aef_region.py --project <ee-project> --years 2021 --max-units 2   # smoke test
+    python dataprep/gee_aef_region.py --project <ee-project> --check 30 --check-year 2021
+    python dataprep/gee_aef_region.py --project <ee-project>           # the burn, resumable
     python dataprep/gee_aef_region.py --status
     python dataprep/gee_aef_region.py --assemble
 """
@@ -75,6 +75,8 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+
+from _paths import local_value
 
 COLL = "GOOGLE/SATELLITE_EMBEDDING/V1/ANNUAL"
 BANDS = [f"A{i:02d}" for i in range(64)]
@@ -556,7 +558,9 @@ def check(ee, n: int, year: int, scale: float, seed: int = 0) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=(__doc__ or "").split("\n\n")[0])
-    ap.add_argument("--project", default=None, help="EE-registered cloud project id")
+    ap.add_argument("--project", default=local_value("gee_project"),
+                    help="EE-registered cloud project id (default: gee_project in "
+                         "dataprep/local_paths.toml)")
     ap.add_argument("--years", nargs="+", type=int, default=YEARS, choices=YEARS)
     ap.add_argument("--chunk", type=int, default=150, help="max cells per request")
     ap.add_argument("--scale", type=float, default=15.0, choices=SCALES,

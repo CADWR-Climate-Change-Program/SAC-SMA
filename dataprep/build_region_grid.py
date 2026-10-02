@@ -34,7 +34,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-WGEN_DIR = r"C:\Users\warnold_la\Local\WGEN_NonDetrend_Unsplit_Statewide"
+from _paths import local_path
+
+WGEN_DIR = str(local_path("wgen_ascii"))
 GPKG = "data/calsim/gis/calsim3.gpkg"
 GPKG_LAYERS = ("CalSim3_And_GooseLake", "CalSim3_Merged")
 DOMAINS = ("15cdec_grid", "9unimp", "11obs", "12rim")

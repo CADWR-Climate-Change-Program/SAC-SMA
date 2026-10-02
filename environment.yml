@@ -30,11 +30,16 @@ dependencies:
   - scipy>=1.10       # Voronoi spacing + gamma-tail QMAP
   - pypdf>=4.0        # dataprep/dwr_unimpaired.py: DWR Appendix B table transcription
   - requests>=2.31    # dataprep downloads: cdec_fnf, download_gis, aorc_region, bcm_region
+  - zstandard>=0.22   # dataprep/aorc_region.py: the AORC zarr chunks
+  - pillow>=10        # sacsma dpl calsim atlas: figures embedded in the HTML
   # dev
   - ruff>=0.4
   - pip
   - pip:
       - -e .
+      - earthengine-api>=1.0   # dataprep/gee_*.py
       # dataprep/build_flowlens.py (HydroSHEDS flow-length tracing). The pip wheel carries
       # its own GDAL: keep it out of any process that also imports geopandas/pyogrio.
+      # The GIS raster scripts otherwise run in their own environment (environment-gis.yml),
+      # which `sacsma dpl calsim tier2 --trace-python` can use for the tracer.
       - rasterio>=1.4

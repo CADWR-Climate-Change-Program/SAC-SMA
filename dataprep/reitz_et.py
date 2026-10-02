@@ -21,8 +21,8 @@ record keepable: each source tif is windowed to ``BBOX``, rewritten as a
 DEFLATE/predictor GeoTIFF, **verified bit-exact against the source window**, and
 only then may the source zip be deleted (``--delete-source``).
 
-Staging root is local-only (``tmp/reitz2023_et``; ``SACSMA_REITZ_ET`` overrides
-it, the SACSMA_RAW_GIS precedent).  The ``*_monthly.zip`` and
+Staging root is local-only (``tmp/reitz2023_et``; ``reitz_et`` in
+dataprep/local_paths.toml or ``SACSMA_REITZ_ET`` overrides it).  The ``*_monthly.zip`` and
 ``Irrigation_*_1980-2018.zip`` files are ScienceBase *cloud* files (login or a
 captcha/e-mail request) -- drop them into the staging root by hand; everything
 else is fetched by ``tmp/reitz2023_et/get_reitz2023.py``.
@@ -62,9 +62,11 @@ import rasterio
 from rasterio.io import MemoryFile
 from rasterio.windows import Window
 
+from _paths import local_path
+
 REPO = Path(__file__).resolve().parents[1]
 GRID_CSV = REPO / "data" / "region" / "grid_cells.csv"
-DEFAULT_STAGE = Path(os.environ.get("SACSMA_REITZ_ET") or REPO / "tmp" / "reitz2023_et")
+DEFAULT_STAGE = local_path("reitz_et", REPO / "tmp" / "reitz2023_et")
 
 #: (west, south, east, north), degrees.  The whole state plus the out-of-state
 #: headwaters the region grid reaches (Goose Lake to 42.44 N, the east-slope

@@ -2,9 +2,8 @@
 
 Re-exports the 7 GEE-derived obs products (3 ET + 4 SWE) over the region
 1/16-deg grid (``data/region/grid_cells.csv``, 4410 cells = the modeling
-domains ∪ the full CalSim3 gpkg footprint) in the exact per-cell monthly form the dPL obs losses
-consume (``sacsma.dpl.data.ET_FILES``/``SWE_FILES`` npz:
-keys/dates/<var>/lat/lon).  The two non-GEE products (GLEAM, FLUXCOM) have
+domains ∪ the full CalSim3 gpkg footprint) as per-cell monthly npz files
+(keys/dates/<var>/lat/lon), kept as reference observations (no code reads them).  The two non-GEE products (GLEAM, FLUXCOM) have
 local raw sources and their own ingest (dataprep/local_obs_region.py).
 
 **The region store is its own spec** (decision 2026-07-16, replacing the
@@ -12,9 +11,8 @@ local raw sources and their own ingest (dataprep/local_obs_region.py).
 1/16-deg cell rectangle at each asset's NATIVE scale, computed on the asset
 versions current at export time (recorded in the npz ``meta`` field), months
 1988-01..2018-12, units converted to mm/month (ET) or mm mean monthly state
-(SWE; TerraClimate stays an end-of-month SNAPSHOT — the loss loader applies
-the adjacent-mean phase fix, so do NOT convert it here).  The legacy
-``D:\\sacsma-data`` npz are the frozen record of what the pre-region
+(SWE; TerraClimate stays an end-of-month SNAPSHOT, not converted here).  The earlier
+per-cell npz under the local staging root are the frozen record of what the pre-region
 ``noah_ft`` trained on: GEE assets drift (ERA5-Land was reprocessed — rel RMS
 ~0.2 vs the snapshot under every reduction we tried, and the snapshot's exact
 pipeline is lost), so the snapshot is irreproducible and everything that
@@ -28,11 +26,9 @@ project: ``earthengine authenticate`` + pass ``--project <your-ee-project>``):
      data/region/swe_obs/<p>_swe_cell_monthly.npz.
   2. ``python dataprep/gee_obs_region.py --verify --project <id>`` (optional)
      re-ingests the legacy stores' 2074 cells and REPORTS the delta vs the
-     D:\\sacsma-data snapshot per product — documentation of asset drift,
+     staged snapshot per product — documentation of asset drift,
      not a gate.
 
-The dPL loaders then point at the region store via SACSMA_ET_DIR /
-SACSMA_SWE_DIR (or the in-repo defaults once data.py is repointed).
 """
 
 from __future__ import annotations
@@ -44,6 +40,8 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+
+from _paths import local_path, local_value
 
 GRID_CSV = "data/region/grid_cells.csv"
 DATES = pd.date_range("1988-01-01", "2018-12-01", freq="MS")
@@ -106,16 +104,12 @@ PRODUCTS: dict[str, dict] = {
         to_mm=lambda v, nd: v * 1000.0),              # m of water -> mm
 }
 #: existing 2074-cell stores for --verify (product -> path)
+_STAGING = local_path("staging")       # ``staging`` in dataprep/local_paths.toml
 VERIFY_AGAINST = {
-    "openet": r"D:\sacsma-data\et_processed\openet_gee_cell_monthly.npz",
-    "modis": r"D:\sacsma-data\et_processed\modis_gee_cell_monthly.npz",
-    "terraclimate": r"D:\sacsma-data\et_processed\terraclimate_gee_cell_monthly.npz",
-    "fldas": r"D:\sacsma-data\et_processed\fldas_gee_cell_monthly.npz",
-    "era5land": r"D:\sacsma-data\et_processed\era5land_gee_cell_monthly.npz",
-    "daymet_swe": r"D:\sacsma-data\swe_processed\daymet_swe_gee_cell_monthly.npz",
-    "terraclimate_swe": r"D:\sacsma-data\swe_processed\terraclimate_swe_gee_cell_monthly.npz",
-    "fldas_swe": r"D:\sacsma-data\swe_processed\fldas_swe_gee_cell_monthly.npz",
-    "era5land_swe": r"D:\sacsma-data\swe_processed\era5land_swe_gee_cell_monthly.npz",
+    **{p: _STAGING / "et_processed" / f"{p}_gee_cell_monthly.npz"
+       for p in ("openet", "modis", "terraclimate", "fldas", "era5land")},
+    **{f"{p}_swe": _STAGING / "swe_processed" / f"{p}_swe_gee_cell_monthly.npz"
+       for p in ("daymet", "terraclimate", "fldas", "era5land")},
 }
 
 
@@ -222,12 +216,12 @@ def main() -> None:
                     help=f"subset of {sorted(PRODUCTS)} or 'all'")
     ap.add_argument("--verify", action="store_true",
                     help="re-ingest ONLY the legacy stores' 2074 cells and "
-                         "REPORT the delta vs the D:\\ snapshot (asset-drift "
+                         "REPORT the delta vs the staged snapshot (asset-drift "
                          "documentation, not a gate)")
     ap.add_argument("--out-root", default="data/region")
-    ap.add_argument("--project", default=None,
-                    help="Earth-Engine-registered cloud project id (required "
-                         "unless your default credentials carry one)")
+    ap.add_argument("--project", default=local_value("gee_project"),
+                    help="Earth-Engine-registered cloud project id (default: gee_project in "
+                         "dataprep/local_paths.toml, else the one your credentials carry)")
     args = ap.parse_args()
     try:
         import ee
