@@ -377,7 +377,7 @@ class DplConfig:
     #: checkpoint-selection shares, when they must differ from the loss shares
     #: (numeric mt_family_weight only): "area" = the footprint-area shares of
     #: the run's families (the sum of each family's registry area_mi2 over the
-    #: run's entities, renormalized) — the rule H95's shares were set by, kept
+    #: run's entities, renormalized) — the rule dPL-95's shares were set by, kept
     #: for selection when the loss shares are re-solved so their REALIZED
     #: coefficient shares hit those area shares; or numeric shares in the
     #: mt_family_weight syntax.  "" (default) = the mt_family_weight shares.

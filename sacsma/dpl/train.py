@@ -337,7 +337,7 @@ def _with_calsim_arcs(data_dir: str, basins: tuple[str, ...] | None) -> tuple[st
 def _area_shares(data_dir: str, basins, families=None) -> dict[str, float]:
     """Footprint-area family shares: each family's registry ``area_mi2`` summed over
     ``basins`` (restricted to ``families`` when given), renormalized — the rule the
-    H95 shares were set by."""
+    dPL-95 shares were set by."""
     from ..io import domain_dir
 
     reg = pd.read_csv(domain_dir(data_dir, MULTI_TIMESCALE_DOMAIN) / "entities.csv",
@@ -594,7 +594,7 @@ def train(
                  "selection = share-weighted family mean"), flush=True)
     # checkpoint selection: the loss shares, unless mt_select_weight sets its own (e.g.
     # the area shares when the loss shares were re-solved to REALIZE them); with the
-    # CalSim3 arcs, sel3 (logged, not selected on) = the H95 rule over the other
+    # CalSim3 arcs, sel3 (logged, not selected on) = the dPL-95 rule over the other
     # families — their footprint-area shares
     sel_shares, sel3_shares = shares, None
     if shares is not None and cfg.mt_select_weight:
@@ -613,7 +613,7 @@ def train(
             and "calsim_monthly" in shares and len(shares) > 1):
         sel3_shares = _area_shares(data_dir, dom.basins,
                                    families=[f for f in shares if f != "calsim_monthly"])
-        print("train: sel3 (logged beside the selection scalar) = the H95 rule without "
+        print("train: sel3 (logged beside the selection scalar) = the dPL-95 rule without "
               "the arcs, the footprint-area shares "
               + ", ".join(f"{f.split('_')[0]} {s:.4f}" for f, s in sel3_shares.items()),
               flush=True)
@@ -1294,7 +1294,7 @@ def train(
             for f, m in fam_means.items())
         pooled = float(k[valid].mean())
         # with the CalSim3 arcs in the scalar, sel3 is logged beside it: the scalar a run
-        # without arcs selects on (share runs: H95's rule, the other families' area shares)
+        # without arcs selects on (share runs: dPL-95's rule, the other families' area shares)
         fm3 = {f: m for f, m in fam_means.items() if f != "calsim_monthly"}
         sel3_txt = ""
         if len(fm3) < len(fam_means):
