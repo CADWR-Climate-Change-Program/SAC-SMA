@@ -20,7 +20,7 @@ import torch
 
 from .. import paths
 from ..cdec15 import BASINS, CAL_END, load_gage
-from ..io import MULTI_TIMESCALE_DOMAIN, load_hru_table, load_params
+from ..io import DEFAULT_FORCING, MULTI_TIMESCALE_DOMAIN, load_hru_table, load_params
 from ..model import DomainForcing, load_domain_forcing
 from .config import PARAM_ORDER, validate_ga_optimum
 
@@ -414,10 +414,11 @@ def load_domain_tensors(
     basins: tuple[str, ...] | None = None,
     dynamic_window: int | None = None,
     calsim_footprint: bool = False,
+    product: str = DEFAULT_FORCING,
 ) -> DomainTensors:
     device = torch.device(device)
-    forcing = load_domain_forcing(data_dir, domain=domain)
-    tmin_cells, tmax_cells = _load_percell_tminmax(data_dir, domain, forcing)
+    forcing = load_domain_forcing(data_dir, domain=domain, product=product)
+    tmin_cells, tmax_cells = _load_percell_tminmax(data_dir, domain, forcing, product)
     veg_cells, lai_lut = _load_canopy_obs(data_dir, domain, forcing)
     state_cells = (None if dynamic_window is None else
                    _compute_state_index(forcing, forcing.dates, dynamic_window, CAL_END))
@@ -522,16 +523,21 @@ def _load_canopy_obs(data_dir: str, domain: str, forcing):
     return veg_frac, lai_lut
 
 
-def _load_percell_tminmax(data_dir: str, domain: str, forcing):
+def _load_percell_tminmax(data_dir: str, domain: str, forcing, product: str = DEFAULT_FORCING):
     """Per-cell (n_cells, T) Tmin/Tmax aligned to ``forcing`` cell order, from
-    the unified region forcing store (``data/inputs/forcing``) — or
-    (None, None) for non-grid domains (the Noah/PT paths then RAISE at run
-    time; there is no tavg fallback)."""
+    the unified region forcing store of ``product`` (``data/inputs/forcing``; a WGEN
+    scenario store is decoded against its base) — or (None, None) for non-grid domains
+    (the Noah/PT paths then RAISE at run time; there is no tavg fallback)."""
+    from .. import wgen_scenarios
     from ..io import REGION_DOMAINS, forcing_path, norm_grid_key
 
     if domain not in REGION_DOMAINS:
         return None, None
-    path = forcing_path(data_dir, domain)
+    if wgen_scenarios.scenario_of(product) is not None:
+        want = [norm_grid_key(k) for k in forcing.pos]
+        ds = wgen_scenarios.load_region_subset(data_dir, product, want, ("tmin", "tmax"))
+        return (ds["tmin"].values.astype(np.float32), ds["tmax"].values.astype(np.float32))
+    path = forcing_path(data_dir, domain, product)
     if not path.exists():
         return None, None
     import xarray as xr

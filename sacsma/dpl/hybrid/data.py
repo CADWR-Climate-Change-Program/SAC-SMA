@@ -86,7 +86,7 @@ def build_frozen_sim(
     """Frozen SAC-SMA daily sim (mm/day) for all 15 basins: index=date, cols=basins.
 
     ``physics_csv`` = a ga_optimum-shaped parameter table (with a ``basin``
-    column) e.g. ``artifacts/dpl/pt/params_dpl.csv``; ``None`` uses the
+    column), e.g. the ``params_dpl.csv`` of the ``pt`` run; ``None`` uses the
     archived GA optimum.  ``domain`` + ``pet_source`` + the PT refinement knobs
     reproduce the chosen export's sim EXACTLY as ``dpl.evaluate.score_frozen``
     does (a ``15cdec_grid`` PT export needs ``domain="15cdec_grid"``,
@@ -312,6 +312,11 @@ def load_hybrid_data(
     device: torch.device | str = "cuda",
     dtype: torch.dtype = torch.float32,
 ) -> HybridData:
+    # a checkpoint records its physics run's files where they were when it was trained;
+    # a run that has moved since is found again by its name (sacsma.paths.run_file)
+    physics_csv = paths.run_file(physics_csv, "params_dpl.csv")
+    canopy_csv = paths.run_file(canopy_csv, "params_canopy.csv")
+    sim_cache = paths.run_file(sim_cache, "sim_daily.csv")
     # legacy single ΔT anchor (temp_sim_cache/temp_delta) -> one response anchor
     if response_anchors is None:
         response_anchors = ([{"dp": 0.0, "dt": float(temp_delta),
@@ -392,8 +397,7 @@ def load_hybrid_data(
     # use_pet adds the raw PT potential (the physics' energy-demand signal) as
     # an input channel — recomputed from the forcing (deterministic, cached).
     if use_pet:
-        pet_cache = (Path("artifacts/dpl/_local/cache/climatology")
-                     / f"basin_pet_pt_{domain}.csv")
+        pet_cache = paths.local(name="cache/climatology") / f"basin_pet_pt_{domain}.csv"
         if pet_cache.exists():
             pdf = pd.read_csv(pet_cache, parse_dates=["date"]).set_index("date")
             pet_b = np.vstack([pdf[b].reindex(dates).to_numpy(np.float64)
@@ -434,8 +438,8 @@ def load_hybrid_data(
     # One per (Δprecip, ΔT) anchor: the SAME recipe the (dp, dt) response-surface
     # evaluation uses (apply_response_perturbation), applied at load time.  Each
     # re-feeds the sim channel from the TEACHER sim — the physics run under the
-    # anchor's (dp, dt), dumped by `sacsma dpl evaluate --temp-delta/--precip-scale`
-    # (or the cached noah_teacher_daily).  Statics are unchanged.
+    # anchor's (dp, dt) (`sacsma dpl evaluate --temp-delta`, or a study's cached physics
+    # run under (dp, dt)).  Statics are unchanged.
     norm = {n: (mu_pooled[n], sd_pooled[n]) for n in mu_pooled}
     feat_anchors: list[np.ndarray] = []
     sim_anchors: list[np.ndarray] = []
@@ -444,8 +448,7 @@ def load_hybrid_data(
         if not sc or not Path(sc).exists():
             raise FileNotFoundError(
                 f"response anchor teacher sim {sc!r} not found (dump it with "
-                "`sacsma dpl evaluate <physics ckpt> --temp-delta <dT> "
-                "--precip-scale <1+dp>` or noah_teacher_daily)")
+                "`sacsma dpl evaluate <physics ckpt> --temp-delta <dT>`)")
         sdf = pd.read_csv(sc, parse_dates=["date"]).set_index("date")
         sim_a = np.vstack([sdf[b].reindex(dates).to_numpy(np.float64)
                            for b in basins])

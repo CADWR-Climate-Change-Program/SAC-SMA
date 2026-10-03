@@ -40,14 +40,15 @@ Usage::
                                   [--label NAME] [--dedup-cells] [--components [fastslow|parts]]
                                   [--extension-cells CSV] [--temp-delta DT] [--precip-scale S]
                                   [--anchor-rescaled] [--scenarios NAME=DT:PS,...]
-                                  [--batch-window DAYS]
+                                  [--batch-window DAYS] [--forcing NAME] [--start DATE] [--end DATE]
 
-Writes ``tier2_metrics.csv`` (one row per arc x window), ``tier2_monthly.csv``,
-``tier2_arcs.csv`` (coverage, parent entity and trained-cell share per arc),
-``tier2_not_simulated.csv``, ``tier2_extension_cells.csv``, ``tier2_sim_daily.npz``, the KGE /
-bias maps and the regime figures under ``figures/``, and prints the summary.  When the run
-folder holds ``sim_daily_mm.npz`` the re-run's entity aggregates are checked against it.
-``--figures-only`` redraws from the CSVs already in ``--out``: the maps from the tracked
+Writes ``tier2_metrics.csv`` (one row per arc x window) and ``tier2_arcs.csv`` (coverage,
+parent entity and trained-cell share per arc) to ``tier2/`` in the run's results folder, and
+``tier2_monthly.csv``, ``tier2_not_simulated.csv``, ``tier2_extension_cells.csv``,
+``tier2_sim_daily.npz``, the KGE / bias maps and the regime figures to ``tier2/`` in its local
+folder (``--out`` puts everything in one folder), and prints the summary.  When the run holds
+``sim_daily.npz`` the re-run's entity aggregates are checked against it.
+``--figures-only`` redraws from the CSVs already written: the maps from the tracked
 ``tier2_metrics.csv``, the regime figures only where the untracked ``tier2_monthly.csv`` of a
 previous full run is present.
 
@@ -67,9 +68,18 @@ scenario weather is supplied.  Any extra, and ``--dedup-cells``, also writes
 flag).  ``--scenarios t1=1:1,p85=0:0.85,...`` runs several such perturbations in ONE batched
 forward pass (:func:`stream_batch`: the rows replicated once per scenario, parameters and
 routing kernels evaluated once) and writes each scenario's CSVs, exactly as a single pass
-would, into ``--out/NAME`` (default ``<run>/tier2_scenarios/NAME``), without maps or figures;
+would, into ``--out/NAME`` (default ``tier2_scenarios/NAME`` in the run's local folder), without
+maps or figures;
 it does not combine with ``--dedup-cells``.  ``--batch-window`` is the days per streamed chunk
 and bounds device memory only (results differ between windows by round-off).
+
+``--forcing`` runs the trained field on another forcing store (a ``--forcing`` name of
+``data/inputs/forcing``, e.g. ``wgen_product_a`` or ``wgen_product_a_s12``), and ``--start`` /
+``--end`` move the envelope (default WY1950 to 2018-12; ``--start 1915-10-01`` for the whole
+record, the cycle spinup then looping WY1916-1925).  Either skips the entity check, and is
+recorded in ``tier2_run_info.json``.  The scores are still against historical CalSim3, so
+they mean nothing for a synthetic weather sequence; such a pass is the input of the product
+(``sacsma dpl calsim product apply``).
 
 Needs the ``dpl`` extra (torch) and a source checkout: the extrapolated arcs run the tracer
 of ``data/inputs/domains/multifamily/build_flowlens.py`` (``--trace-cells``) in a subprocess, which needs
@@ -96,6 +106,7 @@ import pandas as pd
 import torch
 
 from ... import paths
+from ...io import DEFAULT_FORCING
 from ...metrics import center_of_timing, kge, nse, pbias, pearson, seasonal_mismatch
 from ...calsim.catchments import (_EQ_CRS, _GRID_STEP_DEG, EXCLUDE_ARCS, MERGED_LAYER,
                          _square_cell_overlap, load_catchments, load_crosswalk, series_arc)
@@ -276,10 +287,11 @@ def _flowlens_for(cells: pd.DataFrame, tiles_dir: str | Path,
     return out
 
 
-def _net_for_hrus(ckpt: str | Path, hrus: pd.DataFrame, data_dir: str | Path, device=None):
+def _net_for_hrus(ckpt: str | Path, hrus: pd.DataFrame, data_dir: str | Path, device=None,
+                  product: str = DEFAULT_FORCING):
     """Rebuild (net, x, dom, cfg) from a checkpoint for an arbitrary HRU table whose ``basin``
     column names the aggregation units — the evaluator's front half with the entity-store
-    loader swapped for the given rows."""
+    loader swapped for the given rows, on the forcing ``product``."""
     import dataclasses as _dc
 
     import sacsma.dpl.data as D
@@ -304,7 +316,8 @@ def _net_for_hrus(ckpt: str | Path, hrus: pd.DataFrame, data_dir: str | Path, de
     D.load_hru_table = IO.load_hru_table = lambda *a, **k: hrus.copy()
     try:
         dom = load_domain_tensors(data_dir, domain=ck["domain"], device=dev, dtype=torch.float64,
-                                  basins=basins, dynamic_window=None, calsim_footprint=False)
+                                  basins=basins, dynamic_window=None, calsim_footprint=False,
+                                  product=product)
     finally:
         D.load_hru_table, IO.load_hru_table = orig_d, orig_io
     stats = FeatureSet(x=np.empty((0, 0), dtype=np.float32), **ck["features"])
@@ -353,9 +366,23 @@ def _component_mode(components) -> str | None:
     return components
 
 
+def _envelope(dom, envelope) -> tuple[int, int]:
+    """Day indices ``(t0, t1)`` of the streamed envelope: ``envelope = (start, end)`` dates,
+    or None for the evaluator's (WY1950 to 2018-12)."""
+    from ..multi_timescale import ENVELOPE_END, ENVELOPE_START
+
+    start, end = envelope or (ENVELOPE_START, ENVELOPE_END)
+    t0 = int(dom.dates.searchsorted(pd.Timestamp(start)))
+    t1 = int(dom.dates.searchsorted(pd.Timestamp(end))) + 1
+    if t0 >= t1 or dom.dates[t0] != pd.Timestamp(start):
+        raise ValueError(f"envelope {start} .. {end} is outside the forcing record "
+                         f"{dom.dates[0].date()} .. {dom.dates[-1].date()}")
+    return t0, t1
+
+
 def stream(net, x, dom, cfg, W_arc: np.ndarray, *, spinup: str = "cycle",
            components: bool | str = False, temp_delta: float = 0.0, precip_scale: float = 1.0,
-           dedup_cells: bool = False):
+           dedup_cells: bool = False, envelope=None):
     """Stream the trained field over the envelope (the evaluator's protocol, including its
     ``spinup``: :func:`sacsma.dpl.spinup.spin_state`) and return (arc depth (A, T), entity
     depth (B, T), t0, t1, bad_rows) in mm/day.  A cell whose physics returns NaN
@@ -374,16 +401,14 @@ def stream(net, x, dom, cfg, W_arc: np.ndarray, *, spinup: str = "cycle",
     channel-ET deduction (and dry-channel clamp), which act before routing.
     ``temp_delta`` / ``precip_scale`` are a PLACEHOLDER uniform climate perturbation (degC
     added to tavg/tmin/tmax, precip multiplied), applied to the spin-up and the envelope
-    alike, until the WGEN daily scenario weather is supplied."""
+    alike, until the WGEN daily scenario weather is supplied.  ``envelope``: :func:`_envelope`."""
     from ..data import with_cell_dedup
     from ..forward import routing_uh
-    from ..multi_timescale import ENVELOPE_END, ENVELOPE_START
     from ..spinup import spin_state, stream_rows
 
     mode = _component_mode(components)
     parts = mode == "parts"
-    t0 = int(dom.dates.searchsorted(pd.Timestamp(ENVELOPE_START)))
-    t1 = int(dom.dates.searchsorted(pd.Timestamp(ENVELOPE_END))) + 1
+    t0, t1 = _envelope(dom, envelope)
     if dedup_cells:
         dom = with_cell_dedup(dom, x)
     Wa = torch.as_tensor(W_arc).to(dom.device, dom.dtype)
@@ -457,7 +482,8 @@ def _tile_rows(v, S: int):
 
 
 def stream_batch(net, x, dom, cfg, W_arc: np.ndarray, scenarios, *, spinup: str = "cycle",
-                 components: bool | str = False, window: int = 128) -> list[tuple]:
+                 components: bool | str = False, window: int = 128,
+                 envelope=None) -> list[tuple]:
     """:func:`stream` for several uniform climate perturbations at once: ``scenarios`` is a
     list of ``(temp_delta, precip_scale)``; returns one :func:`stream` result tuple per
     scenario, in order.  The domain's rows are replicated once per scenario
@@ -466,16 +492,15 @@ def stream_batch(net, x, dom, cfg, W_arc: np.ndarray, scenarios, *, spinup: str 
     replaces ``len(scenarios)`` passes.  The parameter net and the routing kernels are
     evaluated ONCE on the original rows and tiled, so every scenario sees bit-identical
     parameters; each scenario's flow slice is aggregated exactly as :func:`stream` does.
-    ``window`` (days per streamed chunk) bounds device memory only."""
+    ``window`` (days per streamed chunk) bounds device memory only; ``envelope``:
+    :func:`_envelope`."""
     from ..forward import routing_uh
-    from ..multi_timescale import ENVELOPE_END, ENVELOPE_START
     from ..spinup import spin_state, stream_rows
 
     mode = _component_mode(components)
     parts = mode == "parts"
     S, N = len(scenarios), dom.n_hru
-    t0 = int(dom.dates.searchsorted(pd.Timestamp(ENVELOPE_START)))
-    t1 = int(dom.dates.searchsorted(pd.Timestamp(ENVELOPE_END))) + 1
+    t0, t1 = _envelope(dom, envelope)
     Wa = torch.as_tensor(W_arc).to(dom.device, dom.dtype)
     Wb = dom.W
     domS = _replicate_domain(dom, S)
@@ -689,7 +714,8 @@ def score_run(ckpt: str | Path, data_dir: str | Path = "data", *, device=None, r
               trace_python: str | None = None, spinup: str = "cycle",
               components: bool | str = False, temp_delta: float = 0.0, precip_scale: float = 1.0,
               extension_cells: str | Path | None = None, dedup_cells: bool = False,
-              scenarios=None, outs=None, batch_window: int = 128):
+              scenarios=None, outs=None, batch_window: int = 128,
+              forcing: str = DEFAULT_FORCING, envelope=None):
     """Returns (metrics, monthly, arcs, not_sim, entity_check).  ``extend`` simulates the
     arcs outside every trained footprint on their own region cells (``basis = extrapolated``);
     ``spinup`` and ``dedup_cells`` are the evaluator's (:func:`stream`).
@@ -711,7 +737,9 @@ def score_run(ckpt: str | Path, data_dir: str | Path = "data", *, device=None, r
     folder each) runs them all in ONE batched forward pass (:func:`stream_batch`;
     ``temp_delta`` / ``precip_scale`` are then ignored) and returns a list with one
     result per scenario, each exactly what the single-scenario call returns.
-    ``batch_window`` is the batched stream's chunk length (device memory only)."""
+    ``batch_window`` is the batched stream's chunk length (device memory only).  ``forcing``
+    and ``envelope`` (``(start, end)``, :func:`_envelope`) run the field on another forcing
+    store and period; either skips the archived entity check."""
     from ..evaluate import load_net_from_checkpoint
     mode = _component_mode(components)
     batch = scenarios is not None
@@ -727,17 +755,21 @@ def score_run(ckpt: str | Path, data_dir: str | Path = "data", *, device=None, r
               + ", ".join(f"{t:+g}C x{s:g}" for t, s, _ in todo), flush=True)
     else:
         todo = [(float(temp_delta), float(precip_scale), out)]
+    other = forcing != DEFAULT_FORCING or envelope is not None
     for t_, s_, o_ in todo:
         pert_ = bool(t_) or s_ != 1.0
         if pert_ and not batch:
             print(f"tier2: PLACEHOLDER climate perturbation — tavg/tmin/tmax {t_:+g} degC, "
                   f"precip x{s_:g}, spin-up included (uniform stand-in until the WGEN "
                   "daily scenario weather is supplied)", flush=True)
-        if o_ is not None and (mode or pert_ or extension_cells is not None or dedup_cells):
+        if o_ is not None and (mode or pert_ or extension_cells is not None or dedup_cells
+                               or other):
             _write_run_info(o_, ckpt=ckpt, data_dir=data_dir, spinup=spinup, extend=extend,
                             dedup_cells=dedup_cells, components=mode, temp_delta=t_,
-                            precip_scale=s_, extension_cells=extension_cells)
-    net, x, dom, cfg, ck = load_net_from_checkpoint(ckpt, data_dir, device=device)
+                            precip_scale=s_, extension_cells=extension_cells,
+                            forcing=forcing, envelope=envelope)
+    net, x, dom, cfg, ck = load_net_from_checkpoint(ckpt, data_dir, device=device,
+                                                    product=forcing)
     ho = tuple(int(v) for v in (getattr(cfg, "holdout_wy", ()) or ()))
     catch = rim_polygons(data_dir)
     mapping = cell_arc_overlap(dom.hrus, catch)
@@ -762,7 +794,8 @@ def score_run(ckpt: str | Path, data_dir: str | Path = "data", *, device=None, r
             for _, _, o_ in todo:
                 if o_ is not None:
                     ext.to_csv(o_ / "tier2_extension_cells.csv", index=False)
-            net2, x2, dom2, cfg2 = _net_for_hrus(ckpt, ext, data_dir, device=device)
+            net2, x2, dom2, cfg2 = _net_for_hrus(ckpt, ext, data_dir, device=device,
+                                                 product=forcing)
             W2 = dom2.W.cpu().numpy()
         else:
             ext = None
@@ -776,20 +809,22 @@ def score_run(ckpt: str | Path, data_dir: str | Path = "data", *, device=None, r
 
     if batch:
         res1 = stream_batch(net, x, dom, cfg, W_arc, [(t_, s_) for t_, s_, _ in todo],
-                            spinup=spinup, components=mode, window=batch_window)
+                            spinup=spinup, components=mode, window=batch_window,
+                            envelope=envelope)
     else:
         res1 = [stream(net, x, dom, cfg, W_arc, spinup=spinup, dedup_cells=dedup_cells,
-                       **_single_skw(todo[0][0], todo[0][1]))]
+                       envelope=envelope, **_single_skw(todo[0][0], todo[0][1]))]
     res2 = [None] * len(todo)
     if ext is not None:
         print(f"tier2: extrapolating {len(dom2.basins)} uncovered arcs on {len(dom2.hrus)} region "
               f"cells ...", flush=True)
         if batch:
             res2 = stream_batch(net2, x2, dom2, cfg2, W2, [(t_, s_) for t_, s_, _ in todo],
-                                spinup=spinup, components=mode, window=batch_window)
+                                spinup=spinup, components=mode, window=batch_window,
+                                envelope=envelope)
         else:
             res2 = [stream(net2, x2, dom2, cfg2, W2, spinup=spinup, dedup_cells=dedup_cells,
-                           **_single_skw(todo[0][0], todo[0][1]))]
+                           envelope=envelope, **_single_skw(todo[0][0], todo[0][1]))]
 
     def _finish(sres, sres2, out, perturbed, arcs):
         arcs = arcs.copy()
@@ -822,11 +857,12 @@ def score_run(ckpt: str | Path, data_dir: str | Path = "data", *, device=None, r
                                 sim_mm=sim_arc.astype(np.float32))
 
         entity_check = None
-        if perturbed and run_dir is not None:
-            print("tier2: entity check against the archived sim_daily_mm.npz skipped (perturbed "
-                  "forcing)", flush=True)
-        elif run_dir is not None and (Path(run_dir) / "sim_daily_mm.npz").exists():
-            z = np.load(Path(run_dir) / "sim_daily_mm.npz")
+        if (perturbed or other) and run_dir is not None:
+            print("tier2: entity check against the archived sim_daily.npz skipped (another "
+                  "forcing, envelope or a perturbation)", flush=True)
+        elif (run_dir is not None
+              and (archived := paths.run_roles(run_dir).results / "sim_daily.npz").exists()):
+            z = np.load(archived)
             ref = pd.DataFrame(np.asarray(z["sim_mm"]).T.astype(float),
                                columns=list(z["entity_id"]))
             mine = pd.DataFrame(sim_ent.T, columns=list(dom.basins))
@@ -835,7 +871,7 @@ def score_run(ckpt: str | Path, data_dir: str | Path = "data", *, device=None, r
             entity_check = dict(n_entities=len(common), max_abs_diff_mm=float(np.nanmax(np.abs(d))),
                                 rel_rmse=float(np.sqrt(np.nanmean(d ** 2))
                                                / np.nanmean(ref[common].to_numpy())))
-            print(f"tier2: entity re-run vs archived sim_daily_mm.npz over {len(common)} entities: "
+            print(f"tier2: entity re-run vs archived sim_daily.npz over {len(common)} entities: "
                   f"max |diff| {entity_check['max_abs_diff_mm']:.3g} mm/day, relative RMSE "
                   f"{entity_check['rel_rmse']:.2e}", flush=True)
 
@@ -933,10 +969,14 @@ def _write_run_info(out: Path, **info) -> Path:
     import json
     from datetime import datetime, timezone
     perturbed = bool(info["temp_delta"]) or info["precip_scale"] != 1.0
+    envelope = info.get("envelope")
     rec = dict(
         tool="sacsma.dpl.calsim.tier2",
         written_utc=datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        checkpoint=str(info["ckpt"]), data_dir=str(info["data_dir"]), spinup=info["spinup"],
+        checkpoint=Path(info["ckpt"]).as_posix(), data_dir=Path(info["data_dir"]).as_posix(),
+        forcing=info.get("forcing", DEFAULT_FORCING),
+        envelope=None if envelope is None else [str(envelope[0]), str(envelope[1])],
+        spinup=info["spinup"],
         extend=bool(info["extend"]), dedup_cells=bool(info["dedup_cells"]),
         components=info["components"],
         component_columns=(None if not info["components"] else
@@ -944,7 +984,8 @@ def _write_run_info(out: Path, **info) -> Path:
                            + ["fast", "slow", "total"]),
         components_note=("routed runoff components, all NET of SAC-SMA's riparian et4 "
                          "channel-ET deduction and dry-channel clamp" if info["components"] else None),
-        extension_cells=None if info["extension_cells"] is None else str(info["extension_cells"]),
+        extension_cells=(None if info["extension_cells"] is None
+                         else Path(info["extension_cells"]).as_posix()),
         temp_delta_degC=info["temp_delta"], precip_scale=info["precip_scale"],
         perturbed=perturbed, placeholder_perturbation=perturbed,
         perturbation_note=("PLACEHOLDER uniform climate perturbation (degC added to "
@@ -1021,21 +1062,24 @@ _SINGLE_ARC_GROUP = "single-arc sets"
 
 
 def regime_figures(out: Path, data_dir: str | Path = "data", label: str = "",
-                   window: str = VALIDATION_WINDOW) -> list[Path]:
+                   window: str = VALIDATION_WINDOW, bulk: Path | None = None) -> list[Path]:
     """One mean-monthly-regime figure per tier-1 set (the anchor system where one exists),
     every rim arc of the set as a panel — simulated arcs show CalSim3 vs dPL with their score,
     arcs this run does not simulate show the CalSim3 regime alone on a shaded panel.  Arcs in
-    no tier-1 set go to an "unconstrained" figure.  Reads the CSVs written by :func:`main`."""
+    no tier-1 set go to an "unconstrained" figure.  Reads the CSVs written by :func:`main`:
+    ``tier2_metrics.csv`` from ``out``, ``tier2_monthly.csv`` from ``bulk`` (default ``out``),
+    and draws into ``bulk/figures``."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    if not (out / "tier2_monthly.csv").exists():
+    bulk = out if bulk is None else bulk
+    if not (bulk / "tier2_monthly.csv").exists():
         # the monthly table is not tracked: a fresh clone holds the metrics only
-        print(f"tier2: no {out / 'tier2_monthly.csv'} (written by the forward pass, not tracked) — "
+        print(f"tier2: no {bulk / 'tier2_monthly.csv'} (written by the forward pass, not tracked) — "
               "regime figures skipped", flush=True)
         return []
     metrics = pd.read_csv(out / "tier2_metrics.csv")
-    monthly = pd.read_csv(out / "tier2_monthly.csv")
+    monthly = pd.read_csv(bulk / "tier2_monthly.csv")
     inflow, _ = load_references(data_dir)
     catch = rim_polygons(data_dir)
     sq_mi = catch.groupby("arc")["sq_mi"].sum()
@@ -1081,7 +1125,7 @@ def regime_figures(out: Path, data_dir: str | Path = "data", label: str = "",
     if len(single) > 1:
         groups[_SINGLE_ARC_GROUP] = [groups.pop(g)[0] for g in single]
 
-    paths = []
+    written = []
     for g, arcs in groups.items():
         arcs = sorted(arcs, key=lambda a: -float(sq_mi[a]))
         ncol = min(5, max(len(arcs), 2))
@@ -1124,12 +1168,12 @@ def regime_figures(out: Path, data_dir: str | Path = "data", label: str = "",
         fig.suptitle(f"Tier 2 mean-monthly regime, {window} (TAF/month): {title}  |  {n_sim} of "
                      f"{len(arcs)} arcs simulated  [{label}]", fontsize=10)
         fig.tight_layout(rect=(0, 0.02, 1, 0.96))
-        path = out / "figures" / f"tier2_regime_{g.replace(' ', '_')}_{window}.png"
+        path = bulk / "figures" / f"tier2_regime_{g.replace(' ', '_')}_{window}.png"
         path.parent.mkdir(exist_ok=True)
         fig.savefig(path, dpi=130)
         plt.close(fig)
-        paths.append(path)
-    return paths
+        written.append(path)
+    return written
 
 
 def _parse_scenarios(spec: str) -> list[tuple[str, float, float]]:
@@ -1143,17 +1187,30 @@ def _parse_scenarios(spec: str) -> list[tuple[str, float, float]]:
     return out
 
 
+def _forcing_args(a) -> dict:
+    """``score_run`` keywords of ``--forcing`` / ``--start`` / ``--end`` (empty at the defaults)."""
+    from ..multi_timescale import ENVELOPE_END, ENVELOPE_START
+
+    out = {}
+    if a.forcing != DEFAULT_FORCING:
+        out["forcing"] = a.forcing
+    if a.start or a.end:
+        out["envelope"] = (a.start or ENVELOPE_START, a.end or ENVELOPE_END)
+    return out
+
+
 def _main_batch(a, ckpt: Path, run_dir: Path) -> None:
     """``--scenarios``: one batched pass, then each scenario's CSVs exactly as a single pass
     writes them (plus the anchor-rescaled scores of a holdout run), into ``--out/NAME``."""
     sc = _parse_scenarios(a.scenarios)
-    root = Path(a.out) if a.out else run_dir / "tier2_scenarios"
+    root = Path(a.out) if a.out else paths.run_roles(run_dir).local / "tier2_scenarios"
     outs = [root / n for n, _, _ in sc]
     for o in outs:
         o.mkdir(parents=True, exist_ok=True)
     extra = {"components": a.components} if a.components else {}
     if a.extension_cells:
         extra["extension_cells"] = a.extension_cells
+    extra.update(_forcing_args(a))
     results = score_run(ckpt, a.data_dir, device=a.device, run_dir=run_dir, extend=not a.no_extend,
                         tiles_dir=a.tiles_dir, out=None, trace_python=a.trace_python,
                         spinup=a.spinup, scenarios=[(t, s) for _, t, s in sc], outs=outs,
@@ -1181,8 +1238,12 @@ def _main_batch(a, ckpt: Path, run_dir: Path) -> None:
 
 def main(argv=None, prog=None) -> None:
     p = argparse.ArgumentParser(prog=prog, description=__doc__.split("\n\n")[0])
-    p.add_argument("run", nargs="?", help="run folder (uses checkpoints/best.pt) or a checkpoint file")
-    p.add_argument("--out", default=None, help="output folder (default <run>/tier2)")
+    p.add_argument("run", nargs="?",
+                   help="the run (any of its folders; uses its checkpoints/best.pt) or a "
+                        "checkpoint file")
+    p.add_argument("--out", default=None,
+                   help="one output folder for everything (default: tier2/ in the run's results "
+                        "folder, the bulk in its local folder)")
     p.add_argument("--data-dir", default="data")
     p.add_argument("--device", default=None, help="cpu | cuda (default: cuda if available)")
     p.add_argument("--label", default="")
@@ -1234,6 +1295,14 @@ def main(argv=None, prog=None) -> None:
                         "--out/NAME (no maps or figures; --temp-delta/--precip-scale ignored)")
     p.add_argument("--batch-window", type=int, default=128,
                    help="days per streamed chunk under --scenarios (device memory only)")
+    p.add_argument("--forcing", default=DEFAULT_FORCING,
+                   help="the forcing store to run on (a --forcing name of data/inputs/forcing; "
+                        f"default {DEFAULT_FORCING}, the training forcing)")
+    p.add_argument("--start", default=None, metavar="DATE",
+                   help="first day of the envelope (default 1949-10-01; 1915-10-01 for the "
+                        "whole record); the cycle spinup loops its first ten water years")
+    p.add_argument("--end", default=None, metavar="DATE",
+                   help="last day of the envelope (default 2018-12-31)")
     p.add_argument("--trace-only", nargs=2, metavar=("CELLS_CSV", "OUT_CSV"), default=None,
                    help=argparse.SUPPRESS)   # the flow-length subprocess entry point
     a = p.parse_args(argv)
@@ -1243,14 +1312,18 @@ def main(argv=None, prog=None) -> None:
     if not a.run:
         p.error("run is required")
     run = Path(a.run)
-    ckpt = run / "checkpoints" / "best.pt" if run.is_dir() else run
     run_dir = run if run.is_dir() else run.parent.parent
+    roles = paths.run_roles(run_dir)
+    ckpt = roles.model / "checkpoints" / "best.pt" if run.is_dir() else run
     if a.scenarios:
         _main_batch(a, ckpt, run_dir)
         return
-    out = Path(a.out) if a.out else run_dir / "tier2"
+    # the tracked scores to the run's results folder, the rest to its local folder
+    out = Path(a.out) if a.out else roles.results / "tier2"
+    bulk = Path(a.out) if a.out else roles.local / "tier2"
     out.mkdir(parents=True, exist_ok=True)
-    label = a.label or run_dir.name
+    bulk.mkdir(parents=True, exist_ok=True)
+    label = a.label or roles.results.name
     # a run that held water years out of training is validated over them (score_run)
     ho = run_holdout_wy(ckpt)
     ho_win = holdout_windows(ho) if ho else None
@@ -1263,26 +1336,28 @@ def main(argv=None, prog=None) -> None:
             extra.update(temp_delta=a.temp_delta, precip_scale=a.precip_scale)
         if a.extension_cells:
             extra["extension_cells"] = a.extension_cells
+        extra.update(_forcing_args(a))
         res = score_run(ckpt, a.data_dir, device=a.device, run_dir=run_dir,
-                        extend=not a.no_extend, tiles_dir=a.tiles_dir, out=out,
+                        extend=not a.no_extend, tiles_dir=a.tiles_dir, out=bulk,
                         trace_python=a.trace_python,
                         spinup=a.spinup, dedup_cells=a.dedup_cells, **extra)
         metrics, monthly, arcs, not_sim, _ = res[:5]
         metrics.to_csv(out / "tier2_metrics.csv", index=False)
-        monthly.to_csv(out / "tier2_monthly.csv", index=False)
+        monthly.to_csv(bulk / "tier2_monthly.csv", index=False)
         arcs.to_csv(out / "tier2_arcs.csv", index=False)
-        not_sim.to_csv(out / "tier2_not_simulated.csv", index=False)
+        not_sim.to_csv(bulk / "tier2_not_simulated.csv", index=False)
         if a.components:
-            res[5].to_csv(out / "tier2_components_monthly.csv", index=False)
+            res[5].to_csv(bulk / "tier2_components_monthly.csv", index=False)
         print(summarize(metrics, not_sim, window=vwin))
-        print(f"wrote {out / 'tier2_metrics.csv'}, tier2_monthly.csv, tier2_arcs.csv, tier2_not_simulated.csv"
-              + (", tier2_components_monthly.csv" if a.components else ""))
+        print(f"wrote {out / 'tier2_metrics.csv'}, tier2_arcs.csv; tier2_monthly.csv, "
+              "tier2_not_simulated.csv"
+              + (", tier2_components_monthly.csv" if a.components else "") + f" -> {bulk}")
     else:
         metrics = pd.read_csv(out / "tier2_metrics.csv")
-    if (ho or a.anchor_rescaled) and (out / "tier2_monthly.csv").exists():
+    if (ho or a.anchor_rescaled) and (bulk / "tier2_monthly.csv").exists():
         from .arcs import own_record_months
         wins = ho_win or {VALIDATION_WINDOW: WINDOWS[VALIDATION_WINDOW]}
-        ar = anchor_rescaled(pd.read_csv(out / "tier2_monthly.csv"), a.data_dir, windows=wins,
+        ar = anchor_rescaled(pd.read_csv(bulk / "tier2_monthly.csv"), a.data_dir, windows=wins,
                              own=own_record_months(a.data_dir, ho) if ho else None,
                              own_window=vwin if ho else None)
         ar.to_csv(out / "tier2_anchor_rescaled.csv", index=False)
@@ -1292,11 +1367,11 @@ def main(argv=None, prog=None) -> None:
               f"-> {out / 'tier2_anchor_rescaled.csv'}", flush=True)
     if not a.no_maps:
         try:
-            maps(metrics, out, label, a.data_dir, window=vwin)
+            maps(metrics, bulk, label, a.data_dir, window=vwin)
         except Exception as e:  # noqa: BLE001 — maps are a convenience on top of the CSVs
             print(f"tier2: maps skipped ({e})")
-    paths = regime_figures(out, a.data_dir, label, window=vwin)
-    print(f"wrote {len(paths)} regime figures under {out / 'figures'}")
+    figs = regime_figures(out, a.data_dir, label, window=vwin, bulk=bulk)
+    print(f"wrote {len(figs)} regime figures under {bulk / 'figures'}")
 
 
 if __name__ == "__main__":

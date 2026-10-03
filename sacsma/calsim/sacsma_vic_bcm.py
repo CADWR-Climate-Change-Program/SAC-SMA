@@ -19,8 +19,8 @@ Scope, all three fixed by the study request:
   ``StonyCreek`` (9unimp) are the same watershed — the same three CalSim arcs
   ``I_BLKBT``/``I_EPARK``/``I_SGRGE`` — so the 11obs copy is dropped and the
   9unimp one kept (:data:`DUPLICATE_BASINS`).
-* **Output** — ``artifacts/calsim/compare/`` alongside the two-way anchor
-  artifacts, under the ``sacsma_vic_bcm_`` prefix.
+* **Output** — ``artifacts/results/calibrated/vic_bcm/``, under the ``sacsma_vic_bcm_``
+  prefix.
 
 **How each model's basin volume is built**, and why they are comparable:
 
@@ -562,7 +562,7 @@ def summary_fig(met: pd.DataFrame, path, *, wy_range=WY_RANGE) -> None:
 def make_all(data_dir: str | Path = "data", artifacts_dir: str | Path = "artifacts",
              *, wy_range=WY_RANGE, product: str = PRODUCT, scenario: str = BCM_SCENARIO,
              parallel: bool = False) -> Path:
-    """Build the whole three-way artifact into ``artifacts/calsim/compare/``.
+    """Build the whole three-way comparison into ``<artifacts_dir>/results/calibrated/vic_bcm/``.
 
     Writes ``sacsma_vic_bcm_monthly.csv`` (the full long table, all years — so the
     window can be re-cut without re-simulating), ``sacsma_vic_bcm_metrics.csv`` (per
@@ -571,7 +571,7 @@ def make_all(data_dir: str | Path = "data", artifacts_dir: str | Path = "artifac
     """
     from ..io import write_table
 
-    out = Path(artifacts_dir) / "calsim" / "compare"
+    out = paths.calibrated(artifacts_dir, "vic_bcm")
     figs = out / "figures"
     out.mkdir(parents=True, exist_ok=True)
     figs.mkdir(parents=True, exist_ok=True)

@@ -3,7 +3,7 @@ climate-adaptive parameters.
 
 Two runs, left to right in the figure:
 
-  * ``superseded/noah_noca`` (column "Noah") — the ``physical`` inputs (23
+  * ``noah_noca`` (column "Noah") — the ``physical`` inputs (23
     physiographic soil/veg/terrain/LAI features).  Its learned SAC + canopy
     parameters are a CLIMATE-FROZEN regionalization — under a (Δp, ΔT)
     perturbation only the FORCING changes.
@@ -20,9 +20,9 @@ change vs that run's own present climate.
 
 Physics is the fast frozen numba noah-lite core (``run_basin`` with
 ``et_scheme='noah_lite'``, PT potential) — the same core that scores the frozen
-checkpoints.  The first column reuses the cache of
-:func:`dtdp_response._frozen_noah`; the ``noah`` runs are cached under
-``artifacts/dpl/_local/cache/adaptive/``.
+checkpoints.  The ``noah_noca`` runs are cached under ``artifacts/_local/cache/dtdp/``, the
+``noah`` runs under ``artifacts/_local/cache/adaptive/``.  The grid, the metrics and the
+regimes are those of :mod:`.surfaces`.
 """
 from __future__ import annotations
 
@@ -32,14 +32,32 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from ... import paths
 from ..._figures import plt  # noqa: F401  (house rcParams)
 from ...io import load_basin_area
 from .climatology import _basin_order
-from .dtdp_response import (DOMAIN, DP, DT, METRICS, REGIMES, _REGIME_TITLE,
-                            _aggregate_regime, _frozen_noah, _metrics_from_daily)
+from .surfaces import (
+    DOMAIN,
+    DP,
+    DT,
+    METRICS,
+    REGIME_TITLE,
+    REGIMES,
+    aggregate_regime,
+    metrics_from_daily,
+)
 
-CA_CKPT = "artifacts/dpl/noah/checkpoints/best.pt"
-_CA_CACHE = Path("artifacts/dpl/_local/cache/adaptive")
+CA_CKPT = paths.dpl_run(run="noah") / "checkpoints" / "best.pt"
+_CA_CACHE = paths.local(name="cache/adaptive")
+NOCA_DPL = paths.dpl_run(run="noah_noca") / "params_dpl.csv"        # frozen noah-lite SAC params
+NOCA_CANOPY = paths.dpl_run(run="noah_noca") / "params_canopy.csv"  # + soil_chi
+_NOCA_CACHE = paths.local(name="cache/dtdp")
+
+
+def _out(out_dir: str | Path | None) -> Path:
+    """The study's result folder, unless ``out_dir`` names another."""
+    return Path(out_dir) if out_dir is not None else paths.dpl_study(name="adaptive")
+
 
 #: canonical physics model-type labels (left → right in the figure).
 NOAH = "Noah"
@@ -54,6 +72,39 @@ ANCHORS = [(dp, dt) for dp in (-0.2, -0.1, 0.0, 0.1, 0.2) for dt in (0.0, 2.0, 4
 
 _CA: dict | None = None   # in-process cache of the loaded noah net + baseline
 _FA = None                # in-process cache of the noah numba forcing
+_F0 = None                # in-process cache of the noah_noca numba forcing
+
+
+def noah_noca_daily(dp: float, dt: float, data_dir: str = "data") -> pd.DataFrame:
+    """``noah_noca`` daily basin flow (date x basin, mm/day) under (Δprecip fraction ``dp``,
+    ΔT ``dt``): the frozen numba noah-lite core on the perturbed forcing.  Cached to disk; the
+    loaded baseline forcing is reused across calls."""
+    cache = _NOCA_CACHE / f"frozen_dp{dp:+.2f}_dt{dt:+.1f}.csv"
+    if cache.exists():
+        return pd.read_csv(cache, parse_dates=["date"]).set_index("date")
+    global _F0
+    from ...cdec15 import BASINS
+    from ...model import attach_tminmax, load_domain_forcing, run_basin
+    if _F0 is None:
+        f = load_domain_forcing(data_dir, domain=DOMAIN)
+        attach_tminmax(data_dir, DOMAIN, f)
+        _F0 = f
+    fp = dc.replace(_F0, prcp=_F0.prcp * (1.0 + dp), tavg=_F0.tavg + dt,
+                    tmin=_F0.tmin + dt, tmax=_F0.tmax + dt, _f64={})
+    params = pd.read_csv(NOCA_DPL)
+    canopy = pd.read_csv(NOCA_CANOPY)
+    cols = {}
+    for b in BASINS:
+        s = run_basin(b, data_dir=data_dir, domain=DOMAIN, forcing=fp,
+                      params=params, parallel=True, pet_source="priestley_taylor",
+                      pt_snow_albedo=0.0, pt_dewpoint_depression=0.0,
+                      et_scheme="noah_lite", canopy_params=canopy)
+        cols[b] = s.set_index("date")["flow"]
+    df = pd.DataFrame(cols)
+    df.index.name = "date"
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    df.round(6).to_csv(cache)
+    return df
 
 
 def _load_ca(data_dir: str = "data") -> dict:
@@ -154,9 +205,9 @@ def assemble(data_dir: str = "data") -> pd.DataFrame:
                                                            "q999", "q30")}))
 
     for i, (dp, dt) in enumerate(grid):
-        _emit(NOAH, dp, dt, _metrics_from_daily(_frozen_noah(dp, dt, data_dir), areas))
+        _emit(NOAH, dp, dt, metrics_from_daily(noah_noca_daily(dp, dt, data_dir), areas))
         _emit(CA_ADAPTIVE, dp, dt,
-              _metrics_from_daily(noah_daily(dp, dt, "adaptive", data_dir), areas))
+              metrics_from_daily(noah_daily(dp, dt, "adaptive", data_dir), areas))
         print(f"  [{i + 1}/{len(grid)}] ({dp:+.2f},{dt:+.1f}) done", flush=True)
 
     tbl = pd.DataFrame(rows)
@@ -222,16 +273,16 @@ def _plot_basin(basin: str, sub: pd.DataFrame, out: Path,
 
 
 def make_regime_physics_surfaces(tbl: pd.DataFrame, data_dir: str = "data",
-                                 out_dir: str | Path = "artifacts/dpl") -> None:
+                                 out_dir: str | Path | None = None) -> None:
     """One 4×2 ``[noah_noca | noah]`` physics response-surface figure per
     hydroclimate regime (:data:`REGIMES`), the group's basins pooled by
     area-weighted % change."""
     areas = load_basin_area(data_dir, domain="15cdec").set_index(
         "basin")["area_mi2"].to_dict()
-    figdir = Path(out_dir) / "figures" / "noah_climate_adaptive_regimes"
+    figdir = _out(out_dir) / "noah_climate_adaptive_regimes"
     for reg, basins in REGIMES.items():
-        agg = _aggregate_regime(tbl, basins, areas)
-        title = (f"{_REGIME_TITLE[reg]} regime · {len(basins)} basins: "
+        agg = aggregate_regime(tbl, basins, areas)
+        title = (f"{REGIME_TITLE[reg]} regime · {len(basins)} basins: "
                  f"{' '.join(basins)}\n"
                  "area-weighted % change   ○ present   ×  Δp·ΔT anchors")
         _plot_basin(reg, agg, figdir / f"{reg}.png", title=title)
@@ -239,12 +290,13 @@ def make_regime_physics_surfaces(tbl: pd.DataFrame, data_dir: str = "data",
 
 
 def make_adaptive_physics_surfaces(data_dir: str = "data",
-                                   out_dir: str | Path = "artifacts/dpl",
+                                   out_dir: str | Path | None = None,
                                    *, regen: bool = False) -> pd.DataFrame:
     """Assemble (or reload) the noah_noca / noah metrics table + one 4×2 physics
-    response-surface figure per watershed (north → south) and per regime."""
-    out_dir = Path(out_dir)
-    csv = out_dir / "figures" / "noah_climate_adaptive_metrics.csv"
+    response-surface figure per watershed (north → south) and per regime, into ``out_dir``
+    (default: the study's result folder)."""
+    out_dir = _out(out_dir)
+    csv = out_dir / "noah_climate_adaptive_metrics.csv"
     if csv.exists() and not regen:
         tbl = pd.read_csv(csv)
         print(f"loaded {csv}", flush=True)
@@ -255,7 +307,7 @@ def make_adaptive_physics_surfaces(data_dir: str = "data",
         print(f"wrote {csv}", flush=True)
 
     order = _basin_order(data_dir, sorted(tbl["basin"].unique()))
-    figdir = out_dir / "figures" / "noah_climate_adaptive"
+    figdir = out_dir / "noah_climate_adaptive"
     for b in order:
         _plot_basin(b, tbl[tbl.basin == b], figdir / f"{b}.png")
     print(f"wrote {len(order)} figures -> {figdir}", flush=True)

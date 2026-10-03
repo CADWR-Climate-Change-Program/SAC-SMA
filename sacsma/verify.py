@@ -10,15 +10,19 @@ The repository has no test suite; the model is verified by running it.  The chec
 ``links``
     every relative link and image in the tracked markdown files resolves, section anchors
     included
+``artifacts``
+    the output tree keeps its layout (``artifacts/README.md``): every tracked file sits in
+    ``product/``, ``models/`` or ``results/``, each of which has its README; nothing under
+    ``_local/`` is tracked; no file a command wrote sits untracked in a tracked folder; every
+    learned-parameter run has its model folder and its results folder
 ``parity``
     the Python model against the archived MATLAB simulation, one watershed per domain
     (:data:`PARITY_BASINS`): KGE > 0.9999 and max daily difference < 0.1 mm/day
 ``product``
-    the share model applied to the base tier-2 pass reproduces the tracked
-    ``rim_inflow_monthly.csv`` of every run that carries a product (needs the run's local
-    tier-2 files; skipped when they are absent)
+    the share model applied to the tier-2 pass kept beside each forcing's series
+    (``artifacts/product/<forcing>/tier2/``) reproduces the tracked ``rim_inflow_monthly.csv``
 
-``--quick`` runs the first three, which need no model run.  The exit code is the number of
+``--quick`` runs the first four, which need no model run.  The exit code is the number of
 failed checks.
 """
 
@@ -32,6 +36,8 @@ import re
 import subprocess
 from pathlib import Path
 
+from . import paths
+
 #: one watershed per domain for the parity check
 PARITY_BASINS = (("15cdec", "BND"), ("9unimp", "CacheCreek"), ("11obs", "SHA"),
                  ("12rim", "SHAST"))
@@ -40,8 +46,10 @@ PARITY_MAX_MM = 0.1
 #: relative tolerance of the product check (the fit and ``apply`` agree to about 3e-7)
 PRODUCT_RTOL = 1e-5
 
-CHECKS = ("imports", "cli", "links", "parity", "product")
-QUICK = ("imports", "cli", "links")
+CHECKS = ("imports", "cli", "links", "artifacts", "parity", "product")
+QUICK = ("imports", "cli", "links", "artifacts")
+#: the tracked parts of the output tree; ``_local/`` is ignored
+ARTIFACT_PARTS = ("product", "models", "results")
 
 
 def _has_torch() -> bool:
@@ -181,6 +189,44 @@ def check_links(root: str | Path = ".", **_) -> tuple[bool, str]:
                      "files" + "".join(f"\n    {b}" for b in bad))
 
 
+# ----------------------------------------------------------------------------- artifacts
+def _git_files(root: Path, *args: str) -> list[str]:
+    r = subprocess.run(["git", "-C", str(root), "ls-files", *args, "--", "artifacts"],
+                       capture_output=True, text=True, check=True)
+    return [p for p in r.stdout.splitlines() if p]
+
+
+def check_artifacts(root: str | Path = ".", **_) -> tuple[bool | None, str]:
+    root = Path(root).resolve()
+    try:
+        tracked = _git_files(root)
+        stray = _git_files(root, "--others", "--exclude-standard")
+    except (OSError, subprocess.CalledProcessError):
+        return None, "not a git checkout"
+    bad = []
+    parts = {Path(f).parts[1] if len(Path(f).parts) > 2 else "" for f in tracked}
+    for f in tracked:
+        q = Path(f).parts
+        if f != "artifacts/README.md" and (len(q) < 3 or q[1] not in ARTIFACT_PARTS):
+            bad.append(f"tracked outside {', '.join(ARTIFACT_PARTS)}: {f}")
+    bad += [f"no README.md in artifacts/{d}/" for d in ARTIFACT_PARTS
+            if d in parts and f"artifacts/{d}/README.md" not in tracked]
+    bad += [f"untracked in a tracked folder: {f}" for f in stray]
+    runs: dict[tuple[str, str], set[str]] = {}
+    for f in tracked:
+        q = Path(f).parts
+        if (len(q) > 5 and q[1] in ("models", "results") and q[2] == "dpl"
+                and q[4] not in ("benchmark", "studies")):
+            runs.setdefault((q[3], q[4]), set()).add(q[1])
+    bad += [f"{g}/{r} has only a {next(iter(roles))} folder"
+            for (g, r), roles in sorted(runs.items()) if roles != {"models", "results"}]
+    rows = [f"\n    {b}" for b in bad[:20]]
+    if len(bad) > 20:
+        rows.append(f"\n    ... and {len(bad) - 20} more")
+    return not bad, (f"{len(tracked)} tracked files, {len(runs)} learned-parameter runs with "
+                     "a model and a results folder" + "".join(rows))
+
+
 # -------------------------------------------------------------------------------- parity
 def check_parity(data_dir: str = "data", **_) -> tuple[bool, str]:
     import numpy as np
@@ -210,39 +256,42 @@ def check_parity(data_dir: str = "data", **_) -> tuple[bool, str]:
 # ------------------------------------------------------------------------------- product
 def check_product(data_dir: str = "data", artifacts_dir: str = "artifacts",
                   **_) -> tuple[bool | None, str]:
-    runs = sorted(Path(artifacts_dir).glob("dpl/multifamily/*/calsim_product/share_model.pt"))
-    if not runs:
-        return None, "no run carries a rim-inflow product"
+    root = paths.product(artifacts_dir)
+    series = sorted(root.glob("*/rim_inflow_monthly.csv"))
+    if not (root / "share_model.pt").exists() or not series:
+        return None, f"no rim-inflow product under {root}"
     if not _has_torch():
         return None, "torch is not installed"
     import numpy as np
     import pandas as pd
     import torch
 
-    from .dpl.calsim.product import apply
+    from .dpl.calsim.product import PASS_FILES, apply
 
+    model = torch.load(root / "share_model.pt", weights_only=False)
     ok, rows, done = True, [], 0
-    for pt in runs:
-        run = pt.parents[1]
-        tier2 = run / "tier2"
-        if not (tier2 / "tier2_components_monthly.csv").exists():
-            rows.append(f"\n    {run.name}: skipped, the base tier-2 pass with runoff parts is "
-                        "local-only and not here (sacsma dpl calsim tier2 <run> --components parts)")
+    for csv in series:
+        tier2 = csv.parent / "tier2"
+        if not all((tier2 / name).exists() for name in PASS_FILES):
+            rows.append(f"\n    {csv.parent.name}: skipped, {tier2} lacks the pass "
+                        f"({', '.join(PASS_FILES)})")
             continue
-        got = apply(torch.load(pt, weights_only=False), tier2, data_dir)
-        ref = pd.read_csv(pt.parent / "rim_inflow_monthly.csv")
+        ref = pd.read_csv(csv)
+        per = pd.PeriodIndex(ref.month.unique(), freq="M")
+        wy = per.year + (per.month >= 10)
+        got = apply(model, tier2, data_dir, wy=(int(wy.min()), int(wy.max())))
         m = ref.merge(got, on=["arc", "month"], suffixes=("_ref", ""))
         rel = float((np.abs(m.taf - m.taf_ref) / np.maximum(np.abs(m.taf_ref), 1e-6)).max())
         good = len(m) == len(ref) == len(got) and rel < PRODUCT_RTOL
         ok &= good
         done += 1
-        rows.append(f"\n    {run.name}: {len(m)} arc-months, max relative difference {rel:.1e}"
-                    + ("" if good else "   FAIL"))
+        rows.append(f"\n    {csv.parent.name}: {len(m)} arc-months, max relative difference "
+                    f"{rel:.1e}" + ("" if good else "   FAIL"))
     return (ok if done else None), "apply reproduces the tracked product" + "".join(rows)
 
 
 _FUNCS = {"imports": check_imports, "cli": check_cli, "links": check_links,
-          "parity": check_parity, "product": check_product}
+          "artifacts": check_artifacts, "parity": check_parity, "product": check_product}
 
 
 def run_checks(checks=None, *, data_dir: str = "data", quick: bool = False) -> int:

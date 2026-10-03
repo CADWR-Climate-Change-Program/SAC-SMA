@@ -425,7 +425,9 @@ def train(
                                              # native grid | multifamily
                                              # multi-timescale entities
 ) -> Path:
-    """Train one feature variant; returns the output directory."""
+    """Train one feature variant; returns the run's model folder.  ``out_dir`` names the
+    run (any of its folders): checkpoints and the training log go to its model folder, the
+    diagnostics logs and per-epoch snapshots to its local folder."""
     cfg = cfg or DplConfig()
     if cfg.ninc_mode != "fixed":
         raise ValueError("training requires ninc_mode='fixed' (dynamic mode "
@@ -433,7 +435,9 @@ def train(
     dev = pick_device(cfg.device)
     torch.manual_seed(cfg.seed)
     dtype = _DTYPES[cfg.dtype]
-    out = Path(out_dir if out_dir is not None else f"artifacts/dpl/{variant}")
+    run = paths.run_roles(out_dir if out_dir is not None
+                          else paths.dpl_run(run=variant, domain=domain))
+    out = run.model
     ckdir = out / "checkpoints"
     ckdir.mkdir(parents=True, exist_ok=True)
     log_path = out / "train_log.csv"
@@ -1431,8 +1435,8 @@ def train(
     diag = cfg.diagnostics
     chunk_cols = _CHUNK_LOG_COLS + (_CS_CHUNK_LOG_COLS if has_cs else ())
     eval_cols = _EVAL_TERM_COLS + (_CS_EVAL_TERM_COLS if has_cs else ())
-    chunk_log_path, eval_terms_path = out / "chunk_log.csv", out / "eval_terms.csv"
-    snapdir = ckdir / "snapshots"
+    chunk_log_path, eval_terms_path = run.local / "chunk_log.csv", run.local / "eval_terms.csv"
+    snapdir = run.local / "checkpoints" / "snapshots"
     params_list = list(net.parameters())
     ema: list[torch.Tensor] = []
     if not resume:
@@ -1440,7 +1444,7 @@ def train(
         for p in (chunk_log_path, eval_terms_path, *snapdir.glob("e*.pt")):
             p.unlink(missing_ok=True)
     if diag:
-        snapdir.mkdir(exist_ok=True)
+        snapdir.mkdir(parents=True, exist_ok=True)
         if resume:
             # the resumed run rewrites the interrupted epoch: drop its rows; the kept
             # rows take the current columns (a file from before a column was added

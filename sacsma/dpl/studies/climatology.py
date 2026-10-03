@@ -21,9 +21,8 @@ step against CalSim3 FNF:
 
 ``Hybrid`` / ``Hybrid DT`` are the CANONICAL seed ENSEMBLES (mean of member
 daily flows) on the noah physics baseline — the sim channel is the noah daily
-simulation each member checkpoint records
-(``artifacts/dpl/noah/frozen_sim_noah.csv``).
-Output: ``artifacts/dpl/figures/climatology_{a..e}.png``.
+simulation each member checkpoint records (``sim_daily.csv`` of the ``noah`` run).
+Output: ``artifacts/results/dpl/15cdec/studies/climatology/climatology_{a..e}.png``.
 
 A dPL-side artifact (needs torch for the hybrids) that reads the lightweight
 CalSim3-FNF loader from ``calsim.compare``; it never makes calsim depend on torch.
@@ -36,6 +35,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from ... import paths
 from ...io import load_hru_table, mmday_to_cfs
 
 _AF_PER_CFS_DAY = 1.98347          # cfs-day -> acre-feet; /1000 -> TAF
@@ -49,16 +49,16 @@ _WY_LABELS = ["O", "N", "D", "J", "F", "M", "A", "M", "J", "J", "A", "S"]
 #: the Noah-lite external-ET canopy on PT potential.
 FROZEN: dict[str, dict] = {
     "GA SAC-SMA":     dict(csv=None, domain="15cdec", pet="hamon", alb=0.0, dew=0.0),
-    "Hamon (dense)":  dict(csv="artifacts/dpl/superseded/hamon_dense/params_dpl.csv",
+    "Hamon (dense)":  dict(csv=paths.dpl_run(run="hamon_dense") / "params_dpl.csv",
                            domain="15cdec", pet="hamon", alb=0.0, dew=0.0),
-    "Hamon":          dict(csv="artifacts/dpl/hamon/params_dpl.csv",
+    "Hamon":          dict(csv=paths.dpl_run(run="hamon") / "params_dpl.csv",
                            domain="15cdec_grid", pet="hamon", alb=0.0, dew=0.0),
-    "PT":             dict(csv="artifacts/dpl/pt/params_dpl.csv",
+    "PT":             dict(csv=paths.dpl_run(run="pt") / "params_dpl.csv",
                            domain="15cdec_grid", pet="priestley_taylor", alb=0.6, dew=2.0),
-    "Noah":           dict(csv="artifacts/dpl/noah/params_dpl.csv",
+    "Noah":           dict(csv=paths.dpl_run(run="noah") / "params_dpl.csv",
                            domain="15cdec_grid", pet="priestley_taylor", alb=0.0, dew=0.0,
                            et_scheme="noah_lite",
-                           canopy_csv="artifacts/dpl/noah/params_canopy.csv"),
+                           canopy_csv=paths.dpl_run(run="noah") / "params_canopy.csv"),
 }
 #: explicit cache tag per FROZEN label -- the label is a chart legend, the tag
 #: is a stable cache filename key independent of that text.
@@ -75,9 +75,9 @@ TORCH_SIM: dict[str, str] = {}
 #: plain feature ensemble (no PET channel, no dT loss — the skill step),
 #: ``Hybrid DT`` adds the PT-potential input + the temperature-consistency
 #: loss (the physics-consistent climate response, same skill).
-HYBRID: dict[str, str] = {
-    "Hybrid": "artifacts/dpl/hybrid",
-    "Hybrid DT": "artifacts/dpl/hybrid_dt",
+HYBRID: dict[str, Path] = {
+    "Hybrid": paths.dpl_run(run="hybrid"),
+    "Hybrid DT": paths.dpl_run(run="hybrid_dt"),
 }
 
 #: per-series line style (identity by hue; CalSim3 FNF emphasized in black).
@@ -256,7 +256,7 @@ def assemble(data_dir: str = "data", *, device: str = "cuda") -> dict:
     from ..config import pick_device
 
     areas = basin_areas(data_dir, domain="15cdec")
-    cachedir = Path("artifacts/dpl/_local/cache/climatology")
+    cachedir = paths.local(name="cache/climatology")
     cachedir.mkdir(parents=True, exist_ok=True)
 
     monthly: dict[str, pd.DataFrame] = {}
@@ -486,12 +486,13 @@ def _plot_metrics_bars_agg(data: dict, path: Path) -> None:
 
 
 def make_cdec15_climatology(data_dir: str = "data",
-                            out_dir: str | Path = "artifacts/dpl",
+                            out_dir: str | Path | None = None,
                             *, device: str = "cuda") -> dict:
     """Assemble every series and render the five ablation figures + the
-    all-series metric-bar summaries (per-basin and basin-aggregated)."""
+    all-series metric-bar summaries (per-basin and basin-aggregated) into ``out_dir``
+    (default: the study's result folder)."""
     data = assemble(data_dir, device=device)
-    figdir = Path(out_dir) / "figures"
+    figdir = Path(out_dir) if out_dir is not None else paths.dpl_study(name="climatology")
     for tag, subtitle, models in COMPARISONS:
         _plot_comparison(data, models, tag, subtitle,
                          figdir / f"climatology_{tag}.png")

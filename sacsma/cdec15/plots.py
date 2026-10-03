@@ -5,7 +5,7 @@ the observed daily gage full-natural-flow target (missing days are NaN).  The
 record is split at the calibration/validation boundary (:data:`CAL_END`,
 WY2004 start); skill statistics are reported **separately** for each period.
 Writes per-basin diagnostics, a domain skill-summary, and a metrics CSV under
-``artifacts/cdec15/``.
+``artifacts/results/calibrated/15cdec/``.
 
 Usage::
 
@@ -21,6 +21,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from .. import paths
 from .._figures import (
     _period_stats,
     basin_diagnostics_fig,
@@ -77,15 +78,14 @@ def make_all(
     basins: list[str] | None = None,
     data_dir: str | Path = "data",
     artifacts_dir: str | Path = "artifacts",
-    run: str = "cdec15",
     cal_end: str = CAL_END,
 ) -> pd.DataFrame:
-    """15-CDEC diagnostics -> ``artifacts/<run>/`` (default ``artifacts/cdec15/``).
+    """15-CDEC diagnostics -> ``<artifacts_dir>/results/calibrated/15cdec/``.
 
     Daily calibration/validation vs the observed gage, plus the exact MATLAB
     parity figure.
     """
-    art = Path(artifacts_dir) / run
+    art = paths.calibrated(artifacts_dir, DOMAIN)
     figdir = art / "figures"
     figdir.mkdir(parents=True, exist_ok=True)
     cal_end_ts = pd.Timestamp(cal_end)
@@ -104,7 +104,7 @@ def make_all(
     metrics, parity = _make_observed(basins, data_dir, forcing, areas, figdir, cal_end_ts)
 
     if not metrics.empty:
-        csv = art / f"metrics_{DOMAIN}.csv"
+        csv = art / "metrics.csv"
         metrics.round(4).to_csv(csv, index=False)
         print(f"wrote {csv} and {len(metrics)} watershed figures")
     if parity:
@@ -119,11 +119,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--basins", nargs="*", default=None, help="subset of basin codes (default: all)")
     ap.add_argument("--data-dir", default="data", help="data store")
     ap.add_argument("--artifacts-dir", default="artifacts", help="output root")
-    ap.add_argument("--run", default="cdec15", help="run name -> artifacts/<run>/")
     ap.add_argument("--cal-end", default=CAL_END, help="calibration/validation split date (YYYY-MM-DD)")
     args = ap.parse_args(argv)
     make_all(basins=args.basins, data_dir=args.data_dir, artifacts_dir=args.artifacts_dir,
-             run=args.run, cal_end=args.cal_end)
+             cal_end=args.cal_end)
     return 0
 
 

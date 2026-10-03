@@ -29,10 +29,11 @@ the squared miss of the product's volume change (%) and April-July share change 
 the dPL arc's own.  No temperature or precipitation enters the model; the response comes
 through the dPL flows of each pass.
 
-``fit`` needs the run's base tier-2 pass with runoff parts (``<run>/tier2``, written by
-``sacsma dpl calsim tier2 --components parts``) and the same at the eleven training climate points of
-:data:`TRAIN_POINTS` (``sacsma dpl calsim tier2 --components parts --scenarios ...`` writes them to
-``<run>/tier2_scenarios/<name>``; :func:`scenario_spec` gives the argument).  It fits on water
+``fit`` needs the run's base tier-2 pass with runoff parts (``tier2/`` of the run's local
+folder, written by ``sacsma dpl calsim tier2 --components parts``) and the same at the eleven
+training climate points of :data:`TRAIN_POINTS` (``sacsma dpl calsim tier2 --components parts
+--scenarios ...`` writes them to ``tier2_scenarios/<name>`` of the same folder;
+:func:`scenario_spec` gives the argument).  It fits on water
 years 1950-2015 without the run's held-out water years (``DplConfig.holdout_wy``, or
 ``--holdout-wy``), selects ``mu`` out of fold over seven blocks of training water years
 (:func:`select`) unless ``--mu`` fixes it, and scores the product on the held-out years.  Where
@@ -42,17 +43,25 @@ p90 <= 3 pp on both.
 
 Usage::
 
-    sacsma dpl calsim product fit <run_dir> [--scenarios DIR ...] [--out DIR]
-                                  [--data-dir data] [--mu MU] [--holdout-wy A-B] [--epochs N]
-                                  [--threads N]
-    sacsma dpl calsim product apply <run_dir> --tier2 DIR [--out CSV] [--data-dir data]
+    sacsma dpl calsim product fit <run_dir> [--scenarios DIR ...] [--out DIR] [--data-dir data]
+                                  [--mu MU] [--holdout-wy A-B] [--epochs N] [--threads N]
+    sacsma dpl calsim product apply --tier2 DIR --forcing NAME [--wy A-B] [--share-model PT]
+                                    [--out DIR] [--data-dir data]
 
-``fit`` writes to ``<run>/calsim_product``: ``share_model.pt`` (the network and everything
-:func:`apply` needs), ``rim_inflow_monthly.csv`` (``arc, month, taf, dpl_taf, kind``: the product
-on the base pass), ``product_metrics.csv`` (per arc: KGE of the dPL arc and of the product on
-the held-out and on the training water years), ``share_selection.csv`` (the out-of-fold
-candidates), ``response_gate.csv`` and ``product_info.json``.  ``apply`` runs the fitted model on
-any other tier-2 pass with runoff parts (a climate scenario) and writes the product for it.
+``fit`` writes the share model and its records to ``artifacts/product/`` (:func:`sacsma.paths.product`):
+``share_model.pt`` (the network and everything :func:`apply` needs), ``share_selection.csv``
+(the out-of-fold candidates), ``response_gate.csv`` and ``product_info.json`` (with the scores
+of the dPL arcs and of the product on the held-out water years of the base pass).  ``apply``
+runs the fitted model on a tier-2 pass with runoff parts (``sacsma dpl calsim tier2
+--components parts``, on any ``--forcing`` and envelope) and writes the product of one forcing
+to ``artifacts/product/<forcing>/`` unless ``--out`` names another folder:
+``rim_inflow_monthly.csv`` (``arc, month, taf, dpl_taf, kind``) over the complete water years of
+the pass (``--wy`` narrows them), ``tier2/`` (the two tables of the pass and its
+``tier2_run_info.json``) and, for a historical forcing, ``product_metrics.csv`` (per arc: monthly
+KGE against CalSim3 of the dPL arc and of the product on the held-out water years, on the other
+fit years and on the years before them).  A WGEN weather sequence does not follow the days of
+the CalSim3 record and is not scored.  After a refit, ``apply`` remakes every forcing's
+series; ``sacsma verify product`` repeats every tracked series from its ``tier2/``.
 
 The fit is on the CPU and seeded; with the same thread count it reproduces to round-off.
 """
@@ -61,6 +70,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 from pathlib import Path
 
 import numpy as np
@@ -69,9 +79,14 @@ import torch
 from torch import nn
 
 from ... import paths
+from ...io import DEFAULT_FORCING
 from ...metrics import kge
 from .tier1 import run_holdout_wy
 
+#: the two tables of a tier-2 pass the product is made from (kept beside each product)
+PASS_FILES = ("tier2_monthly.csv", "tier2_components_monthly.csv")
+#: the record of a pass (forcing, envelope, checkpoint), kept with it when present
+PASS_RECORD = "tier2_run_info.json"
 #: closure groups whose arcs are NOT closed to a system: Whiskeytown (``I_WKYTN``) lies inside
 #: the Bend Bridge anchor, which no arc is closed to
 NON_ANCHOR_GROUPS = ("FU_WH",)
@@ -83,6 +98,7 @@ TRAIN_POINTS = {"t1": (1.0, 1.0), "t3": (3.0, 1.0), "t4": (4.0, 1.0), "p85": (0.
 #: climate points no fit sees: the response gate is read at them
 VALIDATION_POINTS = {"t25": (2.5, 1.0), "p95": (0.0, 0.95), "p105": (0.0, 1.05),
                      "t25p95": (2.5, 0.95), "t25p105": (2.5, 1.05)}
+#: the water years the share model is fitted and scored on
 PRODUCT_WY = (1950, 2015)
 MUS = (0.03, 0.1, 0.3)
 EPOCHS = 300
@@ -119,9 +135,24 @@ def load_units(data_dir: str | Path = "data") -> pd.DataFrame:
     return u
 
 
-def load_pass(tier2_dir: str | Path, arcs) -> pd.DataFrame:
+def historical(forcing: str) -> bool:
+    """Whether a forcing follows the days of the CalSim3 record (the historical grids), so that
+    its product is scored against CalSim3; a WGEN weather sequence does not."""
+    return forcing.startswith("historical")
+
+
+def pass_wy(tier2_dir: str | Path) -> tuple[int, int]:
+    """The first and the last complete water year of a tier-2 pass."""
+    m = pd.read_csv(Path(tier2_dir) / "tier2_monthly.csv", usecols=["month"]).month
+    per = pd.PeriodIndex(m.unique(), freq="M")
+    a, b = per.min(), per.max()
+    return a.year + 1 + (a.month > 10), b.year - (b.month < 9)
+
+
+def load_pass(tier2_dir: str | Path, arcs, wy: tuple[int, int] = PRODUCT_WY) -> pd.DataFrame:
     """One tier-2 pass as ``[arc, month, sim, ref, quick, inter, supp, prim, wy, moy]`` for
-    ``arcs`` over :data:`PRODUCT_WY`, sorted by arc and month (flows in TAF/month)."""
+    ``arcs`` over the water years ``wy`` (first, last), sorted by arc and month (flows in
+    TAF/month)."""
     d = Path(tier2_dir)
     comp = d / "tier2_components_monthly.csv"
     if not comp.exists():
@@ -137,14 +168,36 @@ def load_pass(tier2_dir: str | Path, arcs) -> pd.DataFrame:
     m["month"] = pd.PeriodIndex(m.month, freq="M")
     m["wy"] = [p.year + (p.month >= 10) for p in m.month]
     m["moy"] = [p.month for p in m.month]
-    m = m[(m.wy >= PRODUCT_WY[0]) & (m.wy <= PRODUCT_WY[1])]
+    m = m[(m.wy >= wy[0]) & (m.wy <= wy[1])]
     return m.sort_values(["arc", "month"]).reset_index(drop=True)
 
 
+def keep_pass(tier2_dir: str | Path, dest: Path) -> None:
+    """Copy the tables of the pass a product was made from, and its record, into ``dest``
+    (``<forcing>/tier2``), so that the product can be repeated from tracked files."""
+    src = Path(tier2_dir)
+    if src.resolve() == dest.resolve():
+        return
+    dest.mkdir(parents=True, exist_ok=True)
+    for name in PASS_FILES:
+        shutil.copyfile(src / name, dest / name)
+    if (src / PASS_RECORD).exists():
+        shutil.copyfile(src / PASS_RECORD, dest / PASS_RECORD)
+
+
+def _relative(path: Path, base: Path) -> str:
+    """``path`` relative to ``base`` when inside it, with forward slashes."""
+    try:
+        return Path(path).resolve().relative_to(base.resolve()).as_posix()
+    except ValueError:
+        return Path(path).as_posix()
+
+
 def find_pass(name: str, run_dir: Path, scenario_dirs) -> Path | None:
-    """The folder of climate point ``name`` (``base`` = ``<run>/tier2``), or None."""
+    """The folder of climate point ``name`` (``base`` = the run's own tier-2 pass, in its local
+    folder), or None."""
     if name == "base":
-        return run_dir / "tier2"
+        return paths.run_roles(run_dir).local / "tier2"
     for d in scenario_dirs:
         if (Path(d) / name / "tier2_monthly.csv").exists():
             return Path(d) / name
@@ -407,14 +460,15 @@ def select(F: _Fit, mus=MUS, epochs: int = EPOCHS, n_blocks: int = N_BLOCKS, log
 
 
 # --------------------------------------------------------------------------------- product
-def _assemble(units: pd.DataFrame, tier2_dir, share: pd.DataFrame) -> pd.DataFrame:
-    """``[arc, month, taf, dpl_taf, kind]`` for every rim arc of a pass: the share arcs from
-    ``share`` (``arc, month, taf``), every other arc its dPL flow."""
+def _assemble(units: pd.DataFrame, tier2_dir, share: pd.DataFrame,
+              wy: tuple[int, int] = PRODUCT_WY) -> pd.DataFrame:
+    """``[arc, month, taf, dpl_taf, kind]`` for every rim arc of a pass over the water years
+    ``wy``: the share arcs from ``share`` (``arc, month, taf``), every other arc its dPL flow."""
     m = pd.read_csv(Path(tier2_dir) / "tier2_monthly.csv", usecols=["arc", "month", "sim_taf"])
     m = m[m.arc.isin(units.index)].rename(columns={"sim_taf": "dpl_taf"})
     per = pd.PeriodIndex(m.month, freq="M")
-    wy = per.year + (per.month >= 10)
-    m = m[(wy >= PRODUCT_WY[0]) & (wy <= PRODUCT_WY[1])]
+    m_wy = per.year + (per.month >= 10)
+    m = m[(m_wy >= wy[0]) & (m_wy <= wy[1])]
     m = m.merge(share.assign(month=share.month.astype(str)), on=["arc", "month"], how="left")
     m["kind"] = m.arc.map(units.kind)
     missing = m.taf.isna() & (m.kind == "share")
@@ -425,15 +479,18 @@ def _assemble(units: pd.DataFrame, tier2_dir, share: pd.DataFrame) -> pd.DataFra
     return m.sort_values(["arc", "month"]).reset_index(drop=True)
 
 
-def apply(model: dict, tier2_dir: str | Path, data_dir: str | Path = "data") -> pd.DataFrame:
+def apply(model: dict, tier2_dir: str | Path, data_dir: str | Path = "data",
+          wy: tuple[int, int] | None = None) -> pd.DataFrame:
     """The product for one tier-2 pass (with runoff parts) under a fitted share model
-    (``share_model.pt`` as loaded by ``torch.load``): ``[arc, month, taf, dpl_taf, kind]``."""
+    (``share_model.pt`` as loaded by ``torch.load``): ``[arc, month, taf, dpl_taf, kind]`` over
+    the water years ``wy`` (default: every complete water year of the pass)."""
+    wy = tuple(wy) if wy else pass_wy(tier2_dir)
     units = load_units(data_dir)
     hm = units[units.kind == "share"]
     arcs, systems = model["arcs"], model["systems"]
     if sorted(arcs) != sorted(hm.index):
         raise ValueError("the share arcs of data/targets/calsim3/arc_hierarchy.csv differ from the model's")
-    D = load_pass(tier2_dir, arcs)
+    D = load_pass(tier2_dir, arcs, wy)
     D["system"] = D.arc.map(hm.system)
     as_s = lambda v: pd.Series(v, index=arcs)   # noqa: E731
     f = share_features(D, as_s(model["eps"]))
@@ -451,7 +508,7 @@ def apply(model: dict, tier2_dir: str | Path, data_dir: str | Path = "data") -> 
         Q = rows.close(out, t64(D.sim.to_numpy()), t64(_system_flow(D)),
                        t64(D.arc.map(as_s(model["k"])).to_numpy()),
                        t64(D.arc.map(as_s(model["floor"])).to_numpy())).numpy()
-    return _assemble(units, tier2_dir, pd.DataFrame({"arc": D.arc, "month": D.month, "taf": Q}))
+    return _assemble(units, tier2_dir, pd.DataFrame({"arc": D.arc, "month": D.month, "taf": Q}), wy)
 
 
 def _summary(M: pd.DataFrame, col: str) -> pd.DataFrame:
@@ -464,13 +521,47 @@ def _summary(M: pd.DataFrame, col: str) -> pd.DataFrame:
     return out.astype({"n": int, "below_0": int})
 
 
+def product_scores(prod: pd.DataFrame, tier2_dir: str | Path, units: pd.DataFrame,
+                   holdout_wy) -> pd.DataFrame:
+    """Per arc (index ``arc``, column ``kind``), monthly KGE against CalSim3 (the pass's
+    ``ref_taf``) of the dPL arc and of the product (``kge_dpl_<w>``, ``kge_product_<w>``) on
+    the held-out water years (``holdout``), on the other water years of :data:`PRODUCT_WY`
+    (``train``) and on the years before them (``early``), each where ``prod`` has them."""
+    ref = pd.read_csv(Path(tier2_dir) / "tier2_monthly.csv", usecols=["arc", "month", "ref_taf"])
+    S = prod.merge(ref, on=["arc", "month"]).dropna(subset=["ref_taf"])
+    per = pd.PeriodIndex(S.month, freq="M")
+    wy = np.asarray(per.year + (per.month >= 10))
+    ho = (wy >= holdout_wy[0]) & (wy <= holdout_wy[1]) if holdout_wy else np.zeros(len(S), bool)
+    fit = (wy >= PRODUCT_WY[0]) & (wy <= PRODUCT_WY[1])
+    unit, r = S.arc.to_numpy(), S.ref_taf.to_numpy()
+    M = pd.DataFrame({"kind": units.kind.reindex(sorted(S.arc.unique()))})
+    for tag, mask in (("holdout", ho), ("train", fit & ~ho), ("early", wy < PRODUCT_WY[0])):
+        if mask.any():
+            M[f"kge_dpl_{tag}"] = _unit_kge(S.dpl_taf.to_numpy(), r, unit, mask)
+            M[f"kge_product_{tag}"] = _unit_kge(S.taf.to_numpy(), r, unit, mask)
+    return M.rename_axis("arc")
+
+
+def _log_scores(M: pd.DataFrame, tag: str, log=print) -> dict:
+    """Log the KGE summaries of the dPL arcs and of the product on window ``tag``; return them."""
+    out = {}
+    for who in ("dpl", "product"):
+        t = _summary(M, f"kge_{who}_{tag}")
+        out[f"kge_{who}_{tag}"] = t.round(4).to_dict("index")
+        log(f"monthly KGE vs CalSim3, {tag} water years — "
+            f"{'the dPL arcs' if who == 'dpl' else 'the product'}:\n"
+            + t.to_string(float_format=lambda v: f"{v:.3f}"))
+    return out
+
+
 def fit_product(run_dir: str | Path, scenario_dirs=None, out: str | Path | None = None,
                 data_dir: str | Path = "data", mu: float | None = None, holdout_wy=None,
                 epochs: int = EPOCHS, threads: int = 8, log=print) -> dict:
-    """Fit the share model of a run and write its product (module docstring)."""
+    """Fit the share model of a run on its passes on the training forcing (module docstring)."""
     run_dir = Path(run_dir)
-    out = Path(out) if out else run_dir / "calsim_product"
-    scenario_dirs = list(scenario_dirs or [run_dir / "tier2_scenarios"])
+    out = Path(out) if out else paths.product()
+    local = paths.run_roles(run_dir).local
+    scenario_dirs = list(scenario_dirs or [local / "tier2_scenarios"])
     holdout_wy = tuple(holdout_wy) if holdout_wy else run_holdout_wy(run_dir)
     passes = {p: find_pass(p, run_dir, scenario_dirs)
               for p in ["base", *TRAIN_POINTS, *VALIDATION_POINTS]}
@@ -508,33 +599,16 @@ def fit_product(run_dir: str | Path, scenario_dirs=None, out: str | Path | None 
                  mu=mu, epochs=epochs, features=FEATURES, holdout_wy=holdout_wy,
                  train_points=F.train_points, run=run_dir.name)
     torch.save(model, out / "share_model.pt")
-    # the product on the base pass, and its scores
+    # the product on the base pass, for its scores
     prod = _assemble(units, passes["base"], pd.DataFrame({"arc": F.B.arc, "month": F.B.month,
                                                            "taf": Q["base"]}))
-    prod.to_csv(out / "rim_inflow_monthly.csv", index=False, float_format="%.8g")
-    ref = pd.read_csv(passes["base"] / "tier2_monthly.csv", usecols=["arc", "month", "ref_taf"])
-    S = prod.merge(ref, on=["arc", "month"]).dropna(subset=["ref_taf"])
-    per = pd.PeriodIndex(S.month, freq="M")
-    wy = np.asarray(per.year + (per.month >= 10))
-    ho = (wy >= holdout_wy[0]) & (wy <= holdout_wy[1]) if holdout_wy else np.zeros(len(S), bool)
-    unit, r = S.arc.to_numpy(), S.ref_taf.to_numpy()
-    M = pd.DataFrame({"kind": units.kind.reindex(sorted(S.arc.unique()))})
-    for tag, mask in (("holdout", ho), ("train", ~ho)):
-        if mask.any():
-            M[f"kge_dpl_{tag}"] = _unit_kge(S.dpl_taf.to_numpy(), r, unit, mask)
-            M[f"kge_product_{tag}"] = _unit_kge(S.taf.to_numpy(), r, unit, mask)
-    M.rename_axis("arc").to_csv(out / "product_metrics.csv")
-    info = dict(run=run_dir.name, mu=mu, epochs=epochs, threads=threads, holdout_wy=holdout_wy,
-                product_wy=PRODUCT_WY, train_points=TRAIN_POINTS,
+    M = product_scores(prod, passes["base"], units, holdout_wy)
+    info = dict(run=run_dir.name, forcing=DEFAULT_FORCING, mu=mu, epochs=epochs, threads=threads,
+                holdout_wy=holdout_wy, fit_wy=PRODUCT_WY, train_points=TRAIN_POINTS,
                 validation_points={p: VALIDATION_POINTS[p] for p in val_points},
-                passes={p: str(d) for p, d in passes.items()}, n_arcs=int(prod.arc.nunique()))
-    tag = "holdout" if holdout_wy else "train"
-    for who in ("dpl", "product"):
-        t = _summary(M, f"kge_{who}_{tag}")
-        info[f"kge_{who}_{tag}"] = t.round(4).to_dict("index")
-        log(f"monthly KGE vs CalSim3, {'held-out' if holdout_wy else 'all'} water years — "
-            f"{'the dPL arcs' if who == 'dpl' else 'the product'}:\n"
-            + t.to_string(float_format=lambda v: f"{v:.3f}"))
+                passes={p: _relative(d, local) for p, d in passes.items()},
+                n_arcs=int(prod.arc.nunique()))
+    info.update(_log_scores(M, "holdout" if holdout_wy else "train", log))
     if val_points:
         G = gate_table(F.misses(Q, val_points, np.ones(len(F.B), bool)))
         G.to_csv(out / "response_gate.csv")
@@ -544,8 +618,32 @@ def fit_product(run_dir: str | Path, scenario_dirs=None, out: str | Path | None 
             + G[["medV", "p90V", "medAJ", "p90AJ"]].to_string(float_format=lambda v: f"{v:.2f}")
             + f"\nfull gate: {'PASS' if ok else 'FAIL'}")
     (out / "product_info.json").write_text(json.dumps(info, indent=1))
-    log(f"calsim_product: wrote {out}")
+    log(f"calsim_product: wrote {out}; the series of a forcing: sacsma dpl calsim product apply "
+        "--tier2 <pass> --forcing <name>")
     return dict(model=model, product=prod, metrics=M, Q=Q, frame=F.B, info=info)
+
+
+def apply_product(tier2_dir: str | Path, forcing: str, share_model: str | Path | None = None,
+                  out: str | Path | None = None, data_dir: str | Path = "data", wy=None,
+                  log=print) -> pd.DataFrame:
+    """Write the product of one forcing (module docstring): the series over ``wy`` (default:
+    every complete water year of the pass), the pass, and for a historical forcing its scores."""
+    model = torch.load(share_model or paths.product() / "share_model.pt", weights_only=False)
+    out = Path(out) if out else paths.product(forcing=forcing)
+    out.mkdir(parents=True, exist_ok=True)
+    wy = tuple(wy) if wy else pass_wy(tier2_dir)
+    prod = apply(model, tier2_dir, data_dir, wy)
+    prod.to_csv(out / "rim_inflow_monthly.csv", index=False, float_format="%.8g")
+    keep_pass(tier2_dir, out / "tier2")
+    log(f"calsim_product: {forcing}, water years {wy[0]}-{wy[1]}, {prod.arc.nunique()} arcs")
+    if historical(forcing):
+        M = product_scores(prod, tier2_dir, load_units(data_dir), model["holdout_wy"])
+        M.to_csv(out / "product_metrics.csv")
+        for tag in ("holdout", "early"):
+            if f"kge_product_{tag}" in M:
+                _log_scores(M, tag, log)
+    log(f"calsim_product: wrote {out}")
+    return prod
 
 
 def main(argv=None, prog=None) -> None:
@@ -557,8 +655,8 @@ def main(argv=None, prog=None) -> None:
     f.add_argument("run", help="run folder (holds checkpoints/best.pt and tier2/)")
     f.add_argument("--scenarios", action="append", default=None, metavar="DIR",
                    help="folder of climate-point tier-2 passes, one subfolder per point "
-                        "(repeatable; default <run>/tier2_scenarios)")
-    f.add_argument("--out", default=None, help="output folder (default <run>/calsim_product)")
+                        "(repeatable; default: tier2_scenarios/ of the run's local folder)")
+    f.add_argument("--out", default=None, help="output folder (default artifacts/product)")
     f.add_argument("--data-dir", default="data")
     f.add_argument("--mu", type=float, default=None,
                    help="response-penalty weight; omit to select it out of fold")
@@ -567,20 +665,24 @@ def main(argv=None, prog=None) -> None:
     f.add_argument("--epochs", type=int, default=EPOCHS)
     f.add_argument("--threads", type=int, default=8,
                    help="torch CPU threads (the fit reproduces at the same count)")
-    g = sub.add_parser("apply", help="the product for another tier-2 pass (a climate scenario)")
-    g.add_argument("run", help="run folder (holds calsim_product/share_model.pt)")
+    g = sub.add_parser("apply", help="the product of one forcing, from its tier-2 pass")
     g.add_argument("--tier2", required=True, help="the tier-2 pass (with --components parts)")
-    g.add_argument("--out", default=None, help="CSV (default <tier2>/rim_inflow_monthly.csv)")
+    g.add_argument("--forcing", required=True,
+                   help="the forcing of the pass (its --forcing name, or a scenario's name)")
+    g.add_argument("--wy", default=None, metavar="A-B",
+                   help="water years of the product (default: every complete one of the pass)")
+    g.add_argument("--share-model", default=None,
+                   help="the fitted share model (default artifacts/product/share_model.pt)")
+    g.add_argument("--out", default=None,
+                   help="output folder (default artifacts/product/<forcing>)")
     g.add_argument("--data-dir", default="data")
     a = p.parse_args(argv)
     if a.cmd == "fit":
         ho = tuple(int(v) for v in a.holdout_wy.split("-")) if a.holdout_wy else None
         fit_product(a.run, a.scenarios, a.out, a.data_dir, a.mu, ho, a.epochs, a.threads)
         return
-    model = torch.load(Path(a.run) / "calsim_product" / "share_model.pt", weights_only=False)
-    out = Path(a.out) if a.out else Path(a.tier2) / "rim_inflow_monthly.csv"
-    apply(model, a.tier2, a.data_dir).to_csv(out, index=False, float_format="%.8g")
-    print(f"calsim_product: wrote {out}")
+    wy = tuple(int(v) for v in a.wy.split("-")) if a.wy else None
+    apply_product(a.tier2, a.forcing, a.share_model, a.out, a.data_dir, wy)
 
 
 if __name__ == "__main__":

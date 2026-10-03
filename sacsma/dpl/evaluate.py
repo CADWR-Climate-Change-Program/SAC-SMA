@@ -24,7 +24,9 @@ import numpy as np
 import pandas as pd
 import torch
 
+from .. import paths
 from ..cdec15 import BASINS, CAL_END, load_gage
+from ..io import DEFAULT_FORCING
 from ..metrics import kge, nse, pbias
 from ..model import run_basin
 from .config import (CANOPY_LEARNED_PARAMS, PARAM_ORDER, RETIRED_CFG_DEFAULTS, DplConfig,
@@ -169,9 +171,8 @@ def _obs_kge(sim: pd.Series, obs: pd.Series, dates: pd.DatetimeIndex,
 def score_frozen(
     params: pd.DataFrame,
     data_dir: str = "data",
-    out_dir: str | Path = "artifacts/dpl/static",
+    out_dir: str | Path | None = None,
     *,
-    label: str = "dpl_static",
     cal_end: str = CAL_END,
     domain: str = "15cdec",
     parallel: bool = True,
@@ -187,8 +188,8 @@ def score_frozen(
     basin (frozen physics — the torch pipeline is never a source of reported
     skill), daily cal/val split at ``cal_end``, per-basin diagnostics + skill
     summary in the cdec15 figure conventions ->
-    ``<out_dir>/metrics_<label>.csv`` + ``figures/``.  Same columns as
-    ``metrics_15cdec.csv`` so the GA-vs-dPL comparison is a plain merge.
+    ``<out_dir>/metrics.csv`` + ``figures/``.  Same columns as the calibrated model's
+    ``metrics.csv`` so the GA-vs-dPL comparison is a plain merge.
 
     ``pet_source="priestley_taylor"`` scores a PT-trained export through the
     numba PT PET (``sacsma.pet_pt``) with the given refinement knobs — the
@@ -208,7 +209,7 @@ def score_frozen(
     from ..io import load_basin_area, load_hru_table, mmday_to_cfs
     from ..model import load_domain_forcing
 
-    out = Path(out_dir)
+    out = Path(out_dir) if out_dir is not None else paths.local(name="eval")
     figdir = out / "figures"
     figdir.mkdir(parents=True, exist_ok=True)
     cal_end_ts = pd.Timestamp(cal_end)
@@ -265,7 +266,7 @@ def score_frozen(
 
     metrics = pd.DataFrame(records)
     skill_summary_fig(metrics, figdir / "skill_summary.png")
-    csv = out / f"metrics_{label}.csv"
+    csv = out / "metrics.csv"
     metrics.round(4).to_csv(csv, index=False)
     print(f"wrote {csv}", flush=True)
     return metrics
@@ -411,19 +412,20 @@ def _noah_stream(net: torch.nn.Module, x: torch.Tensor, dom: DomainTensors,
 
 def score_noah_torch(net: torch.nn.Module, x: torch.Tensor, dom: DomainTensors,
                      cfg: DplConfig, *, data_dir: str = "data",
-                     out_dir: str | Path = "artifacts/dpl/noah_grid",
-                     label: str = "dpl_noah", temp_delta: float = 0.0,
+                     out_dir: str | Path | None = None,
+                     temp_delta: float = 0.0,
                      chunk_days: int = 4096, cal_end: str = CAL_END) -> pd.DataFrame:
     """Score a Noah-ET net through the TORCH pipeline (Noah is NEW physics — NOT
     scorable via ``run_basin``).  Streams the full record with ``et_mode='noah'``
     + per-cell tmin/tmax, aggregates ``dom.W @ flow`` to the outlet, and scores
     cal/val KGE vs the gage (same columns as ``score_frozen``).  Also reports
     the per-basin ET partition and a per-HRU water-balance closure.  ``temp_delta``
-    adds ΔT to tavg/tmin/tmax (a one-knob warming-projection run)."""
+    adds ΔT to tavg/tmin/tmax (a one-knob warming-projection run): its files carry the suffix
+    ``_plus<ΔT>C``.  Writes ``metrics.csv`` and the daily simulation ``sim_daily.csv``."""
     from .._figures import _period_stats, folsom_before_yuba, skill_summary_fig
     from ..io import load_basin_area, load_hru_table, mmday_to_cfs
 
-    out = Path(out_dir)
+    out = Path(out_dir) if out_dir is not None else paths.local(name="eval")
     (out / "figures").mkdir(parents=True, exist_ok=True)
     res = _noah_stream(net, x, dom, cfg, temp_delta=temp_delta,
                        chunk_days=chunk_days)
@@ -472,12 +474,12 @@ def score_noah_torch(net: torch.nn.Module, x: torch.Tensor, dom: DomainTensors,
     metrics = pd.DataFrame(rows)
     if not temp_delta:      # a perturbed run must not clobber the run's figure
         skill_summary_fig(metrics, out / "figures" / "skill_summary.png")
-    lab = label if not temp_delta else f"{label}_plus{temp_delta:g}C"
-    csv = out / f"metrics_{lab}.csv"
+    tag = f"_plus{temp_delta:g}C" if temp_delta else ""
+    csv = out / f"metrics{tag}.csv"
     metrics.round(4).to_csv(csv, index=False)
     # daily sim (date x basin, mm/day) — the torch reporting path's only route to
     # a daily series (run_basin can't reconstruct a seasonal/Noah net).
-    daily_csv = out / f"daily_sim_{lab}.csv"
+    daily_csv = out / f"sim_daily{tag}.csv"
     pd.DataFrame(sim.T, index=dom.dates, columns=list(dom.basins)).rename_axis(
         "date").to_csv(daily_csv)
     print(f"wrote {daily_csv} (daily sim mm/day)", flush=True)
@@ -492,15 +494,15 @@ def score_noah_torch(net: torch.nn.Module, x: torch.Tensor, dom: DomainTensors,
 
 def score_sac_torch(net: torch.nn.Module, x: torch.Tensor, dom: DomainTensors,
                     cfg: DplConfig, *, data_dir: str = "data",
-                    out_dir: str | Path = "artifacts/dpl/dynamic",
-                    label: str = "dpl_dynamic", cal_end: str = CAL_END) -> pd.DataFrame:
+                    out_dir: str | Path | None = None,
+                    cal_end: str = CAL_END) -> pd.DataFrame:
     """Score a Hamon (et_mode='sac') net through the TORCH pipeline — needed when
     the parameter field is TIME-VARYING (dynamic params), which the frozen
     run_basin cannot reconstruct.  Same per-basin columns as score_frozen."""
     from .._figures import _period_stats, folsom_before_yuba, skill_summary_fig
     from ..io import load_basin_area, load_hru_table, mmday_to_cfs
 
-    out = Path(out_dir)
+    out = Path(out_dir) if out_dir is not None else paths.local(name="eval")
     (out / "figures").mkdir(parents=True, exist_ok=True)
     net.eval()
     with torch.no_grad():
@@ -541,7 +543,7 @@ def score_sac_torch(net: torch.nn.Module, x: torch.Tensor, dom: DomainTensors,
               f"VAL KGE={val.get('kge', float('nan')):.3f}", flush=True)
     metrics = pd.DataFrame(rows)
     skill_summary_fig(metrics, out / "figures" / "skill_summary.png")
-    csv = out / f"metrics_{label}.csv"
+    csv = out / "metrics.csv"
     metrics.round(4).to_csv(csv, index=False)
     print(f"wrote {csv}  (mean cal {metrics['cal_kge'].mean():.3f} / "
           f"val {metrics['val_kge'].mean():.3f})", flush=True)
@@ -558,10 +560,12 @@ def load_net_from_checkpoint(
     data_dir: str = "data",
     *,
     device: torch.device | str | None = None,
+    product: str = DEFAULT_FORCING,
 ) -> tuple[torch.nn.Module, torch.Tensor, DomainTensors, DplConfig, dict]:
     """Rebuild ``(net, x, dom, cfg, ck)`` from a training checkpoint — the
     shared front half of :func:`evaluate_checkpoint` (feature rebuild +
-    ParameterNet restore).  ``device=None`` -> cuda if available, else cpu."""
+    ParameterNet restore).  ``device=None`` -> cuda if available, else cpu.
+    ``product`` is the forcing the domain tensors carry (default: the training forcing)."""
     import dataclasses as _dc
 
     import numpy as _np
@@ -606,7 +610,8 @@ def load_net_from_checkpoint(
                               dynamic_window=(nc.get("dynamic_window", 365)
                                               if dyn else None),
                               calsim_footprint=ck.get("cfg", {}).get(
-                                  "calsim_footprint", False))
+                                  "calsim_footprint", False),
+                              product=product)
     stats = FeatureSet(x=_np.empty((0, 0), dtype=_np.float32), **ck["features"])
     fs = build_features(dom.hrus, variant=variant,
                         forcing=(dom.forcing if variant in ("climate",
@@ -668,61 +673,18 @@ def noah_torch_daily(ckpt_path: str | Path, *, data_dir: str = "data",
     return df
 
 
-#: cache root for the (Δprecip, ΔT) noah physics teachers / response-surface runs.
-_DTDP_CACHE = "artifacts/dpl/_local/cache/dtdp"
-
-
-def teacher_cache_path(dp: float, dt: float,
-                       cache_dir: str | Path = _DTDP_CACHE) -> Path:
-    """Cache path for the noah daily sim under (Δprecip fraction dp, ΔT dt)."""
-    return Path(cache_dir) / f"noah_dp{dp:+.2f}_dt{dt:+.1f}.csv"
-
-
-def noah_teacher_daily(dp: float, dt: float, ckpt_path: str | Path, *,
-                       data_dir: str = "data", cache_dir: str | Path = _DTDP_CACHE,
-                       device: torch.device | str | None = None) -> pd.DataFrame:
-    """Cached noah daily sim (date x basin, mm/day) under (Δprecip fraction ``dp``,
-    ΔT ``dt`` degC).  The SINGLE source of truth for the dt/dp response teachers,
-    the physics response column, and the hybrids' perturbed sim channel — so the
-    numerics match on the training and evaluation sides.  ``dp=dt=0`` reproduces
-    the noah checkpoint's full torch daily sim (the physics parity anchor)."""
-    cache = teacher_cache_path(dp, dt, cache_dir)
-    if cache.exists():
-        return pd.read_csv(cache, parse_dates=["date"]).set_index("date")
-    df = noah_torch_daily(ckpt_path, data_dir=data_dir, temp_delta=float(dt),
-                          precip_scale=1.0 + float(dp), device=device)
-    cache.parent.mkdir(parents=True, exist_ok=True)
-    df.to_csv(cache)
-    return df
-
-
-def corner_anchors(dp: float, dt: float) -> list[tuple[float, float]]:
-    """The 5 non-origin corners of {−dp, 0, +dp} × {0, +dt}:
-    (−dp,0), (+dp,0), (0,dt), (−dp,dt), (+dp,dt)."""
-    return [(-dp, 0.0), (dp, 0.0), (0.0, dt), (-dp, dt), (dp, dt)]
-
-
-def grid_anchors(dps, dts) -> list[tuple[float, float]]:
-    """The full (Δprecip, ΔT) grid ``dps × dts`` minus the (0, 0) origin — a wider
-    / interior anchor set for supervising the response over more of the plane
-    (not just the corners)."""
-    return [(float(dp), float(dt)) for dp in dps for dt in dts
-            if not (float(dp) == 0.0 and float(dt) == 0.0)]
-
-
 def evaluate_checkpoint(
     ckpt_path: str | Path,
     data_dir: str = "data",
     out_dir: str | Path | None = None,
     *,
     parallel: bool = True,
-    label: str | None = None,
     temp_delta: float = 0.0,
 ) -> pd.DataFrame:
     """best.pt -> params_dpl.csv -> frozen-model metrics (the full Phase-4 path).
 
     ``temp_delta`` != 0 re-runs the TORCH scorer with tavg/tmin/tmax + delta and
-    dumps the perturbed daily sim (label suffixed ``_plus<delta>C``) — the
+    dumps the perturbed daily sim (``sim_daily_plus<delta>C.csv``) — the
     teacher for the hybrid temperature-consistency loss.  Torch-scored
     checkpoints only (seasonal/canopy/dynamic)."""
     ck = torch.load(ckpt_path, map_location="cpu", weights_only=False)
@@ -738,19 +700,19 @@ def evaluate_checkpoint(
     if temp_delta and not canopy:
         raise ValueError("--temp-delta teacher dumps run through the torch Noah "
                          "scorer only (canopy checkpoints)")
+    # The run's folders: the parameter tables go to its model folder, the scores and
+    # figures to its results folder.  Default: the run of the checkpoint
+    # (<run>/checkpoints/x.pt); a bare checkpoint outside that layout falls back to the
+    # variant's run.
+    ckp = Path(ckpt_path).resolve()
     if out_dir is not None:
-        out = Path(out_dir)
+        run = paths.run_roles(out_dir)
+    elif ckp.parent.name == "checkpoints":
+        run = paths.run_roles(ckp.parent.parent)
     else:
-        # default NEXT TO the checkpoint (<run>/checkpoints/x.pt -> <run>/).
-        # The old artifacts/dpl/<variant> fallback silently CLOBBERED whatever
-        # unrelated run shared the variant name (it overwrote the hamon
-        # `physical` arm's outputs on 2026-07-15); it remains only for a bare
-        # checkpoint outside the standard run layout.
-        ckp = Path(ckpt_path).resolve()
-        out = (ckp.parent.parent if ckp.parent.name == "checkpoints"
-               else Path(f"artifacts/dpl/{variant}"))
-        if label is None and ckp.parent.name == "checkpoints":
-            label = out.name       # metrics_<run>.csv, not metrics_dpl_<variant>
+        run = paths.run_roles(paths.dpl_run(run=variant, domain=domain))
+    run.model.mkdir(parents=True, exist_ok=True)
+    out = run.results
     out.mkdir(parents=True, exist_ok=True)
 
     if torch_score:
@@ -764,7 +726,7 @@ def evaluate_checkpoint(
                                                     device=dev)
 
     if canopy:   # Noah ET — a SEPARATE canopy-param table (kept OUT of ga_optimum)
-        ccsv = out / "params_canopy.csv"
+        ccsv = run.model / "params_canopy.csv"
         canopy_df = export_canopy_params(net, dom, x)
         canopy_df.to_csv(ccsv, index=False)
         print(f"wrote {ccsv} (Noah canopy params; kept OUT of ga_optimum)",
@@ -773,7 +735,7 @@ def evaluate_checkpoint(
         # leaving noah with no params_dpl.csv) — the Noah-lite frozen
         # path and the hybrid physics baseline both need them.
         dpl_df = export_params(net, dom, x)
-        pcsv = out / "params_dpl.csv"
+        pcsv = run.model / "params_dpl.csv"
         dpl_df.to_csv(pcsv, index=False)
         print(f"wrote {pcsv} ({len(dpl_df)} HRU rows, cal KGE at selection "
               f"{ck.get('cal_kge', float('nan')):.4f})", flush=True)
@@ -793,35 +755,28 @@ def evaluate_checkpoint(
             pt_alb = cfg.pt_snow_albedo or 0.0
             pt_dd = cfg.pt_dewpoint_depression or 0.0
             return score_frozen(
-                dpl_df, data_dir, out,
-                label=label if label is not None else f"dpl_{variant}",
-                domain=domain, parallel=parallel, pet_source="priestley_taylor",
-                pt_snow_albedo=pt_alb, pt_dewpoint_depression=pt_dd,
+                dpl_df, data_dir, out, domain=domain, parallel=parallel,
+                pet_source="priestley_taylor", pt_snow_albedo=pt_alb, pt_dewpoint_depression=pt_dd,
                 et_scheme="noah_lite", canopy_params=canopy_df)
         # full Noah ET (7-param Jarvis) or Hamon-potential lite: NO frozen core
         # -> the torch pipeline reports skill (mass-balance validated).
         return score_noah_torch(net, x, dom, cfg, data_dir=data_dir, out_dir=out,
-                                temp_delta=temp_delta,
-                                label=label if label is not None
-                                else f"dpl_{variant}_noah")
+                                temp_delta=temp_delta)
 
     dpl_df = export_params(net, dom, x)
-    pcsv = out / "params_dpl.csv"
+    pcsv = run.model / "params_dpl.csv"
     dpl_df.to_csv(pcsv, index=False)
     print(f"wrote {pcsv} ({len(dpl_df)} HRU rows, cal KGE at selection "
           f"{ck.get('cal_kge', float('nan')):.4f})", flush=True)
     if dyn:   # time-varying params — the frozen run_basin can't reconstruct them
         print(f"dynamic params {dyn} -> torch scoring (run_basin can't reconstruct)",
               flush=True)
-        return score_sac_torch(net, x, dom, cfg, data_dir=data_dir, out_dir=out,
-                               label=label if label is not None else f"dpl_{variant}")
+        return score_sac_torch(net, x, dom, cfg, data_dir=data_dir, out_dir=out)
     if cfg.sac_pet != "hamon":
         print(f"sac_pet={cfg.sac_pet} -> frozen scoring via the numba PT PET "
               f"(snow_albedo={cfg.pt_snow_albedo}, "
               f"dewpoint_depression={cfg.pt_dewpoint_depression})", flush=True)
-    return score_frozen(dpl_df, data_dir, out,
-                        label=label if label is not None else f"dpl_{variant}",
-                        domain=domain, parallel=parallel,
+    return score_frozen(dpl_df, data_dir, out, domain=domain, parallel=parallel,
                         pet_source=cfg.sac_pet,
                         pt_snow_albedo=cfg.pt_snow_albedo,
                         pt_dewpoint_depression=cfg.pt_dewpoint_depression)
@@ -829,16 +784,17 @@ def evaluate_checkpoint(
 
 def fidelity_benchmark(
     data_dir: str = "data",
-    out_dir: str = "artifacts/dpl/noah/fidelity",
+    out_dir: str | Path | None = None,
     *,
     configs: tuple[str, ...] | None = None,
     device: str = "cuda",
     chunk_days: int = 4096,
 ) -> pd.DataFrame:
-    """Run the sweep; writes ``fidelity_benchmark.csv`` + a summary figure."""
+    """Run the sweep; writes ``fidelity_benchmark.csv`` + a summary figure into ``out_dir``
+    (default: the benchmark's result folder)."""
     dev = pick_device(device)
     names = tuple(configs if configs is not None else FIDELITY_CONFIGS)
-    out = Path(out_dir)
+    out = Path(out_dir) if out_dir is not None else paths.dpl_benchmark()
     (out / "figures").mkdir(parents=True, exist_ok=True)
 
     print("fidelity: frozen reference (run_basin, parallel) ...", flush=True)
