@@ -13,5 +13,7 @@ artifacts/**/*.html filter=lfs diff=lfs merge=lfs -text
 artifacts/**/*.npz filter=lfs diff=lfs merge=lfs -text
 # the rim-inflow product of each forcing (196 arcs x every month, 7-11 MB) and the tier-2 pass
 # it was made from (9-35 MB)
-artifacts/product/*/rim_inflow_monthly.csv filter=lfs diff=lfs merge=lfs -text
-artifacts/product/*/tier2/*.csv filter=lfs diff=lfs merge=lfs -text
+artifacts/product/calsim3/*/rim_inflow_monthly.csv filter=lfs diff=lfs merge=lfs -text
+artifacts/product/calsim3/*/tier2/*.csv filter=lfs diff=lfs merge=lfs -text
+# the daily flow of the 15 CDEC watersheds, WY1922-2018 (15 x 35,000 days)
+artifacts/product/15cdec/*/flow_daily.csv filter=lfs diff=lfs merge=lfs -text
