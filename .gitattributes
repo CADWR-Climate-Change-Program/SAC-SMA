@@ -8,8 +8,10 @@ data/targets/calsim3/calsim3_inflow_monthly_mm.csv filter=lfs diff=lfs merge=lfs
 data/targets/calsim3/arc_obs_mask.csv filter=lfs diff=lfs merge=lfs -text
 # self-contained validation atlases (images embedded): keep them out of text diffs and language stats
 artifacts/**/*.html linguist-generated=true -diff
-# the multifamily dPL runs' atlases (~20 MB each) and daily-flow dumps (2-8 MB) are binary-sized
-artifacts/dpl/multifamily/**/*.html filter=lfs diff=lfs merge=lfs -text
-artifacts/dpl/multifamily/**/*.npz filter=lfs diff=lfs merge=lfs -text
-# the CalSim3 rim-inflow product of a run (196 arcs x 792 months, ~7 MB)
-artifacts/dpl/multifamily/**/rim_inflow_monthly.csv filter=lfs diff=lfs merge=lfs -text
+# the atlases (~20 MB each) and the daily-flow archives (2-8 MB) are binary-sized
+artifacts/**/*.html filter=lfs diff=lfs merge=lfs -text
+artifacts/**/*.npz filter=lfs diff=lfs merge=lfs -text
+# the rim-inflow product of each forcing (196 arcs x every month, 7-11 MB) and the tier-2 pass
+# it was made from (9-35 MB)
+artifacts/product/*/rim_inflow_monthly.csv filter=lfs diff=lfs merge=lfs -text
+artifacts/product/*/tier2/*.csv filter=lfs diff=lfs merge=lfs -text
