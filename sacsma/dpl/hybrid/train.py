@@ -27,6 +27,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
+from ... import paths
 from ...metrics import kge
 from ..config import pick_device
 from .data import load_hybrid_data
@@ -134,7 +135,8 @@ def train_hybrid(cfg: HybridConfig, *, data_dir: str = "data",
                  sim_cache: str | Path | None = None) -> dict:
     dev = pick_device(cfg.device)
     torch.manual_seed(cfg.seed)
-    out = Path(out_dir)
+    run = paths.run_roles(out_dir)
+    out = run.model                 # the checkpoint and the training log
     out.mkdir(parents=True, exist_ok=True)
     if sim_cache is None:
         # physics-tagged so distinct baselines never share a stale sim cache
@@ -142,7 +144,7 @@ def train_hybrid(cfg: HybridConfig, *, data_dir: str = "data",
         tag = f"frozen_sim_{cfg.physics_domain}_{cfg.pet_source}"
         if cfg.physics_et_scheme != "sac":
             tag += f"_{cfg.physics_et_scheme}"
-        sim_cache = out.parent / f"{tag}.csv"
+        sim_cache = run.local.parent / f"{tag}.csv"     # a cache, beside the run
 
     # unified response anchors: the legacy ΔT term (temp_*) first, then any
     # explicit (dp, dt) anchors.  Same math for the n=1 ΔT case as before.

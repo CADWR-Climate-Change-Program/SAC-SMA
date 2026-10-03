@@ -3,7 +3,7 @@
 Bounds are the ORIGINAL GA feasible ranges from the archived calibration setup
 (``tmp/sacsma_module/sacramento_ga_15cdec_pool.txt``, parameter-description
 block) — the same box the pooled optimum was drawn from, so every value in
-``data/inputs/domains/15cdec/ga_optimum.csv`` lies inside them (asserted by
+``artifacts/models/15cdec/ga_optimum.csv`` lies inside them (asserted by
 :func:`validate_ga_optimum`).  ``side``, ``SCF`` and ``PXTEMP`` had degenerate
 ranges there (held fixed) and stay fixed here.
 

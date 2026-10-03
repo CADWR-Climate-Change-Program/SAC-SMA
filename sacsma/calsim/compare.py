@@ -17,7 +17,8 @@ through the hand-edited ``data/reference/calsim_crosswalk.csv`` (its ``vic_basin
 column).  Per-node scores go to the CSVs (``calset_metrics.csv`` etc.); the **maps and
 figures present skill at the main-basin level** — every sub-area polygon is coloured by
 its watershed's basin-anchor score (:func:`anchor_metrics`), not its own sub-arc score.
-Artifacts -> ``artifacts/calsim/``.
+Outputs -> ``artifacts/results/calsim3/`` (scores, maps, rolling skill, the per-arc
+quantile mapping) and ``footprints/`` (the footprint and HRU-attribute maps).
 """
 
 from __future__ import annotations
@@ -460,17 +461,17 @@ def _subarc_validate(
 
 
 def make_subarc_validation(data_dir: str | Path = "data", artifacts_dir: str | Path = "artifacts",
-                           run: str = "compare", sets=DEFAULT_CALSETS, *,
+                           sets=DEFAULT_CALSETS, *,
                            anchor_long=None, raw_long=None, met=None, series=None,
                            method="qmap") -> Path:
-    """Write the per-sub-arc bias-correction validation (train/test) under ``artifacts/<run>/``:
+    """Write the per-sub-arc bias-correction validation (train/test) to the ``calsim3`` folder:
     ``subarc_validation_metrics.csv`` (the scorecard),
     and — for ``method="qmap"`` — the **per-set QMAP-corrected sub-arc series**
     ``subarc_qmap_<set>.csv`` (the deliverable, one file per SAC set and VIC, distinct from the
     legacy monthly-ratio approach).  ``method`` selects the correction (``qmap`` default,
     ``ratio`` legacy — see :func:`subarc_validation_metrics`).  ``met``/``series`` may be passed
     in (already computed by :func:`make_all`) to avoid recompute."""
-    out = Path(artifacts_dir) / "calsim" / run
+    out = paths.calibrated(artifacts_dir, "calsim3")
     (out / "figures").mkdir(parents=True, exist_ok=True)
     if met is None:
         met, series = _subarc_validate(data_dir, sets, anchor_long=anchor_long,
@@ -924,7 +925,7 @@ def _rolling_basin_fig(basin_tbl, st, metric, mlabel, ylim, window_years, path):
 
 
 def make_rolling_skill(data_dir: str | Path = "data", artifacts_dir: str | Path = "artifacts",
-                       run: str = "compare", *, anchor_long=None, sets=DEFAULT_CALSETS,
+                       *, anchor_long=None, sets=DEFAULT_CALSETS,
                        window_years: int = 30, step_months: int = 1) -> Path:
     """Rolling basin-level skill vs CalSim3 (FLOW-UNIMPAIRED anchors) for the SAC anchor sets +
     VIC (split onto each set's basins).  Writes the median table ``rolling_skill_<W>yr.csv`` +
@@ -932,7 +933,7 @@ def make_rolling_skill(data_dir: str | Path = "data", artifacts_dir: str | Path 
     per-watershed table ``rolling_skill_basin_<W>yr.csv``, and per-(set, metric)
     SAC-top/VIC-bottom watershed figures ``figures/rolling_basin_<set>_<metric>.png``.
     ``anchor_long`` is the basin-level frame; if ``None`` it is read from ``anchor_monthly.csv``."""
-    out = Path(artifacts_dir) / "calsim" / run
+    out = paths.calibrated(artifacts_dir, "calsim3")
     (out / "figures").mkdir(parents=True, exist_ok=True)
     if anchor_long is None:
         csv = out / "anchor_monthly.csv"
@@ -986,7 +987,6 @@ def _shared_period(*longs):
 def make_all(
     data_dir: str | Path = "data",
     artifacts_dir: str | Path = "artifacts",
-    run: str = "compare",
     sets=DEFAULT_CALSETS,
     covered_frac=None,
     mass_balance=False,
@@ -1004,7 +1004,7 @@ def make_all(
     ``run_basin`` and the per-catchment local runoff via ``run_calsim``) across cores
     with the Numba ``prange`` kernels — the model results are unchanged (bit-exact for
     the per-catchment build, floating-tolerance for the routed anchors)."""
-    out = Path(artifacts_dir) / "calsim" / run
+    out = paths.calibrated(artifacts_dir, "calsim3")
     (out / "figures").mkdir(parents=True, exist_ok=True)
 
     # Shared per-cell SMA-component cache: the anchor (run_basin, routed) and per-catchment
@@ -1066,11 +1066,13 @@ def make_all(
         _calset_skill_fig(anchor_met, s, out / "figures" / f"{s}_skill.png")
     # basin-level (anchor) comparison: each basin vs the sum of its sub-nodes (15cdec is
     # folded onto the same dumbbells inside make_anchor, behind a dashed divider)
-    make_anchor(data_dir, artifacts_dir, run, sets, anchor_long=anchor_long)
+    make_anchor(data_dir, artifacts_dir, sets, anchor_long=anchor_long)
+    # the same scores before and from WY1950, from the anchor series just written
+    make_anchor_skill_periods(data_dir, artifacts_dir)
     # parallel full-footprint view + the screened-vs-full delta (with the VIC benchmark), plus
     # the calibration-target-vs-CalSim3 table; the fnf_* calibration basis is untouched
     # (see tmp/CALSIM3_FNF_FOOTPRINT.md).
-    make_anchor_full(data_dir, artifacts_dir, run, sets, anchor_long=anchor_long,
+    make_anchor_full(data_dir, artifacts_dir, sets, anchor_long=anchor_long,
                      period=(start, end), comp_cache=comp_cache, parallel=parallel)
     target_vs_calsim3(data_dir, sets=tuple(s for s in sets if s in ANCHOR_SETS)).to_csv(
         out / "target_vs_calsim3.csv", index=False)
@@ -1081,7 +1083,7 @@ def make_all(
     subarc_met, subarc_series = _subarc_validate(
         data_dir, adj_sets, anchor_long=anchor_long,
         raw_long=(None if mass_balance else long))
-    make_subarc_validation(data_dir, artifacts_dir, run, adj_sets, met=subarc_met,
+    make_subarc_validation(data_dir, artifacts_dir, adj_sets, met=subarc_met,
                            series=subarc_series)
 
     # CalSim<->SAC-SMA basin maps (9unimp + 11obs partition): basin-level NSE/KGE/pbias for
@@ -1089,20 +1091,21 @@ def make_all(
     make_basin_maps(data_dir, out, anchor_met, sets=adj_sets)
     # footprint-screening methods maps (single-basin illustrations of
     # tmp/CALSIM3_FNF_FOOTPRINT.md: the VIC grid + the SAC HRU sets on the catchment)
-    make_shasta_footprint_maps(data_dir, out)
+    fp = paths.calibrated(artifacts_dir, "footprints")
+    make_shasta_footprint_maps(data_dir, fp)
     for title, set_name, basin, vic_node, cdec_basin, stem in FOOTPRINT_MAP_BASINS:
-        make_basin_footprint_maps(data_dir, out, title=title, set_name=set_name,
+        make_basin_footprint_maps(data_dir, fp, title=title, set_name=set_name,
                                   basin=basin, vic_node=vic_node,
                                   cdec_basin=cdec_basin, stem=stem)
     # whole-domain HRU attribute / calibrated-parameter maps (15cdec veg_class + Kpet;
     # 11obs/9unimp per-basin Kpet) + the per-veg-class Kpet summary and the exact
     # soil_class→Kpet lookup (the real 15cdec Kpet regionalization is soil-based)
-    make_hru_attribute_maps(data_dir, out)
-    hru_param_table(data_dir).to_csv(out / "hru_veg_kpet_15cdec.csv", index=False)
-    kpet_soil_table(data_dir).to_csv(out / "hru_kpet_by_soil_15cdec.csv", index=False)
+    make_hru_attribute_maps(data_dir, fp)
+    hru_param_table(data_dir).to_csv(fp / "hru_veg_kpet_15cdec.csv", index=False)
+    kpet_soil_table(data_dir).to_csv(fp / "hru_kpet_by_soil_15cdec.csv", index=False)
     # rolling 30-yr KGE/NSE/pbias vs CalSim3 at the basin-level FLOW-UNIMPAIRED anchors
     # (median across each anchor set's basins; VIC split onto the 11obs & 9unimp basins)
-    make_rolling_skill(data_dir, artifacts_dir, run, anchor_long=anchor_long, sets=sets)
+    make_rolling_skill(data_dir, artifacts_dir, anchor_long=anchor_long, sets=sets)
     return out
 
 
@@ -1305,7 +1308,7 @@ def _fp_panel(ax, title, note, *, context, outline, extent, aspect):
 
 
 def make_shasta_footprint_maps(data_dir: str | Path = "data",
-                               out: str | Path = "artifacts/calsim/compare"):
+                               out: str | Path | None = None):
     """The Shasta footprint-screening story as maps (single-basin methods figure).
 
     ``shasta_footprint_panels.png`` — 2x3 solo panels (same layout as
@@ -1347,7 +1350,7 @@ def make_shasta_footprint_maps(data_dir: str | Path = "data",
         screened_footprint,
     )
 
-    figs = Path(out) / "figures"
+    figs = Path(out if out is not None else paths.calibrated(name="footprints")) / "figures"
     figs.mkdir(parents=True, exist_ok=True)
     km2_per_mi2 = _M2_PER_MI2 / 1e6
 
@@ -1474,7 +1477,7 @@ FOOTPRINT_MAP_BASINS = (
 
 
 def make_basin_footprint_maps(data_dir: str | Path = "data",
-                              out: str | Path = "artifacts/calsim/compare", *,
+                              out: str | Path | None = None, *,
                               title: str = "Stanislaus", set_name: str = "11obs",
                               basin: str = "SNS", vic_node: str = "8RI_N_MEL",
                               cdec_basin: str | None = "NML", stem: str = "sns"):
@@ -1527,7 +1530,7 @@ def make_basin_footprint_maps(data_dir: str | Path = "data",
 
     screened = basin in SCREENED_BASINS
 
-    figs = Path(out) / "figures"
+    figs = Path(out if out is not None else paths.calibrated(name="footprints")) / "figures"
     figs.mkdir(parents=True, exist_ok=True)
     km2_per_mi2 = _M2_PER_MI2 / 1e6
 
@@ -1712,7 +1715,7 @@ def _hru_map_context(ax, data_dir, extent):
 
 
 def make_hru_attribute_maps(data_dir: str | Path = "data",
-                            out: str | Path = "artifacts/calsim/compare"):
+                            out: str | Path | None = None):
     """Whole-domain HRU attribute / calibrated-parameter maps (input figures).
 
     Four PNGs into ``<out>/figures/``:
@@ -1751,7 +1754,7 @@ def make_hru_attribute_maps(data_dir: str | Path = "data",
     from ..io import load_hru_table, load_params
     from .catchments import basin_footprints
 
-    figs = Path(out) / "figures"
+    figs = Path(out if out is not None else paths.calibrated(name="footprints")) / "figures"
     figs.mkdir(parents=True, exist_ok=True)
     halo = [withStroke(linewidth=1.6, foreground="white")]
 
@@ -1791,7 +1794,7 @@ def make_hru_attribute_maps(data_dir: str | Path = "data",
     _cat_map("soil_class", "15cdec HRUs by soil class", "hru_soil_15cdec.png")
 
     # --- Figure 3: 15cdec calibrated Kpet (tracks soil_class) ---
-    kp15 = load_params(data_dir, domain="15cdec").set_index("key")["Kpet"]
+    kp15 = load_params(domain="15cdec").set_index("key")["Kpet"]
     h = h.assign(Kpet=h["key"].map(kp15))
     norm = Normalize(vmin=np.floor(h["Kpet"].min() * 10) / 10,
                      vmax=np.ceil(h["Kpet"].max() * 10) / 10)
@@ -1816,7 +1819,7 @@ def make_hru_attribute_maps(data_dir: str | Path = "data",
     # --- Figure 3: 11obs + 9unimp per-basin Kpet ---
     doms = ["11obs", "9unimp"]
     hru = {d: load_hru_table(data_dir, domain=d) for d in doms}
-    par = {d: load_params(data_dir, domain=d).groupby("basin")["Kpet"].first() for d in doms}
+    par = {d: load_params(domain=d).groupby("basin")["Kpet"].first() for d in doms}
     allh = np.concatenate([hru[d][["lat", "lon"]].to_numpy() for d in doms])
     cext = _hru_extent(allh[:, 0], allh[:, 1])
     kall = np.concatenate([par[d].to_numpy() for d in doms])
@@ -1864,7 +1867,7 @@ def hru_param_table(data_dir: str | Path = "data", domain: str = "15cdec") -> pd
     from ..io import load_hru_table, load_params
 
     h = load_hru_table(data_dir, domain=domain)
-    kp = load_params(data_dir, domain=domain)
+    kp = load_params(domain=domain)
     kp = (kp.drop_duplicates("basin") if "basin" in kp.columns and domain != "15cdec"
           else kp.drop_duplicates("key"))
     h = h.merge(kp[["key", "Kpet"]], on="key", how="left")
@@ -1893,7 +1896,7 @@ def kpet_soil_table(data_dir: str | Path = "data", domain: str = "15cdec") -> pd
     from ..io import load_hru_table, load_params
 
     h = load_hru_table(data_dir, domain=domain)
-    kp = load_params(data_dir, domain=domain).drop_duplicates("key")
+    kp = load_params(domain=domain).drop_duplicates("key")
     m = h.merge(kp[["key", "Kpet"]], on="key", how="left")
     g = m.groupby("soil_class")["Kpet"]
     tbl = pd.DataFrame({
@@ -2040,7 +2043,7 @@ def _anchor_set_taf(domain, data_dir, nodes, forcing=None, *, comp_cache=None,
         from ..io import load_hru_table, load_params
         fp_basins = set(footprint["basin"].unique())
         hru_tbl = load_hru_table(data_dir, domain=domain)
-        pfull = load_params(data_dir, domain=domain)
+        pfull = load_params(domain=domain)
     parts = []
     for basin, g in summable.groupby("basin"):
         if basin in fp_basins:
@@ -2176,7 +2179,7 @@ ANCHOR_SETS = ("11obs", "9unimp")
 
 
 def make_anchor(data_dir: str | Path = "data", artifacts_dir: str | Path = "artifacts",
-                run: str = "compare", sets=DEFAULT_CALSETS, *, anchor_long=None) -> Path:
+                sets=DEFAULT_CALSETS, *, anchor_long=None) -> Path:
     """Basin-level anchor comparison: each set basin vs the sum of its CalSim3 nodes, using
     only the gauge-calibrated anchor sets (:data:`ANCHOR_SETS` = 11obs/9unimp; 15cdec is
     excluded from ``anchor_metrics.csv``/``anchor_monthly.csv`` and everything downstream of
@@ -2187,7 +2190,7 @@ def make_anchor(data_dir: str | Path = "data", artifacts_dir: str | Path = "arti
     :func:`make_anchor_15cdec`), behind a dashed divider (:func:`_anchor_dumbbell_fig`) — a
     display-only addition that does not touch the ANCHOR_SETS CSVs above.
     """
-    out = Path(artifacts_dir) / "calsim" / run
+    out = paths.calibrated(artifacts_dir, "calsim3")
     (out / "figures").mkdir(parents=True, exist_ok=True)
     long = (build_anchor_long(data_dir, sets, footprint=_screened_fp(data_dir, sets))
             if anchor_long is None else anchor_long)
@@ -2196,11 +2199,6 @@ def make_anchor(data_dir: str | Path = "data", artifacts_dir: str | Path = "arti
     met = anchor_metrics(long)
     long.to_csv(out / "anchor_monthly.csv", index=False)
     met.to_csv(out / "anchor_metrics.csv", index=False)
-    # surface the canonical CalSim catchment areas (the basin total now sits on these)
-    for s in sets:
-        area_csv = paths.calsim_basin_area(data_dir, s)
-        if area_csv.exists():
-            pd.read_csv(area_csv).to_csv(out / f"basin_area_{s}_calsim.csv", index=False)
     msg = "  ".join(f"{s}={met[(met['set']==s)&(met['source']==s)]['kge'].median():.2f}"
                     for s in sets if ((met['set'] == s) & (met['source'] == s)).any())
     print(f"anchor: basin-level vs CalSim3 (FLOW-UNIMPAIRED where a rim system exists, "
@@ -2209,7 +2207,7 @@ def make_anchor(data_dir: str | Path = "data", artifacts_dir: str | Path = "arti
     # fold 15cdec onto the skill dumbbells only (own CSVs, own median print; never merged
     # into the ANCHOR_SETS met/CSVs above)
     has_cdec15 = anchor_long is None or CDEC15 in set(anchor_long["set"])
-    long_15, met_15 = (make_anchor_15cdec(data_dir, artifacts_dir, run, anchor_long=anchor_long)
+    long_15, met_15 = (make_anchor_15cdec(data_dir, artifacts_dir, anchor_long=anchor_long)
                       if has_cdec15 else (pd.DataFrame(), pd.DataFrame()))
     plot_sets = sets + (CDEC15,) if not met_15.empty else sets
     plot_met = pd.concat([met, met_15], ignore_index=True) if not met_15.empty else met
@@ -2320,7 +2318,7 @@ def target_vs_calsim3(data_dir: str | Path = "data", sets=ANCHOR_SETS) -> pd.Dat
 
 
 def make_anchor_full(data_dir: str | Path = "data", artifacts_dir: str | Path = "artifacts",
-                     run: str = "compare", sets=DEFAULT_CALSETS, *, anchor_long=None,
+                     sets=DEFAULT_CALSETS, *, anchor_long=None,
                      period=None, comp_cache=None, parallel=False) -> Path:
     """Parallel full-HRU-footprint anchor + the screened-vs-full delta.
 
@@ -2341,7 +2339,7 @@ def make_anchor_full(data_dir: str | Path = "data", artifacts_dir: str | Path = 
     :func:`make_all` (rebuilt here if omitted); ``period`` (a ``(start, end)`` pair) clips both
     views to identical months for a fair delta.  The ``fnf_<domain>_monthly.csv`` calibration
     basis and the fnf-target diagnostics are unaffected by the anchor basis."""
-    out = Path(artifacts_dir) / "calsim" / run
+    out = paths.calibrated(artifacts_dir, "calsim3")
     (out / "figures").mkdir(parents=True, exist_ok=True)
     ssets = tuple(s for s in sets if s in ANCHOR_SETS)
     if anchor_long is None:
@@ -2477,7 +2475,6 @@ def _anchor_screened_fig(cmp, sets, path, data_dir="data"):
 
 
 def make_anchor_15cdec(data_dir: str | Path = "data", artifacts_dir: str | Path = "artifacts",
-                       run: str = "compare",
                        *, anchor_long=None) -> tuple[pd.DataFrame, pd.DataFrame]:
     """15cdec's basin-level monthly SAC-SMA-vs-VIC series/metrics — computed and stored
     separately from :data:`ANCHOR_SETS`/``anchor_metrics.csv`` (15cdec is reservoir-
@@ -2495,7 +2492,7 @@ def make_anchor_15cdec(data_dir: str | Path = "data", artifacts_dir: str | Path 
     ``anchor_monthly_15cdec.csv``/``anchor_metrics_15cdec.csv``; returns ``(long, met)``
     (both empty if 15cdec has no scoreable basins).
     """
-    out = Path(artifacts_dir) / "calsim" / run
+    out = paths.calibrated(artifacts_dir, "calsim3")
     out.mkdir(parents=True, exist_ok=True)
     long = (build_anchor_long(data_dir, sets=(CDEC15,)) if anchor_long is None
            else anchor_long[anchor_long["set"] == CDEC15].copy())
@@ -2511,7 +2508,7 @@ def make_anchor_15cdec(data_dir: str | Path = "data", artifacts_dir: str | Path 
 
 
 def make_anchor_skill_periods(data_dir: str | Path = "data",
-                              artifacts_dir: str | Path = "artifacts", run: str = "compare",
+                              artifacts_dir: str | Path = "artifacts",
                               split: str = "1949-10-01") -> pd.DataFrame:
     """Pre-/post-1950 SAC-SMA-vs-VIC anchor dumbbells from the committed anchor series.
 
@@ -2526,7 +2523,7 @@ def make_anchor_skill_periods(data_dir: str | Path = "data",
     11obs/9unimp behind a dashed divider (:func:`_anchor_dumbbell_fig`) — it is included in
     ``anchor_metrics_by_period.csv`` for transparency but never in ``anchor_metrics.csv``.
     """
-    out = Path(artifacts_dir) / "calsim" / run
+    out = paths.calibrated(artifacts_dir, "calsim3")
     # round_trip: the default fast parser can be 1 ulp off, which would leak formatting
     # noise back into the committed CSVs on a re-run
     long = pd.read_csv(out / "anchor_monthly.csv", parse_dates=["date"],
@@ -2821,8 +2818,7 @@ def main(argv: list[str] | None = None) -> int:
         description="Cross-compare CalSim3 (actual) vs VIC vs multi-set SAC-SMA at the CalSim nodes",
     )
     p.add_argument("--data-dir", default="data")
-    p.add_argument("--artifacts-dir", default="artifacts")
-    p.add_argument("--run", default="compare", help="run name -> artifacts/calsim/<run>/")
+    p.add_argument("--artifacts-dir", default="artifacts", help="output root")
     p.add_argument("--sets", nargs="+", default=None,
                    help="SAC-SMA calibration sets to score separately vs CalSim3 "
                         f"(default: {', '.join(DEFAULT_CALSETS)})")
@@ -2837,7 +2833,7 @@ def main(argv: list[str] | None = None) -> int:
                         "results unchanged, ~6-8x faster on the model-run phase")
     args = p.parse_args(argv)
     sets = tuple(args.sets) if args.sets else DEFAULT_CALSETS
-    make_all(args.data_dir, args.artifacts_dir, args.run, sets, covered_frac=args.covered_frac,
+    make_all(args.data_dir, args.artifacts_dir, sets, covered_frac=args.covered_frac,
              mass_balance=args.mass_balance, parallel=args.parallel)
     return 0
 

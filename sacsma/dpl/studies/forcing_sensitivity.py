@@ -28,7 +28,7 @@ Two figures on the basin-aggregated flow change dQ = detrended - historical:
     toward zero as the record approaches the 1991-2020 baseline);
   * the monthly dQ regime over the pre-1950 period (largest detrending effect).
 
-Output: artifacts/dpl/figures/forcing_sensitivity_*.png.
+Output: ``artifacts/results/dpl/15cdec/studies/forcing/forcing_sensitivity_*.png``.
 """
 
 from __future__ import annotations
@@ -50,30 +50,30 @@ _PRE1950 = "1950-01-01"
 #: pure-physics frozen sims (run_basin).  ``PT`` is the refined PT cascade;
 #: ``Noah`` is the frozen Noah-lite external-ET core (bit-exact vs torch).
 MODELS: dict[str, dict] = {
-    "Hamon": dict(csv="artifacts/dpl/hamon/params_dpl.csv",
+    "Hamon": dict(csv=paths.dpl_run(run="hamon") / "params_dpl.csv",
                  pet="hamon", alb=0.0, dew=0.0),
-    "PT":    dict(csv="artifacts/dpl/pt/params_dpl.csv",
+    "PT":    dict(csv=paths.dpl_run(run="pt") / "params_dpl.csv",
                  pet="priestley_taylor", alb=0.6, dew=2.0),
-    "Noah":  dict(csv="artifacts/dpl/noah/params_dpl.csv",
+    "Noah":  dict(csv=paths.dpl_run(run="noah") / "params_dpl.csv",
                  pet="priestley_taylor", alb=0.0, dew=0.0, et_scheme="noah_lite",
-                 canopy_csv="artifacts/dpl/noah/params_canopy.csv"),
+                 canopy_csv=paths.dpl_run(run="noah") / "params_canopy.csv"),
 }
 #: explicit cache tag per MODELS label -- stable cache filenames independent
 #: of the legend text.
 _MODEL_TAG: dict[str, str] = {"Hamon": "hamon", "PT": "pt", "Noah": "noah"}
 #: the noah checkpoint: the ensembles' sac_sim channel is its TORCH daily run
-#: (``daily_sim_noah_torch.csv`` baked into the seed ckpts), so the detrended
+#: (the run's ``sim_daily.csv``, recorded in the seed ckpts), so the detrended
 #: channel streams the torch pipeline under the dT field.
-NOAH_CKPT = "artifacts/dpl/noah/checkpoints/best.pt"
+NOAH_CKPT = paths.dpl_run(run="noah") / "checkpoints" / "best.pt"
 #: the canonical Hybrid ENSEMBLES (mean over seed members); both sac_sim
 #: channels are the noah physics, whose detrended torch run is re-fed as the
 #: ensembles' detrended baseline.  ``Hybrid`` (plain: no PET, no dT loss) is
 #: the improvement BASELINE — its near-flat/wrong-signed response against
 #: ``Hybrid DT`` (PT-potential input + temperature-consistency loss) is
 #: the point of this figure.
-ENSEMBLES: dict[str, str] = {
-    "Hybrid":    "artifacts/dpl/hybrid",
-    "Hybrid DT": "artifacts/dpl/hybrid_dt",
+ENSEMBLES: dict[str, Path] = {
+    "Hybrid":    paths.dpl_run(run="hybrid"),
+    "Hybrid DT": paths.dpl_run(run="hybrid_dt"),
 }
 #: 2-D encoding so the series separate cleanly: COLOR = physics lineage (blue =
 #: Hamon, red = PT cascade, green = Noah-lite); LINESTYLE = role (solid = pure
@@ -260,7 +260,7 @@ def assemble(data_dir: str = "data", *, device: str = "cuda") -> dict:
 
     areas = basin_areas(data_dir, domain="15cdec")
     f_hist, f_detr, dT = _forcings(data_dir)
-    cd = Path("artifacts/dpl/_local/cache/climatology")
+    cd = paths.local(name="cache/climatology")
     # basins covered by WGEN: dT non-zero for >=50% of their cells
     hru = load_hru_table(data_dir, domain=DOMAIN)
     covered = {_norm_key(k) for k, r in f_hist.pos.items() if np.any(dT[r] != 0.0)}
@@ -371,10 +371,11 @@ def _plot_monthly(data: dict, path: Path) -> None:
 
 
 def make_forcing_sensitivity(data_dir: str = "data",
-                             out_dir: str | Path = "artifacts/dpl",
+                             out_dir: str | Path | None = None,
                              *, device: str = "cuda") -> dict:
+    """The two figures into ``out_dir`` (default: the study's result folder)."""
     data = assemble(data_dir, device=device)
-    figdir = Path(out_dir) / "figures"
+    figdir = Path(out_dir) if out_dir is not None else paths.dpl_study(name="forcing")
     _plot_rolling(data, figdir / "forcing_sensitivity_rolling.png")
     _plot_monthly(data, figdir / "forcing_sensitivity_monthly_pre1950.png")
     return data

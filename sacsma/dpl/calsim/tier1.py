@@ -5,7 +5,7 @@ watersheds expressed as CalSim3 arc sets.  They are scored in **volume** (TAF/mo
 over the held-out water years 1950-1984 against CalSim3: the ``FLOW-UNIMPAIRED`` series
 where a system carries one (ten anchors), the sum of the member ``INFLOW`` arcs
 elsewhere.  The simulation is the run's archived daily entity depth
-(``sim_daily_mm.npz`` — the area-weighted mean over the entity's cell set), summed to
+(``sim_daily.npz`` — the area-weighted mean over the entity's cell set), summed to
 calendar months and converted with the ``CalSim3_Merged`` ``SQ_MI`` of the arcs the
 entity simulates, so no third area enters the comparison.
 
@@ -47,9 +47,10 @@ Usage::
 
     sacsma dpl calsim tier1 <run_dir> [--out DIR] [--data-dir data]
 
-Writes ``tier1_metrics.csv`` (one row per set x reference x window), ``tier1_monthly.csv``
-(the aligned monthly volumes) and ``tier1_regime_WY1950-84.png`` under ``--out``
-(default ``<run_dir>/tier1``) and prints the summary.
+Writes ``tier1_metrics.csv`` (one row per set x reference x window) to the run's results
+folder, ``tier1_monthly.csv`` (the aligned monthly volumes), ``tier1_regime_WY1950-84.png``
+and the location figures to its local folder (both ``tier1/``; ``--out`` puts everything in
+one folder), and prints the summary.
 """
 
 from __future__ import annotations
@@ -122,7 +123,7 @@ def run_holdout_wy(path: str | Path) -> tuple[int, ...]:
     """``DplConfig.holdout_wy`` of a run folder (its ``checkpoints/best.pt``) or a checkpoint
     file; ``()`` when the checkpoint has none (or does not exist)."""
     p = Path(path)
-    ck = p if p.is_file() else p / "checkpoints" / "best.pt"
+    ck = p if p.is_file() else paths.run_roles(p).model / "checkpoints" / "best.pt"
     if not ck.exists():
         return ()
     import torch
@@ -239,8 +240,8 @@ def footprint_areas(data_dir: str | Path = "data") -> dict[str, float]:
 
 
 def load_run_monthly_depth(run_dir: str | Path) -> pd.DataFrame:
-    """Monthly entity depth (mm/month, complete calendar months) from ``sim_daily_mm.npz``."""
-    z = np.load(Path(run_dir) / "sim_daily_mm.npz")
+    """Monthly entity depth (mm/month, complete calendar months) from ``sim_daily.npz``."""
+    z = np.load(paths.run_roles(run_dir).results / "sim_daily.npz")
     daily = pd.DataFrame(np.asarray(z["sim_mm"]).T.astype(float),
                          index=pd.to_datetime(z["date"]), columns=list(z["entity_id"]))
     monthly = daily.resample("ME").sum(min_count=1)
@@ -412,7 +413,7 @@ def score_run(run_dir: str | Path, data_dir: str | Path = "data",
 
 def _run_obs_mask(run_dir: str | Path) -> tuple[str, ...]:
     """The run's ``DplConfig.obs_mask`` from its best checkpoint (``()`` if none)."""
-    ck = Path(run_dir) / "checkpoints" / "best.pt"
+    ck = paths.run_roles(run_dir).model / "checkpoints" / "best.pt"
     if not ck.exists():
         return ()
     import torch
@@ -620,31 +621,36 @@ def regime_figure(monthly: pd.DataFrame, metrics: pd.DataFrame, path: Path,
 
 def main(argv=None, prog=None) -> None:
     p = argparse.ArgumentParser(prog=prog, description=__doc__.split("\n\n")[0])
-    p.add_argument("run_dir", help="run folder holding sim_daily_mm.npz")
-    p.add_argument("--out", default=None, help="output folder (default <run_dir>/tier1)")
+    p.add_argument("run_dir", help="the run (any of its folders)")
+    p.add_argument("--out", default=None,
+                   help="one output folder for everything (default: tier1/ in the run's "
+                        "results folder, the bulk in its local folder)")
     p.add_argument("--data-dir", default="data")
     p.add_argument("--label", default="", help="figure title suffix")
     p.add_argument("--no-figures", action="store_true",
                    help="skip the per-location figures (figures/<set_id>.png)")
     a = p.parse_args(argv)
-    out = Path(a.out) if a.out else Path(a.run_dir) / "tier1"
+    run = paths.run_roles(a.run_dir)
+    out = Path(a.out) if a.out else run.results / "tier1"
+    bulk = Path(a.out) if a.out else run.local / "tier1"
     out.mkdir(parents=True, exist_ok=True)
-    label = a.label or Path(a.run_dir).name
+    bulk.mkdir(parents=True, exist_ok=True)
+    label = a.label or run.results.name
     metrics, monthly, panels = score_run(a.run_dir, a.data_dir)
     metrics.to_csv(out / "tier1_metrics.csv", index=False)
-    monthly.to_csv(out / "tier1_monthly.csv", index=False)
+    monthly.to_csv(bulk / "tier1_monthly.csv", index=False)
     # a holdout run is validated over its held-out water years (score_run)
     ho = run_holdout_wy(a.run_dir)
     vwin = next(iter(holdout_windows(ho))) if ho else VALIDATION_WINDOW
-    regime_figure(monthly, metrics, out / f"tier1_regime_{vwin}.png", window=vwin, title=label)
+    regime_figure(monthly, metrics, bulk / f"tier1_regime_{vwin}.png", window=vwin, title=label)
     n_fig = 1
     if not a.no_figures:
-        (out / "figures").mkdir(exist_ok=True)
+        (bulk / "figures").mkdir(exist_ok=True)
         for sid, panel in panels.items():
-            location_figure(panel, out / "figures" / f"{sid}.png", run_label=label)
+            location_figure(panel, bulk / "figures" / f"{sid}.png", run_label=label)
             n_fig += 1
     print(summarize(metrics, window=vwin))
-    print(f"wrote {out / 'tier1_metrics.csv'}, tier1_monthly.csv and {n_fig} figures")
+    print(f"wrote {out / 'tier1_metrics.csv'}; tier1_monthly.csv and {n_fig} figures -> {bulk}")
 
 
 if __name__ == "__main__":

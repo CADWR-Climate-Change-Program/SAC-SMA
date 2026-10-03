@@ -2,10 +2,10 @@
 
 Reconstruct the daily flow (net output, clipped >= 0), split at
 :data:`sacsma.cdec15.CAL_END`, and run the SAME ``_figures._period_stats``
-used for GA/dPL -> ``metrics_hybrid.csv`` (identical columns to
-``metrics_15cdec.csv``).  ``compare_all`` merges the GA, dPL and hybrid tables
-into one cal/val KGE comparison table (the per-basin dumbbell view is now
-``figures/hybrid_progression.png``, :func:`sacsma.dpl.studies.hybrids.make_hybrid_progression`).
+used for GA/dPL -> ``metrics.csv`` (the columns of the calibrated model's
+``metrics.csv``).  ``compare_all`` merges the GA, dPL and hybrid tables into one cal/val
+KGE comparison table, written by ``sacsma dpl study hybrids`` (the per-basin dumbbell view
+is ``hybrid_progression.png``, :func:`sacsma.dpl.studies.hybrids.make_hybrid_progression`).
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ import numpy as np
 import pandas as pd
 import torch
 
+from ... import paths
 from ..._figures import _period_stats
 from ...cdec15 import CAL_END
 from ...io import load_basin_area, mmday_to_cfs
@@ -88,7 +89,7 @@ def _build_model(ck: dict, data, dev: torch.device) -> HybridLSTM:
 
 def _score_pred(pred: np.ndarray, data, data_dir: str, out: Path) -> pd.DataFrame:
     """Score a (B, T) daily-flow prediction vs the gage, cal/val split ->
-    ``metrics_hybrid.csv`` (identical columns to metrics_15cdec.csv)."""
+    ``metrics.csv`` (the columns of the calibrated model's ``metrics.csv``)."""
     obs = data.obs.cpu().numpy()
     is_cal = np.asarray(data.dates <= pd.Timestamp(CAL_END))
     try:
@@ -116,7 +117,7 @@ def _score_pred(pred: np.ndarray, data, data_dir: str, out: Path) -> pd.DataFram
               f"VAL KGE={val.get('kge', float('nan')):.3f}", flush=True)
     metrics = pd.DataFrame(rows)
     out.mkdir(parents=True, exist_ok=True)
-    csv = out / "metrics_hybrid.csv"
+    csv = out / "metrics.csv"
     metrics.round(4).to_csv(csv, index=False)
     print(f"wrote {csv}  (mean cal {metrics['cal_kge'].mean():.3f} / "
           f"val {metrics['val_kge'].mean():.3f})", flush=True)
@@ -126,7 +127,9 @@ def _score_pred(pred: np.ndarray, data, data_dir: str, out: Path) -> pd.DataFram
 def score_hybrid(ckpt_path: str | Path, *, data_dir: str = "data",
                  out_dir: str | Path | None = None) -> pd.DataFrame:
     ck = torch.load(ckpt_path, map_location="cpu", weights_only=False)
-    out = Path(out_dir if out_dir is not None else Path(ckpt_path).parents[1])
+    # one member's score is local; the tracked score of an ensemble is its mean flow's
+    out = (Path(out_dir) if out_dir is not None
+           else paths.run_roles(Path(ckpt_path).parents[1]).local)
     dev = _device()
     data = _load_data(ck, data_dir, dev)
     pred = _reconstruct(_build_model(ck, data, dev), data)
@@ -141,16 +144,17 @@ def score_ensemble(ens_dir: str | Path, *, data_dir: str = "data",
 
     Averages the per-seed reconstructed flow (mean of member flows — the
     canonical "keep full ensemble, use mean" convention) then scores it vs the
-    gage exactly like :func:`score_hybrid` -> ``metrics_hybrid.csv`` at
-    ``ens_dir``.  ``seed*/checkpoints/best.pt`` are the members; data is
+    gage exactly like :func:`score_hybrid` -> ``metrics.csv`` in the
+    ensemble's results folder.  ``seed*/checkpoints/best.pt`` are the members; data is
     loaded once (every seed shares the physics/domain config).  ``physics_csv`` /
     ``sim_cache`` override the checkpoint-stored paths (for canonicalized
     ensembles whose training-time ``testing/`` paths are now stale)."""
-    ens = Path(ens_dir)
+    run = paths.run_roles(ens_dir)
+    ens = run.model
     ckpts = sorted(ens.glob("seed*/checkpoints/best.pt"))
     if not ckpts:
         raise FileNotFoundError(f"no seed*/checkpoints/best.pt under {ens}")
-    out = Path(out_dir if out_dir is not None else ens)
+    out = Path(out_dir) if out_dir is not None else run.results
     dev = _device()
     ck0 = torch.load(ckpts[0], map_location="cpu", weights_only=False)
     data = _load_data(ck0, data_dir, dev, physics_csv=physics_csv,
@@ -166,17 +170,20 @@ def score_ensemble(ens_dir: str | Path, *, data_dir: str = "data",
     return _score_pred(pred, data, data_dir, out)
 
 
-def compare_all(out_dir: str | Path = "artifacts/dpl",
-                *, ga_csv: str | Path = "artifacts/cdec15/metrics_15cdec.csv",
-                dpl_csv: str | Path =
-                "artifacts/dpl/superseded/hamon_dense/metrics_hamon_dense.csv",
-                hybrid_csv: str | Path =
-                "artifacts/dpl/hybrid/metrics_hybrid.csv",
-                pet_dt_csv: str | Path =
-                "artifacts/dpl/hybrid_dt/metrics_hybrid.csv",
+def compare_all(out_dir: str | Path | None = None,
+                *, ga_csv: str | Path | None = None,
+                dpl_csv: str | Path | None = None,
+                hybrid_csv: str | Path | None = None,
+                pet_dt_csv: str | Path | None = None,
                 ) -> pd.DataFrame:
-    """Merge GA / dPL / hybrid-ensemble cal+val KGE into one comparison table."""
-    out = Path(out_dir)
+    """Merge GA / dPL / hybrid-ensemble cal+val KGE into one comparison table, by default
+    from the tracked score tables (the GA set, ``hamon_dense``, ``hybrid``, ``hybrid_dt``)
+    into the ``hybrids`` study folder."""
+    out = Path(out_dir) if out_dir is not None else paths.dpl_study(name="hybrids")
+    ga_csv = ga_csv or paths.calibrated(name="15cdec") / "metrics.csv"
+    dpl_csv = dpl_csv or paths.dpl_metrics(run="hamon_dense")
+    hybrid_csv = hybrid_csv or paths.dpl_metrics(run="hybrid")
+    pet_dt_csv = pet_dt_csv or paths.dpl_metrics(run="hybrid_dt")
     frames = {}
     for name, path in [("GA", ga_csv), ("dPL", dpl_csv),
                        ("hybrid", hybrid_csv),

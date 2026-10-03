@@ -24,13 +24,13 @@ overlap vs 99.9 % for a true member proves the creek joins BELOW the gauge,
 so I_PYN001 is correctly excluded from UF 6.
 
 Web calls (NWIS site service, CDEC staMeta, NLDI basin) are cached in
-``artifacts/dwr_unimpaired/verification/web_cache.json`` + ``nldi_bend_basin.json``;
+``verification/web_cache.json`` + ``nldi_bend_basin.json`` beside this script;
 with the committed caches the script reruns offline and reproduces its tables
 byte for byte.
 
 Outputs
 -------
-    artifacts/dwr_unimpaired/verification/
+    data/targets/dwr_unimpaired/verification/
         report_table.csv                  per-UF results (areas, volumes, outlets)
         uf_outlets.csv                    UF -> USGS gauge used by the checks
                                           (site, name, lat/lon, published DA,
@@ -67,9 +67,9 @@ from shapely.validation import make_valid
 
 sys.path.insert(0, str(next(p for p in Path(__file__).resolve().parents
                             if (p / "_paths.py").is_file())))
-from _paths import DATA, REPO, layout  # noqa: E402
+from _paths import DATA, layout  # noqa: E402
 
-OUT = REPO / "artifacts" / "dwr_unimpaired" / "verification"
+OUT = layout.dwr_unimpaired(DATA, "verification")
 FIG = OUT / "figures"
 WY = (1950, 1984)  # volume-closure window, water years inclusive
 

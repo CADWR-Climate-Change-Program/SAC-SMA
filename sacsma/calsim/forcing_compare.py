@@ -20,8 +20,10 @@ calibration sets 9unimp + 11obs (:data:`SETS`), basins north->south.
 Inputs:
 
 * SAC-SMA — the committed run tables: the parity-exact ``simflow`` reference
-  (the Livneh-unsplit run) and ``artifacts/calsim/<product>/flow_daily_<domain>.csv``
-  (regenerate with ``sacsma run ALL --domain <d> --forcing <product>``).
+  (the Livneh-unsplit run) and ``sim_daily_<domain>.csv`` of each product under
+  ``artifacts/results/forcing/<product>/`` (:func:`run_table`, which simulates a
+  missing one: every watershed of the set under the product, the GA optima).  Regenerated, a
+  table differs from the tracked one in the sixth decimal on a few days in a thousand.
 * VIC — the routed monthly tables ``data/reference/vic/vic_routed_monthly[_<product>].csv``
   (TAF/month; the ``Historical_Unsplit`` baseline / ``Historical`` split /
   ``Product_A`` detrended runs), aggregated to basins exactly like the
@@ -29,7 +31,7 @@ Inputs:
   keeps only its own system's series) and converted to depth over the canonical
   CalSim catchment area.
 
-Outputs -> ``artifacts/calsim/forcing_compare/figures/``, per set prefix:
+Outputs -> ``artifacts/results/forcing/figures/``, per set prefix:
 
 * ``<p>_volume_by_period.png`` — % volume difference per watershed, one bar
   per period, one panel per domain.
@@ -64,6 +66,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from .. import paths
 from .._figures import plt  # Agg backend
 from ..io import load_reference
 from .compare import _BASIN_ABBREV, basin_order_north_south
@@ -132,9 +135,33 @@ def _monthly_mm(df: pd.DataFrame) -> pd.Series:
     return df.groupby(df["date"].dt.to_period("M"))["flow"].sum()
 
 
-def _sacsma_series(data_dir, calsim_art: Path, cfg: dict, domain: str) -> dict:
+def run_table(data_dir, artifacts_dir, product: str, domain: str) -> Path:
+    """The daily run of one CalLite set under ``product``: ``sim_daily_<domain>.csv``, long
+    ``[date, basin, flow]`` in mm/day over the product's whole record, every watershed of the
+    set from its GA optimum.  Simulated and written when it is missing."""
+    csv = paths.forcing_run(artifacts_dir, product) / f"sim_daily_{domain}.csv"
+    if csv.exists():
+        return csv
+    from ..io import load_hru_table
+    from ..model import load_domain_forcing, run_basin
+
+    print(f"simulating {domain} under {product} -> {csv}", flush=True)
+    forcing = load_domain_forcing(data_dir, domain=domain, product=product)
+    parts = []
+    for b in sorted(load_hru_table(data_dir, domain=domain)["basin"].unique()):
+        s = run_basin(b, data_dir=data_dir, domain=domain, forcing=forcing, parallel=True,
+                      product=product)
+        parts.append(s.assign(basin=b)[["date", "basin", "flow"]])
+    df = pd.concat(parts, ignore_index=True)
+    df["flow"] = df["flow"].round(6)
+    csv.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(csv, index=False)
+    return csv
+
+
+def _sacsma_series(data_dir, artifacts_dir, cfg: dict, domain: str) -> dict:
     """SAC-SMA per-basin monthly mm: ``simflow`` reference vs the product run table."""
-    run = pd.read_csv(calsim_art / cfg["product"] / f"flow_daily_{domain}.csv",
+    run = pd.read_csv(run_table(data_dir, artifacts_dir, cfg["product"], domain),
                       parse_dates=["date"])
     return {b: (_monthly_mm(load_reference(data_dir, basin=b, domain=domain)),
                 _monthly_mm(run[run["basin"] == b]))
@@ -177,9 +204,9 @@ def _vic_series(data_dir, cfg: dict, domain: str) -> dict:
     return out
 
 
-def _series_for(data_dir, calsim_art: Path, cfg: dict, domain: str) -> dict:
+def _series_for(data_dir, artifacts_dir, cfg: dict, domain: str) -> dict:
     return (_vic_series(data_dir, cfg, domain) if cfg["model"] == "VIC"
-            else _sacsma_series(data_dir, calsim_art, cfg, domain))
+            else _sacsma_series(data_dir, artifacts_dir, cfg, domain))
 
 
 # --------------------------------------------------------------------------
@@ -504,7 +531,7 @@ def make_split_unsplit_skill(data_dir: str | Path = "data",
     """The split-product skill artifact: ``split_unsplit_anchor_skill.csv`` +
     ``figures/split_unsplit_skill_boxplot.png`` (see
     :func:`split_unsplit_skill_table`)."""
-    out = Path(artifacts_dir) / "calsim" / "forcing_compare"
+    out = paths.calibrated(artifacts_dir, "forcing")
     (out / "figures").mkdir(parents=True, exist_ok=True)
     met = split_unsplit_skill_table(data_dir)
     met.to_csv(out / "split_unsplit_anchor_skill.csv", index=False)
@@ -517,14 +544,18 @@ def make_split_unsplit_skill(data_dir: str | Path = "data",
 
 
 def make_all(data_dir: str | Path = "data", artifacts_dir: str | Path = "artifacts") -> Path:
-    """Forcing-comparison figures -> ``artifacts/calsim/forcing_compare/figures/``."""
-    calsim_art = Path(artifacts_dir) / "calsim"
-    figdir = calsim_art / "forcing_compare" / "figures"
+    """Forcing-comparison figures -> ``<artifacts_dir>/results/forcing/figures/``."""
+    figdir = paths.calibrated(artifacts_dir, "forcing") / "figures"
     figdir.mkdir(parents=True, exist_ok=True)
+    # the daily run tables of every CalLite set under each product (the figures read SETS)
+    sac_products = [c["product"] for c in PRODUCTS.values() if c["model"] == "SAC-SMA"]
+    for product in dict.fromkeys(sac_products):
+        for domain in paths.CALLITE:
+            run_table(data_dir, artifacts_dir, product, domain)
     orders = {d: basin_order_north_south(data_dir, d) for d in SETS}
     all_series = {}
     for prefix, cfg in PRODUCTS.items():
-        series = all_series[prefix] = {d: _series_for(data_dir, calsim_art, cfg, d)
+        series = all_series[prefix] = {d: _series_for(data_dir, artifacts_dir, cfg, d)
                                        for d in SETS}
         volume_by_period_fig(series, orders, cfg,
                              figdir / f"{prefix}_volume_by_period.png")

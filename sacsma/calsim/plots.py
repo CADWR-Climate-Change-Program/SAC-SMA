@@ -6,16 +6,16 @@ the observed monthly full-natural-flow for its domain (``9unimp``/``11obs``/
 1922-) the record splits into the calibration window [cal_start, cal_end] and
 **validation** (everything outside); otherwise it falls back to the
 calibration-log FNF (calibration period only).  Writes per-basin diagnostics,
-a skill summary, and a metrics CSV under ``artifacts/calsim/<domain>/``.
+a skill summary, and ``metrics.csv`` under ``artifacts/results/callite/<domain>/``.
 
 Also home to :func:`make_cdec15_fnf_check`: the 15cdec basins scored MONTHLY against
-**CalSim3's unimpaired FNF** (``*_calsim3`` figures + ``metrics_15cdec_calsim3.csv``)
-instead of 15cdec's own daily CDEC gage -> ``artifacts/cdec15/``.  Lives
+**CalSim3's unimpaired FNF** (``*_calsim3`` figures + ``metrics_calsim3.csv``)
+instead of 15cdec's own daily CDEC gage -> ``artifacts/results/15cdec/``.  Lives
 here rather than in ``sacsma.cdec15`` because ``sacsma.calsim`` is the side of the
 dependency edge allowed to import ``sacsma.cdec15`` (never the reverse).
 
 Each of these also emits a **CalSim3-basis** variant (``*_calsim3`` figures +
-``metrics_*_calsim3.csv``, :func:`_make_calsim3_diagnostics`): the anchor run — on the
+``metrics_calsim3.csv``, :func:`_make_calsim3_diagnostics`): the anchor run — on the
 GIS-**corrected footprint** for the
 CalLite domains — scored against **CalSim3's own unimpaired FNF** (TAF/month) instead of the
 observed-FNF calibration target, split on the same calibration windows.  Non-destructive: the
@@ -35,7 +35,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from .. import cdec15
+from .. import cdec15, paths
 from .._figures import _period_stats, basin_diagnostics_fig, parity_fig, skill_summary_fig
 from ..io import load_reference
 from ..model import load_domain_forcing, run_basin
@@ -194,9 +194,9 @@ def make_cdec15_fnf_check(
     basins: list[str] | None = None,
     data_dir: str | Path = "data",
     artifacts_dir: str | Path = "artifacts",
-    run: str = "cdec15",
 ) -> pd.DataFrame:
-    """15cdec basins scored MONTHLY against CalSim3's unimpaired FNF -> ``artifacts/<run>/``.
+    """15cdec basins scored MONTHLY against CalSim3's unimpaired FNF ->
+    ``<artifacts_dir>/results/15cdec/``.
 
     A second, independent diagnostic alongside :func:`sacsma.cdec15.plots.make_all`'s daily
     CDEC-gage diagnostics: same basins, same GA-calibrated model run, scored directly against
@@ -205,7 +205,7 @@ def make_cdec15_fnf_check(
     record start through :data:`cdec15.CAL_END`; validation picks up everything outside it,
     including the pre-gage decades CalSim3 reaches back to.  Only the 11 basins with a CalSim3
     rim counterpart (:data:`CDEC15_FNF_MATCH` keys) are scoreable; PNF/TRM/SCC/ISB (Tulare
-    Basin, no CalSim3 rim arc) are skipped.  Writes ``metrics_15cdec_calsim3.csv`` +
+    Basin, no CalSim3 rim arc) are skipped.  Writes ``metrics_calsim3.csv`` +
     ``*_diagnostics_calsim3.png`` + ``skill_summary_calsim3.png``.
 
     (The earlier fnf-basis variant — the same model scored against the 11obs/9unimp
@@ -213,7 +213,7 @@ def make_cdec15_fnf_check(
     historical-FNF product whose per-basin offsets vs CalSim3 (see ``target_vs_calsim3.csv``,
     e.g. CalaverasRiver +4.8%) leaked into the 15cdec scores as spurious bias.)
     """
-    art = Path(artifacts_dir) / run
+    art = paths.calibrated(artifacts_dir, cdec15.DOMAIN)
     figdir = art / "figures"
     figdir.mkdir(parents=True, exist_ok=True)
     basins = list(basins) if basins is not None else list(CDEC15_FNF_MATCH)
@@ -237,8 +237,8 @@ def make_cdec15_fnf_check(
                                        screened=False, cal_windows=cal_windows,
                                        label_map=labels)
     if not met_c3.empty:
-        met_c3.round(4).to_csv(art / "metrics_15cdec_calsim3.csv", index=False)
-        print(f"wrote metrics_15cdec_calsim3.csv and {len(met_c3)} _calsim3 figures")
+        met_c3.round(4).to_csv(art / "metrics_calsim3.csv", index=False)
+        print(f"wrote {art / 'metrics_calsim3.csv'} and {len(met_c3)} _calsim3 figures")
     return met_c3
 
 
@@ -247,17 +247,15 @@ def make_all(
     basins: list[str] | None = None,
     data_dir: str | Path = "data",
     artifacts_dir: str | Path = "artifacts",
-    run: str | None = None,
 ) -> pd.DataFrame:
-    """CalLite-domain diagnostics -> ``artifacts/calsim/<run>/`` (default: the domain name).
+    """CalLite-domain diagnostics -> ``<artifacts_dir>/results/callite/<domain>/``.
 
     Monthly calibration/validation vs the observed FNF, plus the exact MATLAB
     parity figure.
     """
     if domain not in DOMAINS:
         raise ValueError(f"domain must be one of {DOMAINS}, got {domain!r}")
-    run = run or domain
-    art = Path(artifacts_dir) / "calsim" / run
+    art = paths.calibrated(artifacts_dir, domain)
     figdir = art / "figures"
     figdir.mkdir(parents=True, exist_ok=True)
     if basins is None:
@@ -268,7 +266,7 @@ def make_all(
     metrics, parity = _make_calib_monthly(basins, data_dir, forcing, figdir, domain)
 
     if not metrics.empty:
-        csv = art / f"metrics_{domain}.csv"
+        csv = art / "metrics.csv"
         metrics.round(4).to_csv(csv, index=False)
         print(f"wrote {csv} and {len(metrics)} watershed figures")
     if parity:
@@ -295,8 +293,8 @@ def make_all(
             met_c3 = _make_calsim3_diagnostics(basins, data_dir, domain, figdir,
                                                screened=True, cal_windows=cal_windows)
             if not met_c3.empty:
-                met_c3.round(4).to_csv(art / f"metrics_{domain}_calsim3.csv", index=False)
-                print(f"wrote metrics_{domain}_calsim3.csv and {len(met_c3)} _calsim3 figures")
+                met_c3.round(4).to_csv(art / "metrics_calsim3.csv", index=False)
+                print(f"wrote {art / 'metrics_calsim3.csv'} and {len(met_c3)} _calsim3 figures")
     return metrics
 
 
@@ -308,11 +306,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--basins", nargs="*", default=None, help="subset of watershed codes (default: all)")
     ap.add_argument("--data-dir", default="data", help="data store")
     ap.add_argument("--artifacts-dir", default="artifacts", help="output root")
-    ap.add_argument("--run", default=None,
-                    help="run name -> artifacts/calsim/<run>/ (default: domain)")
     args = ap.parse_args(argv)
     make_all(domain=args.domain, basins=args.basins, data_dir=args.data_dir,
-             artifacts_dir=args.artifacts_dir, run=args.run)
+             artifacts_dir=args.artifacts_dir)
     return 0
 
 

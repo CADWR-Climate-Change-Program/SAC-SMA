@@ -14,7 +14,8 @@ The repository holds three lines of work on that one model:
 | **Learned parameters** | The same model in PyTorch, with parameters produced by a neural network trained on flow records. | [Learned parameters](docs/learned_parameters.md) |
 
 **Current result.** The learned-parameter model **dPL-CalSim** and its **CalSim3 rim-inflow
-product**: monthly flow on the 196 CalSim3 rim arcs, WY1950–2015. On the water years 1976–85,
+product**: monthly flow on the 196 CalSim3 rim arcs, WY1916–2018, under the historical weather
+and two WGEN weather sequences. On the water years 1976–85,
 which no fit used, the product's median monthly KGE against CalSim3 is 0.81 over all 196 arcs.
 See [CalSim3 rim inflows](docs/calsim3_rim_inflows.md).
 
@@ -41,10 +42,11 @@ data scripts. The scripts that read rasters or pull from Earth Engine use a seco
 sacsma run BND                                           # one CDEC watershed
 sacsma run CacheCreek --domain 9unimp                    # a CalLite watershed
 sacsma run ALL --domain 11obs --forcing wgen_product_a   # another forcing product
-sacsma plots --domain 15cdec                             # diagnostics -> artifacts/cdec15/
-sacsma calsim                                            # comparison with CalSim3 -> artifacts/calsim/compare/
+sacsma plots --domain 15cdec                             # diagnostics -> artifacts/results/15cdec/
+sacsma calsim                                            # comparison with CalSim3 -> artifacts/results/calsim3/
+sacsma product callite                                   # the CalLite inflow files -> artifacts/product/callite/
 sacsma dpl train --help                                  # learned parameters: train, evaluate, hybrid, calsim, study
-sacsma verify                                            # imports, commands, links, parity, product
+sacsma verify                                            # imports, commands, links, artifacts, parity, product
 ```
 
 ```python
@@ -62,7 +64,7 @@ average year. Without it a run starts from the reference cold start.
 |---|---|---|
 | `sacsma/` | the package: the model, the two calibrated applications (`cdec15`, `calsim`), the learned-parameter code (`dpl`) | [`docs/`](docs/README.md) |
 | `data/` | inputs, calibration and training targets, references, and the scripts that build them | [`data/README.md`](data/README.md) |
-| `artifacts/` | results: tables, figures, trained runs, the rim-inflow product | [`artifacts/README.md`](artifacts/README.md) |
+| `artifacts/` | results: tables, figures, the models, the products (rim inflows, CalLite, 15 CDEC) | [`artifacts/README.md`](artifacts/README.md) |
 | `docs/` | the guide | [`docs/README.md`](docs/README.md) |
 
 The rules a change has to respect are in [Conventions](docs/conventions.md).

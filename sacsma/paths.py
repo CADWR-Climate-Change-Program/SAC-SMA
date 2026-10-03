@@ -1,9 +1,9 @@
-"""Where every file under ``data/`` lives.
+"""Where every file under ``data/`` and ``artifacts/`` lives.
 
-This is the one module that knows the layout of the data store.  Everything else in the
-package, and every build script under ``data/``, asks it for a path, so the layout can
-change here and nowhere else.  It uses the standard library only: the build scripts load it
-by file location, without importing the package.
+This is the one module that knows the layout of the data store and of the output tree.
+Everything else in the package, and every build script under ``data/``, asks it for a path,
+so a layout can change here and nowhere else.  It uses the standard library only: the build
+scripts load it by file location, without importing the package.
 
 The store has three parts (see ``data/README.md``):
 
@@ -17,11 +17,14 @@ through the ingest script that sits in them.
 
 Every function takes the store root (``data_dir``, default ``"data"``) and returns a
 :class:`pathlib.Path`; none of them touches the file system.
+
+The output tree is described at its own section below.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
+from typing import NamedTuple
 
 CDEC15 = "15cdec"
 CDEC15_GRID = "15cdec_grid"
@@ -130,10 +133,6 @@ def domain_dir(data_dir="data", domain: str = CDEC15) -> Path:
 
 def hruinfo(data_dir="data", domain: str = CDEC15) -> Path:
     return domain_dir(data_dir, domain) / "hruinfo.csv"
-
-
-def ga_optimum(data_dir="data", domain: str = CDEC15) -> Path:
-    return domain_dir(data_dir, domain) / "ga_optimum.csv"
 
 
 def basin_area(data_dir="data", domain: str = CDEC15) -> Path:
@@ -257,6 +256,177 @@ def swe_obs(data_dir="data", name: str = "") -> Path:
 
 def dwr_swat(data_dir="data", name: str = "swat_monthly.csv") -> Path:
     return _root(data_dir) / R_DWR_SWAT / name
+
+
+# ============================================================================ artifacts/
+# The output tree (see ``artifacts/README.md``) has four parts:
+#
+# * ``product/``  what is delivered, one folder per application: ``calsim3`` (the rim-inflow
+#   product of the learned model), ``callite`` and ``15cdec`` (the calibrated models), each
+#   with one folder per forcing;
+# * ``models/``   every model: the archived calibrations (``callite/<set>``, ``15cdec``,
+#   ``15cdec_grid``) and what training made (``dpl/``), with the parameter tables;
+# * ``results/``  what a command redraws: the calibrated sets (``callite/<set>``, ``15cdec``)
+#   and their comparisons (``calsim3``, ``vic_bcm``, ``footprints``, ``forcing``), and the
+#   learned runs (``dpl/``);
+# * ``_local/``   not tracked: caches, scratch, the large outputs of a run, runs not adopted.
+#
+# A learned-parameter run has one folder per role (:func:`run_roles`), each under the same
+# name: ``models/dpl/<group>/<run>``, ``results/dpl/<group>/<run>`` and
+# ``_local/runs/dpl/<group>/<run>``, where ``<group>`` is ``15cdec`` (both 15-CDEC domains) or
+# ``multifamily``.  Every function takes the output root (``artifacts_dir``, default
+# ``"artifacts"``) and touches no file, except :func:`run_roles` and :func:`run_file`, which
+# look for a run's model folder.
+
+#: the folder that groups the three CalLite calibration sets in models/, results/, product/
+CALLITE_DIR = "callite"
+#: the calibrated model's result folders: one per set, then the comparisons
+CALIBRATED = (CDEC15, *CALLITE, "calsim3", "vic_bcm", "footprints", "forcing")
+#: the delivered products, one folder each under product/
+PRODUCTS = ("calsim3", CALLITE_DIR, CDEC15)
+#: the ``sacsma dpl study`` result folders
+DPL_STUDIES = ("climatology", "hybrids", "adaptive", "forcing")
+#: the roles of a learned-parameter run
+ROLES = ("models", "results", "local")
+
+
+class RunDirs(NamedTuple):
+    """The folders of one learned-parameter run, by role."""
+
+    model: Path
+    results: Path
+    local: Path
+
+
+def _art(artifacts_dir) -> Path:
+    return Path("artifacts" if artifacts_dir is None else artifacts_dir)
+
+
+def _group(domain: str) -> str:
+    """The folder of a domain's runs: the two 15-CDEC domains share one."""
+    return MULTIFAMILY if _check(domain) == MULTIFAMILY else CDEC15
+
+
+def _app(name: str) -> Path:
+    """A calibration set's folder under an application: ``callite/<set>`` for the CalLite
+    sets, the name itself otherwise."""
+    return Path(CALLITE_DIR, name) if name in CALLITE else Path(name)
+
+
+def calibrated_model(artifacts_dir="artifacts", domain: str = CDEC15) -> Path:
+    """The archived GA calibration of a domain: ``models/callite/<set>``, ``models/15cdec``,
+    ``models/15cdec_grid`` (``ga_optimum.csv``)."""
+    if _check(domain) == MULTIFAMILY:
+        raise ValueError("the multifamily domain has no calibration")
+    return _art(artifacts_dir) / "models" / _app(domain)
+
+
+def ga_optimum(artifacts_dir="artifacts", domain: str = CDEC15) -> Path:
+    """The GA optimum of a domain: 31 parameters per modeling unit."""
+    return calibrated_model(artifacts_dir, domain) / "ga_optimum.csv"
+
+
+def calibrated(artifacts_dir="artifacts", name: str = CDEC15) -> Path:
+    """Results of the calibrated model: one set's diagnostics (``results/15cdec``,
+    ``results/callite/<set>``), the comparison with CalSim3 (``calsim3``), with VIC and BCM
+    (``vic_bcm``), the footprint and HRU-attribute maps (``footprints``), the forcing
+    comparison (``forcing``)."""
+    if name not in CALIBRATED:
+        raise ValueError(f"unknown result folder {name!r} (expected one of {CALIBRATED})")
+    return _art(artifacts_dir) / "results" / _app(name)
+
+
+def forcing_run(artifacts_dir="artifacts", product: str = "wgen_product_a") -> Path:
+    """Daily flow of the calibrated sets under another forcing product
+    (``sim_daily_<domain>.csv``), written and read by the forcing comparison."""
+    return calibrated(artifacts_dir, "forcing") / product
+
+
+def dpl_run(artifacts_dir="artifacts", run: str = "noah", domain: str = CDEC15,
+            role: str = "models") -> Path:
+    """One role's folder of a learned-parameter run: ``models``, ``results`` or ``local``."""
+    if role not in ROLES:
+        raise ValueError(f"unknown role {role!r} (expected one of {ROLES})")
+    sub = Path("dpl") / _group(domain) / run
+    return _art(artifacts_dir) / ("_local/runs" if role == "local" else role) / sub
+
+
+def dpl_metrics(artifacts_dir="artifacts", run: str = "noah", domain: str = CDEC15) -> Path:
+    """The score table of a learned-parameter run."""
+    return dpl_run(artifacts_dir, run, domain, role="results") / "metrics.csv"
+
+
+def run_roles(run_dir, artifacts_dir="artifacts") -> RunDirs:
+    """The three folders of the run that ``run_dir`` names: any one of them, or a folder
+    inside one (a seed of an ensemble, ``hybrid/seed0``, gives the seed's folder in each
+    role).  A run kept only under ``_local/`` (no model folder) and a folder outside the
+    layout hold all three roles themselves."""
+    p = Path(run_dir)
+    root = _art(artifacts_dir).resolve()
+    try:
+        parts = p.resolve().relative_to(root).parts
+    except ValueError:
+        return RunDirs(p, p, p)
+    in_local = parts[:2] == ("_local", "runs")
+    if in_local:
+        parts = parts[2:]
+    elif parts[:1] in (("models",), ("results",)):
+        parts = parts[1:]
+    else:
+        return RunDirs(p, p, p)
+    if len(parts) < 3 or parts[0] != "dpl" or parts[1] not in (CDEC15, MULTIFAMILY):
+        return RunDirs(p, p, p)
+    group, run, rest = parts[1], parts[2], parts[3:]
+    if in_local and not dpl_run(artifacts_dir, run, group).is_dir():   # a run kept in _local/ only
+        return RunDirs(p, p, p)
+    return RunDirs(*(dpl_run(artifacts_dir, run, group, role).joinpath(*rest) for role in ROLES))
+
+
+def run_file(recorded, name: str, artifacts_dir="artifacts") -> Path | None:
+    """A file of a learned-parameter run that a checkpoint recorded when it was trained (the
+    hybrids record their physics run's tables): the path as recorded while its folder exists,
+    else the file ``name`` of the run named by that folder, in the folder of its role (the
+    daily simulation ``sim_daily.csv`` in the results, the parameter tables in the model
+    folder).  None stays None; a path that names no run is returned as it is."""
+    if recorded is None or str(recorded) == "":
+        return None
+    p = Path(recorded)
+    if p.parent.is_dir():
+        return p
+    role = "results" if name.startswith("sim_daily") else "models"
+    for group in (CDEC15, MULTIFAMILY):
+        if dpl_run(artifacts_dir, p.parent.name, group).is_dir():
+            return dpl_run(artifacts_dir, p.parent.name, group, role) / name
+    return p
+
+
+def dpl_study(artifacts_dir="artifacts", name: str = "climatology") -> Path:
+    """Results of one ``sacsma dpl study``."""
+    if name not in DPL_STUDIES:
+        raise ValueError(f"unknown study {name!r} (expected one of {DPL_STUDIES})")
+    return _art(artifacts_dir) / "results" / "dpl" / CDEC15 / "studies" / name
+
+
+def dpl_benchmark(artifacts_dir="artifacts") -> Path:
+    """The differentiable model against the reference model (``sacsma dpl benchmark``)."""
+    return _art(artifacts_dir) / "results" / "dpl" / CDEC15 / "benchmark"
+
+
+def product(artifacts_dir="artifacts", forcing: str | None = None, app: str = "calsim3") -> Path:
+    """One product: ``calsim3`` (the rim-inflow product: the share model and its fit records,
+    or one forcing's series with the tier-2 pass it was applied to), ``callite`` or
+    ``15cdec`` (the calibrated models' series), or its folder for one forcing."""
+    if app not in PRODUCTS:
+        raise ValueError(f"unknown product {app!r} (expected one of {PRODUCTS})")
+    root = _art(artifacts_dir) / "product" / app
+    return root / forcing if forcing else root
+
+
+def local(artifacts_dir="artifacts", name: str = "") -> Path:
+    """A folder under the untracked part: ``cache/<what>``, ``testing/<run>``, ``eval``,
+    ``product/calsim3/<forcing>`` (the large files of a product pass)."""
+    root = _art(artifacts_dir) / "_local"
+    return root / name if name else root
 
 
 # ---------------------------------------------------------------------------------- misc

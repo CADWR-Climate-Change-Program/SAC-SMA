@@ -13,31 +13,25 @@ import argparse
 #: ``sacsma dpl calsim <tool>``: the tool's module (under :mod:`sacsma.dpl.calsim`) and what it does.
 #: Each tool keeps its own argument parser; the arguments after the tool name go to it unchanged.
 CALSIM_TOOLS: dict[str, tuple[str, str]] = {
-    "tier1": ("tier1", "score a run against CalSim3 at the anchors (set sums) -> <run>/tier1/"),
-    "tier2": ("tier2", "simulate and score every rim arc -> <run>/tier2/ (or --scenarios)"),
-    "atlas": ("atlas", "the validation atlas of a run (HTML) -> <run>/atlas/"),
+    "tier1": ("tier1", "score a run against CalSim3 at the anchors (set sums) -> the run's tier1/"),
+    "tier2": ("tier2", "simulate and score every rim arc -> the run's tier2/ (or --scenarios)"),
+    "atlas": ("atlas", "the validation atlas of a run (HTML) -> the run's atlas/"),
     "windows": ("windows", "the trimmed validation window of each set -> data/inputs/calsim3/tier1_sets.csv"),
     "compare": ("compare", "two runs side by side on tier 1"),
-    "product": ("product", "the CalSim3 rim-inflow product: fit <run> | apply <run> --tier2 DIR"),
+    "product": ("product", "the CalSim3 rim-inflow product: fit <run> | apply --tier2 DIR --forcing NAME"),
 }
 
 #: ``sacsma dpl study <name>``: module (under :mod:`sacsma.dpl.studies`), function, what it writes.
 STUDIES: dict[str, tuple[str, str, str]] = {
     "climatology": ("climatology", "make_cdec15_climatology",
                     "per-watershed mean-monthly TAF regime (GA + dPL + hybrids) vs the observed "
-                    "CalSim3 FNF, as a 5-step ablation + all-series metric bars "
-                    "-> artifacts/dpl/figures/climatology_*.png"),
-    "response": ("dtdp_response", "make_dtdp_response",
-                 "(dp, dT) response surfaces of one hybrid ensemble vs the physics"),
+                    "CalSim3 FNF, as a 5-step ablation + all-series metric bars"),
     "adaptive": ("adaptive_physics", "make_adaptive_physics_surfaces",
-                 "physics-only (dp, dT) surfaces: climate-frozen vs climate-adaptive noah "
-                 "-> artifacts/dpl/figures/noah_climate_adaptive*"),
+                 "physics-only (dp, dT) surfaces: climate-frozen vs climate-adaptive noah"),
     "hybrids": ("hybrids", "make_hybrids",
-                "the hybrid family (hybrid, hybrid_dt, lstm) response surfaces and skill summary "
-                "-> artifacts/dpl/figures/hybrid*"),
+                "the hybrid family (hybrid, hybrid_dt, lstm) response surfaces and skill summary"),
     "forcing": ("forcing_sensitivity", "make_forcing_sensitivity",
-                "forcing-product sensitivity of the dPL chain "
-                "-> artifacts/dpl/figures/forcing_sensitivity_*.png"),
+                "forcing-product sensitivity of the dPL chain"),
 }
 
 
@@ -184,34 +178,13 @@ def _dpl_evaluate(args: argparse.Namespace) -> int:
 
 
 def _dpl_hybrid(args: argparse.Namespace) -> int:
-    from pathlib import Path
-
-    from .hybrid.evaluate import compare_all, score_hybrid
+    from .. import paths
+    from .hybrid.evaluate import score_hybrid
     from .hybrid.train import HybridConfig, train_hybrid
 
-    out = args.out or "artifacts/dpl/_local/testing/hybrid"
+    out = args.out or paths.local(name="testing/hybrid")
     physics = (None if str(args.physics).lower() in ("", "none", "ga")
                else args.physics)
-    # --response-grid: build the 5 corner (Δprecip, ΔT) anchors and ensure the
-    # cached physics teacher sim under each (fast frozen noah-lite response on the
-    # torch baseline; the SAME physics the response-surface sweep uses).
-    response_anchors: tuple = ()
-    if args.response_grid:
-        from .studies.dtdp_response import physics_daily
-        from .evaluate import (corner_anchors, grid_anchors,
-                                   teacher_cache_path)
-        if args.response_dps and args.response_dts:
-            anchor_pts = grid_anchors(
-                [float(x) for x in args.response_dps.split(",")],
-                [float(x) for x in args.response_dts.split(",")])
-        else:
-            anchor_pts = corner_anchors(args.response_dp, args.response_dt)
-        ancs = []
-        for dp, dt in anchor_pts:
-            physics_daily(dp, dt, data_dir=args.data_dir)   # ensure cached teacher
-            ancs.append({"dp": dp, "dt": dt, "lambda": args.response_lambda,
-                         "sim_cache": str(teacher_cache_path(dp, dt))})
-        response_anchors = tuple(ancs)
     cfg = HybridConfig(
         use_statics=args.statics, n_epochs=args.epochs,
         hidden=args.hidden, dropout=args.dropout, lr=args.lr,
@@ -219,17 +192,16 @@ def _dpl_hybrid(args: argparse.Namespace) -> int:
         input_noise=args.input_noise,
         use_doy=not args.no_doy, use_pet=args.pet_input,
         temp_lambda=args.temp_lambda, temp_delta=args.temp_delta,
-        temp_sim_cache=args.temp_sim_cache, response_anchors=response_anchors,
+        temp_sim_cache=args.temp_sim_cache,
         physics_domain=args.physics_domain, pet_source=args.sac_pet,
         pt_snow_albedo=args.pt_snow_albedo,
         pt_dewpoint_depression=args.pt_dewpoint_depression,
         physics_et_scheme=args.physics_et, canopy_csv=args.canopy_params)
     train_hybrid(cfg, data_dir=args.data_dir, out_dir=out,
                  physics_csv=physics, sim_cache=args.sim_cache)
-    score_hybrid(Path(out) / "checkpoints" / "best.pt",
-                 data_dir=args.data_dir, out_dir=out)
-    if args.compare:
-        compare_all(Path(out).parent)
+    run = paths.run_roles(out)
+    score_hybrid(run.model / "checkpoints" / "best.pt",
+                 data_dir=args.data_dir, out_dir=run.local)
     return 0
 
 
@@ -258,10 +230,12 @@ def _dpl_study(args: argparse.Namespace) -> int:
 
     module, func, _ = STUDIES[args.study]
     kw = {"device": args.device} if args.study != "adaptive" else {}
-    if args.study in ("response", "adaptive", "hybrids"):
+    if args.study in ("adaptive", "hybrids"):
         kw["regen"] = args.regen
+    if args.out is not None:
+        kw["out_dir"] = args.out
     getattr(importlib.import_module(f".studies.{module}", __package__), func)(
-        data_dir=args.data_dir, out_dir=args.out, **kw)
+        data_dir=args.data_dir, **kw)
     return 0
 
 
@@ -276,10 +250,11 @@ def register(sub) -> None:
     bm = dpl_sub.add_parser(
         "benchmark",
         help="fidelity benchmark: archived GA params through the torch forward "
-             "vs the frozen reference -> artifacts/dpl/noah/fidelity/",
+             "vs the frozen reference -> artifacts/results/dpl/15cdec/benchmark/",
     )
     bm.add_argument("--data-dir", default="data", help="organized data/ store")
-    bm.add_argument("--out", default="artifacts/dpl/noah/fidelity", help="output dir")
+    bm.add_argument("--out", default=None,
+                    help="output dir (default: artifacts/results/dpl/15cdec/benchmark)")
     bm.add_argument("--configs", nargs="+", default=None,
                     help="subset of named numerics configs (default: all; see "
                          "dpl.evaluate.FIDELITY_CONFIGS)")
@@ -292,7 +267,7 @@ def register(sub) -> None:
     tr = dpl_sub.add_parser(
         "train",
         help="train a feature variant (spinup + water-year TBPTT; GPU asserted) "
-             "-> artifacts/dpl/<variant>/",
+             "-> artifacts/models/dpl/<domain>/<variant>/",
     )
     tr.add_argument("variant",
                     choices=["static", "climate", "physical", "physical_climate",
@@ -401,7 +376,7 @@ def register(sub) -> None:
     tr.add_argument("--dynamic-amp", type=float, default=0.5,
                     help="tanh cap on the state-response coeff |b|")
     tr.add_argument("--out", default=None,
-                    help="output dir (default: artifacts/dpl/<variant>)")
+                    help="output dir (default: artifacts/models/dpl/<domain>/<variant>)")
     tr.add_argument("--device", default="cuda", choices=["cuda", "cpu"],
                     help="torch device (default: cuda; GPU is asserted)")
     tr.add_argument("--epochs", type=int, default=60)
@@ -662,15 +637,15 @@ def register(sub) -> None:
     ev.add_argument("checkpoint", help="path to checkpoints/best.pt")
     ev.add_argument("--data-dir", default="data", help="organized data/ store")
     ev.add_argument("--out", default=None,
-                    help="output dir (default: the checkpoint's own run dir "
-                         "for the standard <run>/checkpoints/*.pt layout, "
-                         "else artifacts/dpl/<variant>)")
+                    help="the run to write (any of its folders; default: the run of "
+                         "the checkpoint): parameter tables go to its model folder, "
+                         "scores and figures to its results folder")
     ev.add_argument("--serial", action="store_true",
                     help="disable the parallel (numba prange) frozen model")
     ev.add_argument("--temp-delta", type=float, default=0.0,
                     help="add a uniform delta (degC) to tavg/tmin/tmax and dump "
-                         "the perturbed daily sim (torch path only; label gets a "
-                         "_dT suffix, gage metrics/figures are skipped) — the "
+                         "the perturbed daily sim (torch path only; the files get a "
+                         "_plus<dT>C suffix, the figures are skipped) — the "
                          "TEACHER for the hybrid temperature-consistency loss")
     ev.add_argument("--hydrographs", default="review",
                     choices=["review", "all", "none"],
@@ -691,8 +666,8 @@ def register(sub) -> None:
     hy = dpl_sub.add_parser(
         "hybrid",
         help="train + score the hybrid SAC-SMA x LSTM (physics sim as an input "
-             "channel) on the 15cdec daily basis -> artifacts/dpl/_local/testing/hybrid/ "
-             "(local scratch; the canonical ensemble lives at artifacts/dpl/hybrid)",
+             "channel) on the 15cdec daily basis -> artifacts/_local/testing/hybrid/ "
+             "(local scratch; the tracked ensembles are under artifacts/models/dpl/15cdec/)",
     )
     hy.add_argument("--physics", required=True,
                     help="frozen SAC-SMA parameter table for the physics baseline "
@@ -748,29 +723,9 @@ def register(sub) -> None:
                     help="teacher daily-sim CSV: the SAME physics as --sim-cache "
                          "re-run under +temp_delta (`sacsma dpl evaluate <physics "
                          "ckpt> --temp-delta <dT>`)")
-    hy.add_argument("--response-grid", action="store_true",
-                    help="multi-anchor dp/dt response-consistency loss: anchor the "
-                         "hybrid's response to physics at the 5 corners of "
-                         "{−dp,0,+dp}×{0,+dt} (precip + warming + joint). Ensures "
-                         "the cached noah teacher sim under each corner")
-    hy.add_argument("--response-lambda", type=float, default=0.1,
-                    help="per-anchor weight for --response-grid (total = 5×; "
-                         "start ~0.1, screen if pooled cal-KGE drops)")
-    hy.add_argument("--response-dp", type=float, default=0.10,
-                    help="precip perturbation fraction for --response-grid "
-                         "(0.10 = ±10%%)")
-    hy.add_argument("--response-dt", type=float, default=3.0,
-                    help="warming perturbation (degC) for --response-grid (+3)")
-    hy.add_argument("--response-dps", default="",
-                    help="comma-separated Δprecip fractions for a full anchor GRID "
-                         "(with --response-dts) — a wider/interior anchor set that "
-                         "overrides the 5-corner default, e.g. '-0.2,-0.1,0,0.1,0.2'")
-    hy.add_argument("--response-dts", default="",
-                    help="comma-separated ΔT (degC) for the full anchor grid "
-                         "(with --response-dps), e.g. '0,2,4' (origin dropped)")
     hy.add_argument("--data-dir", default="data", help="organized data/ store")
     hy.add_argument("--out", default=None,
-                    help="output dir (default: artifacts/dpl/_local/testing/hybrid)")
+                    help="output dir (default: artifacts/_local/testing/hybrid)")
     hy.add_argument("--epochs", type=int, default=60)
     hy.add_argument("--hidden", type=int, default=128, help="LSTM hidden size")
     hy.add_argument("--dropout", type=float, default=0.15)
@@ -780,8 +735,6 @@ def register(sub) -> None:
     hy.add_argument("--batch-size", type=int, default=512)
     hy.add_argument("--device", default="cuda", help="cuda | cpu")
     hy.add_argument("--seed", type=int, default=0)
-    hy.add_argument("--compare", action="store_true",
-                    help="also write the GA/dPL/hybrid comparison table")
     hy.set_defaults(func=_dpl_hybrid)
 
     cs = dpl_sub.add_parser(
@@ -804,12 +757,13 @@ def register(sub) -> None:
     for name, (_, _, text) in STUDIES.items():
         sp = st_sub.add_parser(name, help=text)
         sp.add_argument("--data-dir", default="data", help="organized data/ store")
-        sp.add_argument("--out", default="artifacts/dpl",
-                        help="output root (figures -> <out>/figures/)")
+        sp.add_argument("--out", default=None,
+                        help="output folder (default: "
+                             f"artifacts/results/dpl/15cdec/studies/{name}/)")
         if name != "adaptive":
             sp.add_argument("--device", default="cuda", choices=["cuda", "cpu"],
                             help="torch device for the hybrid reconstructions")
-        if name in ("response", "adaptive", "hybrids"):
+        if name in ("adaptive", "hybrids"):
             sp.add_argument("--regen", action="store_true",
                             help="recompute the metrics table instead of reloading it")
         sp.set_defaults(func=_dpl_study)

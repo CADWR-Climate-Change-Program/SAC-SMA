@@ -27,46 +27,10 @@ data/inputs/grid/lai_climatology_raster.csv
 data/reference/bcm/CalBasins_v8_DWR_FNF_PRISM19.xlsx
 # this machine's paths for the build scripts (data/local_paths.example.toml)
 data/local_paths.toml
+# written by data/targets/dwr_unimpaired/check_uf_locations.py for GIS viewing; carries a write timestamp
+data/targets/dwr_unimpaired/verification/uf_dissolved.gpkg
 
 # --- artifacts/ -------------------------------------------------------------------------
-# Outputs are tracked folder by folder (artifacts/README.md).
-artifacts/*
-!artifacts/README.md
-!artifacts/cdec15
-!artifacts/calsim
-!artifacts/dwr_unimpaired
-!artifacts/dpl
-# written by data/targets/dwr_unimpaired/check_uf_locations.py for GIS viewing; carries a write timestamp
-artifacts/dwr_unimpaired/verification/uf_dissolved.gpkg
-
-# artifacts/dpl/: tracked, except the one local folder that holds the caches, the
-# exploratory runs and the runs that were not kept
-artifacts/dpl/_local/
-
-# artifacts/dpl/multifamily/<run>/: every run folder here is a tracked run.  Per run the
-# selected checkpoint, the training log, the parameter fields, the simulated daily flow, the
-# score tables, the atlas, provenance/ and calsim_product/ are tracked; the rest (figures,
-# monthly dumps, tier-2 scenario passes, snapshots) regenerates and stays local.
-artifacts/dpl/multifamily/*/*
-!artifacts/dpl/multifamily/*/train_log.csv
-!artifacts/dpl/multifamily/*/metrics_entities.csv
-!artifacts/dpl/multifamily/*/metrics_entities_holdout.csv
-!artifacts/dpl/multifamily/*/params_dpl.csv
-!artifacts/dpl/multifamily/*/params_canopy.csv
-!artifacts/dpl/multifamily/*/sim_daily_mm.npz
-!artifacts/dpl/multifamily/*/provenance/
-!artifacts/dpl/multifamily/*/calsim_product/
-!artifacts/dpl/multifamily/*/checkpoints/
-artifacts/dpl/multifamily/*/checkpoints/*
-!artifacts/dpl/multifamily/*/checkpoints/best.pt
-!artifacts/dpl/multifamily/*/tier1/
-artifacts/dpl/multifamily/*/tier1/*
-!artifacts/dpl/multifamily/*/tier1/tier1_metrics.csv
-!artifacts/dpl/multifamily/*/tier2/
-artifacts/dpl/multifamily/*/tier2/*
-!artifacts/dpl/multifamily/*/tier2/tier2_metrics.csv
-!artifacts/dpl/multifamily/*/tier2/tier2_arcs.csv
-!artifacts/dpl/multifamily/*/tier2/tier2_anchor_rescaled.csv
-!artifacts/dpl/multifamily/*/atlas/
-artifacts/dpl/multifamily/*/atlas/*
-!artifacts/dpl/multifamily/*/atlas/calsim_validation_atlas.html
+# Everything under artifacts/ is tracked (artifacts/README.md) except its local part: the
+# caches, scratch runs, the large outputs of each run, and the runs that were not adopted
+artifacts/_local/

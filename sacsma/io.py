@@ -210,15 +210,17 @@ def load_hru_table(data_dir: str | Path = "data", domain: str = DEFAULT_DOMAIN) 
     return out
 
 
-def load_params(data_dir: str | Path = "data", domain: str = DEFAULT_DOMAIN) -> pd.DataFrame:
-    """Per-HRU GA-optimum parameters for a ``domain`` (columns include ``key``).
+def load_params(domain: str = DEFAULT_DOMAIN,
+                artifacts_dir: str | Path = "artifacts") -> pd.DataFrame:
+    """Per-HRU GA-optimum parameters for a ``domain`` (columns include ``key``), from its
+    archived calibration in ``artifacts/models/`` (:func:`sacsma.paths.ga_optimum`).
 
     Not indexed: the pooled ``15cdec`` set has one param row per grid cell, but the
     per-watershed ``9unimp`` calibration repeats some shared cells with different
     params per ``basin``, so callers index by ``key`` (after filtering to a basin
     where a ``basin`` column is present).
     """
-    return read_table(paths.ga_optimum(data_dir, domain))
+    return read_table(paths.ga_optimum(artifacts_dir, domain))
 
 
 def load_reference(

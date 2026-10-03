@@ -90,7 +90,7 @@ from channel inflow. They are marked ★ in [Model equations](equations.md).
 units at once so that parameters can be learned by gradient descent
 ([Learned parameters](learned_parameters.md)). With the reference numerics it matches the
 reference model to 2 × 10⁻¹³ mm/day on all 15 CDEC watersheds
-(`artifacts/dpl/noah/fidelity/fidelity_benchmark.csv`). It adds three options the reference
+(`artifacts/results/dpl/15cdec/benchmark/fidelity_benchmark.csv`). It adds three options the reference
 chain does not have: Priestley–Taylor PET, a soil-moisture-limited ET on observed vegetation
 ("Noah-lite"), and a learned rain/snow threshold. The first two have reference counterparts in
 `sacsma/pet_pt.py` and `sacsma/sma_noah_lite.py`, so learned parameter tables can be run through

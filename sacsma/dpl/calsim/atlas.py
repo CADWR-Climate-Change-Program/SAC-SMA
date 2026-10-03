@@ -1,7 +1,8 @@
 """CalSim3 validation atlas: where every validated location is, and how the run scored on it.
 
 Builds, from a run's tier-1 outputs (:mod:`sacsma.dpl.calsim.tier1`) and, when present, its tier-2
-outputs (:mod:`sacsma.dpl.calsim.tier2`), the folder ``<run>/atlas/`` beside ``tier1/`` and ``tier2/``:
+outputs (:mod:`sacsma.dpl.calsim.tier2`), ``atlas/`` beside ``tier1/`` and ``tier2/``: the page in
+the run's results folder, its images and ``atlas.md`` in its local folder:
 
 * ``atlas/tier1_map_kge_<window>.png`` and ``atlas/tier1_map_pbias_<window>.png`` — the
   CalSim3 rim domain with every tier-1 arc set dissolved and coloured by its score, the
@@ -32,7 +33,8 @@ Usage::
 
     sacsma dpl calsim atlas <run_dir> [--data-dir data] [--out DIR] [--tier2-dir ...] [--label ...]
 
-``<run_dir>`` is the run folder holding ``tier1/``; its ``tier1/`` folder is accepted as well.
+``<run_dir>`` is the run (any of its folders); a folder holding ``tier1_metrics.csv`` is accepted
+as well.
 """
 
 from __future__ import annotations
@@ -85,15 +87,16 @@ def _aspect(catch):
 def daily_monthly_overlap(data_dir: str | Path, run_dir: Path | None):
     """Where a daily-family entity and a monthly-family entity of the run both train: the
     intersection of the two families' cell-footprint unions (1/16-degree cell squares from
-    ``entity_cells.csv``).  The trained entities are read from the run's ``sim_daily_mm.npz``
+    ``entity_cells.csv``).  The trained entities are read from the run's ``sim_daily.npz``
     when available, else every base registry entity is assumed trained (the opt-in
     ``calsim_monthly`` arcs train only when named, as in ``load_domain_tensors``)."""
     from shapely import box
     from shapely.ops import unary_union
     reg = pd.read_csv(paths.entities(data_dir), dtype={"site_id": str})
     trained = None
-    if run_dir is not None and (Path(run_dir) / "sim_daily_mm.npz").exists():
-        trained = set(np.load(Path(run_dir) / "sim_daily_mm.npz")["entity_id"].tolist())
+    sim = paths.run_roles(run_dir).results / "sim_daily.npz" if run_dir is not None else None
+    if sim is not None and sim.exists():
+        trained = set(np.load(sim)["entity_id"].tolist())
     if trained is not None:
         reg = reg[reg["entity_id"].isin(trained)]
     else:
@@ -123,7 +126,7 @@ def run_recipe(run_dir: Path, data_dir: str | Path, trained=None) -> dict | None
     counts by family (``trained`` ids against the registry) and, from ``checkpoints/best.pt``, the
     ``--mt-family-weight`` setting with each family's nominal share of the loss, the selected
     epoch, the selection statistic and the seed.  ``None`` when the run folder has no checkpoint."""
-    ckpt = Path(run_dir) / "checkpoints" / "best.pt"
+    ckpt = paths.run_roles(run_dir).model / "checkpoints" / "best.pt"
     if not ckpt.exists():
         return None
     import torch
@@ -1337,29 +1340,38 @@ def write_markdown(sets, metrics, out: Path, label: str, window: str, maps: list
 def main(argv=None, prog=None) -> None:
     p = argparse.ArgumentParser(prog=prog, description=__doc__.split("\n\n")[0])
     p.add_argument("run_dir_or_tier1", metavar="run_dir",
-                   help="the run folder holding tier1/ (tier1_metrics.csv + figures/<set>.png); "
-                        "the tier1/ folder itself is accepted as well")
+                   help="the run (any of its folders); a folder holding tier1_metrics.csv "
+                        "(and figures/<set>.png) is accepted as well")
     p.add_argument("--data-dir", default="data")
     p.add_argument("--label", default="")
-    p.add_argument("--out", default=None, help="default <run_dir>/atlas")
+    p.add_argument("--out", default=None,
+                   help="one output folder for everything (default: atlas/ in the run's results "
+                        "folder, the images and atlas.md in its local folder)")
     p.add_argument("--run-dir", default=None,
-                   help="run folder with sim_daily_mm.npz, to know which entities trained (for the "
+                   help="run folder with sim_daily.npz, to know which entities trained (for the "
                         "daily/monthly overlap hatching; default: the run folder)")
     p.add_argument("--tier2-dir", default=None,
                    help="a tier-2 output folder (tier2_metrics.csv, maps, figures/) to embed per set; "
-                        "default <run-dir>/tier2 when it exists")
+                        "default: the run's tier2/ when it exists")
     p.add_argument("--arc-derivation", default=None,
                    help="per-arc derivation table (default data/targets/calsim3/calsim3_arc_derivation.csv when present)")
     a = p.parse_args(argv)
     given = Path(a.run_dir_or_tier1)
-    t1 = given if (given / "tier1_metrics.csv").exists() else given / "tier1"
+    t1 = (given if (given / "tier1_metrics.csv").exists()
+          else paths.run_roles(given).results / "tier1")
     if not (t1 / "tier1_metrics.csv").exists():
-        p.error(f"no tier1_metrics.csv under {given} or {given / 'tier1'}: run sacsma dpl calsim tier1 first")
-    out = Path(a.out) if a.out else t1.parent / "atlas"
+        p.error(f"no tier1_metrics.csv under {given} or {t1}: run sacsma dpl calsim tier1 first")
+    run_dir = Path(a.run_dir) if a.run_dir else (given if t1 != given else t1.parent)
+    run = paths.run_roles(run_dir)
+    # the tier-1 figures: beside the scores when tier 1 wrote one folder, else in the local part
+    t1_figs = t1 if (t1 / "figures").exists() else run.local / "tier1"
+    # the page to the results folder, its images and atlas.md to the local folder
+    out = Path(a.out) if a.out else run.results / "atlas"
+    bulk = Path(a.out) if a.out else run.local / "atlas"
     out.mkdir(parents=True, exist_ok=True)
-    label = a.label or t1.parent.name
+    bulk.mkdir(parents=True, exist_ok=True)
+    label = a.label or run.results.name
     metrics = pd.read_csv(t1 / "tier1_metrics.csv")
-    run_dir = Path(a.run_dir) if a.run_dir else t1.parent
     # a run that held water years out of training is validated over them (sacsma dpl calsim tier1)
     ho = run_holdout_wy(run_dir)
     ho_win = holdout_windows(ho) if ho else None
@@ -1370,7 +1382,8 @@ def main(argv=None, prog=None) -> None:
     geoms = _set_geoms(catch, sets)
     outlets = _outlets(a.data_dir)
     overlap, _ = daily_monthly_overlap(a.data_dir, run_dir)
-    t2_dir = Path(a.tier2_dir) if a.tier2_dir else run_dir / "tier2"
+    t2_dir = Path(a.tier2_dir) if a.tier2_dir else run.results / "tier2"
+    t2_bulk = Path(a.tier2_dir) if a.tier2_dir else run.local / "tier2"
     t2 = None
     if (t2_dir / "tier2_metrics.csv").exists():
         t2 = pd.read_csv(t2_dir / "tier2_metrics.csv")
@@ -1389,32 +1402,32 @@ def main(argv=None, prog=None) -> None:
         print(f"atlas: tier-2 block from {t2_dir} ({len(t2)} arcs"
               + (", with derivation classes)" if deriv.exists() else ")"))
     else:
-        t2_dir = None
+        t2_bulk = None
     t2_idx = t2.set_index("arc") if t2 is not None else None
-    maps = domain_maps(catch, sets, geoms, metrics, out, label, vwin, overlap=overlap)
+    maps = domain_maps(catch, sets, geoms, metrics, bulk, label, vwin, overlap=overlap)
     trained = None
-    if (run_dir / "sim_daily_mm.npz").exists():
-        trained = set(np.load(run_dir / "sim_daily_mm.npz")["entity_id"].tolist())
-    fam_maps = family_maps(catch, a.data_dir, out, trained=trained, label=label)
+    if (run.results / "sim_daily.npz").exists():
+        trained = set(np.load(run.results / "sim_daily.npz")["entity_id"].tolist())
+    fam_maps = family_maps(catch, a.data_dir, bulk, trained=trained, label=label)
     print("atlas: family footprint maps for " + ", ".join(f"{k} ({len(v[1])})" for k, v in fam_maps.items())
-          + ("" if trained else " (all base registry entities: the run has no sim_daily_mm.npz)"))
+          + ("" if trained else " (all base registry entities: the run has no sim_daily.npz)"))
     creeks = creek_overlap(sets, geoms, a.data_dir, trained=trained, window=vwin, holdout_wy=ho)
     creeks_trained = trained is None or any(str(x).startswith("usgs_") for x in trained)
     n = 0
     for s in sets.itertuples(index=False):
-        if not (t1 / "figures" / f"{s.set_id}.png").exists():
+        if not (t1_figs / "figures" / f"{s.set_id}.png").exists():
             print(f"atlas: no tier-1 figure for {s.set_id}, skipped")
             continue
-        location_maps(s.set_id, s, catch, geoms, outlets, out, overlap=overlap, t2=t2_idx)
+        location_maps(s.set_id, s, catch, geoms, outlets, bulk, overlap=overlap, t2=t2_idx)
         if s.set_id in creeks:
-            creek_overlap_figure(s.set_id, s, catch, geoms, outlets, creeks[s.set_id][0], creeks[s.set_id][1], out)
+            creek_overlap_figure(s.set_id, s, catch, geoms, outlets, creeks[s.set_id][0], creeks[s.set_id][1], bulk)
         n += 1
     n_ov = sum(1 for v in creeks.values() if v[1]["n"])
     print(f"atlas: USGS creek overlap computed for {len(creeks)} sets ({n_ov} with an overlapping creek"
           + ("" if creeks_trained else "; none trained in this run") + ")")
     recipe = run_recipe(run_dir, a.data_dir, trained=trained)
     print("atlas: " + (_recipe_sentence(recipe) if recipe else
-                       f"no {run_dir / 'checkpoints' / 'best.pt'}: the page will not state the training recipe"))
+                       f"no {run.model / 'checkpoints' / 'best.pt'}: the page will not state the training recipe"))
     # the full-against-trimmed tab reads the coverage of all the registry's creeks, which is what the
     # trimmed windows are picked from; a run that left creeks out gets that coverage computed apart
     reg = pd.read_csv(paths.entities(a.data_dir))
@@ -1436,10 +1449,10 @@ def main(argv=None, prog=None) -> None:
                   f"This run trained {n_tr} of the registry's {len(reg_creeks)} USGS creeks: the creek columns describe "
                   "all of the registry's gauges, which set the windows; the coverage by the trained creeks alone is on "
                   "each location's tab.")
-    page = write_html(sets, metrics, out, label, vwin, maps, t1, t2=t2, t2_dir=t2_dir,
+    page = write_html(sets, metrics, out, label, vwin, maps, t1_figs, t2=t2, t2_dir=t2_bulk,
                       fam_maps=fam_maps, creeks=creeks, creeks_trained=creeks_trained, recipe=recipe,
                       window_cover=window_cover, creek_note=creek_note, extra_windows=extra)
-    md = write_markdown(sets, metrics, out, label, vwin, maps, creeks=creeks, t1_dir=t1, recipe=recipe,
+    md = write_markdown(sets, metrics, bulk, label, vwin, maps, creeks=creeks, t1_dir=t1_figs, recipe=recipe,
                         window_cover=window_cover, creek_note=creek_note, extra_windows=extra)
     print(f"wrote {n} location map pairs, {len(maps)} domain maps, {page} ({page.stat().st_size / 1e6:.1f} MB) and {md}")
 

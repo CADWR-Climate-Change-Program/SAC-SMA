@@ -9,20 +9,21 @@ daily entities on days, monthly entities on calendar-month sums of the same
 simulated flow.  There is no held-out flow validation in this domain by
 design (validation happens against CalSim elsewhere), so all metrics are
 calibration-window skill — except for a run with ``holdout_wy``, whose
-held-out water years are scored apart (``metrics_entities_holdout.csv``).
+held-out water years are scored apart (``metrics_holdout.csv``).
 
-Outputs (next to the checkpoint, like the other domains):
+Outputs (the parameter table in the run's model folder, the scores and the daily depth in its
+results folder, the figures in its local folder; :func:`sacsma.paths.run_roles`):
 
 * ``params_dpl.csv`` — the learned per-(entity, cell) parameter field.
-* ``metrics_entities.csv`` — one row per entity: family, timescale, KGE,
+* ``metrics.csv`` — one row per entity: family, timescale, KGE,
   NSE, pbias, r, alpha, beta, n days/months scored (asserted == the
   registry ``n_obs``).  A run with ``holdout_wy`` / ``uf_train_start`` adds
   ``n_holdout`` / ``n_ext`` and the registry-window scores ``n_reg`` /
   ``kge_reg`` / ``nse_reg`` / ``pbias_reg`` (holdout and back-extension out).
-* ``metrics_entities_holdout.csv`` — only for a run with ``holdout_wy``: the held-out water
+* ``metrics_holdout.csv`` — only for a run with ``holdout_wy``: the held-out water
   years scored apart (:func:`holdout_metrics`: USGS daily, uf monthly, the calsim arcs on
   their own gauge-record months and on all months).
-* ``sim_daily_mm.npz`` — the simulated daily basin depth (entities x days)
+* ``sim_daily.npz`` — the simulated daily basin depth (entities x days)
   over the envelope, for downstream figures/analyses.
 * ``figures/skill_by_family.png`` — per-entity KGE by family (fixed 0-1 axis).
 * ``figures/entities/<entity_id>.png`` — the per-basin diagnostics figure of
@@ -110,8 +111,8 @@ def holdout_metrics(sim: np.ndarray, dates: pd.DatetimeIndex, basins, data_dir: 
                     holdout_wy: tuple[int, int] = (1976, 1985), *,
                     obs_mask: tuple[str, ...] = ()) -> pd.DataFrame:
     """Per-entity skill over the water years a run held out of training
-    (``metrics_entities_holdout.csv``); ``sim`` is the ``(entities, days)`` daily depth over
-    ``dates`` (the evaluator's stream or an archived ``sim_daily_mm.npz``).  Rows, one per
+    (``metrics_holdout.csv``); ``sim`` is the ``(entities, days)`` daily depth over
+    ``dates`` (the evaluator's stream or an archived ``sim_daily.npz``).  Rows, one per
     entity x window x basis:
 
     * daily entities — the native store on the held-out days inside the registry window
@@ -252,7 +253,10 @@ def evaluate_checkpoint_mt(
     spinup: str = "cycle",         # cycle (timing-independent) | window (legacy)
     dedup_cells: bool = False,     # per-cell physics once per distinct cell
 ) -> pd.DataFrame:
-    """Score a ``multifamily`` checkpoint per entity; returns the metrics."""
+    """Score a ``multifamily`` checkpoint per entity; returns the metrics.  ``out_dir`` names
+    the run (any of its folders; default: the run of the checkpoint): the parameter tables go
+    to its model folder, the scores and ``sim_daily.npz`` to its results folder, the
+    figures to its local folder."""
     if hydrographs not in ("review", "all", "none"):
         raise ValueError(f"hydrographs {hydrographs!r}")
     net, x, dom, cfg, ck = load_net_from_checkpoint(ckpt_path, data_dir,
@@ -261,18 +265,20 @@ def evaluate_checkpoint_mt(
         raise ValueError(f"checkpoint domain {ck.get('domain')!r} is not "
                          f"{MULTI_TIMESCALE_DOMAIN!r}")
     ckp = Path(ckpt_path).resolve()
-    out = Path(out_dir) if out_dir is not None else (
-        ckp.parent.parent if ckp.parent.name == "checkpoints"
-        else Path("artifacts/dpl/_local/eval"))
-    figdir = out / "figures" / "entities"
+    run = paths.run_roles(out_dir if out_dir is not None else (
+        ckp.parent.parent if ckp.parent.name == "checkpoints" else paths.local(name="eval")))
+    out = run.results
+    out.mkdir(parents=True, exist_ok=True)
+    figdir = run.local / "figures" / "entities"
     figdir.mkdir(parents=True, exist_ok=True)
 
+    run.model.mkdir(parents=True, exist_ok=True)
     dpl_df = export_params(net, dom, x)
-    dpl_df.to_csv(out / "params_dpl.csv", index=False)
+    dpl_df.to_csv(run.model / "params_dpl.csv", index=False)
     if ck.get("net_config", {}).get("canopy", False):
         export_canopy_params(net, dom, x).to_csv(
-            out / "params_canopy.csv", index=False)
-    print(f"wrote {out / 'params_dpl.csv'} ({len(dpl_df)} entity-cell rows, "
+            run.model / "params_canopy.csv", index=False)
+    print(f"wrote {run.model / 'params_dpl.csv'} ({len(dpl_df)} entity-cell rows, "
           f"sel cal KGE {ck.get('cal_kge', float('nan')):.4f})", flush=True)
 
     # scored against the run's own training target (its obs_mask, water-year
@@ -290,7 +296,7 @@ def evaluate_checkpoint_mt(
     assert (t0, t1) == (eobs.t0, eobs.t1)
     dates = dom.dates[t0:t1]
     np.savez_compressed(
-        out / "sim_daily_mm.npz", entity_id=np.array(dom.basins),
+        out / "sim_daily.npz", entity_id=np.array(dom.basins),
         date=dates.to_numpy().astype("datetime64[D]").astype(str),
         sim_mm=sim.astype(np.float32))
 
@@ -367,11 +373,11 @@ def evaluate_checkpoint_mt(
         if len(bad):
             raise AssertionError(f"registry-window counts diverge: "
                                  f"{bad['entity_id'].tolist()[:5]}")
-    met.to_csv(out / "metrics_entities.csv", index=False)
+    met.to_csv(out / "metrics.csv", index=False)
     fam_tbl = (met.groupby("family")[["kge", "nse", "pbias"]
                                      + (["kge_reg"] if ho_cols else [])]
                .median().round(3))
-    print(f"wrote {out / 'metrics_entities.csv'} ({len(met)} entities); "
+    print(f"wrote {out / 'metrics.csv'} ({len(met)} entities); "
           "family medians:", flush=True)
     print(fam_tbl.to_string(), flush=True)
     if cfg.holdout_wy:
@@ -384,14 +390,14 @@ def evaluate_checkpoint_mt(
                   if int(eobs.n_holdout[i]) and reg.loc[e, "timescale"] == "daily"}
         if d.to_dict() != want_d:
             raise AssertionError("holdout daily counts diverge from the removed target values")
-        hm.to_csv(out / "metrics_entities_holdout.csv", index=False)
-        print(f"wrote {out / 'metrics_entities_holdout.csv'} ({len(hm)} rows, WY"
+        hm.to_csv(out / "metrics_holdout.csv", index=False)
+        print(f"wrote {out / 'metrics_holdout.csv'} ({len(hm)} rows, WY"
               f"{cfg.holdout_wy[0]}-{cfg.holdout_wy[1]}); median KGE by family x window x basis:",
               flush=True)
         print(hm.groupby(["family", "window", "basis"])["kge"].agg(["count", "median"])
               .round(3).to_string(), flush=True)
 
-    _skill_by_family_fig(met, out / "figures" / "skill_by_family.png")
+    _skill_by_family_fig(met, run.local / "figures" / "skill_by_family.png")
     for eid, m, unit, ts, te in figs:
         # everything is calibration in this domain — obs outside the window
         # are masked upstream, so the figure's "validation" panels stay empty
@@ -402,5 +408,5 @@ def evaluate_checkpoint_mt(
             obs_label="observed (native store)",
             title_obs="observed flow (training window)")
     n_figs = len(figs) + 1
-    print(f"wrote {n_figs} figures under {out / 'figures'}", flush=True)
+    print(f"wrote {n_figs} figures under {run.local / 'figures'}", flush=True)
     return met

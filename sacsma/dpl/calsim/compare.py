@@ -26,13 +26,14 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from ... import paths
 from .tier1 import TRIMMED_WINDOW, VALIDATION_WINDOW, load_sets, volume_rows
 
 _MAIN = ["anchor", "arcsum"]
 
 
 def _load(run: Path) -> pd.DataFrame:
-    m = pd.read_csv(Path(run) / "tier1" / "tier1_metrics.csv")
+    m = pd.read_csv(paths.run_roles(run).results / "tier1" / "tier1_metrics.csv")
     return m[m.ref_kind.isin(_MAIN) & m.volume_scored]
 
 
@@ -225,7 +226,8 @@ def main(argv=None, prog=None) -> None:
     p.add_argument("--data-dir", default="data")
     p.add_argument("--no-coverage", action="store_true", help="skip the creek-coverage columns (no GIS needed)")
     a = p.parse_args(argv)
-    la, lb = a.label_a or Path(a.run_a).name, a.label_b or Path(a.run_b).name
+    la = a.label_a or paths.run_roles(a.run_a).results.name
+    lb = a.label_b or paths.run_roles(a.run_b).results.name
     loc, summ = compare(a.run_a, a.run_b, a.data_dir, coverage=not a.no_coverage)
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)

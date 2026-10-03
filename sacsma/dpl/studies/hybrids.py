@@ -13,34 +13,42 @@ All four models share the climate-ADAPTIVE ``noah`` physics (the
     climate-adaptive statics (pmean/snowf co-vary) — the no-physics ablation.
 
 Per-watershed figure: 4 metrics × 4 model columns, % change vs each model's own
-present climate.  The physics + hybrid daily flows reuse the ``dtdp_response``
-machinery (frozen numba noah-lite physics via ``adaptive_physics.noah_daily``;
-``_ensemble_perturbed_daily`` for the LSTM forwards, with the climate statics
-co-varying).  Ensembles = mean over the seed members; scratch trains stay local.
+present climate.  The physics daily flow is the frozen numba noah-lite core
+(``adaptive_physics.noah_daily``); the hybrids are forwarded on the perturbed features
+(:func:`_ensemble_perturbed_daily`, with the climate statics co-varying).  Ensembles = mean
+over the seed members.  The grid, the metrics and the regimes are those of
+:mod:`.surfaces`.  Also writes ``compare_ga_dpl_hybrid.csv``, the GA, dPL and hybrid scores
+side by side (:func:`sacsma.dpl.hybrid.evaluate.compare_all`).
 """
 from __future__ import annotations
 
+import dataclasses as dc
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
+from ... import paths
 from ..._figures import plt  # noqa: F401
 from ...io import load_basin_area
 from .adaptive_physics import noah_daily
 from .climatology import _basin_order
-from .dtdp_response import (DOMAIN, DP, DT, METRICS, REGIMES, _REGIME_TITLE,
-                            _aggregate_regime, _ensemble_perturbed_daily,
-                            _load_ensemble, _metrics_from_daily)
+from .surfaces import (
+    DOMAIN,
+    DP,
+    DT,
+    METRICS,
+    REGIME_TITLE,
+    REGIMES,
+    aggregate_regime,
+    metrics_from_daily,
+)
 
-# the runs the figures compare
-NOAH_DIR = "artifacts/dpl/noah"                 # the adaptive physics
-NOAH_DPL = "artifacts/dpl/noah/params_dpl.csv"  # present-climate SAC params
-NOAH_SIM = "artifacts/dpl/noah/frozen_sim_noah.csv"  # present sim channel
-# `lstm` has no physics channel at all (use_sim=False).
-BASE_DIR = "artifacts/dpl/hybrid"
-DTDP_DIR = "artifacts/dpl/hybrid_dt"
-LSTM_DIR = "artifacts/dpl/lstm"
+# the runs the figures compare; `hybrid` and `hybrid_dt` read `noah`'s parameter tables
+# and daily simulation, `lstm` has no physics channel at all (use_sim=False)
+BASE_DIR = paths.dpl_run(run="hybrid")
+DTDP_DIR = paths.dpl_run(run="hybrid_dt")
+LSTM_DIR = paths.dpl_run(run="lstm")
 N_SEEDS = 3
 
 #: figure-facing labels; PHYSICS/BASE/DTDP/LSTM are the dict keys used
@@ -51,8 +59,8 @@ DTDP = "Hybrid DT"
 LSTM = "LSTM"
 COL_ORDER = [PHYSICS, BASE, DTDP, LSTM]
 ENSEMBLES = {BASE: BASE_DIR, DTDP: DTDP_DIR, LSTM: LSTM_DIR}
-# REGIMES / _REGIME_TITLE / _aggregate_regime are shared from dtdp_response.
-
+#: the run folder name of each figure label (for its score table)
+RUN = {PHYSICS: "noah", BASE: "hybrid", DTDP: "hybrid_dt", LSTM: "lstm"}
 #: 14-anchor set the dt·dp hybrid was supervised on (marked on its column):
 #: {−20%,−10%,0,+10%,+20%} × {0,+2,+4 °C}, precip extended to the ±20% edges.
 ANCHORS = [(dp, dt) for dp in (-0.2, -0.1, 0.0, 0.1, 0.2) for dt in (0.0, 2.0, 4.0)
@@ -61,13 +69,107 @@ ANCHORS = [(dp, dt) for dp in (-0.2, -0.1, 0.0, 0.1, 0.2) for dt in (0.0, 2.0, 4
 
 #: gitignored per-(dp,dt) ensemble daily-flow cache — lets a metric-only change
 #: (e.g. a different percentile) reduce on CPU instead of re-running the GPU sweep.
-_HYBRID_CACHE = Path("artifacts/dpl/_local/cache/hybrid_daily")
+_HYBRID_CACHE = paths.local(name="cache/hybrid_daily")
 _ENS_TAG = {BASE: "base", DTDP: "dtdp", LSTM: "lstm"}
+
+
+def _out(out_dir: str | Path | None) -> Path:
+    """The study's result folder, unless ``out_dir`` names another."""
+    return Path(out_dir) if out_dir is not None else paths.dpl_study(name="hybrids")
 
 
 def _hybrid_cache_path(tag: str, dp: float, dt: float) -> Path:
     dp, dt = dp + 0.0, dt + 0.0                   # normalize IEEE -0.0 (arange)
     return _HYBRID_CACHE / f"{tag}_dp{dp:+.2f}_dt{dt:+.1f}.csv"
+
+
+def _load_ensemble(ens_dir: str | Path, data_dir: str, dev, n_seeds: int):
+    """Load the shared hybrid data + up to ``n_seeds`` member models once (every
+    seed shares the physics/domain/normalization config)."""
+    import torch
+
+    from ..hybrid.data import feature_names, load_hybrid_data
+    from ..hybrid.model import HybridLSTM
+
+    ckpts = sorted(Path(ens_dir).glob("seed*/checkpoints/best.pt"))[:n_seeds]
+    if not ckpts:
+        raise FileNotFoundError(f"no seed*/checkpoints/best.pt under {ens_dir}")
+    ck0 = torch.load(ckpts[0], map_location="cpu", weights_only=False)
+    cfg = ck0["cfg"]
+    if ck0.get("variant", "feature") != "feature":
+        raise ValueError("residual hybrid checkpoints are retired (2026-07-16)")
+    h = load_hybrid_data(
+        data_dir, physics_csv=ck0.get("physics_csv"), sim_cache=ck0.get("sim_cache"),
+        use_statics=bool(ck0["n_static"]),
+        use_doy=cfg.get("use_doy", True), use_pet=cfg.get("use_pet", False),
+        use_sim=cfg.get("use_sim", True),
+        domain=cfg.get("physics_domain", "15cdec"),
+        pet_source=cfg.get("pet_source", "hamon"),
+        pt_snow_albedo=cfg.get("pt_snow_albedo", 0.0),
+        pt_dewpoint_depression=cfg.get("pt_dewpoint_depression", 0.0),
+        et_scheme=cfg.get("physics_et_scheme", "sac"),
+        canopy_csv=cfg.get("canopy_csv") or None, device=dev)
+    models = []
+    for cp in ckpts:
+        ck = torch.load(cp, map_location="cpu", weights_only=False)
+        mdl = HybridLSTM(h.n_feat, h.n_static, hidden=cfg["hidden"],
+                         static_embed=cfg["static_embed"],
+                         dropout=cfg["dropout"]).to(dev)
+        mdl.load_state_dict(ck["model"])
+        models.append(mdl)
+    names = feature_names(cfg.get("use_doy", True), cfg.get("use_pet", False),
+                          cfg.get("use_sim", True))
+    return h, models, cfg, names
+
+
+def _ensemble_perturbed_daily(h, dom, models, cfg, names, dp: float, dt: float,
+                              sim_pert_df: pd.DataFrame,
+                              pet_pert: np.ndarray | None = None) -> pd.DataFrame:
+    """Ensemble-mean daily hybrid flow (date x basin, mm/day) under (dp, dt).
+
+    Builds the perturbed feature tensor with the SAME recipe the training loss
+    uses (``apply_response_perturbation`` on the stored normalization) and the
+    physics sim channel re-fed from ``sim_pert_df`` (the noah run under (dp, dt)),
+    then averages the seed members.  ``pet_pert`` (the raw PT PET under ΔT, (B,T))
+    may be precomputed and passed in (it depends only on dt); computed here if the
+    model uses PET and none is given."""
+    import torch
+
+    from ..hybrid.data import (apply_response_perturbation, basin_pet_pt,
+                               perturbed_static)
+    from ..hybrid.train import predict_days
+
+    use_pet = cfg.get("use_pet", False)
+    base_feat = h.feat.cpu().numpy()
+    prcp = h.prcp.cpu().numpy()
+    scale = h.scale.cpu().numpy()
+    sim_pert = np.vstack([sim_pert_df[b].reindex(h.dates).to_numpy(np.float64)
+                          for b in h.basins])
+    if use_pet and pet_pert is None:
+        pet_pert = basin_pet_pt(dom, delta_t=float(dt))
+    if not use_pet:
+        pet_pert = None
+    feat_p = apply_response_perturbation(
+        base_feat, names, dp=float(dp), dt=float(dt), prcp_raw=prcp,
+        norm=h.norm, pet_pert=pet_pert, sim_pert=sim_pert, scale=scale)
+    feat_t = torch.as_tensor(feat_p).to(dtype=h.feat.dtype, device=h.device)
+    sim_t = torch.as_tensor(sim_pert).to(dtype=h.feat.dtype, device=h.device)
+    rep = dict(feat=feat_t, sim=sim_t)
+    if h.static is not None and h.static_ing:      # CLIMATE statics co-vary too
+        sp = perturbed_static(h.static_ing, float(dp), float(dt))
+        rep["static"] = torch.as_tensor(sp).to(dtype=h.static.dtype,
+                                               device=h.device)
+    hp = dc.replace(h, **rep)
+
+    bb, tt = hp.eval_days("all")
+    accum = None
+    for mdl in models:
+        f = predict_days(mdl, hp, bb, tt).clamp_min(0.0).cpu().numpy()
+        accum = f if accum is None else accum + f
+    flow = accum / len(models)
+    arr = np.full((len(hp.basins), len(hp.dates)), np.nan)
+    arr[bb.cpu().numpy(), tt.cpu().numpy()] = flow
+    return pd.DataFrame(arr.T, index=hp.dates, columns=list(hp.basins))
 
 
 def assemble(data_dir: str = "data", *, device: str = "cuda",
@@ -116,9 +218,9 @@ def assemble(data_dir: str = "data", *, device: str = "cuda",
             _lazy[key] = basin_pet_pt(_dom(), delta_t=float(dt))
         return _lazy[key]
 
-    def _ens(label, ens_dir, over):
+    def _ens(label, ens_dir):
         if label not in _lazy:
-            _lazy[label] = _load_ensemble(ens_dir, data_dir, _dev(), n_seeds, **over)
+            _lazy[label] = _load_ensemble(ens_dir, data_dir, _dev(), n_seeds)
         return _lazy[label]
 
     rows = []
@@ -131,27 +233,23 @@ def assemble(data_dir: str = "data", *, device: str = "cuda",
                                                            "q999", "q30")}))
 
     for dp, dt in grid:
-        _emit(PHYSICS, dp, dt, _metrics_from_daily(phys[(dp, dt)], areas))
+        _emit(PHYSICS, dp, dt, metrics_from_daily(phys[(dp, dt)], areas))
 
     for label, ens in ENSEMBLES.items():
-        # hybrid and hybrid_dt carry the noah present sim channel; override the
-        # training-time paths in the checkpoints with the tracked ones (LSTM has none).
-        over = ({} if label == LSTM
-                else dict(physics_csv=NOAH_DPL, sim_cache=NOAH_SIM))
         tag, n_miss = _ENS_TAG[label], 0
         for dp, dt in grid:
             cache = _hybrid_cache_path(tag, dp, dt)
             if cache.exists():
                 daily = pd.read_csv(cache, index_col=0, parse_dates=[0])
             else:
-                h, models, cfg, names = _ens(label, ens, over)
+                h, models, cfg, names = _ens(label, ens)
                 daily = _ensemble_perturbed_daily(h, _dom(), models, cfg, names,
                                                   dp, dt, phys[(dp, dt)],
                                                   pet_pert=_pet(dt))
                 daily.index.name = "date"
                 daily.round(6).to_csv(cache)
                 n_miss += 1
-            _emit(label, dp, dt, _metrics_from_daily(daily, areas))
+            _emit(label, dp, dt, metrics_from_daily(daily, areas))
         print(f"  {label}: {len(grid)} points ({n_miss} computed, "
               f"{len(grid) - n_miss} cached)", flush=True)
 
@@ -223,16 +321,14 @@ def _plot_basin(basin: str, sub: pd.DataFrame, out: Path,
 # skill + response summary (3-panel) and the regime-aggregate surfaces
 # --------------------------------------------------------------------------- #
 def _mean_calval(csv: str | Path) -> tuple[float, float]:
-    """(mean cal_kge, mean val_kge) of a metrics_*.csv."""
+    """(mean cal_kge, mean val_kge) of a run's ``metrics.csv``."""
     m = pd.read_csv(csv)
     return float(m["cal_kge"].mean()), float(m["val_kge"].mean())
 
 
 def _skill_pairs() -> dict[str, tuple[float, float]]:
     """Ensemble-mean cal/val KGE per model, from the tracked metrics CSVs."""
-    return {PHYSICS: _mean_calval(f"{NOAH_DIR}/metrics_noah.csv"),
-            **{lab: _mean_calval(f"{d}/metrics_hybrid.csv")
-               for lab, d in ENSEMBLES.items()}}
+    return {lab: _mean_calval(paths.dpl_metrics(run=RUN[lab])) for lab in (PHYSICS, *ENSEMBLES)}
 
 
 def _pooled(tbl: pd.DataFrame, model: str, col: str, dp: float, dt: float):
@@ -241,7 +337,7 @@ def _pooled(tbl: pd.DataFrame, model: str, col: str, dp: float, dt: float):
     return s.set_index("basin")[col]
 
 
-def make_summary(tbl: pd.DataFrame, out_dir: str | Path = "artifacts/dpl",
+def make_summary(tbl: pd.DataFrame, out_dir: str | Path | None = None,
                  ) -> Path:
     """3-panel headline: (1) ensemble-mean skill bars, (2) the warming-response
     CURVE (pooled annual %Δ vs present along ΔT at Δp=0), (3) the precip-response
@@ -305,7 +401,7 @@ def make_summary(tbl: pd.DataFrame, out_dir: str | Path = "artifacts/dpl",
     fig.suptitle("Noah / Hybrid / Hybrid DT / LSTM — skill vs climate-response "
                  "fidelity  (physics sim channel + Δp·ΔT response loss)",
                  fontsize=11, fontweight="bold")
-    out = Path(out_dir) / "figures" / "hybrid_summary.png"
+    out = _out(out_dir) / "hybrid_summary.png"
     out.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out, dpi=300)
     plt.close(fig)
@@ -314,15 +410,15 @@ def make_summary(tbl: pd.DataFrame, out_dir: str | Path = "artifacts/dpl",
 
 
 def make_regime_surfaces(tbl: pd.DataFrame, data_dir: str = "data",
-                         out_dir: str | Path = "artifacts/dpl") -> None:
+                         out_dir: str | Path | None = None) -> None:
     """One 4×4 response-surface figure per hydroclimate regime (:data:`REGIMES`),
     the group's basins pooled by area-weighted % change."""
     areas = load_basin_area(data_dir, domain="15cdec").set_index(
         "basin")["area_mi2"].to_dict()
-    figdir = Path(out_dir) / "figures" / "hybrid_regimes"
+    figdir = _out(out_dir) / "hybrid_regimes"
     for reg, basins in REGIMES.items():
-        agg = _aggregate_regime(tbl, basins, areas)
-        title = (f"{_REGIME_TITLE[reg]} regime  ({len(basins)} basins: "
+        agg = aggregate_regime(tbl, basins, areas)
+        title = (f"{REGIME_TITLE[reg]} regime  ({len(basins)} basins: "
                  f"{' '.join(basins)})  — Noah / Hybrid / Hybrid DT / LSTM "
                  "response surfaces\n"
                  "area-weighted % change vs present climate    "
@@ -332,7 +428,7 @@ def make_regime_surfaces(tbl: pd.DataFrame, data_dir: str = "data",
 
 
 def make_hybrid_progression(tbl: pd.DataFrame, data_dir: str = "data",
-                            out_dir: str | Path = "artifacts/dpl") -> Path:
+                            out_dir: str | Path | None = None) -> Path:
     """Two-panel progression exhibit for the chain Noah (physics) -> Hybrid ->
     Hybrid DT: (a) per-basin validation skill, (b) the pooled warming-response
     curve."""
@@ -342,12 +438,8 @@ def make_hybrid_progression(tbl: pd.DataFrame, data_dir: str = "data",
            DTDP: dict(color="#1f77b4", marker="^", mfc="#1f77b4", mec="#1f77b4")}
 
     order = _basin_order(data_dir, sorted(tbl["basin"].unique()))
-    val = {PHYSICS: pd.read_csv(f"{NOAH_DIR}/metrics_noah.csv"
-                                ).set_index("basin")["val_kge"],
-           BASE: pd.read_csv(f"{BASE_DIR}/metrics_hybrid.csv"
-                             ).set_index("basin")["val_kge"],
-           DTDP: pd.read_csv(f"{DTDP_DIR}/metrics_hybrid.csv"
-                             ).set_index("basin")["val_kge"]}
+    val = {lab: pd.read_csv(paths.dpl_metrics(run=RUN[lab])).set_index("basin")["val_kge"]
+           for lab in (PHYSICS, BASE, DTDP)}
     temp_curve = {m: [float(_pooled(tbl, m, "pct_annual", 0.0, float(dt)).mean())
                       for dt in DT] for m in MODELS}
 
@@ -376,7 +468,7 @@ def make_hybrid_progression(tbl: pd.DataFrame, data_dir: str = "data",
 
     fig.suptitle("Noah → Hybrid → Hybrid DT: skill vs a trustworthy warming "
                 "response", fontsize=12.5, fontweight="bold")
-    out = Path(out_dir) / "figures" / "hybrid_progression.png"
+    out = _out(out_dir) / "hybrid_progression.png"
     out.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out, dpi=300)
     plt.close(fig)
@@ -387,21 +479,23 @@ def make_hybrid_progression(tbl: pd.DataFrame, data_dir: str = "data",
         for dt, v in zip(DT.tolist(), temp_curve[m]):
             row[f"pct_annual_dt{dt:g}"] = round(v, 4)
         rows.append(row)
-    csv = Path(out_dir) / "figures" / "hybrid_progression.csv"
+    csv = _out(out_dir) / "hybrid_progression.csv"
     pd.DataFrame(rows).to_csv(csv, index=False)
     print(f"wrote {out}", flush=True)
     return out
 
 
 def make_hybrids(data_dir: str = "data",
-                 out_dir: str | Path = "artifacts/dpl",
+                 out_dir: str | Path | None = None,
                  *, device: str = "cuda", n_seeds: int = N_SEEDS,
                  regen: bool = False) -> pd.DataFrame:
     """Assemble (or reload) the metrics table, then render: one 4×4 response
-    surface per watershed, one per hydroclimate regime, and the 3-panel skill /
-    response summary."""
-    out_dir = Path(out_dir)
-    csv = out_dir / "figures" / "hybrids_metrics.csv"
+    surface per watershed, one per hydroclimate regime, the 3-panel skill /
+    response summary, the progression exhibit, and the GA / dPL / hybrid score table."""
+    from ..hybrid.evaluate import compare_all
+
+    out_dir = _out(out_dir)
+    csv = out_dir / "hybrids_metrics.csv"
     if csv.exists() and not regen:
         tbl = pd.read_csv(csv)
         print(f"loaded {csv}", flush=True)
@@ -412,13 +506,14 @@ def make_hybrids(data_dir: str = "data",
         print(f"wrote {csv}", flush=True)
 
     order = _basin_order(data_dir, sorted(tbl["basin"].unique()))
-    figdir = out_dir / "figures" / "hybrid"
+    figdir = out_dir / "hybrid"
     for b in order:
         _plot_basin(b, tbl[tbl.basin == b], figdir / f"{b}.png")
     print(f"wrote {len(order)} figures -> {figdir}", flush=True)
     make_regime_surfaces(tbl, data_dir, out_dir)
     make_summary(tbl, out_dir)
     make_hybrid_progression(tbl, data_dir, out_dir)
+    compare_all(out_dir)
     return tbl
 
 

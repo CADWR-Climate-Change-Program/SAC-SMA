@@ -39,7 +39,9 @@ Delivered; cannot be rebuilt from a clone.
 - SHA and TNL (`11obs`) have no published unimpaired table of their own: Shasta is inside the
   Sacramento River near Red Bluff subbasin, and the Trinity is not a Central Valley subbasin.
 - `obs_mm` is a depth over the domain's own basin area. The areas of `9unimp` and `11obs` are
-  in `data/inputs/domains/<domain>/basin_area.csv`; `12rim` has no area table.
+  in `data/inputs/domains/<domain>/basin_area.csv`. The `12rim` table there holds the areas the
+  study's CalLite wrapper converted its output with; whether they are the basis of the `12rim`
+  `obs_mm` is not recorded.
 - Basin codes are domain-specific: short codes in `11obs` and `12rim` (SHA, BND, ...),
   CamelCase names in `9unimp` (CacheCreek, StonyCreek, ...).
 
