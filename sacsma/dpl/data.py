@@ -174,7 +174,7 @@ class DomainTensors:
 
     def ga_params(self, data_dir: str = "data") -> dict[str, torch.Tensor]:
         """Archived GA optimum expanded to per-HRU (N,) tensors, bounds-asserted."""
-        pdf = load_params(data_dir, domain="15cdec")
+        pdf = load_params(domain="15cdec")
         validate_ga_optimum(pdf)
         merged = self.hrus.merge(pdf, on="key", how="left", suffixes=("", "_ga"))
         if merged[PARAM_ORDER[0]].isna().any():

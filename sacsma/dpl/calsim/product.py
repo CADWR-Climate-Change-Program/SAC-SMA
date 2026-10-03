@@ -48,13 +48,14 @@ Usage::
     sacsma dpl calsim product apply --tier2 DIR --forcing NAME [--wy A-B] [--share-model PT]
                                     [--out DIR] [--data-dir data]
 
-``fit`` writes the share model and its records to ``artifacts/product/`` (:func:`sacsma.paths.product`):
-``share_model.pt`` (the network and everything :func:`apply` needs), ``share_selection.csv``
-(the out-of-fold candidates), ``response_gate.csv`` and ``product_info.json`` (with the scores
+``fit`` writes the share model and its records to ``artifacts/product/calsim3/``
+(:func:`sacsma.paths.product`): ``share_model.pt`` (the network and everything :func:`apply`
+needs), ``share_selection.csv`` (the out-of-fold candidates), ``response_gate.csv`` and
+``product_info.json`` (with the scores
 of the dPL arcs and of the product on the held-out water years of the base pass).  ``apply``
 runs the fitted model on a tier-2 pass with runoff parts (``sacsma dpl calsim tier2
 --components parts``, on any ``--forcing`` and envelope) and writes the product of one forcing
-to ``artifacts/product/<forcing>/`` unless ``--out`` names another folder:
+to ``artifacts/product/calsim3/<forcing>/`` unless ``--out`` names another folder:
 ``rim_inflow_monthly.csv`` (``arc, month, taf, dpl_taf, kind``) over the complete water years of
 the pass (``--wy`` narrows them), ``tier2/`` (the two tables of the pass and its
 ``tier2_run_info.json``) and, for a historical forcing, ``product_metrics.csv`` (per arc: monthly
@@ -656,7 +657,7 @@ def main(argv=None, prog=None) -> None:
     f.add_argument("--scenarios", action="append", default=None, metavar="DIR",
                    help="folder of climate-point tier-2 passes, one subfolder per point "
                         "(repeatable; default: tier2_scenarios/ of the run's local folder)")
-    f.add_argument("--out", default=None, help="output folder (default artifacts/product)")
+    f.add_argument("--out", default=None, help="output folder (default artifacts/product/calsim3)")
     f.add_argument("--data-dir", default="data")
     f.add_argument("--mu", type=float, default=None,
                    help="response-penalty weight; omit to select it out of fold")
@@ -672,9 +673,9 @@ def main(argv=None, prog=None) -> None:
     g.add_argument("--wy", default=None, metavar="A-B",
                    help="water years of the product (default: every complete one of the pass)")
     g.add_argument("--share-model", default=None,
-                   help="the fitted share model (default artifacts/product/share_model.pt)")
+                   help="the fitted share model (default artifacts/product/calsim3/share_model.pt)")
     g.add_argument("--out", default=None,
-                   help="output folder (default artifacts/product/<forcing>)")
+                   help="output folder (default artifacts/product/calsim3/<forcing>)")
     g.add_argument("--data-dir", default="data")
     a = p.parse_args(argv)
     if a.cmd == "fit":

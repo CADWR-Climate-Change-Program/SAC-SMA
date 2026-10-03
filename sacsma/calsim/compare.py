@@ -17,7 +17,7 @@ through the hand-edited ``data/reference/calsim_crosswalk.csv`` (its ``vic_basin
 column).  Per-node scores go to the CSVs (``calset_metrics.csv`` etc.); the **maps and
 figures present skill at the main-basin level** — every sub-area polygon is coloured by
 its watershed's basin-anchor score (:func:`anchor_metrics`), not its own sub-arc score.
-Outputs -> ``artifacts/results/calibrated/calsim3/`` (scores, maps, rolling skill, the per-arc
+Outputs -> ``artifacts/results/calsim3/`` (scores, maps, rolling skill, the per-arc
 quantile mapping) and ``footprints/`` (the footprint and HRU-attribute maps).
 """
 
@@ -1794,7 +1794,7 @@ def make_hru_attribute_maps(data_dir: str | Path = "data",
     _cat_map("soil_class", "15cdec HRUs by soil class", "hru_soil_15cdec.png")
 
     # --- Figure 3: 15cdec calibrated Kpet (tracks soil_class) ---
-    kp15 = load_params(data_dir, domain="15cdec").set_index("key")["Kpet"]
+    kp15 = load_params(domain="15cdec").set_index("key")["Kpet"]
     h = h.assign(Kpet=h["key"].map(kp15))
     norm = Normalize(vmin=np.floor(h["Kpet"].min() * 10) / 10,
                      vmax=np.ceil(h["Kpet"].max() * 10) / 10)
@@ -1819,7 +1819,7 @@ def make_hru_attribute_maps(data_dir: str | Path = "data",
     # --- Figure 3: 11obs + 9unimp per-basin Kpet ---
     doms = ["11obs", "9unimp"]
     hru = {d: load_hru_table(data_dir, domain=d) for d in doms}
-    par = {d: load_params(data_dir, domain=d).groupby("basin")["Kpet"].first() for d in doms}
+    par = {d: load_params(domain=d).groupby("basin")["Kpet"].first() for d in doms}
     allh = np.concatenate([hru[d][["lat", "lon"]].to_numpy() for d in doms])
     cext = _hru_extent(allh[:, 0], allh[:, 1])
     kall = np.concatenate([par[d].to_numpy() for d in doms])
@@ -1867,7 +1867,7 @@ def hru_param_table(data_dir: str | Path = "data", domain: str = "15cdec") -> pd
     from ..io import load_hru_table, load_params
 
     h = load_hru_table(data_dir, domain=domain)
-    kp = load_params(data_dir, domain=domain)
+    kp = load_params(domain=domain)
     kp = (kp.drop_duplicates("basin") if "basin" in kp.columns and domain != "15cdec"
           else kp.drop_duplicates("key"))
     h = h.merge(kp[["key", "Kpet"]], on="key", how="left")
@@ -1896,7 +1896,7 @@ def kpet_soil_table(data_dir: str | Path = "data", domain: str = "15cdec") -> pd
     from ..io import load_hru_table, load_params
 
     h = load_hru_table(data_dir, domain=domain)
-    kp = load_params(data_dir, domain=domain).drop_duplicates("key")
+    kp = load_params(domain=domain).drop_duplicates("key")
     m = h.merge(kp[["key", "Kpet"]], on="key", how="left")
     g = m.groupby("soil_class")["Kpet"]
     tbl = pd.DataFrame({
@@ -2043,7 +2043,7 @@ def _anchor_set_taf(domain, data_dir, nodes, forcing=None, *, comp_cache=None,
         from ..io import load_hru_table, load_params
         fp_basins = set(footprint["basin"].unique())
         hru_tbl = load_hru_table(data_dir, domain=domain)
-        pfull = load_params(data_dir, domain=domain)
+        pfull = load_params(domain=domain)
     parts = []
     for basin, g in summable.groupby("basin"):
         if basin in fp_basins:

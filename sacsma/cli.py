@@ -1,10 +1,10 @@
-"""Command-line interface: ``sacsma run | plots | calsim | verify | dpl``.
+"""Command-line interface: ``sacsma run | plots | calsim | product | verify | dpl``.
 
 ``run`` forward-simulates a watershed from its archived GA optimum; ``plots``
 writes the per-watershed calibration/validation diagnostics for a domain;
-``calsim`` runs the CalSim3-vs-VIC-vs-SAC-SMA cross-compare; ``verify`` checks the
-installation.  The ``dpl`` commands (differentiable parameter learning) are
-defined in :mod:`sacsma.dpl.cli`.
+``calsim`` runs the CalSim3-vs-VIC-vs-SAC-SMA cross-compare; ``product`` writes the
+products of the calibrated models; ``verify`` checks the installation.  The ``dpl``
+commands (differentiable parameter learning) are defined in :mod:`sacsma.dpl.cli`.
 """
 
 from __future__ import annotations
@@ -106,6 +106,13 @@ def _calsim(args: argparse.Namespace) -> int:
     return 0
 
 
+def _product(args: argparse.Namespace) -> int:
+    from .product import write
+
+    write(args.app, args.forcing, args.data_dir, args.artifacts_dir)
+    return 0
+
+
 def _verify(args: argparse.Namespace) -> int:
     from .verify import run_checks
 
@@ -152,7 +159,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="subset of watershed codes (default: all)")
     pl.add_argument("--data-dir", default="data", help="data store")
     pl.add_argument("--artifacts-dir", default="artifacts",
-                    help="output root (-> <root>/results/calibrated/<domain>/)")
+                    help="output root (-> <root>/results/15cdec/ or "
+                         "<root>/results/callite/<domain>/)")
     pl.add_argument("--fnf-check", action="store_true",
                     help="15cdec only: also score the same basins MONTHLY against CalSim3's "
                          "unimpaired FNF (longer independent validation window) -> extra "
@@ -162,7 +170,7 @@ def build_parser() -> argparse.ArgumentParser:
     cs = sub.add_parser(
         "calsim",
         help="cross-compare CalSim3 (actual) vs VIC vs multi-set SAC-SMA "
-             "-> artifacts/results/calibrated/calsim3/ and footprints/",
+             "-> artifacts/results/calsim3/ and footprints/",
     )
     cs.add_argument("--data-dir", default="data", help="organized data/ store")
     cs.add_argument("--artifacts-dir", default="artifacts", help="output root")
@@ -178,16 +186,31 @@ def build_parser() -> argparse.ArgumentParser:
     cs.add_argument("--sacsma-vic-bcm", action="store_true",
                     help="instead of the standard cross-compare, build the SAC-SMA vs VIC "
                          "vs BCM comparison on WGEN Product A over WY1989-2018, "
-                         "9unimp+11obs pooled -> artifacts/results/calibrated/vic_bcm/")
+                         "9unimp+11obs pooled -> artifacts/results/vic_bcm/")
     cs.add_argument("--forcing-compare", action="store_true",
                     help="instead of the standard cross-compare, draw the forcing-product "
-                         "volume and regime figures -> artifacts/results/calibrated/forcing/")
+                         "volume and regime figures -> artifacts/results/forcing/")
     cs.set_defaults(func=_calsim)
+
+    pr = sub.add_parser(
+        "product",
+        help="the products of the calibrated models: the three CalLite inflow files per "
+             "forcing -> artifacts/product/callite/<forcing>/, or the daily flow of the 15 "
+             "CDEC watersheds -> artifacts/product/15cdec/<forcing>/",
+    )
+    pr.add_argument("app", choices=("callite", "15cdec"))
+    pr.add_argument("--forcing", nargs="+", default=None, metavar="PRODUCT",
+                    help="forcings to write (default: every forcing the product carries: "
+                         "callite historical_livneh_unsplit wgen_product_a wgen_product_a_s12, "
+                         "15cdec historical_livneh_unsplit)")
+    pr.add_argument("--data-dir", default="data", help="organized data/ store")
+    pr.add_argument("--artifacts-dir", default="artifacts", help="output root")
+    pr.set_defaults(func=_product)
 
     vf = sub.add_parser(
         "verify",
         help="check the installation: imports, commands, document links, the layout of "
-             "artifacts/, parity with the MATLAB reference, and the tracked rim-inflow product",
+             "artifacts/, parity with the MATLAB reference, and the tracked products",
     )
     vf.add_argument("checks", nargs="*", metavar="CHECK",
                     help="subset of: imports cli links artifacts parity product (default: all)")

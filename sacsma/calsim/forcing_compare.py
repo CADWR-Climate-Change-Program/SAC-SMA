@@ -21,7 +21,7 @@ Inputs:
 
 * SAC-SMA — the committed run tables: the parity-exact ``simflow`` reference
   (the Livneh-unsplit run) and ``sim_daily_<domain>.csv`` of each product under
-  ``artifacts/results/calibrated/forcing/<product>/`` (:func:`run_table`, which simulates a
+  ``artifacts/results/forcing/<product>/`` (:func:`run_table`, which simulates a
   missing one: every watershed of the set under the product, the GA optima).  Regenerated, a
   table differs from the tracked one in the sixth decimal on a few days in a thousand.
 * VIC — the routed monthly tables ``data/reference/vic/vic_routed_monthly[_<product>].csv``
@@ -31,7 +31,7 @@ Inputs:
   keeps only its own system's series) and converted to depth over the canonical
   CalSim catchment area.
 
-Outputs -> ``artifacts/results/calibrated/forcing/figures/``, per set prefix:
+Outputs -> ``artifacts/results/forcing/figures/``, per set prefix:
 
 * ``<p>_volume_by_period.png`` — % volume difference per watershed, one bar
   per period, one panel per domain.
@@ -544,7 +544,7 @@ def make_split_unsplit_skill(data_dir: str | Path = "data",
 
 
 def make_all(data_dir: str | Path = "data", artifacts_dir: str | Path = "artifacts") -> Path:
-    """Forcing-comparison figures -> ``<artifacts_dir>/results/calibrated/forcing/figures/``."""
+    """Forcing-comparison figures -> ``<artifacts_dir>/results/forcing/figures/``."""
     figdir = paths.calibrated(artifacts_dir, "forcing") / "figures"
     figdir.mkdir(parents=True, exist_ok=True)
     # the daily run tables of every CalLite set under each product (the figures read SETS)

@@ -5,7 +5,7 @@ the observed daily gage full-natural-flow target (missing days are NaN).  The
 record is split at the calibration/validation boundary (:data:`CAL_END`,
 WY2004 start); skill statistics are reported **separately** for each period.
 Writes per-basin diagnostics, a domain skill-summary, and a metrics CSV under
-``artifacts/results/calibrated/15cdec/``.
+``artifacts/results/15cdec/``.
 
 Usage::
 
@@ -80,7 +80,7 @@ def make_all(
     artifacts_dir: str | Path = "artifacts",
     cal_end: str = CAL_END,
 ) -> pd.DataFrame:
-    """15-CDEC diagnostics -> ``<artifacts_dir>/results/calibrated/15cdec/``.
+    """15-CDEC diagnostics -> ``<artifacts_dir>/results/15cdec/``.
 
     Daily calibration/validation vs the observed gage, plus the exact MATLAB
     parity figure.

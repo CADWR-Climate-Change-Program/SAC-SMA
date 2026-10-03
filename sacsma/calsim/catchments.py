@@ -770,7 +770,7 @@ def run_calsim(
         forcing = load_domain_forcing(data_dir, domain=domain, start=start, end=end)
     # per-watershed calibrations repeat shared cells; one param set per cell suffices
     # for the CalSim aggregation, so keep the first.
-    params = load_params(data_dir, domain=domain).drop_duplicates("key").set_index("key")
+    params = load_params(domain=domain).drop_duplicates("key").set_index("key")
 
     # compute each unique HRU cell once; an HRU may feed several catchments.
     keys = mapping["key"].unique()

@@ -653,7 +653,7 @@ def _run_basin_native(
     noah_lite = et_scheme == "noah_lite"
     if pet_source == "priestley_taylor" or noah_lite:
         attach_tminmax(dd, domain, forcing, product=product)   # no-op if already attached
-    params_df = params if params is not None else load_params(dd, domain=domain)
+    params_df = params if params is not None else load_params(domain=domain)
     # per-watershed calibrations (e.g. 9unimp) repeat shared cells with different
     # params per basin; filter to this basin before indexing by key.
     if "basin" in params_df.columns:

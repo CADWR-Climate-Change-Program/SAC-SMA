@@ -876,7 +876,7 @@ def train(
         # the multi-timescale store carries no GA table — the scalar init
         # prior (area-weighted median per param) comes from the region-grid
         # 15cdec GA params over the covered cells
-        pdf = load_params(data_dir, domain="15cdec_grid").drop_duplicates("key")
+        pdf = load_params(domain="15cdec_grid").drop_duplicates("key")
         hrus_b = dom.hrus if base_hru is None else dom.hrus[base_hru]
         hrus_p = hrus_b[hrus_b["key"].isin(set(pdf["key"]))]
         if hrus_p.empty:            # debug subsets entirely off the 15cdec grid
@@ -885,7 +885,7 @@ def train(
               f"{len(hrus_p)}/{len(dom.hrus)} HRU rows", flush=True)
         priors = ga_priors(pdf, hrus_p)
     else:
-        priors = ga_priors(load_params(data_dir, domain=domain), dom.hrus)
+        priors = ga_priors(load_params(domain=domain), dom.hrus)
     net.init_from_priors(priors, box=cfg.param_box)
     donor_kge = float("nan")
     # ep0-donor gate mode: "same" compares the selection scalar directly

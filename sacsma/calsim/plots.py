@@ -6,11 +6,11 @@ the observed monthly full-natural-flow for its domain (``9unimp``/``11obs``/
 1922-) the record splits into the calibration window [cal_start, cal_end] and
 **validation** (everything outside); otherwise it falls back to the
 calibration-log FNF (calibration period only).  Writes per-basin diagnostics,
-a skill summary, and ``metrics.csv`` under ``artifacts/results/calibrated/<domain>/``.
+a skill summary, and ``metrics.csv`` under ``artifacts/results/callite/<domain>/``.
 
 Also home to :func:`make_cdec15_fnf_check`: the 15cdec basins scored MONTHLY against
 **CalSim3's unimpaired FNF** (``*_calsim3`` figures + ``metrics_calsim3.csv``)
-instead of 15cdec's own daily CDEC gage -> ``artifacts/results/calibrated/15cdec/``.  Lives
+instead of 15cdec's own daily CDEC gage -> ``artifacts/results/15cdec/``.  Lives
 here rather than in ``sacsma.cdec15`` because ``sacsma.calsim`` is the side of the
 dependency edge allowed to import ``sacsma.cdec15`` (never the reverse).
 
@@ -196,7 +196,7 @@ def make_cdec15_fnf_check(
     artifacts_dir: str | Path = "artifacts",
 ) -> pd.DataFrame:
     """15cdec basins scored MONTHLY against CalSim3's unimpaired FNF ->
-    ``<artifacts_dir>/results/calibrated/15cdec/``.
+    ``<artifacts_dir>/results/15cdec/``.
 
     A second, independent diagnostic alongside :func:`sacsma.cdec15.plots.make_all`'s daily
     CDEC-gage diagnostics: same basins, same GA-calibrated model run, scored directly against
@@ -248,7 +248,7 @@ def make_all(
     data_dir: str | Path = "data",
     artifacts_dir: str | Path = "artifacts",
 ) -> pd.DataFrame:
-    """CalLite-domain diagnostics -> ``<artifacts_dir>/results/calibrated/<domain>/``.
+    """CalLite-domain diagnostics -> ``<artifacts_dir>/results/callite/<domain>/``.
 
     Monthly calibration/validation vs the observed FNF, plus the exact MATLAB
     parity figure.

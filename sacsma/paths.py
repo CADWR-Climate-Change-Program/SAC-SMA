@@ -135,10 +135,6 @@ def hruinfo(data_dir="data", domain: str = CDEC15) -> Path:
     return domain_dir(data_dir, domain) / "hruinfo.csv"
 
 
-def ga_optimum(data_dir="data", domain: str = CDEC15) -> Path:
-    return domain_dir(data_dir, domain) / "ga_optimum.csv"
-
-
 def basin_area(data_dir="data", domain: str = CDEC15) -> Path:
     return domain_dir(data_dir, domain) / "basin_area.csv"
 
@@ -265,9 +261,14 @@ def dwr_swat(data_dir="data", name: str = "swat_monthly.csv") -> Path:
 # ============================================================================ artifacts/
 # The output tree (see ``artifacts/README.md``) has four parts:
 #
-# * ``product/``  the CalSim3 rim-inflow product, one folder per forcing;
-# * ``models/``   what training made, and the parameter tables;
-# * ``results/``  what a command redraws from the models and the data;
+# * ``product/``  what is delivered, one folder per application: ``calsim3`` (the rim-inflow
+#   product of the learned model), ``callite`` and ``15cdec`` (the calibrated models), each
+#   with one folder per forcing;
+# * ``models/``   every model: the archived calibrations (``callite/<set>``, ``15cdec``,
+#   ``15cdec_grid``) and what training made (``dpl/``), with the parameter tables;
+# * ``results/``  what a command redraws: the calibrated sets (``callite/<set>``, ``15cdec``)
+#   and their comparisons (``calsim3``, ``vic_bcm``, ``footprints``, ``forcing``), and the
+#   learned runs (``dpl/``);
 # * ``_local/``   not tracked: caches, scratch, the large outputs of a run, runs not adopted.
 #
 # A learned-parameter run has one folder per role (:func:`run_roles`), each under the same
@@ -277,8 +278,12 @@ def dwr_swat(data_dir="data", name: str = "swat_monthly.csv") -> Path:
 # ``"artifacts"``) and touches no file, except :func:`run_roles` and :func:`run_file`, which
 # look for a run's model folder.
 
+#: the folder that groups the three CalLite calibration sets in models/, results/, product/
+CALLITE_DIR = "callite"
 #: the calibrated model's result folders: one per set, then the comparisons
 CALIBRATED = (CDEC15, *CALLITE, "calsim3", "vic_bcm", "footprints", "forcing")
+#: the delivered products, one folder each under product/
+PRODUCTS = ("calsim3", CALLITE_DIR, CDEC15)
 #: the ``sacsma dpl study`` result folders
 DPL_STUDIES = ("climatology", "hybrids", "adaptive", "forcing")
 #: the roles of a learned-parameter run
@@ -302,14 +307,33 @@ def _group(domain: str) -> str:
     return MULTIFAMILY if _check(domain) == MULTIFAMILY else CDEC15
 
 
+def _app(name: str) -> Path:
+    """A calibration set's folder under an application: ``callite/<set>`` for the CalLite
+    sets, the name itself otherwise."""
+    return Path(CALLITE_DIR, name) if name in CALLITE else Path(name)
+
+
+def calibrated_model(artifacts_dir="artifacts", domain: str = CDEC15) -> Path:
+    """The archived GA calibration of a domain: ``models/callite/<set>``, ``models/15cdec``,
+    ``models/15cdec_grid`` (``ga_optimum.csv``)."""
+    if _check(domain) == MULTIFAMILY:
+        raise ValueError("the multifamily domain has no calibration")
+    return _art(artifacts_dir) / "models" / _app(domain)
+
+
+def ga_optimum(artifacts_dir="artifacts", domain: str = CDEC15) -> Path:
+    """The GA optimum of a domain: 31 parameters per modeling unit."""
+    return calibrated_model(artifacts_dir, domain) / "ga_optimum.csv"
+
+
 def calibrated(artifacts_dir="artifacts", name: str = CDEC15) -> Path:
-    """Results of the calibrated model: one set's diagnostics (``15cdec``, ``11obs``,
-    ``9unimp``, ``12rim``), the comparison with CalSim3 (``calsim3``), with VIC and BCM
+    """Results of the calibrated model: one set's diagnostics (``results/15cdec``,
+    ``results/callite/<set>``), the comparison with CalSim3 (``calsim3``), with VIC and BCM
     (``vic_bcm``), the footprint and HRU-attribute maps (``footprints``), the forcing
     comparison (``forcing``)."""
     if name not in CALIBRATED:
         raise ValueError(f"unknown result folder {name!r} (expected one of {CALIBRATED})")
-    return _art(artifacts_dir) / "results" / "calibrated" / name
+    return _art(artifacts_dir) / "results" / _app(name)
 
 
 def forcing_run(artifacts_dir="artifacts", product: str = "wgen_product_a") -> Path:
@@ -388,17 +412,19 @@ def dpl_benchmark(artifacts_dir="artifacts") -> Path:
     return _art(artifacts_dir) / "results" / "dpl" / CDEC15 / "benchmark"
 
 
-def product(artifacts_dir="artifacts", forcing: str | None = None) -> Path:
-    """The rim-inflow product: the share model and its fit records, or one forcing's
-    series (``<forcing>/rim_inflow_monthly.csv``) and the tier-2 pass it was applied to
-    (``<forcing>/tier2/``)."""
-    root = _art(artifacts_dir) / "product"
+def product(artifacts_dir="artifacts", forcing: str | None = None, app: str = "calsim3") -> Path:
+    """One product: ``calsim3`` (the rim-inflow product: the share model and its fit records,
+    or one forcing's series with the tier-2 pass it was applied to), ``callite`` or
+    ``15cdec`` (the calibrated models' series), or its folder for one forcing."""
+    if app not in PRODUCTS:
+        raise ValueError(f"unknown product {app!r} (expected one of {PRODUCTS})")
+    root = _art(artifacts_dir) / "product" / app
     return root / forcing if forcing else root
 
 
 def local(artifacts_dir="artifacts", name: str = "") -> Path:
     """A folder under the untracked part: ``cache/<what>``, ``testing/<run>``, ``eval``,
-    ``product/<forcing>`` (the large files of a product pass)."""
+    ``product/calsim3/<forcing>`` (the large files of a product pass)."""
     root = _art(artifacts_dir) / "_local"
     return root / name if name else root
 

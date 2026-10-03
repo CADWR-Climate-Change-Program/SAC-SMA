@@ -20,7 +20,10 @@ The repository has no test suite; the model is verified by running it.  The chec
     (:data:`PARITY_BASINS`): KGE > 0.9999 and max daily difference < 0.1 mm/day
 ``product``
     the share model applied to the tier-2 pass kept beside each forcing's series
-    (``artifacts/product/<forcing>/tier2/``) reproduces the tracked ``rim_inflow_monthly.csv``
+    (``artifacts/product/calsim3/<forcing>/tier2/``) reproduces the tracked
+    ``rim_inflow_monthly.csv``; the products of the calibrated models
+    (``artifacts/product/{callite,15cdec}/<forcing>/``, :mod:`sacsma.product`) are written again
+    and match the tracked files to one unit in the last printed digit
 
 ``--quick`` runs the first four, which need no model run.  The exit code is the number of
 failed checks.
@@ -254,14 +257,14 @@ def check_parity(data_dir: str = "data", **_) -> tuple[bool, str]:
 
 
 # ------------------------------------------------------------------------------- product
-def check_product(data_dir: str = "data", artifacts_dir: str = "artifacts",
-                  **_) -> tuple[bool | None, str]:
-    root = paths.product(artifacts_dir)
+def _calsim3_rows(data_dir: str, artifacts_dir: str) -> list[tuple[bool | None, str]]:
+    """The share model applied to each forcing's tier-2 pass against its tracked series."""
+    root = paths.product(artifacts_dir, app="calsim3")
     series = sorted(root.glob("*/rim_inflow_monthly.csv"))
     if not (root / "share_model.pt").exists() or not series:
-        return None, f"no rim-inflow product under {root}"
+        return [(None, f"calsim3: no rim-inflow product under {root}")]
     if not _has_torch():
-        return None, "torch is not installed"
+        return [(None, "calsim3: torch is not installed")]
     import numpy as np
     import pandas as pd
     import torch
@@ -269,12 +272,12 @@ def check_product(data_dir: str = "data", artifacts_dir: str = "artifacts",
     from .dpl.calsim.product import PASS_FILES, apply
 
     model = torch.load(root / "share_model.pt", weights_only=False)
-    ok, rows, done = True, [], 0
+    rows = []
     for csv in series:
         tier2 = csv.parent / "tier2"
         if not all((tier2 / name).exists() for name in PASS_FILES):
-            rows.append(f"\n    {csv.parent.name}: skipped, {tier2} lacks the pass "
-                        f"({', '.join(PASS_FILES)})")
+            rows.append((None, f"calsim3/{csv.parent.name}: skipped, {tier2} lacks the pass "
+                               f"({', '.join(PASS_FILES)})"))
             continue
         ref = pd.read_csv(csv)
         per = pd.PeriodIndex(ref.month.unique(), freq="M")
@@ -283,11 +286,64 @@ def check_product(data_dir: str = "data", artifacts_dir: str = "artifacts",
         m = ref.merge(got, on=["arc", "month"], suffixes=("_ref", ""))
         rel = float((np.abs(m.taf - m.taf_ref) / np.maximum(np.abs(m.taf_ref), 1e-6)).max())
         good = len(m) == len(ref) == len(got) and rel < PRODUCT_RTOL
-        ok &= good
-        done += 1
-        rows.append(f"\n    {csv.parent.name}: {len(m)} arc-months, max relative difference "
-                    f"{rel:.1e}" + ("" if good else "   FAIL"))
-    return (ok if done else None), "apply reproduces the tracked product" + "".join(rows)
+        rows.append((good, f"calsim3/{csv.parent.name}: {len(m)} arc-months, max relative "
+                           f"difference {rel:.1e}" + ("" if good else "   FAIL")))
+    return rows
+
+
+def _last_digits(ref: str, new: str) -> float:
+    """Largest difference between two tables of one writer, in units of the last printed
+    decimal of each number (``inf`` when a line, a word or the shape differs)."""
+    a, b = ref.splitlines(), new.splitlines()
+    if len(a) != len(b):
+        return float("inf")
+    worst = 0.0
+    for x, y in zip(a, b, strict=True):
+        if x == y:
+            continue
+        u, v = x.split(","), y.split(",")
+        if len(u) != len(v):
+            return float("inf")
+        for s, t in zip(u, v, strict=True):
+            if s == t:
+                continue
+            try:
+                d = abs(float(s) - float(t))
+            except ValueError:
+                return float("inf")
+            dec = max(len(s.strip().partition(".")[2]), len(t.strip().partition(".")[2]))
+            worst = max(worst, d * 10 ** dec)
+    return worst
+
+
+def _calibrated_rows(data_dir: str, artifacts_dir: str) -> list[tuple[bool | None, str]]:
+    """Each tracked product of the calibrated models written again and compared."""
+    from . import product
+
+    rows = []
+    for app, forcings in product.FORCINGS.items():
+        for forcing in forcings:
+            out = paths.product(artifacts_dir, forcing=forcing, app=app)
+            if not out.is_dir():
+                rows.append((None, f"{app}/{forcing}: not written"))
+                continue
+            worst = 0.0
+            for name, text in product.files(app, forcing, data_dir).items():
+                ref = out / name
+                worst = max(worst, _last_digits(ref.read_text(), text) if ref.exists()
+                            else float("inf"))
+            good = worst <= 1.0
+            rows.append((good, f"{app}/{forcing}: largest difference {worst:g} in the last "
+                               "printed digit" + ("" if good else "   FAIL")))
+    return rows
+
+
+def check_product(data_dir: str = "data", artifacts_dir: str = "artifacts",
+                  **_) -> tuple[bool | None, str]:
+    rows = _calsim3_rows(data_dir, artifacts_dir) + _calibrated_rows(data_dir, artifacts_dir)
+    done = [good for good, _ in rows if good is not None]
+    return ((all(done) if done else None),
+            "every tracked product is written again" + "".join(f"\n    {r}" for _, r in rows))
 
 
 _FUNCS = {"imports": check_imports, "cli": check_cli, "links": check_links,
