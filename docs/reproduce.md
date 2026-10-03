@@ -59,13 +59,13 @@ section 6). The whole check takes a few minutes on CPU.
 ```bash
 sacsma run ALL                         # the 15 CDEC watersheds, daily
 sacsma run ALL --domain 11obs          # likewise 9unimp, 12rim
-sacsma plots --domain 15cdec           # calibration and validation diagnostics -> artifacts/cdec15/
-sacsma plots --domain 11obs            # -> artifacts/calsim/11obs/
-sacsma calsim                          # comparison with CalSim3 and VIC -> artifacts/calsim/compare/
+sacsma plots --domain 15cdec           # calibration and validation diagnostics -> artifacts/results/calibrated/15cdec/
+sacsma plots --domain 11obs            # -> artifacts/results/calibrated/11obs/
+sacsma calsim                          # comparison with CalSim3 and VIC -> artifacts/results/calibrated/calsim3/
 ```
 
 All of it runs on CPU in minutes. `sacsma calsim --parallel` uses all cores for the model
-runs; results are unchanged. [`artifacts/README.md`](../artifacts/README.md) lists every file
+runs; results are unchanged. [`artifacts/results/calibrated/README.md`](../artifacts/results/calibrated/README.md) lists every file
 these commands write. Regenerated tables can differ from the tracked ones in the last digits,
 and the row order of `monthly_calsets.csv` is not fixed; compare before committing.
 
@@ -75,21 +75,23 @@ The runs of [Learned parameters](learned_parameters.md) are tracked with their s
 checkpoints, so scoring needs no training:
 
 ```bash
-sacsma dpl evaluate artifacts/dpl/noah/checkpoints/best.pt
+sacsma dpl evaluate artifacts/models/dpl/15cdec/noah/checkpoints/best.pt
 sacsma dpl hybrid --help               # the hybrid and LSTM runs
-sacsma dpl study --help                # the figures and tables under artifacts/dpl/figures/
+sacsma dpl study --help                # the studies -> artifacts/results/dpl/15cdec/studies/
 ```
 
 A checkpoint stores its full configuration; `sacsma dpl train --help` lists every option, and
-[`artifacts/dpl/RUNS.md`](../artifacts/dpl/RUNS.md) names the variant of each run. Training one
+[Runs](runs.md) names the variant of each run. Training one
 of these runs takes hours on an 8 GB GPU. Train one run at a time: the daily graph takes most
 of the memory.
 
 ## 6. dPL-CalSim and the rim-inflow product
 
-`<run>` below is the tracked run folder of dPL-CalSim, named in
-[`artifacts/dpl/RUNS.md`](../artifacts/dpl/RUNS.md). The tracked folder holds the selected
-checkpoint, the scores, and the product, so steps can be entered anywhere.
+`<run>` below is any folder of dPL-CalSim: `artifacts/models/dpl/multifamily/noah_cdec_uf_usgs_cs64_ho7685_ufx_areaw_all_kref05_sacx_carry_px_aef/`
+(the checkpoints), `artifacts/results/dpl/multifamily/...` (the scores) or
+`artifacts/_local/runs/dpl/multifamily/...` (the large local files); every command finds the
+other two. The tracked folders hold the selected checkpoint and the scores, and
+`artifacts/product/` the product, so steps can be entered anywhere.
 
 **Train** (about 21 hours on an 8 GB GPU: 120 epochs of about 10 minutes):
 
@@ -111,10 +113,10 @@ reproducible across drivers. Two epochs of the same command on the same machine 
 **Score** (GPU; the evaluation streams the whole record in double precision, about 45 minutes):
 
 ```bash
-sacsma dpl evaluate <run>/checkpoints/best.pt             # metrics_entities*.csv, sim_daily_mm.npz
-sacsma dpl calsim tier1 <run>                             # the 20 locations -> <run>/tier1/
+sacsma dpl evaluate <run>/checkpoints/best.pt             # metrics.csv, metrics_holdout.csv, sim_daily.npz
+sacsma dpl calsim tier1 <run>                             # the 20 locations -> tier1/
 sacsma dpl calsim tier2 <run> --components parts \
-    --trace-python <python of the sacsma-gis environment> # all 196 arcs -> <run>/tier2/
+    --trace-python <python of the sacsma-gis environment> # all 196 arcs -> tier2/
 ```
 
 Tier 2 needs the HydroSHEDS direction and accumulation tiles (default `tmp/hydrosheds`;
@@ -122,22 +124,40 @@ Tier 2 needs the HydroSHEDS direction and accumulation tiles (default `tmp/hydro
 footprint get straight-line flow lengths instead of traced ones, and the output says so in its
 `flowlen_method` column.
 
-**The product.** The share model is fitted on the base pass and on tier-2 passes at changed
-climates, which are one batched run:
+The scores go to the run's results folder, the monthly series, maps and figures behind them
+to its local folder.
+
+**The share model** is fitted on the base pass and on tier-2 passes at changed climates,
+which are one batched run (into `tier2_scenarios/` of the local folder, `<local>`):
 
 ```bash
-sacsma dpl calsim tier2 <run> --components parts --out <run>/tier2_scenarios \
-    --extension-cells <run>/tier2/tier2_extension_cells.csv \
+sacsma dpl calsim tier2 <run> --components parts \
+    --extension-cells <local>/tier2/tier2_extension_cells.csv \
     --scenarios p85=0:0.85,p95=0:0.95,p105=0:1.05,p115=0:1.15,t1=1:1,t25=2.5:1,t3=3:1,t4=4:1,t1p85=1:0.85,t1p115=1:1.15,t25p95=2.5:0.95,t25p105=2.5:1.05,t3p85=3:0.85,t3p115=3:1.15,t4p85=4:0.85,t4p115=4:1.15
-sacsma dpl calsim product fit <run>                       # -> <run>/calsim_product/
-sacsma dpl calsim product apply <run> --tier2 <a tier-2 pass> --out <csv>   # the product at another climate
+sacsma dpl calsim product fit <run>                       # -> artifacts/product/
 sacsma dpl calsim atlas <run>                             # the validation atlas (HTML)
-sacsma verify product                                     # the tracked product reproduces
 ```
 
-The fit runs on CPU and repeats exactly at the same thread count. The scenario passes and the
-base pass with runoff parts are large and stay local; everything else the commands write that
-is tracked is listed in [`artifacts/README.md`](../artifacts/README.md).
+The fit runs on CPU and repeats exactly at the same thread count. The scenario passes stay
+local.
+
+**The product** is one series per forcing: a tier-2 pass over the whole forcing record
+(spin-up on its first ten water years, then October 1915 to December 2018), with the share
+model applied over its complete water years:
+
+```bash
+for f in historical_livneh_unsplit wgen_product_a wgen_product_a_s12; do
+  sacsma dpl calsim tier2 <run> --components parts --forcing $f --start 1915-10-01 \
+      --extension-cells <local>/tier2/tier2_extension_cells.csv \
+      --out artifacts/_local/product/$f/tier2 --no-maps     # GPU, one at a time
+  sacsma dpl calsim product apply --tier2 artifacts/_local/product/$f/tier2 --forcing $f
+done                                                      # -> artifacts/product/<forcing>/
+sacsma verify product                                     # each tracked series repeats
+```
+
+The pass each series was made from is kept beside it (`artifacts/product/<forcing>/tier2/`), so
+that `sacsma verify product` can repeat it. After a refit, `apply` remakes every series. The
+files each command writes are listed in the READMEs under [`artifacts/`](../artifacts/README.md).
 
 ## 7. Rebuilding data
 
@@ -176,4 +196,4 @@ on disk; they are not tracked.
 | The hand-kept tables | They are the source: the crosswalk, the tier-1 sets, the arc derivation table, the unimpaired-flow pour points, the daily mask. |
 | Forcing, grid attributes, embeddings, ET and SWE products, BCM, USGS flows, DWR unimpaired flows | Rebuildable only with their external source: a release folder, the raw rasters, an Earth Engine project, a report PDF, or a sibling repository. |
 | The exact tracked checkpoints | Retraining gives a different run in the last digits (section 6). |
-| The runs that were not adopted | Kept locally under `artifacts/dpl/_local/`, not tracked. [`artifacts/dpl/RUNS.md`](../artifacts/dpl/RUNS.md#tried-and-not-adopted) says what they showed. |
+| The runs that were not adopted | Kept locally under `artifacts/_local/runs/`, not tracked. [Runs](runs.md#tried-and-not-adopted) says what they showed. |

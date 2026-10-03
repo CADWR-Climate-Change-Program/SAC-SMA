@@ -35,8 +35,8 @@ about WY1922–1951.
 
 ## Skill against each set's own target
 
-Means of the per-watershed scores (`artifacts/cdec15/metrics_15cdec.csv`,
-`artifacts/calsim/<set>/metrics_<set>.csv`). CDEC15 is scored on daily flow, the others on
+Means of the per-watershed scores (`artifacts/results/calibrated/<set>/metrics.csv`). CDEC15 is scored on daily
+flow, the others on
 monthly flow. The CDEC15 calibration score covers each gauge's record up to September 2003,
 which starts before WY1989 at eight gauges and in October 1999 at BND.
 
@@ -53,7 +53,7 @@ fits less closely and loses little out of sample. Weak cases: SCC (Tule River; v
 validation KGE 0.42, +35 %; TRINI 0.50, +31 %), Stony Creek (0.62, +28 %) and Fresno River
 (0.66, +16 %). BLB has no validation years.
 
-![Skill of the 15-CDEC calibration, by watershed](../artifacts/cdec15/figures/skill_summary.png)
+![Skill of the 15-CDEC calibration, by watershed](../artifacts/results/calibrated/15cdec/figures/skill_summary.png)
 
 ## Skill against CalSim3
 
@@ -63,7 +63,7 @@ TAF. Rim12 is not part of it. The comparison is at the level of a whole watershe
 CalSim3 FLOW-UNIMPAIRED series where the watershed is a rim system and against the sum of its
 INFLOW arcs elsewhere. The rules behind it are in [Conventions](conventions.md).
 
-Full record, October 1921 to December 2018 (`artifacts/calsim/compare/anchor_metrics.csv`,
+Full record, October 1921 to December 2018 (`artifacts/results/calibrated/calsim3/anchor_metrics.csv`,
 `anchor_metrics_15cdec.csv`):
 
 | Set | Watersheds | Mean KGE | Median KGE | Mean \|bias\| | VIC mean KGE |
@@ -81,7 +81,7 @@ in 8 % of the windows, at BLB, Cache Creek, Stony Creek, Putah Creek and SHA
 The pooled CDEC15 set under-runs the two large Sacramento systems against CalSim3, by 24 % at
 SHA and 22 % at BND, which is why it is scored beside the two anchor sets and not as one.
 
-![Anchor KGE by watershed, SAC-SMA and VIC](../artifacts/calsim/compare/figures/anchor_skill_kge.png)
+![Anchor KGE by watershed, SAC-SMA and VIC](../artifacts/results/calibrated/calsim3/figures/anchor_skill_kge.png)
 
 **Before and after WY1950** (`anchor_metrics_by_period.csv`). The months before WY1950 lie
 outside every set's calibration period, so they are a common out-of-sample test.
@@ -104,16 +104,47 @@ watersheds, the target agrees with CalSim3 at 11, differs as a data product at 6
 at 3 (Chowchilla −10 %, SNS −9 %, YRS +8 %). These offsets are the bias a perfect fit to the
 target would still show against CalSim3. They are left visible.
 
-More figures: [`artifacts/calsim/compare/figures/`](../artifacts/calsim/compare/figures/);
-the file tables are in [`artifacts/README.md`](../artifacts/README.md).
+Maps and figures show skill at the level of the whole watershed: every catchment polygon
+carries its watershed's anchor score, never its own arc score, which stays in the tables. The
+footprint screening of SHA, BND, SNS and Chowchilla (only those four watersheds over-reach
+their CalSim3 catchment materially) is shown in `artifacts/results/calibrated/footprints/`, with the HRU attribute
+maps; both are illustrations of the method and the inputs, not part of the scoring. The
+unscreened scores and the difference are in `anchor_metrics_full.csv` and
+`anchor_screened_vs_full.csv`.
+
+More figures: [`artifacts/results/calibrated/calsim3/figures/`](../artifacts/results/calibrated/calsim3/figures/); the file tables are in
+[`artifacts/results/calibrated/README.md`](../artifacts/results/calibrated/README.md).
 
 ## SAC-SMA, VIC and BCM on one climate
 
 `sacsma calsim --sacsma-vic-bcm` puts SAC-SMA, VIC and the USGS Basin Characterization Model
-on the same climate (WGEN Product A) and the same 19 watersheds, WY1989–2018, against the same
-CalSim3 reference. Median KGE is 0.87, 0.77 and 0.66, and SAC-SMA is highest at all 19. That
-order is expected, because only SAC-SMA is calibrated to these watersheds
-(`artifacts/calsim/compare/sacsma_vic_bcm_summary.csv`).
+(BCM v8) on the same climate and the same 19 watersheds, WY1989–2018, against the same CalSim3
+reference: the CalSim3 Weather Generator's historical-parallel sequence, `wgen_product_a` for
+SAC-SMA and VIC and its Scenario 1 for BCM. WY1989–2018 is the most recent 30 water years all
+three cover (BCM ends in September 2018). Observed11 and Unimpaired9 are pooled into one set of
+19: BLB and Stony Creek are the same watershed on the same three arcs, so the Observed11 copy is
+dropped. Median KGE is 0.87, 0.77 and 0.66, and SAC-SMA is highest at all 19. That order is
+expected, because only SAC-SMA is calibrated to these watersheds
+(`artifacts/results/calibrated/vic_bcm/sacsma_vic_bcm_summary.csv`). The content is in the residuals. All three run high
+in volume (+4.8, +8.5 and +4.5 %), so the target is low against every independent model of it.
+The uncalibrated models lose on the small foothill creeks (BCM +32 to +71 %, VIC +26 to +90 % on
+Cache, Calaveras, Chowchilla, Cosumnes and Fresno). BCM's summer flow collapses toward zero in
+the snow watersheds, the signature of a water-balance model without baseflow routing, so its
+month-to-month timing is to be read more loosely than that of the two routed models.
+
+**How BCM joins the watersheds.** BCM enters on the CalSim3 catchments themselves (`run + rch`
+of `bcm_<scenario>_catchments_monthly.csv`, area-weighted over the catchments each watershed
+owns), so all three models sit on the same watershed and area and only the depth is each
+model's own. BCM was aggregated to the `CalSim3_And_GooseLake` layer (386 polygons); the
+watershed areas use `CalSim3_Merged` (200), its dissolve. The two do not join on `Connect_No`:
+the merged layer renames each dissolved catchment for its CalSim INFLOW arc (`MCD021` to
+`MCD128` become `MCLRE`, the Tuolumne and Putah pieces take their arc's name, the Bend Bridge
+valley polygons become `SRBB_VAL`), and a join on the name silently drops four watersheds. So
+each BCM polygon goes to the merged polygon that contains its representative point; the
+largest overlap would route through boundary slivers and put the 14,452 mi² Tulare Lake Basin
+inside Millerton. The Goose Lake block is its own polygon inside no rim catchment, so it needs
+no screening. The areas are checked against the watershed areas, so a GIS or crosswalk change
+that broke the correspondence stops the comparison.
 
 ## Sensitivity to the forcing
 
@@ -129,10 +160,13 @@ PET.
 **Split and unsplit precipitation.** Under `historical_lto` the anchor skill over the full
 record changes little (median KGE 0.93 for both), but it moves between watersheds before
 WY1950: Trinity rises from 0.40 to 0.83 and the Cosumnes falls from 0.96 to 0.81
-(`artifacts/calsim/forcing_compare/split_unsplit_anchor_skill.csv`). Some of the disagreement
+(`artifacts/results/calibrated/forcing/split_unsplit_anchor_skill.csv`). Some of the disagreement
 with CalSim3 before 1950 therefore comes from the precipitation data and not from the model.
 
-Figures for both: [`artifacts/calsim/forcing_compare/figures/`](../artifacts/calsim/forcing_compare/figures/).
+Figures for both: [`artifacts/results/calibrated/forcing/figures/`](../artifacts/results/calibrated/forcing/figures/), each product against the
+Livneh baseline on both models, split at WY1950. The daily runs of the three CalLite sets under
+each product, `<product>/sim_daily_<set>.csv`, are written by the comparison when they are
+missing.
 
 ## Commands
 
@@ -140,8 +174,9 @@ Figures for both: [`artifacts/calsim/forcing_compare/figures/`](../artifacts/cal
 sacsma run BND                               # one 15cdec watershed (ALL for every one)
 sacsma run CacheCreek --domain 9unimp
 sacsma run ALL --domain 11obs --forcing wgen_product_a
-sacsma plots --domain 15cdec                 # -> artifacts/cdec15/
-sacsma plots --domain 11obs                  # -> artifacts/calsim/11obs/
-sacsma calsim                                # the comparison with CalSim3 -> artifacts/calsim/compare/
-sacsma calsim --forcing-compare              # -> artifacts/calsim/forcing_compare/
+sacsma plots --domain 15cdec                 # -> artifacts/results/calibrated/15cdec/
+sacsma plots --domain 11obs                  # -> artifacts/results/calibrated/11obs/
+sacsma calsim                                # the comparison with CalSim3 -> artifacts/results/calibrated/calsim3/, footprints/
+sacsma calsim --sacsma-vic-bcm               # -> artifacts/results/calibrated/vic_bcm/
+sacsma calsim --forcing-compare              # -> artifacts/results/calibrated/forcing/
 ```

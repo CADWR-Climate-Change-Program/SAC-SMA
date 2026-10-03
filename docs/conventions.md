@@ -22,7 +22,7 @@ and results are kept.
 There is no test suite. A change is checked by running the model.
 
 ```bash
-sacsma verify            # imports, commands, links, parity, product
+sacsma verify            # imports, commands, links, artifacts, parity, product
 sacsma verify --quick    # the checks that need no model run
 ```
 
@@ -31,8 +31,9 @@ sacsma verify --quick    # the checks that need no model run
 | `imports` | every module of the package imports |
 | `cli` | every command builds its help |
 | `links` | every relative link in the tracked markdown resolves |
+| `artifacts` | the output tree keeps its layout: tracked files only in `product/`, `models/` and `results/`, each with its README; no untracked file in them; a model and a results folder for every run |
 | `parity` | one watershed per domain matches the MATLAB simulation: KGE above 0.9999 and a largest daily difference below 0.1 mm/day |
-| `product` | `sacsma dpl calsim product apply` reproduces the tracked rim-inflow product to 1 part in 100,000 |
+| `product` | `sacsma dpl calsim product apply` reproduces every tracked series of the rim-inflow product from the tier-2 pass kept beside it, to 1 part in 100,000 |
 
 Run `parity` after any change that touches the model or the path the data takes into it.
 Regenerated tables can differ from the tracked ones by about 1e-13 through floating-point
@@ -137,6 +138,21 @@ The layout and the source of every file are in [`data/README.md`](../data/README
 - **No machine paths in tracked files.** Locations outside the repository are read from an
   untracked local configuration file.
 
+## Outputs
+
+The output tree is described in [`artifacts/README.md`](../artifacts/README.md).
+
+- **Every path under `data/` and `artifacts/` comes from `sacsma/paths.py`.** No path literal
+  in the code.
+- **Outputs are kept by role.** `product/` is the delivered product, `models/` what training
+  made, `results/` what a command redraws from them, `_local/` what is not tracked.
+- **A run has one name in every part:** `models/dpl/<group>/<run>/`,
+  `results/dpl/<group>/<run>/`, `_local/runs/dpl/<group>/<run>/`. A command that takes a run
+  accepts any of the three.
+- **Tracked folders hold only tracked files.** A command writes there the files that are
+  tracked and everything else to the same path under `_local/`; `sacsma verify artifacts`
+  checks it.
+
 ## Learned-parameter runs
 
 - Validation years are never read in training or selection.
@@ -147,4 +163,4 @@ The layout and the source of every file are in [`data/README.md`](../data/README
 - Run folders keep the names they were made with; the files in a run's `provenance/` are the
   record of the run as it was made, including names and module paths of that time.
 - Runs are named for what they train on (dPL-26, dPL-95, dPL-CalSim).
-- What is not adopted stays local (`artifacts/dpl/_local/`, `tmp/`) and is not committed.
+- What is not adopted stays local (`artifacts/_local/`, `tmp/`) and is not committed.

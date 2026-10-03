@@ -1,6 +1,6 @@
 # Guide
 
-Nine short pages. Read the first four in order for the whole picture; the rest are reference.
+Ten short pages. Read the first four in order for the whole picture; the rest are reference.
 
 | Page | What it answers |
 |---|---|
@@ -8,6 +8,7 @@ Nine short pages. Read the first four in order for the whole picture; the rest a
 | [Calibrated SAC-SMA](calibrated_sacsma.md) | The four genetic-algorithm calibration sets, their skill, and their comparison with CalSim3. |
 | [Learned parameters](learned_parameters.md) | How a neural network replaces the calibration, and what that showed on the 15 CDEC watersheds. |
 | [CalSim3 rim inflows](calsim3_rim_inflows.md) | The current model (dPL-CalSim), how it is checked, and the monthly inflow product on the 196 rim arcs. |
+| [Runs](runs.md) | Every learned-parameter run: what is current, what each scores, what was tried and not adopted, what is open. |
 | [Reproduce](reproduce.md) | Environments, data, and the commands from a clone to the product. What a clone cannot rebuild. |
 | [Conventions](conventions.md) | The rules a change must respect: the frozen model, verification, scoring against CalSim3, data. |
 | [Glossary](glossary.md) | Domains, families, entities, the two meanings of "anchor", the three of "tier", run names. |
@@ -19,8 +20,7 @@ Beside the guide:
 | File | What it is |
 |---|---|
 | [`data/README.md`](../data/README.md) | Every data folder: its role, its source, how it is built. |
-| [`artifacts/README.md`](../artifacts/README.md) | Every result file and the command that writes it. |
-| [`artifacts/dpl/RUNS.md`](../artifacts/dpl/RUNS.md) | The learned-parameter runs: what is current, what each scores, what was tried and not adopted. |
+| [`artifacts/README.md`](../artifacts/README.md) | The output tree: the product, the models, the results, and a README beside each that lists its files and the command that writes them. |
 
 ## Which model for which use
 
@@ -38,4 +38,4 @@ Beside the guide:
 - The comparison of the calibrated sets with CalSim3 and VIC is complete.
 - dPL-CalSim is the current learned-parameter model and its rim-inflow product is adopted. Its
   known costs and open items are in [CalSim3 rim inflows](calsim3_rim_inflows.md) and
-  [`artifacts/dpl/RUNS.md`](../artifacts/dpl/RUNS.md).
+  [Runs](runs.md).

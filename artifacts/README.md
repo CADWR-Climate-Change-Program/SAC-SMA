@@ -1,144 +1,18 @@
-# `artifacts/`: simulated outputs and diagnostic figures
+# `artifacts/`: what the commands write
 
-Generated outputs, organized by application: `cdec15/` (the 15-CDEC diagnostics) and `calsim/` (the CalLite domains `9unimp`/`11obs`/`12rim`, the cross-compare `compare/`, and the alternate-forcing runs `wgen_product_a/` + `historical_lto/` with their `forcing_compare/`), plus `dwr_unimpaired/` (checks of the DWR unimpaired-flow location table) and `dpl/` (the learned-parameter runs, including the multi-family runs and the CalSim3 rim-inflow product of dPL-CalSim; their current state is in [`dpl/RUNS.md`](dpl/RUNS.md), and the last two sections below give the file tables of the multi-family runs and the product). The committed copies are the published results of the current data and model. This page lists the files and the command that writes each; the method is in the [guide](../docs/README.md). Regenerate with:
+Four parts, by what a file is. Every path is set in [`sacsma/paths.py`](../sacsma/paths.py); the
+method behind each result is in the [guide](../docs/README.md), the state of the runs in
+[Runs](../docs/runs.md).
 
-```bash
-sacsma plots --domain 15cdec              # -> artifacts/cdec15/
-sacsma plots --domain 11obs               # -> artifacts/calsim/11obs/  (or 9unimp / 12rim)
-sacsma calsim                             # -> artifacts/calsim/compare/
-sacsma calsim --forcing-compare           # -> artifacts/calsim/forcing_compare/
-```
+| Folder | What it holds | Written by | If it is lost |
+|---|---|---|---|
+| [`product/`](product/README.md) | The CalSim3 rim-inflow product: monthly flow on the 196 rim arcs, one folder per forcing, and the share model that makes it | `sacsma dpl calsim product` | Applying the share model to a tracked tier-2 pass rebuilds a series; the share model itself needs its fit passes |
+| [`models/`](models/README.md) | What training made: checkpoints, training logs, the learned parameter tables, and each run's `provenance/` | `sacsma dpl train`, `sacsma dpl hybrid`, `sacsma dpl evaluate` (the parameter tables) | Hours of GPU, and a retrained run differs in the last digits |
+| [`results/`](results/README.md) | What a command redraws from the models and the data: scores, simulated series, figures, atlases | `sacsma plots`, `sacsma calsim`, `sacsma dpl evaluate`, `sacsma dpl calsim tier1/tier2/atlas`, `sacsma dpl study`, `sacsma dpl benchmark` | Minutes on CPU, or a GPU pass for the multi-family runs |
+| `_local/` | Not tracked: caches, scratch runs, the large outputs of every run, and the runs that were not adopted | the same commands | Nothing tracked depends on it |
 
-Throughout, "simulated" is `sacsma.model.run_basin` from the archived GA optimum, "observed" is the daily CDEC gage (`cdec15`) or the domain's monthly FNF (`calsim`), and "reference" (parity) is the MATLAB `simflow` tables. The method is in [Calibrated SAC-SMA](../docs/calibrated_sacsma.md), the rules behind the scores in [Conventions](../docs/conventions.md), and the inputs in [`data/README.md`](../data/README.md).
-
-## Per-domain diagnostics (`cdec15/`, `calsim/<domain>/`)
-
-| File | What |
-|------|------|
-| `figures/<BASIN>_diagnostics.png` | Per-basin 3-panel: sim-vs-observed time series with separate calibration and validation skill, plus mean-monthly regimes for both periods. Daily vs the CDEC gage for `cdec15`, monthly vs observed FNF for the CalLite domains. |
-| `figures/skill_summary.png` | KGE and percent bias (cal vs val) across the domain's watersheds, ordered north→south. KGE on a full 0–1 scale; pbias on a fixed ±75% scale shared across all four calibration sets, so bars are comparable set to set. |
-| `figures/parity_vs_matlab.png` | Python vs the original MATLAB `simflow`: the exact-match proof. |
-| `metrics_<domain>.csv` | Per-basin cal/val KGE, NSE, pbias, r, and mean flow. |
-
-A parallel `*_calsim3` variant of the diagnostics and metrics scores the anchor run against CalSim3's own unimpaired FNF (TAF/month) rather than the observed-FNF target, on the same cal/val windows. It is non-destructive (the FNF-target files are untouched) and skips `12rim`, which is not in the cross-compare.
-
-## Alternate-forcing runs (`calsim/wgen_product_a/`, `calsim/historical_lto/`)
-
-Every CalLite watershed forward-simulated with an alternate forcing product (`sacsma run <basin> --domain <d> --forcing <product>`), same GA optima and model. Each directory holds `flow_daily_<domain>.csv`: long `[date, basin, flow]` daily mm/day, in the `simflow` format. These six files are inputs of the forcing comparison. No command writes them in this form: they are the per-watershed outputs of `sacsma run ALL --domain <d> --forcing <product> --out <file>` put in one table.
-
-- **`wgen_product_a`** changes temperature only (detrended to 1991–2020): a runoff-volume loss of 1 to 7 % across the watersheds (median −3 %), precipitation unchanged.
-- **`historical_lto`** is a different precipitation realization (the "split" Livneh lineage, through 2021), so its differences run end-to-end.
-
-`calsim/forcing_compare/` (`sacsma calsim --forcing-compare`) renders each product against the Livneh baseline on the 1915–2018 overlap, on both SAC-SMA and VIC, everything split at 1950 (where the precipitation differences concentrate). Its figures carry the per-watershed and cross-model volume and regime effects; notably, VIC's volume response to the temperature detrending is much weaker than SAC-SMA's; it mostly shifts snowmelt earlier instead.
-
-## CalSim cross-compare (`calsim/compare/`)
-
-`sacsma calsim` cross-compares each SAC-SMA calibration set (`15cdec`, `9unimp`, `11obs`, kept separate) and VIC against CalSim3's historical inflow at the CalSim inflow nodes (`data/inputs/calsim3/calsim3.gpkg`). It reports two views.
-
-**Per-catchment.** Each CalSim3 node scored individually (`calset_metrics.csv`, with each set's honest HRU coverage `cov_frac`). Median KGE 0.67 (15cdec), 0.68 (11obs), 0.77 (9unimp); VIC 0.63.
-
-**Basin-level "anchor".** Each basin's `run_basin` total, on the canonical CalSim catchment area, vs the faithful CalSim3 reference for that basin (`anchor_metrics.csv`, `anchor_monthly.csv`). Median KGE 0.91 (15cdec), 0.94 (11obs), 0.92 (9unimp) over October 1921 to December 2018; aggregation cancels the per-catchment noise. Where the basin is a rim system, the reference is the single FLOW-UNIMPAIRED whole-watershed series (the only correct target for systems like Sac @ Bend Bridge, whose valley-floor accretion a sub-arc sum misses); otherwise it is the sum of the basin's CalSim3 INFLOW sub-arcs. The choice is recorded per row as `ref_kind`.
-
-Maps and figures show skill at the **main-basin level**: every sub-area polygon is coloured by its watershed's anchor score, never its own sub-arc score, and per-sub-arc numbers stay in the CSVs. Key outputs:
-
-| File | What |
-|------|------|
-| `figures/anchor_skill_{kge,nse,pbias}.png` | Per-basin SAC-SMA vs VIC dumbbells, north→south; 15cdec folded on after a dashed divider. |
-| `figures/calsim_sacsma_map_{nse,kge,pbias}.png` (+ `calsim_vic_map_*`, `calsim_sacsma_minus_vic_*`) | Basin-level skill maps for SAC-SMA, VIC, and their difference. |
-| `figures/anchor_hydrographs.png`, `main_river_climatology.png` | The 8 CA main river indices vs the CalSim3 FLOW-UNIMPAIRED reference. |
-| `subarc_qmap_<set>.csv`, `subarc_validation_metrics.csv` | Per-sub-arc QMAP bias-correction, fitted on WY1922–1971 and scored on WY1972–2018: median sub-arc KGE 0.68 → 0.81 (11obs), 0.76 → 0.86 (9unimp), 0.65 → 0.69 (VIC). |
-| `target_vs_calsim3.csv` | How far each set's calibration target itself sits from CalSim3, the bias floor a perfect-fit model inherits. |
-| `anchor_metrics_by_period.csv`, `figures/anchor_skill_{kge,pbias}_{pre,post}1950.png` | The anchor scores split at WY1950. Not part of `sacsma calsim`: written by `sacsma.calsim.compare.make_anchor_skill_periods()`. |
-
-Footprint screening (`catchments.SCREENED_BASINS` = SHA, BND, SNS, ChowchillaRiver) trims the four basins whose HRU footprint materially over-reaches its CalSim3 catchment; every other basin keeps its full calibrated footprint. The everything-unscreened parallel and its delta are in `anchor_*_full.csv` and `anchor_screened_vs_full.csv`. The footprint-method maps (`figures/{shasta,sns,chowchilla,tnl,fresno}_footprint_panels.png`) and the HRU attribute maps (`figures/hru_{veg,soil,kpet}_*.png`) are single-basin and input illustrations, not part of the basin-level scoring.
-
-The engine is `sacsma.calsim.catchments`. The rules (anchor reference, screening, QMAP, figure style) are in [Conventions](../docs/conventions.md).
-
-## DWR unimpaired-flow location checks (`dwr_unimpaired/verification/`)
-
-`python data/targets/dwr_unimpaired/check_uf_locations.py` tests `data/targets/dwr_unimpaired/uf_locations.csv` (the arc sets that reconstruct DWR's unimpaired-flow subbasins from CalSim3 catchments) against sources that did not produce it: DWR's published unimpaired volumes over WY1950–84, NWIS outlet identity and drainage areas, and the geometry of the dissolved arc sets. A *flag* is a check outside tolerance, not automatically an error in the table; a *note* records an expected or structural condition.
-
-| File | What |
-|------|------|
-| `findings.md` | Generated summary: the flags and notes, per subbasin. |
-| `report_table.csv` | Per-subbasin numbers behind every check (areas, volumes, outlets). |
-| `uf_outlets.csv` | The USGS gauge (and the CDEC coordinates where a station exists) that identifies each subbasin's outlet in the checks: site, name, coordinates, published drainage area. An output of the checks, not an input to any model. |
-| `figures/uf_NN.png`, `figures/uf_dissolved_overview.png` | One map per subbasin (member arcs, outlet pinned) and all subbasins dissolved onto one overview. |
-| `web_cache.json`, `nldi_bend_basin.json` | Cached NWIS / CDEC / NLDI responses, so the tables regenerate offline; delete to re-fetch. |
-
-The script also writes `uf_dissolved.gpkg` for GIS viewing; it is local only (git-ignored).
-
-## SAC-SMA vs VIC vs BCM (`calsim/compare/sacsma_vic_bcm_*`)
-
-`sacsma calsim --sacsma-vic-bcm` (engine `sacsma.calsim.sacsma_vic_bcm`) scores three independent models on one climate against one target: SAC-SMA, VIC and USGS **BCM v8**, all on the CalSim3 Weather Generator's historical-parallel sequence — `wgen_product_a` for SAC-SMA and VIC, Scenario 1 (Baseline) for BCM — against the same CalSim3 unimpaired FNF anchor used above.
-
-Period **WY1989–2018**, the most recent 30 water years all three cover (BCM ends 2018-09 and binds). `11obs` and `9unimp` are **pooled into one 19-basin set**; `BLB` (11obs) and `StonyCreek` (9unimp) are the same watershed on the same three arcs, so the 11obs copy is dropped. BCM enters on **the CalSim3 catchments themselves** (`run + rch` from `bcm_<scenario>_catchments_monthly.csv`, area-weighted over the catchments each basin owns, which sum to exactly the canonical area). All three therefore sit on the same watershed and area; only the depth estimate is each model's own.
-
-**BCM joins to the basins geometrically, not by name.** BCM was aggregated to `CalSim3_And_GooseLake` (386 polygons, `cid` = row order); the canonical areas use `CalSim3_Merged` (200). Merged is the dissolve of And_GooseLake's rim part — verified exact, all 200 nodes reconstructed, totals agreeing at 30,365.2 mi² — but they are **not joinable on `Connect_No`**, because Merged renames each dissolved catchment for its CalSim INFLOW arc (`MCD021…MCD128` → `MCLRE`, `TUO017/054/105` → Tuolumne's, `PTH021+PTH024` → `PTH070`, the Bend Bridge valley polygons → `SRBB_VAL`); name-matching silently drops those four basins. So each sub-polygon is assigned to the merged polygon containing its **representative point** — not its largest overlap, which routes through boundary slivers and puts the 14,452 mi² Tulare Lake Basin inside Millerton. This is also why no Goose Lake screening is needed: the endorheic block is its own polygon with a blank `Connect_No`, inside no rim catchment. Per-basin areas are asserted against the canonical ones, so a GIS or crosswalk edit that broke the correspondence raises.
-
-| File | What |
-|------|------|
-| `sacsma_vic_bcm_monthly.csv` | Long `[date, set, basin, source, flow_taf, ref_kind]`, **all years**, so the window can be re-cut without re-simulating. |
-| `sacsma_vic_bcm_metrics.csv` | Per basin per model, on identical months (all four series intersected). |
-| `sacsma_vic_bcm_summary.csv` | Pooled medians, `mean_abs_pbias`, `n_kge_best`. |
-| `figures/sacsma_vic_bcm_skill.png` | Per-basin KGE and % bias dumbbells, north→south. |
-| `figures/sacsma_vic_bcm_regime.png` | Mean-monthly regime per basin over the CalSim3 reference. |
-| `figures/sacsma_vic_bcm_summary.png` | Pooled KGE / NSE / % bias distributions. |
-
-Result: SAC-SMA median KGE **0.870**, VIC **0.767**, BCM **0.656**, SAC-SMA best in all 19 basins. That ordering is expected, not a finding — SAC-SMA is calibrated to these basins' FNF and the other two are not. The content is in the residuals: all three run high in volume (+4.8 / +8.5 / +4.5 %), so the FNF target is low relative to every independent model of it; the small foothill creeks are where the uncalibrated models lose (BCM +32 to +71 %, VIC +26 to +90 % on Cache, Calaveras, Chowchilla, Cosumnes, Fresno — Fresno being a known `area_artifact` basin); and BCM's summer limb collapses toward zero in the snow basins, the signature of a water-balance model with **no baseflow routing**, which is also why its month-to-month timing should be read more loosely than the two routed models'.
-
-## CalSim3 validation of multi-family runs (tier 1, tier 2, atlas)
-
-Three tools score a trained `multifamily` run against CalSim3 over **WY1950–84**, which precedes the training window of every CDEC and DWR-unimpaired target; two more set the trimmed validation windows and put two scored runs side by side. USGS creek records do reach into those years; the atlas reports, per location, which creeks overlap it and how much of the window they cover. The published runs and their atlases are under `dpl/multifamily/` (listed in [`dpl/RUNS.md`](dpl/RUNS.md)); the reasoning is in [CalSim3 rim inflows](../docs/calsim3_rim_inflows.md). The three scoring tools write into the run folder (`<run>` = the `--out` of `sacsma dpl train`, holding `checkpoints/best.pt` and the evaluator's `sim_daily_mm.npz`):
-
-```bash
-sacsma dpl calsim tier1 <run>              # -> <run>/tier1/
-sacsma dpl calsim tier2 <run> [--no-extend] --trace-python <python of the sacsma-gis environment>   # -> <run>/tier2/   (re-runs the checkpoint forward)
-#   opt-in extras: [--dedup-cells] [--components [fastslow|parts]] [--temp-delta DT] [--precip-scale S] [--extension-cells CSV]
-#   several climate perturbations in one batched pass: --scenarios t1=1:1,p85=0:0.85,... [--batch-window DAYS]   # -> <run>/tier2_scenarios/<name>/
-sacsma dpl calsim atlas <run>              # -> <run>/atlas/calsim_validation_atlas.html
-sacsma dpl calsim windows                  # the trimmed-window rule against data/inputs/calsim3/tier1_sets.csv (--write stores it; then re-run tier1)
-sacsma dpl calsim compare <run_a> <run_b>  # tier 1 of two scored runs side by side -> tier1_comparison.md/.html/.csv under --out (default: the current folder)
-```
-
-**Spinup.** The evaluator (`sacsma dpl evaluate`, which writes `sim_daily_mm.npz` for tier 1 and the atlas) and tier 2 start the envelope from the timing-independent cycle spinup of `sacsma.dpl.spinup`: the envelope's first ten water years looped 20 times from the frozen cold start, whatever spinup the run trained with. Nothing before WY1950 is read, so the same rule serves historical, climate-perturbed and stochastic forcing, and the state does not depend on where the envelope sits in the record. `--spinup window` restores the legacy ten water years before WY1950, which leaves the slow lower-zone stores of some trained fields far from equilibrium (one earlier trained field scored 0.810 tier-1 mean KGE that way against 0.856 from the cycle spinup).
-
-**Tier 1** (`sacsma dpl calsim tier1`) scores monthly volume (TAF) at the twenty training locations of `data/inputs/calsim3/tier1_sets.csv`: against FLOW-UNIMPAIRED where a rim system carries one (ten anchors), against the sum of the member INFLOW arcs elsewhere (ten arc sums). Volumes use the `CalSim3_Merged` polygon areas, so no third area enters. A location whose arcs all belong to a larger one (Shasta inside Red Bluff) is *nested*: it enters the skill statistics but not the volume totals, which sum the unnested locations only (`nested_in` column, derived from the arc lists). The USGS creeks train over their whole records, which reach into WY1950–84, so every location the creeks reach is also scored over a **trimmed window** (`window = trimmed`), water years `val_start_wy` to `val_end_wy` of the set table: the run of at least 20 water years inside WY1950–84 in which the creek gauges covered the least of the location (`sacsma dpl calsim windows` derives and checks it; it comes from the registry's creek records alone, so it is the same for every run). It can start late or end early, and a location no creek reaches keeps the full window and has no `trimmed` row. No window reaches beyond WY1984: from WY1985 the CDEC and DWR-unimpaired targets are in training. The full-window score is the one reported throughout; the atlas sets the two side by side on one tab, with the creek coverage that remains inside the trimmed window, and the summary gives the aggregate both ways. Each entity's own training window is reported alongside as the in-sample comparison. At the ten anchored locations the reference coincides with the training target's source, so that score is a temporal holdout rather than an independent reference.
-
-**Tier 2** (`sacsma dpl calsim tier2`) aggregates per-cell runoff onto every rim INFLOW polygon and scores each arc on its own series. Arcs no trained entity lists are simulated on their region cells with flow lengths traced to the polygon exit and flagged `basis = extrapolated` (`--no-extend` skips them); `trained_cell_frac` gives each arc's share of area on cells the run trained on, because a USGS creek gauge has no arc list and an arc on its footprint is extrapolated by construction while its cells were fitted — the regionalization test proper is the arcs at 0, which the summary and the atlas report apart. It needs the `dpl` extra and a source checkout; the extrapolated arcs also need the HydroSHEDS v2 tiles, traced by `data/inputs/domains/multifamily/build_flowlens.py --trace-cells` in a subprocess that needs `rasterio`. rasterio lives only in the `sacsma-gis` environment (`environment-gis.yml`), so `--trace-python` takes that environment's interpreter; every tracked tier-2 table was made that way (`python data/inputs/domains/multifamily/build_flowlens.py` downloads the 6.2 GB of tiles once into `tmp/hydrosheds/`, after which no network is needed). Without the tracer the extrapolated arcs fall back to straight-line × 1.5 flow lengths, which the log states and `tier2_extension_cells.csv` records. Tier 1 and the atlas need the `gis` extra (geopandas); the atlas also needs `io` (xarray) for `flow_daily.nc`. `windows` and `compare` read the same creek records, so they need both extras and `flow_daily.nc` as well; `compare --no-coverage` needs neither.
-
-**Atlas** (`sacsma dpl calsim atlas`) is one self-contained HTML page (plus `atlas.md`): a header stating what the run trained on and its family weights (read from `checkpoints/best.pt`), domain maps, a tab per location (metrics, time series, sub-arc table with each arc's derivation class from `data/targets/calsim3/calsim3_arc_derivation.csv`, maps), the arcs outside every trained footprint, the footprints of each target family, per location the USGS creek watersheds that overlap it with their records inside the validation window, and a last tab with the full validation window against the trimmed windows (both scores, and the creek coverage over WY1950–84 and inside the trimmed window, per location). It reads `data/targets/usgs/flow_daily.nc`, a git-LFS file.
-
-| File | What |
-|------|------|
-| `tier1/tier1_metrics.csv` | One row per location × window × reference kind: KGE, NSE, % bias, r, α, β, seasonal mismatch, centre-of-timing difference, simulated and reference TAF/yr, `nested_in` (the parent location, or blank). |
-| `tier1/tier1_monthly.csv` | The monthly series behind it, so windows can be re-cut without re-simulating. |
-| `tier1/figures/<set>.png` | Monthly series with the validation window shaded, and the two regimes. |
-| `tier2/tier2_metrics.csv`, `tier2_arcs.csv` | Per-arc scores; per-arc coverage, parent entity, basis and trained-cell share (`trained_cell_frac`). |
-| `tier2/tier2_{kge,pbias}_WY1950-84.png`, `tier2/figures/` | Arc maps and per-set regime figures. |
-| `tier2/tier2_components_monthly.csv` | Only with `--components`: per arc and month the routed fast and slow runoff (`fast_taf + slow_taf = total_taf = sim_taf`); `--components parts` adds `quick_taf` + `interflow_taf` (= fast) and `supplemental_taf` + `primary_taf` (= slow). All net of SAC-SMA's riparian et4 channel-ET deduction. |
-| `tier2/tier2_run_info.json` | Only when an extra or `--dedup-cells` is on: the extras, the dedup setting and the perturbation. `--temp-delta` / `--precip-scale` apply a uniform delta (°C added to tavg/tmin/tmax, precipitation multiplied, spin-up included), flagged `placeholder_perturbation`. |
-
-**Holdout runs.** A run trained with `--holdout-wy` (dPL-CalSim: WY1976–85 held out of every family) is validated over its held-out water years instead of WY1950–84. The evaluator adds `metrics_entities_holdout.csv` (USGS daily, DWR-unimpaired monthly and the CalSim3 arcs on those years). Tier 1 and tier 2 score the windows `WY1976-85`, `WY1976-84` (comparable with runs that trained WY1985) and `WY1950-84_mixed`, and leave the held-out years out of the `train` window (`excluded_wy`); tier 2 adds `WY1976-85_own` (each arc's own gauge-record months) and `tier2/tier2_anchor_rescaled.csv`, an evaluation-only score of each arc after its closure group is rescaled to the CalSim3 anchor. The maps, regime figures and the atlas are over the holdout.
-
-## The CalSim3 rim-inflow product (`sacsma dpl calsim product`)
-
-The product is a run's monthly flow on the 196 CalSim3 rim arcs, WY1950–2015, in TAF. The dPL's own tier-2 flow is kept on the **systems** (the sum of a closure group's arcs, `closure_group` of `data/targets/calsim3/arc_hierarchy.csv`; seven systems are a single arc) and on the **non-anchor arcs** (the 50 arcs with no closure group to close to). On the 139 **share arcs**, the arcs of the eleven multi-arc systems, the **share model** re-divides the dPL system flow: a small network gives each arc's share of its system's flow in a month from the dPL's own shares and their lags, the runoff-part fractions, the system flow, the month and the arc area, and each arc's water-year volume is closed to its share of the system's. A system's arcs sum to the dPL system flow over every water year (inside the year their sum differs from it by 2.5 % of the volume for dPL-CalSim, with the same monthly KGE against CalSim3), so the volume response of every system is the dPL's; the arcs' response is held to the dPL's by a penalty in training and checked at climate points the fit never saw. Method and scores: [CalSim3 rim inflows](../docs/calsim3_rim_inflows.md); what was tried and not adopted: [`dpl/RUNS.md`](dpl/RUNS.md#tried-and-not-adopted).
-
-```bash
-# the passes the fit needs: the base tier 2 with runoff parts, and the same at the 11 training + 5 validation climate points
-sacsma dpl calsim tier2 <run> --components parts --trace-python <python of the sacsma-gis environment>
-sacsma dpl calsim tier2 <run> --components parts --scenarios t1=1:1,t3=3:1,...   # sacsma.dpl.calsim.product.scenario_spec() gives the full list; split it to fit the GPU (8 per pass at --batch-window 512 on 8 GB)
-sacsma dpl calsim product fit <run>                       # -> <run>/calsim_product/   (CPU, about 30 min; --mu 0.03 skips the selection)
-sacsma dpl calsim product apply <run> --tier2 <pass dir>  # the product for another tier-2 pass -> <pass dir>/rim_inflow_monthly.csv
-```
-
-| File | What |
-|------|------|
-| `calsim_product/rim_inflow_monthly.csv` | The product on the base pass: `arc, month, taf, dpl_taf, kind` (`kind` = `share`, `single-arc system` or `non-anchor`; `taf = dpl_taf` except on the share arcs). |
-| `calsim_product/share_model.pt` | The fitted share model and everything `apply` needs (arc and system order, input scaling, per-arc volume ratios). |
-| `calsim_product/product_metrics.csv` | Per arc: monthly KGE against CalSim3 of the dPL arc and of the product, on the held-out and on the training water years. |
-| `calsim_product/share_selection.csv` | The out-of-fold candidates (the dPL's own shares and each penalty weight μ): median and p10 arc KGE on training water years, and the response misses at the training climate points. |
-| `calsim_product/response_gate.csv` | Per validation climate point: median and p90 over the share arcs of the product's miss against the dPL arc in volume change (`V`, %) and April–July share change (`AJ`, pp), with the full gate (median ≤ 1, p90 ≤ 3) and the half gate. |
-| `calsim_product/product_info.json` | Settings, the passes used, and the summary scores by kind of arc. |
-| `tier2_scenarios/<name>/` | Local only: the tier-2 CSVs of each climate point (`--scenarios`), regenerable from the checkpoint. |
+A learned-parameter run has the same name in each part: `models/dpl/<group>/<run>/`,
+`results/dpl/<group>/<run>/` and `_local/runs/dpl/<group>/<run>/`, where `<group>` is `15cdec`
+or `multifamily`. Every command that takes a run accepts any of the three. `sacsma verify
+artifacts` checks this layout: nothing tracked outside the three tracked parts, nothing
+untracked inside them, and a model and a results folder for every run.

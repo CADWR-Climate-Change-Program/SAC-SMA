@@ -51,19 +51,12 @@ years are never read in training or selection.
 
 ## Results on the 15 CDEC watersheds
 
-Each row changes one thing. Mean daily KGE over the 15 watersheds, calibration WY1989–2003 and
-validation WY2004–2018, from each run's `metrics_*.csv` under `artifacts/dpl/`.
-
-| Run | What changed | Calibration | Validation |
-|---|---|---|---|
-| GA parameters | the archived calibration, 7,891 HRUs | 0.805 | 0.768 |
-| `superseded/hamon_dense` | the network in place of the GA, nothing else | 0.806 | 0.840 |
-| `hamon` | 1/16° grid cells in place of HRUs, CalSim3 catchment outlines | 0.817 | 0.836 |
-| `pt` | Priestley–Taylor PET | 0.799 | 0.826 |
-| `noah` | soil-moisture-limited ET; `physical_climate` inputs | 0.779 | 0.804 |
-| `hybrid` | an LSTM on top of `noah`'s simulated flow | 0.922 | 0.877 |
-| `hybrid_dt` | `hybrid` trained to keep `noah`'s response to climate | 0.873 | 0.849 |
-| `lstm` | the LSTM without the simulated flow (a control) | 0.909 | 0.835 |
+Each run changes one thing from the one before it, in this order: the network in place of
+the GA (`hamon_dense`), grid cells in place of HRUs (`hamon`), Priestley–Taylor PET (`pt`), the
+Noah-type ET (`noah`), an LSTM on top (`hybrid`, `hybrid_dt`) and the LSTM alone (`lstm`).
+Their mean daily KGE over the 15 watersheds, calibration WY1989–2003 and validation
+WY2004–2018, is in the table of [Runs](runs.md#runs-on-the-15-cdec-watersheds); validation goes
+0.768 (GA), 0.840, 0.836, 0.826, 0.804, 0.877 (`hybrid`).
 
 What these runs showed:
 
@@ -89,7 +82,7 @@ precipitation change (−20 to +20 %) and warming (0, +2, +4 °C) toward the cha
 physics gives. `lstm` drops the simulated flow from the inputs.
 
 Change in annual runoff at +3 °C with precipitation unchanged, mean over the 15 watersheds
-(`artifacts/dpl/figures/hybrids_metrics.csv`):
+(`artifacts/results/dpl/15cdec/studies/hybrids/hybrids_metrics.csv`):
 
 | Model | Change | Same sign as `noah` |
 |---|---|---|
@@ -101,7 +94,7 @@ Change in annual runoff at +3 °C with precipitation unchanged, mean over the 15
 The LSTM without physics gains runoff under warming, which is wrong. `hybrid` responds too
 strongly. `hybrid_dt` follows the physics, at a cost of about 0.03 validation KGE.
 
-![Skill and response of the hybrid family](../artifacts/dpl/figures/hybrid_summary.png)
+![Skill and response of the hybrid family](../artifacts/results/dpl/15cdec/studies/hybrids/hybrid_summary.png)
 
 ## From 15 watersheds to the CalSim3 arcs
 
@@ -113,9 +106,9 @@ flow into monthly inflows on the CalSim3 rim arcs: [CalSim3 rim inflows](calsim3
 
 | | |
 |---|---|
-| Runs | `artifacts/dpl/<run>/`, earlier generation in `artifacts/dpl/superseded/` |
-| Current state of every run, and what was tried and not adopted | [`artifacts/dpl/RUNS.md`](../artifacts/dpl/RUNS.md) |
-| Figures | [`artifacts/dpl/figures/`](../artifacts/dpl/figures/) |
+| Runs | `artifacts/models/dpl/15cdec/<run>/` (checkpoints, parameter tables), `artifacts/results/dpl/15cdec/<run>/` (scores) |
+| Every run's scores, and what was tried and not adopted | [Runs](runs.md) |
+| Studies and their figures | [`artifacts/results/dpl/15cdec/studies/`](../artifacts/results/dpl/15cdec/studies/), one folder per `sacsma dpl study` |
 
 ```bash
 sacsma dpl benchmark                         # differentiable model against the reference model
@@ -123,5 +116,5 @@ sacsma dpl train physical_climate --domain 15cdec_grid --et noah \
     --noah-pet priestley_taylor --canopy-lite --calsim-footprint
 sacsma dpl evaluate <run>/checkpoints/best.pt
 sacsma dpl hybrid --physics <params_dpl.csv> ...   # see --help
-sacsma dpl study climatology                 # and: response, adaptive, hybrids, forcing
+sacsma dpl study climatology                 # and: adaptive, hybrids, forcing
 ```

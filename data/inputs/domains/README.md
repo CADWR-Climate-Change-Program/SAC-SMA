@@ -54,7 +54,7 @@ sidecars. Products, units, encodings and the sampling conventions are in
   0.37 °C.
 - `15cdec_grid`: the learned-parameter run on it (`hamon`) scores validation KGE 0.836, against 0.840 for
   the same model on the original HRUs, so the coarse grid keeps almost all of the skill
-  ([`artifacts/dpl/RUNS.md`](../../../artifacts/dpl/RUNS.md)).
+  ([Runs](../../../docs/runs.md)).
 
 ## Know before using
 

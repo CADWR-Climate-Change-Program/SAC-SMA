@@ -65,12 +65,13 @@ one thing.
 | **dPL** | Differentiable parameter learning: the network-trained parameters. |
 | `hamon`, `pt`, `noah` | Learned-parameter runs on the 15 CDEC watersheds, named for their PET or ET scheme. |
 | `hybrid`, `hybrid_dt`, `lstm` | An LSTM on top of `noah`; the same trained to keep the physics' response to climate; an LSTM without the physics. |
-| **dPL-26, dPL-95, dPL-CalSim** | The three named multi-family runs (of six tracked), named for what they train on: 26 entities, 95 entities, and 95 entities plus 64 CalSim3 arcs. dPL-CalSim is the current model. |
-| **Product** | The CalSim3 rim-inflow product: dPL-CalSim's monthly flow on the 196 rim arcs with the share model on the share arcs. |
+| **dPL-26, dPL-95, dPL-CalSim** | The three tracked multi-family runs, named for what they train on: 26 entities, 95 entities, and 95 entities plus 64 CalSim3 arcs. dPL-CalSim is the current model. |
+| **Product** | The CalSim3 rim-inflow product: dPL-CalSim's monthly flow on the 196 rim arcs with the share model on the share arcs, WY1916–2018, one series per forcing. |
 
 ## Run folder names
 
-A multi-family run folder under `artifacts/dpl/multifamily/` spells its recipe: the ET scheme,
+A multi-family run folder (`artifacts/models/dpl/multifamily/<run>/`, the same name under
+`results/` and `_local/runs/`) spells its recipe: the ET scheme,
 the families, then the options.
 
 | Part | Meaning |
@@ -97,4 +98,4 @@ the families, then the options.
 | **Footprint screening** | Keeping only the modeling units inside the CalSim3 catchment for four watersheds whose calibrated outline over-reaches it ([Conventions](conventions.md)). |
 | **Holdout** | Years withheld from every fit. For dPL-CalSim: WY1976–85. |
 | **Cycle spinup** | The starting state used in scoring: the first ten water years looped 20 times from a cold start. |
-| **Local-only** | On this machine and ignored by git: `tmp/` and `artifacts/dpl/_local/`. |
+| **Local-only** | On this machine and ignored by git: `tmp/` and `artifacts/_local/`. |

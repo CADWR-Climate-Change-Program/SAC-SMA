@@ -1,15 +1,17 @@
-# Learned-parameter runs: current state
+# Runs
 
-What is in `artifacts/dpl/`, which run is current, what each run scores, what was tried and
-not adopted, and what is still open. The method is in the guide:
-[Learned parameters](../../docs/learned_parameters.md) and
-[CalSim3 rim inflows](../../docs/calsim3_rim_inflows.md).
+Which learned-parameter run is current, what each run scores, what was tried and not adopted,
+and what is still open. The method is in [Learned parameters](learned_parameters.md) and
+[CalSim3 rim inflows](calsim3_rim_inflows.md); where each file sits is in
+[`artifacts/README.md`](../artifacts/README.md).
 
 ## Current model and product
 
-**dPL-CalSim** (`multifamily/noah_cdec_uf_usgs_cs64_ho7685_ufx_areaw_all_kref05_sacx_carry_px_aef`),
-adopted 2026-09-30, and the **CalSim3 rim-inflow product** in its `calsim_product/` folder,
-adopted 2026-10-01: monthly flow on the 196 rim arcs, WY1950–2015, TAF.
+**dPL-CalSim** (`noah_cdec_uf_usgs_cs64_ho7685_ufx_areaw_all_kref05_sacx_carry_px_aef`),
+adopted 2026-09-30, and the **CalSim3 rim-inflow product**
+([`artifacts/product/`](../artifacts/product/README.md)), adopted 2026-10-01: monthly flow on
+the 196 rim arcs, TAF, WY1916–2018, one series per forcing (historical Livneh, WGEN Product A
+scenarios 1 and 12).
 
 Median monthly KGE against CalSim3 on the held-out water years 1976–85:
 
@@ -18,82 +20,84 @@ Median monthly KGE against CalSim3 on the held-out water years 1976–85:
 | 139 share arcs | 0.699 | 0.834 |
 | 50 non-anchor arcs | 0.604 | 0.604 |
 | 7 single-arc systems | 0.870 | 0.870 |
-| All 196 | 0.690 | 0.813 |
+| All 196 | 0.690 | 0.812 |
 
-Source: `calsim_product/product_info.json`. `sacsma verify product` checks that
-`sacsma dpl calsim product apply` reproduces the tracked `rim_inflow_monthly.csv`.
+On WY1922–1949, before any training year:
 
-## Multi-family runs (`multifamily/`)
+| Arcs | dPL-CalSim | Product |
+|---|---|---|
+| 139 share arcs | 0.666 | 0.783 |
+| 50 non-anchor arcs | 0.417 | 0.417 |
+| 7 single-arc systems | 0.778 | 0.778 |
+| All 196 | 0.637 | 0.760 |
+
+Source: `artifacts/product/historical_livneh_unsplit/product_metrics.csv`; the fit's own scores,
+on its WY1950–2015 pass, are in `artifacts/product/product_info.json`. `sacsma verify product`
+checks that `sacsma dpl calsim product apply` reproduces every tracked series.
+
+## Multi-family runs
 
 One parameter network trained on several families of flow record. Mean KGE of each family's
-entities over their training years (`metrics_entities.csv`), and the two checks against CalSim3:
-the mean over the 20 tier-1 locations and the median over the 196 arcs of tier 2. The first
-five runs are checked over WY1950–84, dPL-CalSim over its held-out WY1976–85.
+entities over their training years (the run's `metrics.csv`), and the two checks against
+CalSim3: the mean over the 20 tier-1 locations and the median over the 196 arcs of tier 2. The
+first five runs are checked over WY1950–84, dPL-CalSim over its held-out WY1976–85.
 
 | Name | Folder | Entities | usgs | cdec | uf | arcs | Tier 1 mean | Tier 2 median |
 |---|---|---|---|---|---|---|---|---|
-| – | `noah_cdec_uf_usgs` | 95 | 0.587 | 0.786 | 0.859 | – | 0.812 | 0.598 |
-| – | `noah_cdec_uf_usgs_areaw` | 95 | 0.592 | 0.791 | 0.879 | – | 0.825 | 0.599 |
-| – | `noah_cdec_uf` | 26 | – | 0.790 | 0.893 | – | 0.794 | 0.576 |
+| – | `noah_cdec_uf_usgs` (local) | 95 | 0.587 | 0.786 | 0.859 | – | 0.812 | 0.598 |
+| – | `noah_cdec_uf_usgs_areaw` (local) | 95 | 0.592 | 0.791 | 0.879 | – | 0.825 | 0.599 |
+| – | `noah_cdec_uf` (local) | 26 | – | 0.790 | 0.893 | – | 0.794 | 0.576 |
 | dPL-26 | `noah_cdec_uf_sacx_carry_px_aef` | 26 | – | 0.874 | 0.934 | – | 0.859 | 0.628 |
 | dPL-95 | `noah_cdec_uf_usgs_areaw_all_kref05_sacx_carry_px_aef` | 95 | 0.687 | 0.880 | 0.935 | – | 0.857 | 0.657 |
 | **dPL-CalSim** | `noah_cdec_uf_usgs_cs64_ho7685_ufx_areaw_all_kref05_sacx_carry_px_aef` | 159 | 0.691 | 0.872 | 0.929 | 0.715 | 0.908 | 0.690 |
 
-The first three are the first recipe and are kept for the record. dPL-26 was the base from
-2026-09-28, dPL-95 from 2026-09-29; dPL-CalSim starts from dPL-95's recipe. The parts of a
-folder name are explained in the [Glossary](../../docs/glossary.md#run-folder-names).
-
-Each run tracks ten files: `checkpoints/best.pt`, `train_log.csv`, `metrics_entities.csv`,
-`params_dpl.csv`, `params_canopy.csv`, `sim_daily_mm.npz`, `tier1/tier1_metrics.csv`,
-`tier2/tier2_metrics.csv`, `tier2/tier2_arcs.csv` and `atlas/calsim_validation_atlas.html`. The
-atlases and `sim_daily_mm.npz` are git-LFS files. dPL-95 adds a small `provenance/`. dPL-CalSim
-adds `metrics_entities_holdout.csv`, `tier2/tier2_anchor_rescaled.csv`, `provenance/` (the plan
-frozen before the run, its bars, the readout and the deviations) and `calsim_product/`.
+The first three are the first recipe; they are kept locally, not tracked. dPL-26 was the base
+from 2026-09-28, dPL-95 from 2026-09-29; dPL-CalSim starts from dPL-95's recipe. The parts of
+a folder name are explained in the [Glossary](glossary.md#run-folder-names).
 
 ## Runs on the 15 CDEC watersheds
 
 Mean daily KGE over the 15 watersheds, calibration WY1989–2003 and validation WY2004–2018, from
-each folder's `metrics_*.csv`. The parameter runs are scored through the reference model; the
-LSTM ensembles are scored on the mean flow of their seeds.
+each run's `metrics.csv`. The parameter runs are scored through the reference model; the LSTM
+ensembles on the mean flow of their seeds.
 
-| Folder | What it is | Calibration | Validation |
+| Run | What changed | Calibration | Validation |
 |---|---|---|---|
-| `hamon` | learned parameters on 1/16° cells, Hamon PET | 0.817 | 0.836 |
+| GA parameters | the archived calibration, 7,891 HRUs (not a run) | 0.805 | 0.768 |
+| `hamon_dense` | the network in place of the GA, nothing else | 0.806 | 0.840 |
+| `hamon` | 1/16° grid cells in place of HRUs, CalSim3 catchment outlines | 0.817 | 0.836 |
 | `pt` | Priestley–Taylor PET | 0.799 | 0.826 |
-| `noah` | soil-moisture-limited ET, parameters that respond to climate | 0.779 | 0.804 |
-| `hybrid` | LSTM on `noah`'s flow, 3 seeds | 0.922 | 0.877 |
+| `noah_noca` | soil-moisture-limited ET; `physical` inputs, so parameters fixed in time | 0.767 | 0.799 |
+| `noah` | the same with `physical_climate` inputs: parameters that respond to climate | 0.779 | 0.804 |
+| `hybrid` | an LSTM on top of `noah`'s simulated flow, 3 seeds | 0.922 | 0.877 |
 | `hybrid_dt` | `hybrid` trained to keep `noah`'s response to climate, 3 seeds | 0.873 | 0.849 |
-| `lstm` | LSTM without the physics (control), 3 seeds | 0.909 | 0.835 |
-| `superseded/hamon_dense` | learned parameters on the original 7,891 HRUs | 0.806 | 0.840 |
-| `superseded/noah_noca` | `noah` before its parameters responded to climate | 0.767 | 0.799 |
-| `superseded/hybrid_noca` | LSTM on `noah_noca`, 8 seeds | 0.917 | 0.869 |
-| `superseded/hybrid_dt_noca` | the same with a single +2 °C response term, 8 seeds | 0.916 | 0.864 |
+| `lstm` | the LSTM without the simulated flow (a control), 3 seeds | 0.909 | 0.835 |
+| `hybrid_noca` (local) | an LSTM on `noah_noca`, 8 seeds | 0.917 | 0.869 |
+| `hybrid_dt_noca` (local) | the same with a single +2 °C response term, 8 seeds | 0.916 | 0.864 |
 
-The archived GA parameters score 0.805 / 0.768 on the same basis. `superseded/` is kept because
-it shows the steps and because `superseded/noah_noca` still supplies the physics simulation of
-the earlier hybrids. `noah/fidelity/` is the benchmark of the differentiable model against the
-reference model, not a run. `figures/` holds the comparison figures and their tables.
+`noah_noca` is the climate-frozen baseline of the `adaptive` study. The hybrids read `noah`'s parameter tables and
+its daily simulation (`sim_daily.csv` of its results folder), which `sacsma dpl hybrid` builds on
+first use when `--sim-cache` names that file.
 
 ## What is tracked and what is local
 
-Tracked: the folders above. Everything under `artifacts/dpl/_local/` is ignored by git: caches
-(`_local/cache/`), scratch runs (`_local/testing/`), evaluation scratch (`_local/eval/`) and the
-runs of the training program that were not adopted (`_local/multifamily/`). In a tracked run
-folder, the files beyond those listed above are also ignored and regenerate from the
-checkpoint.
+Each tracked run has a folder under `artifacts/models/` (checkpoints, training log, parameter
+tables, `provenance/`) and one under `artifacts/results/` (scores, simulated series, the
+atlas). Everything else a command writes for the run goes to the run's folder under
+`artifacts/_local/runs/`, which git ignores, as it ignores the caches (`_local/cache/`), the
+scratch runs (`_local/testing/`) and the runs that were not adopted (`_local/runs/`).
 
 ## Regenerating a run's outputs
 
 ```bash
-sacsma dpl evaluate <run>/checkpoints/best.pt    # metrics, parameter tables, sim_daily_mm.npz
+sacsma dpl evaluate <run>/checkpoints/best.pt    # parameter tables, metrics, sim_daily
 sacsma dpl calsim tier1 <run>
 sacsma dpl calsim tier2 <run> --trace-python <python of the sacsma-gis environment>
 sacsma dpl calsim atlas <run>
-sacsma dpl calsim product fit <run>              # dPL-CalSim only; needs the scenario passes
 ```
 
-The complete sequence is in [Reproduce](../../docs/reproduce.md); the files each command writes
-are listed in [`artifacts/README.md`](../README.md).
+`<run>` is any of the run's folders. The complete sequence, the product included, is in
+[Reproduce](reproduce.md).
 
 ## Known costs
 
@@ -104,19 +108,19 @@ are listed in [`artifacts/README.md`](../README.md).
   kept locally, not tracked); dPL-95 is at 0.888.
 - **Single seed.** No run has a second seed. dPL-95 was adopted without its paired run without
   the family loss scale, dPL-CalSim without its control without the arcs
-  (`provenance/DEVIATIONS.txt`).
+  (`provenance/DEVIATIONS.txt` of its model folder).
 - **`hybrid`.** Its volume bias moves between calibration and validation at MRC (+1.5 % to
-  −8.5 %) and NML (−3.0 % to −6.6 %). For the earlier generation (`superseded/hybrid_noca`)
-  the physics run was the better out-of-sample answer on monthly flow against CalSim3 at NML,
-  MRC and ORO. That has not been re-read for this one, whose daily validation KGE is above
-  `noah`'s at NML and ORO.
+  −8.5 %) and NML (−3.0 % to −6.6 %). For the earlier generation (`hybrid_noca`) the physics
+  run was the better out-of-sample answer on monthly flow against CalSim3 at NML, MRC and ORO.
+  That has not been re-read for this one, whose daily validation KGE is above `noah`'s at NML
+  and ORO.
 
 ## Tried and not adopted
 
 One line per result, so that it is not tried again without a reason. The runs behind these
-lines are not tracked (those that still exist are under `_local/`), and the numbers are as
-recorded when the runs were made. The dated record they come from is this file as of commit
-`f4140c0` (`git show f4140c0:artifacts/dpl/RUNS.md`).
+lines are not tracked (those that still exist are under `artifacts/_local/`), and the numbers
+are as recorded when the runs were made. The dated record they come from is the run record as
+of commit `f4140c0` (`git show f4140c0:artifacts/dpl/RUNS.md`).
 
 **Parameters on the 15 CDEC watersheds** (validation KGE unless stated)
 
@@ -151,10 +155,10 @@ recorded when the runs were made. The dated record they come from is this file a
   response to warming (0.24 of the physics response). Only the response term in the loss moves
   the response. Without it the response is a draw: 0.15 and −0.57 of the physics response in
   two trainings of one recipe.
-- **Fewer response points.** One point at +2 °C (`superseded/hybrid_dt_noca`), then 5 and 8
-  points, were tried before the 14 of `hybrid_dt`. With precipitation changes of ±20 % among
-  the points, the error at those edges is 3.7 points of annual change, against 10.1 for
-  `hybrid`.
+- **Fewer response points.** One point at +2 °C (`hybrid_dt_noca`), then 5 and 8 points, were
+  tried before the 14 of `hybrid_dt`. With precipitation changes of ±20 % among the points,
+  the error at those edges is 3.7 points of annual change, against 10.1 for `hybrid`. The
+  surfaces of the 5-point recipe (the retired `sacsma dpl study response`) are not kept.
 
 **Multi-family training** (on the 26 entities of dPL-26 unless stated; one seed each)
 
@@ -199,9 +203,9 @@ recorded when the runs were made. The dated record they come from is this file a
 
 ## Open
 
-- The product covers WY1950–2015; CalSim3 starts in WY1922.
-- The climate response of the product is trained and checked on uniform changes, which stand
-  in for the WGEN daily scenario weather.
+- The share model's response is fitted on uniform climate changes. Under WGEN weather it is
+  checked on scenario 12 only: from scenario 1 the product misses the model's own share-arc
+  response by 0.05 % in volume and 0.18 points in the April–July share at the median.
 - No warmed VIC run exists for a like-for-like comparison of the response.
 - The held-out decade WY1976–85 has been read by three experiments.
 - A rain/snow partition that does not switch whole storm days (the candidate fix for ORO) has

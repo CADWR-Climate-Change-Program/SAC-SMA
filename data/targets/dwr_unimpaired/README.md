@@ -23,6 +23,17 @@ natural-flow estimate departs from unimpaired only on the valley floor (natural 
 | `uf_locations.csv` | `uf, table, name, cdec_id, basin_11obs, basin_9unimp, n_arcs, arcs, area_mi2_calsim, has_swat, swat_scale_appendix_d, swat_partial, note`: each subbasin's calibration basin, CalSim3 arc set and arc-sum area, and the flags of its SWAT table | `dwr_unimpaired.py`, then corrected by hand (see below) |
 | `uf_gauges.csv` | `uf, lat, lon, gauge_source, area_mi2_swat, area_source`: one pour point for each of the 18 arc-mapped subbasins (UF 7 has none by construction) and, for 16 of them, the area the report gives | Hand-maintained, never generated |
 | `uf_monthly_mm.csv` | `uf, date, depth_mm`: `uf_monthly.csv` as mm/month over each subbasin's CalSim3 arc-sum area (`area_mi2_calsim`), the 18 arc-mapped subbasins, full record = 20088 rows | `build_uf_depth.py` |
+| `verification/` | The checks of `uf_locations.csv` against independent sources (below) | `check_uf_locations.py` |
+
+`verification/` holds `findings.md` (the flags and notes, per subbasin), `report_table.csv`
+(the numbers behind every check: areas, volumes, outlets), `uf_outlets.csv` (the USGS gauge,
+and the CDEC coordinates where a station exists, that identifies each subbasin's outlet in the
+checks: site, name, coordinates, published drainage area; an output of the checks, not an input
+of any model), `figures/uf_NN.png` and `figures/uf_dissolved_overview.png` (one map per
+subbasin with its member arcs and pinned outlet, and all subbasins dissolved onto one
+overview), and `web_cache.json` and `nldi_bend_basin.json` (the cached NWIS, CDEC and NLDI
+responses, so the tables regenerate offline; delete them to fetch again). The script also
+writes `uf_dissolved.gpkg` for GIS viewing, which is not tracked.
 
 ## How it is built
 
@@ -42,9 +53,9 @@ includes `pypdf`.
   rewrites the table without them; restore those cells from version control.
 - `build_uf_depth.py` needs only tracked files and reproduces its table byte for byte. Run it
   before `data/targets/cdec/build_fnf_depth.py`, which reads its output for a check.
-- `check_uf_locations.py` writes its findings, table and maps to
-  `artifacts/dwr_unimpaired/verification/`. Its web responses (NWIS, CDEC, NLDI) are cached
-  there, so it reruns offline and reproduces its tables byte for byte.
+- `check_uf_locations.py` writes its findings, table and maps to `verification/`. Its web
+  responses (NWIS, CDEC, NLDI) are cached there, so it reruns offline and reproduces its
+  tables byte for byte. It needs geopandas (environment `sacsma` or `sacsma-gis`).
 
 ## Checks
 
@@ -64,7 +75,8 @@ includes `pypdf`.
   name, coordinates and drainage area of each outlet gauge (and CDEC coordinates), and the
   dissolved geometry. Result: 3 flags, 4 notes. The flags are volume closures: UF 3 +16.3 %
   (monthly r 0.877), UF 6 -11.3 % (r 0.998), UF 10 +12.2 % (r 0.997). A flag is a check
-  outside tolerance, not automatically an error in the table.
+  outside tolerance, not automatically an error in the table; a note records an expected or
+  structural condition.
 - Paynes Creek: `I_PYN001` overlaps the NLDI-delineated Bend Bridge watershed (USGS 11377100)
   by 0.4 % of its area, against 99.9 % for a true member, so the creek joins below the gauge
   and is rightly left out of UF 6.
