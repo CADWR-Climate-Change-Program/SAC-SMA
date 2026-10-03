@@ -84,7 +84,7 @@ changed climate, stay the model's own. The arcs' response is held close to the m
 penalty in the fit and is checked at climate points the fit never saw.
 
 Skill on the held-out decade, median monthly KGE against CalSim3
-(`artifacts/product/historical_livneh_unsplit/product_metrics.csv`):
+(`artifacts/product/calsim3/historical_livneh_unsplit/product_metrics.csv`):
 
 | Arcs | dPL-CalSim | Product |
 |---|---|---|
@@ -96,13 +96,13 @@ Skill on the held-out decade, median monthly KGE against CalSim3
 Over all 196 arcs the product's mean is 0.72 and its 10th percentile 0.42; 7 arcs are below
 zero (13 for the model alone). At the five validation climate points the share arcs' response
 differs from the model's by at most 0.42 % in volume and 0.64 points in the April–July share at
-the 90th percentile (`artifacts/product/response_gate.csv`), inside the limits set beforehand
+the 90th percentile (`artifacts/product/calsim3/response_gate.csv`), inside the limits set beforehand
 (median 1, 90th percentile 3).
 
 **One series per forcing.** Each series is one continuous run over the whole forcing record:
 the spin-up loops WY1916–1925 twenty times from the cold start, the run goes on from October
 1915 to December 2018, and the series holds its complete water years, WY1916–2018. The forcings are the historical Livneh grid (the training
-forcing) and WGEN Product A scenarios 1 and 12 ([`artifacts/product/`](../artifacts/product/README.md)).
+forcing) and WGEN Product A scenarios 1 and 12 ([`artifacts/product/calsim3/`](../artifacts/product/calsim3/README.md)).
 No training target and no fit reaches before WY1950. On WY1922–1949, against CalSim3, the
 historical series scores (median monthly KGE):
 
@@ -205,12 +205,12 @@ after its system is rescaled to the CalSim3 anchor, an evaluation-only score.
 sacsma dpl calsim tier1 <run>
 sacsma dpl calsim tier2 <run> --components parts --trace-python <python of the sacsma-gis environment>
 sacsma dpl calsim atlas <run>
-sacsma dpl calsim product fit <run>                              # -> artifacts/product/
-sacsma dpl calsim product apply --tier2 <pass> --forcing <name>  # -> artifacts/product/<name>/
+sacsma dpl calsim product fit <run>                              # -> artifacts/product/calsim3/
+sacsma dpl calsim product apply --tier2 <pass> --forcing <name>  # -> artifacts/product/calsim3/<name>/
 sacsma verify product                                            # apply repeats every tracked series
 ```
 
 `<run>` is any of the run's folders. The full sequence, from the data to the product, is in
 [Reproduce](reproduce.md). The files each command writes are listed in
 [`artifacts/results/dpl/README.md`](../artifacts/results/dpl/README.md) and
-[`artifacts/product/README.md`](../artifacts/product/README.md).
+[`artifacts/product/calsim3/README.md`](../artifacts/product/calsim3/README.md).

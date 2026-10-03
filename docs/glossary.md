@@ -60,13 +60,13 @@ one thing.
 
 | Name | Meaning |
 |---|---|
-| **GA parameters** | The archived genetic-algorithm calibrations of Wi and Steinschneider. |
+| **GA parameters** | The archived genetic-algorithm calibrations of Wi and Steinschneider (`artifacts/models/`, `ga_optimum.csv`). |
 | **Reference model** | The NumPy/Numba implementation that reproduces the MATLAB simulations. Called the "frozen" model in the code. |
 | **dPL** | Differentiable parameter learning: the network-trained parameters. |
 | `hamon`, `pt`, `noah` | Learned-parameter runs on the 15 CDEC watersheds, named for their PET or ET scheme. |
 | `hybrid`, `hybrid_dt`, `lstm` | An LSTM on top of `noah`; the same trained to keep the physics' response to climate; an LSTM without the physics. |
 | **dPL-26, dPL-95, dPL-CalSim** | The three tracked multi-family runs, named for what they train on: 26 entities, 95 entities, and 95 entities plus 64 CalSim3 arcs. dPL-CalSim is the current model. |
-| **Product** | The CalSim3 rim-inflow product: dPL-CalSim's monthly flow on the 196 rim arcs with the share model on the share arcs, WY1916–2018, one series per forcing. |
+| **Product** | The CalSim3 rim-inflow product: dPL-CalSim's monthly flow on the 196 rim arcs with the share model on the share arcs, WY1916–2018, one series per forcing (`artifacts/product/calsim3/`). The calibrated models deliver two more, named by their application: the CalLite files (`product/callite/`) and the daily flow of the 15 CDEC watersheds (`product/15cdec/`). |
 
 ## Run folder names
 

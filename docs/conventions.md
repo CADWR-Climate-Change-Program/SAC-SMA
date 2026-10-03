@@ -144,8 +144,13 @@ The output tree is described in [`artifacts/README.md`](../artifacts/README.md).
 
 - **Every path under `data/` and `artifacts/` comes from `sacsma/paths.py`.** No path literal
   in the code.
-- **Outputs are kept by role.** `product/` is the delivered product, `models/` what training
-  made, `results/` what a command redraws from them, `_local/` what is not tracked.
+- **Outputs are kept by role.** `product/` is what is delivered (one folder per application
+  and forcing), `models/` every model (the archived calibrations and what training made),
+  `results/` what a command redraws from them, `_local/` what is not tracked.
+- **The archived calibrations are kept by hand.** The five `ga_optimum.csv` tables under
+  `models/` (`15cdec`, `15cdec_grid`, `callite/9unimp`, `callite/11obs`, `callite/12rim`) are
+  the study's GA optima; no command writes them, and `sacsma verify parity` checks them
+  against the MATLAB simulation.
 - **A run has one name in every part:** `models/dpl/<group>/<run>/`,
   `results/dpl/<group>/<run>/`, `_local/runs/dpl/<group>/<run>/`. A command that takes a run
   accepts any of the three.

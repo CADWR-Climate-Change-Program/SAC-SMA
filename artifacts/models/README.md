@@ -1,9 +1,30 @@
-# `artifacts/models/`: what training made
+# `artifacts/models/`: every model
 
-The learned-parameter runs, one folder per run, under the name it was trained with. A run's
-scores and figures are in `results/` under the same name, its large local files in
-`_local/runs/` (see [`artifacts/README.md`](../README.md)). Which run is current, what each
-scores and what was tried and not adopted: [Runs](../../docs/runs.md).
+The archived calibrations of the original study and the learned-parameter runs. Each model's
+scores and figures are in `results/` under the same name (see
+[`artifacts/README.md`](../README.md)).
+
+## The calibrated models
+
+The genetic-algorithm optimum of each calibration domain, from the study archive (Wi &
+Steinschneider), 31 parameters per row: `Kpet`, 16 SAC-SMA, 10 Snow-17 and 4 routing parameters.
+The reference model (`sacsma.model`) runs them with the HRU tables of
+[`data/inputs/domains/`](../../data/inputs/domains/README.md); method and scores:
+[Calibrated SAC-SMA](../../docs/calibrated_sacsma.md). Kept by hand: no command writes them.
+
+| File | What |
+|---|---|
+| `15cdec/ga_optimum.csv` | The pooled optimum of the 15 CDEC watersheds (KGE objective, WY1989–2003), one row per cell, keyed by `key` |
+| `15cdec_grid/ga_optimum.csv` | The optimum on the coarse grid-aligned units of `15cdec_grid`, one row per `hruinfo` row, keyed by `basin` and `key`. Also the initial parameter priors of the multi-family runs (`sacsma.dpl.train`) |
+| `callite/9unimp/`, `callite/11obs/`, `callite/12rim/` `ga_optimum.csv` | The per-watershed optima of the three CalLite sets, with a `basin` column: a cell shared by two watersheds holds different parameters in each, so filter by `basin` before indexing by `key` |
+
+`sacsma verify parity` checks that they still reproduce the archived MATLAB simulation.
+
+## The learned-parameter runs
+
+One folder per run, under the name it was trained with; its large local files are in
+`_local/runs/`. Which run is current, what each scores and what was tried and not adopted:
+[Runs](../../docs/runs.md).
 
 ```
 dpl/15cdec/        runs on the 15 CDEC watersheds (domains 15cdec and 15cdec_grid)

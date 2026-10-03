@@ -1,7 +1,9 @@
 # data/inputs/domains: the five calibration domains
 
-A domain is a group of watersheds with their modeling units: the HRU table, the calibrated parameters and
-the drainage areas. Role: input. The tables come from the archived MATLAB-era study materials of Wi &
+A domain is a group of watersheds with their modeling units: the HRU table and the drainage areas. Its
+calibrated parameters, the archived GA optimum, are in
+[`artifacts/models/`](../../../artifacts/models/README.md) (`15cdec/`, `15cdec_grid/`, `callite/<domain>/`).
+Role: input. The tables come from the archived MATLAB-era study materials of Wi &
 Steinschneider (Cornell / UMass Amherst; California DWR watershed studies). One folder per domain. The
 sixth domain, `multifamily`, has [its own README](multifamily/README.md).
 
@@ -21,8 +23,7 @@ grid (see [the grid README](../grid/README.md)).
 | File | What | Source |
 |---|---|---|
 | `<domain>/hruinfo.csv` (all five) | One row per HRU: `basin, lat, lon, area_weight, elev, flowlen, soil_class, veg_class, key` (plus `basin_id`, `basin_id2` except in `15cdec_grid`). `area_weight` is the HRU's percentage of its watershed. A cell shared by two watersheds appears once per watershed. | The study's HRUinfo tables |
-| `<domain>/ga_optimum.csv` (all five) | The archived genetic-algorithm optimum, 31 parameters per row. `15cdec`: the pooled optimum (KGE objective, WY1989-2003), keyed by `key`, one row per cell. `9unimp`, `11obs`, `12rim`: the per-watershed optima, with a `basin` column, because a shared cell holds different parameters per watershed. `15cdec_grid`: one row per `hruinfo` row, keyed by `basin` and `key`. | Study archive |
-| `<domain>/basin_area.csv` (`15cdec`, `9unimp`, `11obs`) | `[basin, area_mi2]`. `15cdec`: the published drainage areas of the 15 watersheds. `9unimp`, `11obs`: the authoritative drainage areas. Converts mm/day to cfs and back. | Study archive |
+| `<domain>/basin_area.csv` (`15cdec`, `9unimp`, `11obs`, `12rim`) | `[basin, area_mi2]`. `15cdec`: the published drainage areas of the 15 watersheds. `9unimp`, `11obs`: the authoritative drainage areas. `12rim`: the areas the original study's CalLite wrapper converted with (its m² over 1609.344²; its `11obs` areas agree with the table here to 0.01 mi²), used only to write the CalLite product. Converts mm/day to cfs and back. | Study archive; `12rim`: the study's MATLAB CalLite wrapper |
 | `<domain>/soilveg_continuous.csv` (all five) | Continuous soil, vegetation and terrain attributes: POLARIS `sand`, `clay`, `ksat`, `theta_s` at six depths, LANDFIRE `EVC`, `EVH` and the decoded cover % and height, 3DEP elevation, slope, aspect sin and cos, curvature and relief, LAI mean, min, max, amplitude and peak day, with the `polaris_gapfill` and `lai_gapfill` flags (`15cdec_grid` has only the first). One row per HRU in `hruinfo` order, keyed by `key` (not unique). In `15cdec_grid`: one row per cell (2,074). | `data/inputs/grid/sample_gis.py <domain>`; `15cdec_grid`: no script in the repository |
 | `<domain>/lai_climatology.csv` (all five) | The MODIS leaf-area day-of-year climatology, 46 8-day values per row (`lai_doy001` to `lai_doy361`). Same rows as the table above. The `15cdec_grid` file names its key column `cellkey`. | the same |
 | `15cdec/basin_tminmax_livneh.csv` | Watershed-mean daily Tmin and Tmax of the 15 watersheds: `date, tmin_<basin>, tmax_<basin>`, °C, 1915-01-01 to 2018-12-31. Ingested once from the WGEN 1/16° grid. | No script in the repository |
@@ -30,9 +31,9 @@ grid (see [the grid README](../grid/README.md)).
 
 ## How it is built
 
-`hruinfo.csv`, `ga_optimum.csv`, `basin_area.csv`, `basin_tminmax_livneh.csv` and the geojson: delivered;
-cannot be rebuilt from a clone. The one-time ingest scripts were retired and are in git history (commit
-`ad89558` and earlier).
+`hruinfo.csv`, `basin_area.csv`, `basin_tminmax_livneh.csv` and the geojson: delivered; cannot be rebuilt
+from a clone. The one-time ingest scripts were retired and are in git history (commit `ad89558` and
+earlier). The `12rim` area table was transcribed from the study's MATLAB CalLite wrapper.
 
 The attribute sidecars of `15cdec`, `9unimp`, `11obs` and `12rim` are rebuilt by the raster sampler
 (environment `sacsma-gis`; raw rasters in the folder named by `raw_gis` in `data/local_paths.toml`):
@@ -45,7 +46,7 @@ sidecars. Products, units, encodings and the sampling conventions are in
 
 ## Checks
 
-- Parity. `hruinfo.csv` and `ga_optimum.csv` with the default forcing must reproduce the archived MATLAB
+- Parity. `hruinfo.csv` and the GA optimum with the default forcing must reproduce the archived MATLAB
   simulation: `sacsma verify parity` requires KGE > 0.9999 and a largest daily difference < 0.1 mm/day on
   one watershed per domain (results in [the MATLAB reference README](../../reference/matlab/README.md)).
   `15cdec_grid` has no MATLAB reference.
@@ -66,9 +67,10 @@ sidecars. Products, units, encodings and the sampling conventions are in
   (`sacsma.io.cfs_to_mmday`, `mmday_to_cfs`).
 - Watershed codes are specific to a domain. The same river can carry different codes (the Feather at
   Oroville is `ORO` in `15cdec` and `FTO` in `11obs`).
-- caution: in the CalLite domains, filter `ga_optimum.csv` by `basin` before indexing by `key`. Shared
+- caution: in the CalLite domains, filter the GA optimum by `basin` before indexing by `key`. Shared
   cells repeat with different parameters.
-- `12rim` has no `basin_area.csv`: its parity is in mm/day, and it has no column in the CalSim3 crosswalk.
+- `12rim` has no column in the CalSim3 crosswalk, and its parity is in mm/day. Its `basin_area.csv` serves
+  only the CalLite product; no score reads it.
 - `15cdec` reads its own dense forcing store and has no per-cell Tmin and Tmax, so the Priestley-Taylor
   and Noah ET options need a grid domain. `15cdec_grid` is on the grid: it reads the shared stores, and
   its sidecars supply the observed canopy (cover fraction, LAI) of the Noah ET path.
@@ -88,11 +90,10 @@ sidecars. Products, units, encodings and the sampling conventions are in
 
 ## Read by
 
-- `sacsma.io`: `load_hru_table`, `load_params`, `load_basin_area`, `soilveg_path`, `lai_climatology_path`,
-  `load_canopy_obs`. Through them every model run (`sacsma run`, `sacsma plots`, `sacsma calsim`,
-  `sacsma dpl ...`).
-- `ga_optimum.csv` of `15cdec_grid`: also the initial parameter priors of the multifamily dPL runs
-  (`sacsma.dpl.train`).
+- `sacsma.io`: `load_hru_table`, `load_basin_area`, `soilveg_path`, `lai_climatology_path`,
+  `load_canopy_obs` (and `load_params`, which reads the GA optimum from `artifacts/models/`). Through them
+  every model run (`sacsma run`, `sacsma plots`, `sacsma calsim`, `sacsma product`, `sacsma dpl ...`).
+- `12rim/basin_area.csv`: `sacsma.product` (the CalLite file of the 12 rim inflows).
 - `basin_tminmax_livneh.csv`: `sacsma.dpl.hybrid.data` (inputs of the hybrid and LSTM models, which add the
   diurnal range that `tavg` alone discards) and `sacsma.dpl.studies.forcing_sensitivity`.
 - Build scripts: `data/inputs/grid/build_region_grid.py` and `build_region_statics.py` (cells and

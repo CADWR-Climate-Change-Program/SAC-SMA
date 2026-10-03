@@ -9,7 +9,7 @@ and what is still open. The method is in [Learned parameters](learned_parameters
 
 **dPL-CalSim** (`noah_cdec_uf_usgs_cs64_ho7685_ufx_areaw_all_kref05_sacx_carry_px_aef`),
 adopted 2026-09-30, and the **CalSim3 rim-inflow product**
-([`artifacts/product/`](../artifacts/product/README.md)), adopted 2026-10-01: monthly flow on
+([`artifacts/product/calsim3/`](../artifacts/product/calsim3/README.md)), adopted 2026-10-01: monthly flow on
 the 196 rim arcs, TAF, WY1916–2018, one series per forcing (historical Livneh, WGEN Product A
 scenarios 1 and 12).
 
@@ -31,8 +31,8 @@ On WY1922–1949, before any training year:
 | 7 single-arc systems | 0.778 | 0.778 |
 | All 196 | 0.637 | 0.760 |
 
-Source: `artifacts/product/historical_livneh_unsplit/product_metrics.csv`; the fit's own scores,
-on its WY1950–2015 pass, are in `artifacts/product/product_info.json`. `sacsma verify product`
+Source: `artifacts/product/calsim3/historical_livneh_unsplit/product_metrics.csv`; the fit's own scores,
+on its WY1950–2015 pass, are in `artifacts/product/calsim3/product_info.json`. `sacsma verify product`
 checks that `sacsma dpl calsim product apply` reproduces every tracked series.
 
 ## Multi-family runs

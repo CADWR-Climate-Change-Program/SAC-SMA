@@ -59,13 +59,15 @@ section 6). The whole check takes a few minutes on CPU.
 ```bash
 sacsma run ALL                         # the 15 CDEC watersheds, daily
 sacsma run ALL --domain 11obs          # likewise 9unimp, 12rim
-sacsma plots --domain 15cdec           # calibration and validation diagnostics -> artifacts/results/calibrated/15cdec/
-sacsma plots --domain 11obs            # -> artifacts/results/calibrated/11obs/
-sacsma calsim                          # comparison with CalSim3 and VIC -> artifacts/results/calibrated/calsim3/
+sacsma plots --domain 15cdec           # calibration and validation diagnostics -> artifacts/results/15cdec/
+sacsma plots --domain 11obs            # -> artifacts/results/callite/11obs/
+sacsma calsim                          # comparison with CalSim3 and VIC -> artifacts/results/calsim3/
+sacsma product callite                 # the CalLite inflow files, three forcings -> artifacts/product/callite/
+sacsma product 15cdec                  # the daily flow of the 15 watersheds -> artifacts/product/15cdec/
 ```
 
 All of it runs on CPU in minutes. `sacsma calsim --parallel` uses all cores for the model
-runs; results are unchanged. [`artifacts/results/calibrated/README.md`](../artifacts/results/calibrated/README.md) lists every file
+runs; results are unchanged. [`artifacts/results/README.md`](../artifacts/results/README.md) lists every file
 these commands write. Regenerated tables can differ from the tracked ones in the last digits,
 and the row order of `monthly_calsets.csv` is not fixed; compare before committing.
 
@@ -91,7 +93,7 @@ of the memory.
 (the checkpoints), `artifacts/results/dpl/multifamily/...` (the scores) or
 `artifacts/_local/runs/dpl/multifamily/...` (the large local files); every command finds the
 other two. The tracked folders hold the selected checkpoint and the scores, and
-`artifacts/product/` the product, so steps can be entered anywhere.
+`artifacts/product/calsim3/` the product, so steps can be entered anywhere.
 
 **Train** (about 21 hours on an 8 GB GPU: 120 epochs of about 10 minutes):
 
@@ -134,7 +136,7 @@ which are one batched run (into `tier2_scenarios/` of the local folder, `<local>
 sacsma dpl calsim tier2 <run> --components parts \
     --extension-cells <local>/tier2/tier2_extension_cells.csv \
     --scenarios p85=0:0.85,p95=0:0.95,p105=0:1.05,p115=0:1.15,t1=1:1,t25=2.5:1,t3=3:1,t4=4:1,t1p85=1:0.85,t1p115=1:1.15,t25p95=2.5:0.95,t25p105=2.5:1.05,t3p85=3:0.85,t3p115=3:1.15,t4p85=4:0.85,t4p115=4:1.15
-sacsma dpl calsim product fit <run>                       # -> artifacts/product/
+sacsma dpl calsim product fit <run>                       # -> artifacts/product/calsim3/
 sacsma dpl calsim atlas <run>                             # the validation atlas (HTML)
 ```
 
@@ -149,13 +151,13 @@ model applied over its complete water years:
 for f in historical_livneh_unsplit wgen_product_a wgen_product_a_s12; do
   sacsma dpl calsim tier2 <run> --components parts --forcing $f --start 1915-10-01 \
       --extension-cells <local>/tier2/tier2_extension_cells.csv \
-      --out artifacts/_local/product/$f/tier2 --no-maps     # GPU, one at a time
-  sacsma dpl calsim product apply --tier2 artifacts/_local/product/$f/tier2 --forcing $f
-done                                                      # -> artifacts/product/<forcing>/
+      --out artifacts/_local/product/calsim3/$f/tier2 --no-maps     # GPU, one at a time
+  sacsma dpl calsim product apply --tier2 artifacts/_local/product/calsim3/$f/tier2 --forcing $f
+done                                                      # -> artifacts/product/calsim3/<forcing>/
 sacsma verify product                                     # each tracked series repeats
 ```
 
-The pass each series was made from is kept beside it (`artifacts/product/<forcing>/tier2/`), so
+The pass each series was made from is kept beside it (`artifacts/product/calsim3/<forcing>/tier2/`), so
 that `sacsma verify product` can repeat it. After a refit, `apply` remakes every series. The
 files each command writes are listed in the READMEs under [`artifacts/`](../artifacts/README.md).
 
@@ -189,7 +191,7 @@ on disk; they are not tracked.
 
 | What | Why |
 |---|---|
-| The calibration domains, the monthly CalLite targets, the 15-CDEC daily gage file, the MATLAB simulations | Delivered with the original study archive. The one-time ingest scripts are in git history only. |
+| The calibration domains and their GA optima (`artifacts/models/`), the monthly CalLite targets, the 15-CDEC daily gage file, the MATLAB simulations | Delivered with the original study archive. The one-time ingest scripts are in git history only. |
 | The VIC series and the CalSim3 inflow and unimpaired series | Extracted from model output that is not in the repository. |
 | `prcp_x10_artifacts.csv` | Most of it was derived against stores that were since retired, and the rest by a later comparison. It is frozen. |
 | The tracked `historical_livneh_unsplit.nc`, bit for bit | It was built, then patched in place when that table grew. A rebuild from the raw source should give the same values, but the tracked file is the one every result was made with. |

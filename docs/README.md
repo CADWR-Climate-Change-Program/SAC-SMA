@@ -20,7 +20,7 @@ Beside the guide:
 | File | What it is |
 |---|---|
 | [`data/README.md`](../data/README.md) | Every data folder: its role, its source, how it is built. |
-| [`artifacts/README.md`](../artifacts/README.md) | The output tree: the product, the models, the results, and a README beside each that lists its files and the command that writes them. |
+| [`artifacts/README.md`](../artifacts/README.md) | The output tree: the products, the models, the results, and a README beside each that lists its files and the command that writes them. |
 
 ## Which model for which use
 
@@ -29,7 +29,7 @@ Beside the guide:
 | Monthly inflows on the CalSim3 rim arcs | the rim-inflow product of dPL-CalSim | scored on a held-out decade at all 196 arcs; whole-watershed volumes and their response to climate are the model's own |
 | Daily flow at the 15 CDEC reservoir watersheds, present climate | `hybrid` or `hybrid_dt` | highest daily skill |
 | The same under a changed climate | `hybrid_dt`, or `noah` for physics alone | `hybrid_dt` is trained to keep the physics' response; an LSTM without that training is not trustworthy under warming |
-| CalLite inflows as in the original study | the calibrated sets `12rim`, `11obs`, `9unimp` | per-watershed monthly calibrations to those targets |
+| CalLite inflows as in the original study | the calibrated sets `12rim`, `11obs`, `9unimp`: the three CalLite files in [`artifacts/product/callite/`](../artifacts/product/callite/README.md) | per-watershed monthly calibrations to those targets |
 | The original MATLAB results | the reference model with the archived parameters | reproduces them to within 0.1 mm/day |
 
 ## State of the work, October 2026
