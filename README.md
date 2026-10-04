@@ -50,13 +50,10 @@ sacsma verify                                            # imports, commands, li
 ```
 
 ```python
-from sacsma.model import run_basin
-df = run_basin("BND")                           # DataFrame[date, flow], mm/day
-df = run_basin("CacheCreek", domain="9unimp")
+from sacsma.model import run_basins
+df = run_basins(["BND"])                        # date x basin, mm/day
+df = run_basins(domain="9unimp")                # every watershed of a set, one engine run
 ```
-
-`--spinup-years N` starts a run from an equilibrated state by first running N copies of an
-average year. Without it a run starts from the reference cold start.
 
 ## Where things are
 

@@ -58,26 +58,25 @@ a folder name are explained in the [Glossary](glossary.md#run-folder-names).
 ## Runs on the 15 CDEC watersheds
 
 Mean daily KGE over the 15 watersheds, calibration WY1989–2003 and validation WY2004–2018, from
-each run's `metrics.csv`. The parameter runs are scored through the reference model; the LSTM
-ensembles on the mean flow of their seeds.
+each run's `metrics.csv`. The parameter runs are scored as trained (their numerics and basin
+weights); the LSTM ensembles on the mean flow of their seeds.
 
 | Run | What changed | Calibration | Validation |
 |---|---|---|---|
 | GA parameters | the archived calibration, 7,891 HRUs (not a run) | 0.805 | 0.768 |
-| `hamon_dense` | the network in place of the GA, nothing else | 0.806 | 0.840 |
-| `hamon` | 1/16° grid cells in place of HRUs, CalSim3 catchment outlines | 0.817 | 0.836 |
-| `pt` | Priestley–Taylor PET | 0.799 | 0.826 |
-| `noah_noca` | soil-moisture-limited ET; `physical` inputs, so parameters fixed in time | 0.767 | 0.799 |
-| `noah` | the same with `physical_climate` inputs: parameters that respond to climate | 0.779 | 0.804 |
-| `hybrid` | an LSTM on top of `noah`'s simulated flow, 3 seeds | 0.922 | 0.877 |
-| `hybrid_dt` | `hybrid` trained to keep `noah`'s response to climate, 3 seeds | 0.873 | 0.849 |
+| `hamon_dense` | the network in place of the GA, nothing else | 0.802 | 0.838 |
+| `hamon` | 1/16° grid cells in place of HRUs, CalSim3 catchment outlines | 0.807 | 0.829 |
+| `pt` | Priestley–Taylor PET | 0.796 | 0.823 |
+| `noah_noca` | soil-moisture-limited ET; `physical` inputs, so parameters fixed in time | 0.759 | 0.792 |
+| `noah` | the same with `physical_climate` inputs: parameters that respond to climate | 0.771 | 0.801 |
+| `hybrid` | an LSTM on top of `noah`'s simulated flow, 3 seeds | 0.926 | 0.875 |
+| `hybrid_dt` | `hybrid` trained to keep `noah`'s response to climate, 3 seeds | 0.870 | 0.849 |
 | `lstm` | the LSTM without the simulated flow (a control), 3 seeds | 0.909 | 0.835 |
 | `hybrid_noca` (local) | an LSTM on `noah_noca`, 8 seeds | 0.917 | 0.869 |
 | `hybrid_dt_noca` (local) | the same with a single +2 °C response term, 8 seeds | 0.916 | 0.864 |
 
-`noah_noca` is the climate-frozen baseline of the `adaptive` study. The hybrids read `noah`'s parameter tables and
-its daily simulation (`sim_daily.csv` of its results folder), which `sacsma dpl hybrid` builds on
-first use when `--sim-cache` names that file.
+`noah_noca` is the climate-frozen baseline of the `adaptive` study. The hybrids read `noah`'s daily
+flow as trained, which the engine makes from its checkpoint (`sacsma dpl hybrid --physics noah`).
 
 ## What is tracked and what is local
 
@@ -90,7 +89,7 @@ scratch runs (`_local/testing/`) and the runs that were not adopted (`_local/run
 ## Regenerating a run's outputs
 
 ```bash
-sacsma dpl evaluate <run>/checkpoints/best.pt    # parameter tables, metrics, sim_daily
+sacsma dpl evaluate <run>/checkpoints/best.pt    # parameter tables, metrics
 sacsma dpl calsim tier1 <run>
 sacsma dpl calsim tier2 <run> --trace-python <python of the sacsma-gis environment>
 sacsma dpl calsim atlas <run>
@@ -109,8 +108,8 @@ sacsma dpl calsim atlas <run>
 - **Single seed.** No run has a second seed. dPL-95 was adopted without its paired run without
   the family loss scale, dPL-CalSim without its control without the arcs
   (`provenance/DEVIATIONS.txt` of its model folder).
-- **`hybrid`.** Its volume bias moves between calibration and validation at MRC (+1.5 % to
-  −8.5 %) and NML (−3.0 % to −6.6 %). For the earlier generation (`hybrid_noca`) the physics
+- **`hybrid`.** Its volume bias moves between calibration and validation at MRC (+1.7 % to
+  −8.5 %) and NML (−2.2 % to −7.3 %). For the earlier generation (`hybrid_noca`) the physics
   run was the better out-of-sample answer on monthly flow against CalSim3 at NML, MRC and ORO.
   That has not been re-read for this one, whose daily validation KGE is above `noah`'s at NML
   and ORO.

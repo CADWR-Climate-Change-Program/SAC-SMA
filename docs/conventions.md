@@ -7,13 +7,17 @@ and results are kept.
 ## The reference model is frozen
 
 - `sacsma/pet.py`, `snow17.py`, `sma.py`, `routing.py`, `metrics.py` and `_compat.py` reproduce
-  the MATLAB numerics. They are not edited without re-running the parity check below.
+  the MATLAB numerics. They are not edited without re-running the parity check below. The
+  parity check also guards `sacsma/engine.py`, which runs them (the routing convolution and the
+  unit-hydrograph normalisation of the reference model are there).
 - Quirks of the original code that are kept on purpose: the variable number of percolation
   sub-steps, the hard rain/snow split at `PXTEMP`, the squared ratio in the additional-impervious
   runoff, the storage clamps, and the two riparian-ET adjustments to channel inflow.
 - Initial states everywhere: SAC-SMA `[0, 0, 100, 100, 100, 0]` mm, Snow-17 zeros.
-- Serial is the default. `parallel=True` (Numba `prange`) is opt-in and matches serial to
-  floating-point tolerance.
+- One engine runs every parameter field that is not being trained (`sacsma/engine.py`, CPU):
+  the GA optima through the reference model, a trained field through the step it was trained
+  with (`sacsma/sma_learned.py`, the torch step copied to Numba). A trained field is scored as
+  trained, never through the reference numerics. Training alone runs in torch.
 - Units: precipitation mm/day, temperature °C, flow mm/day over the watershed area. Monthly
   CalSim3, VIC and product volumes are TAF per month.
 
@@ -22,7 +26,7 @@ and results are kept.
 There is no test suite. A change is checked by running the model.
 
 ```bash
-sacsma verify            # imports, commands, links, artifacts, parity, product
+sacsma verify            # imports, commands, links, artifacts, parity, learned, product
 sacsma verify --quick    # the checks that need no model run
 ```
 
@@ -33,14 +37,17 @@ sacsma verify --quick    # the checks that need no model run
 | `links` | every relative link in the tracked markdown resolves |
 | `artifacts` | the output tree keeps its layout: tracked files only in `product/`, `models/` and `results/`, each with its README; no untracked file in them; a model and a results folder for every run |
 | `parity` | one watershed per domain matches the MATLAB simulation: KGE above 0.9999 and a largest daily difference below 0.1 mm/day |
+| `learned` | the learned step of the CPU engine (`sacsma/sma_learned.py`) matches the torch step it copies, for one tracked run of each physics, within 1e-9 mm/day |
 | `product` | `sacsma dpl calsim product apply` reproduces every tracked series of the rim-inflow product from the tier-2 pass kept beside it, to 1 part in 100,000 |
 
-Run `parity` after any change that touches the model or the path the data takes into it.
+Run `parity` after any change that touches the model or the path the data takes into it, and
+`learned` after any change to the torch physics or to `sacsma/sma_learned.py`: the two are
+changed together.
 Regenerated tables can differ from the tracked ones by about 1e-13 through floating-point
 order; compare before committing and do not commit noise.
 
-For the differentiable model, `sacsma dpl benchmark` runs the archived parameters through it
-and compares with the reference model.
+`sacsma dpl benchmark` runs the archived GA optimum through the learned numerics (the fixed
+sub-steps the learned-parameter runs train with) and compares it with the reference model.
 
 ## One-way dependencies
 

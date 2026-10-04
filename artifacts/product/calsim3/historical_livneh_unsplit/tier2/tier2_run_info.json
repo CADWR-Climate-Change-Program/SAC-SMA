@@ -1,6 +1,6 @@
 {
  "tool": "sacsma.dpl.calsim.tier2",
- "written_utc": "2026-10-03T02:51:16+00:00",
+ "written_utc": "2026-10-03T16:17:00+00:00",
  "checkpoint": "artifacts/models/dpl/multifamily/noah_cdec_uf_usgs_cs64_ho7685_ufx_areaw_all_kref05_sacx_carry_px_aef/checkpoints/best.pt",
  "data_dir": "data",
  "forcing": "historical_livneh_unsplit",
@@ -10,7 +10,6 @@
  ],
  "spinup": "cycle",
  "extend": true,
- "dedup_cells": false,
  "components": "parts",
  "component_columns": [
   "quick",
@@ -26,6 +25,5 @@
  "temp_delta_degC": 0.0,
  "precip_scale": 1.0,
  "perturbed": false,
- "placeholder_perturbation": false,
  "perturbation_note": null
 }

@@ -6,7 +6,8 @@ log-space interpolation for the parameters whose bounds span decades
 (``config.LOG_SPACE_PARAMS``) — or into a narrower per-parameter box
 (``DplConfig.param_box``, :meth:`ParameterNet.set_box`).  Every free parameter is emitted PER HRU
 ("everything per-HRU"); ``config.FIXED_PARAMS`` (side/SCF/PXTEMP) are appended
-as constants — except PXTEMP when ``pxtemp_learn`` gives it its own head.
+as constants — except PXTEMP when ``pxtemp_learn`` gives it its own head.  A Noah-lite run
+(``canopy``) adds the moisture exponent ``soil_chi`` from a head of its own.
 
 GA-prior initialization (ported pattern): the head weights start at zero and
 each bias at the logit of the (area-weighted median) archived GA value's
@@ -24,18 +25,16 @@ import torch.nn as nn
 
 from .config import (
     BOUNDS,
-    CANOPY_BOUNDS,
-    CANOPY_LEARNED_PARAMS,
-    CANOPY_LITE_LEARNED,
-    CANOPY_LOG_PARAMS,
-    DYNAMIC_SAC_PARAMS,
     FIXED_PARAMS,
     FREE_PARAMS,
     LOG_SPACE_PARAMS,
     PARAM_GROUPS,
+    SOIL_CHI_BOUNDS,
 )
 
 _MIN_NORM = 0.02   # keep prior logits away from the sigmoid tails
+#: buffers of earlier checkpoints that the network no longer has
+_RETIRED_BUFFERS = ("_c_is_log",)
 
 
 def _normalized_position(name: str, value: float) -> float:
@@ -72,34 +71,14 @@ class ParameterNet(nn.Module):
     def __init__(self, n_features: int, *, hidden: int = 64, embed: int = 32,
                  dropout: float = 0.1, grouped_heads: bool = False,
                  gnn_k: int = 0, n_nodes: int | None = None,
-                 seasonal_params: tuple[str, ...] = (),
-                 seasonal_amp: float = 0.18, seasonal_amp_frac: float = 0.10,
                  canopy: bool = False,
-                 canopy_separate_trunk: bool = True,
-                 canopy_lite: bool = False,
-                 dynamic_params: tuple[str, ...] = (),
-                 dynamic_amp: float = 0.5,
                  pxtemp_learn: bool = False,
                  pxtemp_box: tuple[float, float] = (-1.0, 3.0),
                  pxtemp_tau: float = 1.0):
         super().__init__()
         self.grouped_heads = grouped_heads
         self.gnn_k = gnn_k
-        self.seasonal_params = tuple(seasonal_params)
-        self.seasonal_amp = float(seasonal_amp)
         self.canopy = bool(canopy)
-        self.canopy_separate_trunk = bool(canopy_separate_trunk)
-        self.canopy_lite = bool(canopy_lite)
-        # which canopy params the head emits: LITE => soil_chi alone (the one
-        # streamflow-identifiable knob); FULL => the 7 physiology params.
-        self._canopy_learned = (CANOPY_LITE_LEARNED if self.canopy_lite
-                                else CANOPY_LEARNED_PARAMS)
-        # climate-state dynamic params, split by which trunk emits the coeff:
-        # SAC params off the shared trunk z, canopy params off the canopy trunk zc.
-        self.dynamic_amp = float(dynamic_amp)
-        self._dyn_sac = tuple(p for p in dynamic_params if p in DYNAMIC_SAC_PARAMS)
-        self._dyn_canopy = tuple(p for p in dynamic_params
-                                 if p in CANOPY_LEARNED_PARAMS)
         self.encoder = nn.Sequential(
             nn.Linear(n_features, hidden), nn.ReLU(), nn.Dropout(dropout),
             nn.Linear(hidden, embed), nn.ReLU(),
@@ -109,24 +88,6 @@ class ParameterNet(nn.Module):
                 {g: nn.Linear(embed, len(ps)) for g, ps in PARAM_GROUPS.items()})
         else:
             self.head = nn.Linear(embed, len(FREE_PARAMS))
-        if self.seasonal_params:
-            # 2 harmonic coeffs (a_sin, a_cos) per seasonal param off the shared
-            # trunk; ZERO-initialized so the parameter field is EXACTLY static at
-            # init (seasonality grows only if it lowers the loss) — the clean-
-            # superset property that makes this a controlled ablation.  The
-            # forward caps the raw output at |a| <= seasonal_amp via tanh so the
-            # day-of-year swing cannot run away (unbounded coeffs diverged at
-            # LR 1e-3); zero-init keeps tanh(0)=0 => exact static parity.
-            self.seasonal_head = nn.Linear(embed, 2 * len(self.seasonal_params))
-            with torch.no_grad():
-                self.seasonal_head.weight.zero_()
-                self.seasonal_head.bias.zero_()
-            # per-param cap = frac*(hi-lo), repeated for (a_sin, a_cos); a static
-            # buffer (baked into the state_dict like _lo/_hi) so eval restores it.
-            caps = [seasonal_amp_frac * (BOUNDS[p][1] - BOUNDS[p][0])
-                    for p in self.seasonal_params for _ in range(2)]
-            self.register_buffer("_seasonal_cap",
-                                 torch.tensor(caps, dtype=torch.float64))
         if gnn_k > 0:
             if n_nodes is None:
                 raise ValueError("gnn_k > 0 requires n_nodes (the fixed HRU count)")
@@ -147,50 +108,14 @@ class ParameterNet(nn.Module):
         self.register_buffer("_hi", torch.where(is_log, hi.log(), hi))
         self.register_buffer("_is_log", is_log)
         if self.canopy:
-            # Noah ET head: the LEARNED canopy params per node mapped into
-            # CANOPY_BOUNDS (rcmin log-space) — FULL = 7 physiology params, LITE
-            # = soil_chi alone (``self._canopy_learned``).  veg_frac + lai are
-            # OBSERVED (pinned per cell), NOT emitted here.  ZERO-init the head so
-            # sigmoid(0)=0.5 lands every param at its (log-aware) bound midpoint
-            # — a sane start.  FULL puts the head on a SEPARATE encoder
-            # (canopy_separate_trunk) so the 6 weak/non-identifiable physiology
-            # params cannot perturb the GA-prior SAC pathway; LITE emits the one
-            # soil_chi knob off the SHARED trunk z (no separate encoder needed).
-            # Emitted in a SEPARATE out["_canopy"] dict; NEVER in ga_optimum.
-            if self.canopy_separate_trunk:
-                self.canopy_encoder = nn.Sequential(
-                    nn.Linear(n_features, hidden), nn.ReLU(), nn.Dropout(dropout),
-                    nn.Linear(hidden, embed), nn.ReLU(),
-                )
-            self.canopy_head = nn.Linear(embed, len(self._canopy_learned))
+            # Noah-lite: the moisture exponent soil_chi off the shared trunk, zero-init so
+            # sigmoid(0) = 0.5 starts every cell at the middle of its bounds
+            self.canopy_head = nn.Linear(embed, 1)
             with torch.no_grad():
                 self.canopy_head.weight.zero_()
                 self.canopy_head.bias.zero_()
-            clo = torch.tensor([CANOPY_BOUNDS[p][0] for p in self._canopy_learned],
-                               dtype=torch.float64)
-            chi = torch.tensor([CANOPY_BOUNDS[p][1] for p in self._canopy_learned],
-                               dtype=torch.float64)
-            c_is_log = torch.tensor(
-                [p in CANOPY_LOG_PARAMS for p in self._canopy_learned])
-            self.register_buffer("_c_lo", torch.where(c_is_log, clo.log(), clo))
-            self.register_buffer("_c_hi", torch.where(c_is_log, chi.log(), chi))
-            self.register_buffer("_c_is_log", c_is_log)
-
-        # Climate-state DYNAMIC heads: one bounded coeff b per dynamic param,
-        # ZERO-init so the field is EXACTLY static at init (clean superset, like
-        # the seasonal head).  The physics reconstructs param(t)=clamp(base +
-        # b*state(t), lo, hi).  SAC coeffs come off the shared trunk z, canopy
-        # coeffs off the canopy trunk zc.
-        if self._dyn_sac:
-            self.dynamic_head = nn.Linear(embed, len(self._dyn_sac))
-            with torch.no_grad():
-                self.dynamic_head.weight.zero_()
-                self.dynamic_head.bias.zero_()
-        if self._dyn_canopy:
-            self.canopy_dynamic_head = nn.Linear(embed, len(self._dyn_canopy))
-            with torch.no_grad():
-                self.canopy_dynamic_head.weight.zero_()
-                self.canopy_dynamic_head.bias.zero_()
+            self.register_buffer("_c_lo", torch.tensor([SOIL_CHI_BOUNDS[0]], dtype=torch.float64))
+            self.register_buffer("_c_hi", torch.tensor([SOIL_CHI_BOUNDS[1]], dtype=torch.float64))
 
         # Learned Snow-17 rain/snow threshold: one zero-init output off the shared
         # trunk, mapped by tanh onto [lo, 0] / [0, hi] (piecewise, so tanh(0)=0
@@ -208,6 +133,21 @@ class ParameterNet(nn.Module):
             self.register_buffer("_px_box", torch.tensor([lo, hi], dtype=torch.float64))
             self.register_buffer("_px_tau", torch.tensor(float(pxtemp_tau),
                                                          dtype=torch.float64))
+
+    @classmethod
+    def from_checkpoint(cls, ck: dict, n_features: int) -> ParameterNet:
+        """The network of the training checkpoint ``ck``, weights loaded (a ``gnn_k`` network
+        carries its neighbor tables in them)."""
+        nc = ck.get("net_config", {})
+        gnn_k = nc.get("gnn_k", 0)
+        net = cls(n_features, hidden=nc.get("hidden", 64), embed=nc.get("embed", 32),
+                  dropout=nc.get("dropout", 0.1), grouped_heads=nc.get("grouped_heads", False),
+                  gnn_k=gnn_k, n_nodes=ck["net"]["_nbr_idx"].shape[0] if gnn_k else None,
+                  canopy=nc.get("canopy", False), pxtemp_learn=nc.get("pxtemp_learn", False),
+                  pxtemp_box=tuple(nc.get("pxtemp_box", (-1.0, 3.0))),
+                  pxtemp_tau=nc.get("pxtemp_tau", 1.0))
+        net.load_state_dict({k: v for k, v in ck["net"].items() if k not in _RETIRED_BUFFERS})
+        return net
 
     def set_neighbors(self, idx, w) -> None:
         """Load the (N, k) neighbor tables (numpy or tensor) into the buffers."""
@@ -283,38 +223,10 @@ class ParameterNet(nn.Module):
             box = self._px_box.to(r.dtype)
             out["PXTEMP"] = torch.where(r >= 0.0, r * box[1], -r * box[0])
             out["PXTEMP_tau"] = self._px_tau.to(r.dtype).repeat(n)   # (N,), contiguous
-        if self.seasonal_params:
-            # tanh-capped per-param: |a_sin|,|a_cos| <= frac*(hi-lo) (relative swing).
-            sc = self._seasonal_cap.to(z.dtype) * torch.tanh(self.seasonal_head(z))  # (N, 2*S)
-            for i, p in enumerate(self.seasonal_params):
-                out[f"{p}_asin"] = sc[:, 2 * i]
-                out[f"{p}_acos"] = sc[:, 2 * i + 1]
-        if self._dyn_sac:
-            # climate-state response coeff b per SAC dynamic param, off z; the
-            # physics adds b*state(t) in the _seasonal reconstruction.
-            ds = self.dynamic_amp * torch.tanh(self.dynamic_head(z))   # (N, |sac|)
-            for i, p in enumerate(self._dyn_sac):
-                out[f"{p}_dyn"] = ds[:, i]
         if self.canopy:
-            # LEARNED canopy params (FULL: 7 physiology; LITE: soil_chi) via the
-            # same sigmoid->[lo,hi]->double-where-exp map, off the separate canopy
-            # trunk (FULL) or the shared z (LITE); returned SEPARATELY so they
-            # never collide with ga_optimum names.
-            zc = self.canopy_encoder(x) if self.canopy_separate_trunk else z
-            cs = torch.sigmoid(self.canopy_head(zc))     # (N, |canopy_learned|) in (0,1)
-            clo = self._c_lo.to(cs.dtype)
-            chi = self._c_hi.to(cs.dtype)
-            cv = clo + cs * (chi - clo)
-            csafe = torch.where(self._c_is_log, cv, torch.zeros_like(cv))
-            cv = torch.where(self._c_is_log, csafe.exp(), cv)
-            out["_canopy"] = {p: cv[:, i]
-                              for i, p in enumerate(self._canopy_learned)}
-            if self._dyn_canopy:
-                # climate-state response coeff b per canopy dynamic param, off zc;
-                # forward.run_window reconstructs param(t)=clamp(base+b*state,lo,hi).
-                dc = self.dynamic_amp * torch.tanh(self.canopy_dynamic_head(zc))
-                for i, p in enumerate(self._dyn_canopy):
-                    out["_canopy"][f"{p}_dyn"] = dc[:, i]
+            cs = torch.sigmoid(self.canopy_head(z))[:, 0]
+            lo, hi = self._c_lo.to(cs.dtype), self._c_hi.to(cs.dtype)
+            out["soil_chi"] = lo[0] + cs * (hi[0] - lo[0])
         return out
 
 

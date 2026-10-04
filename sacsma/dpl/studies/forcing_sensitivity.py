@@ -2,14 +2,10 @@
 for the dPL hamon, pt and noah physics models plus the canonical Hybrid
 ensembles (mean over seed members, on the noah physics baseline).
 
-The ensembles' sac_sim channel is noah's TORCH daily run (their training
-channel), so the detrended channel is rebuilt by streaming the torch pipeline
-under the per-cell dT field (``evaluate.noah_torch_daily`` on the noah ckpt) —
-numerics-matched to the channel the LSTMs were trained on (the displayed
-``Noah`` series stays the frozen run_basin pair).  Because the WGEN
-detrending never enters the hybrid's TRAINING (the temperature-consistency
-loss trains on a scalar +2degC teacher), the Hybrid series here is an
-INDEPENDENT check of its temperature response.
+The physics runs run as trained under the per-cell dT field
+(:func:`sacsma.dpl.evaluate.basin_daily`); the ensembles' sac_sim channel is the
+detrended ``Noah`` series.  Because the WGEN detrending never enters the hybrids' training, the
+Hybrid series here is an INDEPENDENT check of their temperature response.
 
 WGEN Product A detrends temperature to a 1991-2020 baseline (the early record is
 warmed).  It is not packaged for the 15cdec application, so the detrending signal
@@ -42,29 +38,14 @@ import pandas as pd
 from ... import paths
 from ...cdec15 import CAL_END
 from ...io import load_forcing
-from ...model import attach_tminmax, load_domain_forcing, run_basin
+from ...model import load_domain_forcing
 from .climatology import _WY, _WY_LABELS, _monthly_taf
 
 DOMAIN = "15cdec_grid"
 _PRE1950 = "1950-01-01"
-#: pure-physics frozen sims (run_basin).  ``PT`` is the refined PT cascade;
-#: ``Noah`` is the frozen Noah-lite external-ET core (bit-exact vs torch).
-MODELS: dict[str, dict] = {
-    "Hamon": dict(csv=paths.dpl_run(run="hamon") / "params_dpl.csv",
-                 pet="hamon", alb=0.0, dew=0.0),
-    "PT":    dict(csv=paths.dpl_run(run="pt") / "params_dpl.csv",
-                 pet="priestley_taylor", alb=0.6, dew=2.0),
-    "Noah":  dict(csv=paths.dpl_run(run="noah") / "params_dpl.csv",
-                 pet="priestley_taylor", alb=0.0, dew=0.0, et_scheme="noah_lite",
-                 canopy_csv=paths.dpl_run(run="noah") / "params_canopy.csv"),
-}
-#: explicit cache tag per MODELS label -- stable cache filenames independent
-#: of the legend text.
-_MODEL_TAG: dict[str, str] = {"Hamon": "hamon", "PT": "pt", "Noah": "noah"}
-#: the noah checkpoint: the ensembles' sac_sim channel is its TORCH daily run
-#: (the run's ``sim_daily.csv``, recorded in the seed ckpts), so the detrended
-#: channel streams the torch pipeline under the dT field.
-NOAH_CKPT = paths.dpl_run(run="noah") / "checkpoints" / "best.pt"
+#: the physics runs: label -> 15-CDEC learned run.  ``PT`` is the refined PT cascade, ``Noah``
+#: the Noah-lite ET (whose detrended flow is also the ensembles' sac_sim channel).
+RUNS: dict[str, str] = {"Hamon": "hamon", "PT": "pt", "Noah": "noah"}
 #: the canonical Hybrid ENSEMBLES (mean over seed members); both sac_sim
 #: channels are the noah physics, whose detrended torch run is re-fed as the
 #: ensembles' detrended baseline.  ``Hybrid`` (plain: no PET, no dT loss) is
@@ -119,39 +100,6 @@ def _delta_t(data_dir: str, f_hist) -> np.ndarray:
     return dT
 
 
-def _forcings(data_dir: str):
-    """Historical + detrended DomainForcing (tmin/tmax attached, temp shifted)."""
-    f_hist = load_domain_forcing(data_dir, domain=DOMAIN)
-    attach_tminmax(data_dir, DOMAIN, f_hist)
-    dT = _delta_t(data_dir, f_hist)
-    f_detr = dc.replace(f_hist, tavg=f_hist.tavg + dT, tmin=f_hist.tmin + dT,
-                        tmax=f_hist.tmax + dT, _f64={})
-    return f_hist, f_detr, dT
-
-
-def _frozen_sim(forcing, spec: dict, basins, cache: Path | None = None) -> pd.DataFrame:
-    """Daily basin flow (mm/day) under a given forcing for a frozen model."""
-    if cache is not None and cache.exists():
-        return pd.read_csv(cache, parse_dates=["date"]).set_index("date")
-    params = pd.read_csv(spec["csv"])
-    canopy = pd.read_csv(spec["canopy_csv"]) if spec.get("canopy_csv") else None
-    et_scheme = spec.get("et_scheme", "sac")
-    seasonal = any(str(c).endswith("_asin") for c in params.columns)
-    cols = {}
-    for b in basins:
-        s = run_basin(b, data_dir="data", domain=DOMAIN, forcing=forcing,
-                      params=params, parallel=not seasonal, pet_source=spec["pet"],
-                      pt_snow_albedo=spec["alb"], pt_dewpoint_depression=spec["dew"],
-                      et_scheme=et_scheme, canopy_params=canopy)
-        cols[b] = s.set_index("date")["flow"]
-    df = pd.DataFrame(cols)
-    df.index.name = "date"
-    if cache is not None:
-        cache.parent.mkdir(parents=True, exist_ok=True)
-        df.to_csv(cache)
-    return df
-
-
 def _hybrid_flow(data_dir, dT, dev, sim_detr: pd.DataFrame, ckpt: str):
     """(flow_hist, flow_detr) full-record daily hybrid flow (date x basin).
 
@@ -162,26 +110,15 @@ def _hybrid_flow(data_dir, dT, dev, sim_detr: pd.DataFrame, ckpt: str):
     checkpoint."""
     import torch
 
-    from ..hybrid.data import _CAL_START, feature_names, load_hybrid_data
+    from ..hybrid.data import _CAL_START, data_for, feature_names
     from ..hybrid.model import HybridLSTM
     from ..hybrid.train import predict_days
 
     ck = torch.load(ckpt, map_location="cpu", weights_only=False)
     cfg = ck["cfg"]
-    if ck.get("variant", "feature") != "feature":
-        raise ValueError("residual hybrid checkpoints are retired (2026-07-16)")
     use_doy = cfg.get("use_doy", True)
     use_pet = cfg.get("use_pet", False)
-    h = load_hybrid_data(
-        data_dir, physics_csv=ck.get("physics_csv"),
-        sim_cache=ck.get("sim_cache"), use_statics=bool(ck["n_static"]),
-        use_doy=use_doy, use_pet=use_pet,
-        domain=cfg.get("physics_domain", "15cdec"),
-        pet_source=cfg.get("pet_source", "hamon"),
-        pt_snow_albedo=cfg.get("pt_snow_albedo", 0.0),
-        pt_dewpoint_depression=cfg.get("pt_dewpoint_depression", 0.0),
-        et_scheme=cfg.get("physics_et_scheme", "sac"),
-        canopy_csv=cfg.get("canopy_csv") or None, device=dev)
+    h = data_for(ck, data_dir, dev)
     model = HybridLSTM(h.n_feat, h.n_static, hidden=cfg["hidden"],
                        static_embed=cfg["static_embed"], dropout=cfg["dropout"]).to(dev)
     model.load_state_dict(ck["model"])
@@ -254,13 +191,12 @@ def _ensemble_flow(data_dir, dT, dev, sim_detr: pd.DataFrame, ens_dir: str):
 def assemble(data_dir: str = "data", *, device: str = "cuda") -> dict:
     """dQ (detrended - historical) daily mm/day per model, on the covered basins."""
     from ...calsim.catchments import basin_areas
-    from ...cdec15 import BASINS
     from ...io import load_hru_table
     from ..config import pick_device
 
     areas = basin_areas(data_dir, domain="15cdec")
-    f_hist, f_detr, dT = _forcings(data_dir)
-    cd = paths.local(name="cache/climatology")
+    f_hist = load_domain_forcing(data_dir, domain=DOMAIN)
+    dT = _delta_t(data_dir, f_hist)
     # basins covered by WGEN: dT non-zero for >=50% of their cells
     hru = load_hru_table(data_dir, domain=DOMAIN)
     covered = {_norm_key(k) for k, r in f_hist.pos.items() if np.any(dT[r] != 0.0)}
@@ -268,29 +204,15 @@ def assemble(data_dir: str = "data", *, device: str = "cuda") -> dict:
                       ).groupby("basin")["c"].mean()
     basins = [b for b in frac.index if frac[b] >= 0.5]
 
-    # pure-physics frozen sims over ALL 15 basins (Tulare has dT=0 ->
-    # detrended==historical), cached; dQ subsets to the covered basins.
+    # the physics runs over all 15 basins (Tulare has dT = 0); dQ keeps the covered basins
     dq: dict[str, pd.DataFrame] = {}
-    for label, spec in MODELS.items():
-        tag = _MODEL_TAG[label]
-        h = _frozen_sim(f_hist, spec, BASINS, cd / f"fs_{tag}_hist.csv")
-        d = _frozen_sim(f_detr, spec, BASINS, cd / f"fs_{tag}_detr.csv")
-        dq[label] = (d - h)[basins]
-        print(f"  assembled {label}", flush=True)
+    from ..evaluate import basin_daily
 
-    # the ensembles' detrended sac_sim channel: noah's TORCH run under the dT
-    # field (numerics-matched to the training channel; cached).  Not displayed —
-    # the Noah series above is the frozen run_basin pair.
-    nt_detr_csv = cd / "fs_noah_torch_detr.csv"
-    if nt_detr_csv.exists():
-        nt_detr = pd.read_csv(nt_detr_csv, parse_dates=["date"]).set_index("date")
-    else:
-        from ..evaluate import noah_torch_daily
-        nt_detr = noah_torch_daily(NOAH_CKPT, data_dir=data_dir,
-                                   temp_delta=dT)
-        nt_detr_csv.parent.mkdir(parents=True, exist_ok=True)
-        nt_detr.to_csv(nt_detr_csv)
-    print("  assembled the noah torch detrended channel", flush=True)
+    for label, run in RUNS.items():
+        dq[label] = (basin_daily(run, data_dir=data_dir, dt=dT)
+                     - basin_daily(run, data_dir=data_dir))[basins]
+        print(f"  assembled {label}", flush=True)
+    nt_detr = basin_daily("noah", data_dir=data_dir, dt=dT)
 
     # the canonical Hybrid ENSEMBLES (mean over seed members) on the noah
     # detrended physics baseline

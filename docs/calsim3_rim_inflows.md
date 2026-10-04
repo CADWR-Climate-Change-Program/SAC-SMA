@@ -206,7 +206,7 @@ sacsma dpl calsim tier1 <run>
 sacsma dpl calsim tier2 <run> --components parts --trace-python <python of the sacsma-gis environment>
 sacsma dpl calsim atlas <run>
 sacsma dpl calsim product fit <run>                              # -> artifacts/product/calsim3/
-sacsma dpl calsim product apply --tier2 <pass> --forcing <name>  # -> artifacts/product/calsim3/<name>/
+sacsma dpl calsim product apply --forcing <name>                # -> artifacts/product/calsim3/<name>/
 sacsma verify product                                            # apply repeats every tracked series
 ```
 

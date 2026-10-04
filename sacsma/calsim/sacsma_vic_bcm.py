@@ -250,8 +250,7 @@ def bcm_basin_monthly(data_dir: str | Path = "data", domain: str = "11obs", *,
 # the combined three-model long table
 # --------------------------------------------------------------------------
 def build_long(data_dir: str | Path = "data", *, sets=COMBINED_SETS,
-                        product: str = PRODUCT, scenario: str = BCM_SCENARIO,
-                        parallel: bool = False) -> pd.DataFrame:
+               product: str = PRODUCT, scenario: str = BCM_SCENARIO) -> pd.DataFrame:
     """Long ``[date, set, basin, source, flow_taf, ref_kind]`` for the pooled set.
 
     ``source`` is one of ``sac``/``vic``/``bcm``/``calsim3``.  SAC-SMA and VIC come
@@ -266,7 +265,7 @@ def build_long(data_dir: str | Path = "data", *, sets=COMBINED_SETS,
     from .compare import _screened_fp, build_anchor_long
 
     anchor = build_anchor_long(data_dir, sets, footprint=_screened_fp(data_dir, sets),
-                               product=product, vic_product=product, parallel=parallel)
+                               product=product, vic_product=product)
     anchor = anchor.copy()
     anchor["source"] = anchor["source"].where(~anchor["source"].isin(sets), "sac")
 
@@ -560,8 +559,8 @@ def summary_fig(met: pd.DataFrame, path, *, wy_range=WY_RANGE) -> None:
 
 # --------------------------------------------------------------------------
 def make_all(data_dir: str | Path = "data", artifacts_dir: str | Path = "artifacts",
-             *, wy_range=WY_RANGE, product: str = PRODUCT, scenario: str = BCM_SCENARIO,
-             parallel: bool = False) -> Path:
+             *, wy_range=WY_RANGE, product: str = PRODUCT,
+             scenario: str = BCM_SCENARIO) -> Path:
     """Build the whole three-way comparison into ``<artifacts_dir>/results/vic_bcm/``.
 
     Writes ``sacsma_vic_bcm_monthly.csv`` (the full long table, all years — so the
@@ -576,8 +575,7 @@ def make_all(data_dir: str | Path = "data", artifacts_dir: str | Path = "artifac
     out.mkdir(parents=True, exist_ok=True)
     figs.mkdir(parents=True, exist_ok=True)
 
-    long = build_long(data_dir, product=product, scenario=scenario,
-                               parallel=parallel)
+    long = build_long(data_dir, product=product, scenario=scenario)
     met = skill_metrics(long, wy_range=wy_range)
     summ = pooled_summary(met)
 

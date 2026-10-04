@@ -40,12 +40,7 @@ from ..io import (
     load_params,
     mmday_to_cfs,
 )
-from ..model import (
-    DomainForcing,
-    load_domain_forcing,
-    run_hru_components_cached,
-    run_local_runoff_parallel,
-)
+from ..model import DomainForcing, load_domain_forcing, simulate_ga
 
 CALSIM_GPKG = "calsim3.gpkg"
 CALSIM_LAYER = "CalSim3_And_GooseLake"
@@ -245,7 +240,7 @@ def screened_footprint(data_dir: str | Path = "data", domain: str = DEFAULT_DOMA
     :func:`map_hrus_to_catchments` overlap the per-sub-arc cross-compare uses.
 
     Returns ``[basin, key, overlap_area_mi2]`` (one row per retained HRU per screened basin).
-    It does **not** replace the full-footprint :func:`sacsma.model.run_basin` (the calibration
+    It does **not** replace the full-footprint :func:`sacsma.model.run_basins` (the calibration
     basis).  ``write=True`` saves ``data/inputs/calsim3/screened_footprint_<domain>.csv``.
     """
     catch = load_catchments(data_dir, layer=MERGED_LAYER, rim_only=True)
@@ -689,39 +684,6 @@ def calsim_basin_polygons(data_dir: str | Path = "data", domain: str = DEFAULT_D
 _EARTH_R_M = 6_371_000.0
 
 
-def _haversine_m(lat1, lon1, lat2, lon2):
-    """Great-circle distance (m) between arrays/scalars of lat/lon (degrees)."""
-    la1, lo1, la2, lo2 = (np.radians(np.asarray(x, dtype=float)) for x in (lat1, lon1, lat2, lon2))
-    dphi = la2 - la1
-    dlam = lo2 - lo1
-    a = np.sin(dphi / 2) ** 2 + np.cos(la1) * np.cos(la2) * np.sin(dlam / 2) ** 2
-    return 2 * _EARTH_R_M * np.arcsin(np.sqrt(a))
-
-
-def assign_flowlens(mapping: pd.DataFrame, cells: pd.DataFrame, *, sinuosity: float = 1.4):
-    """Per-HRU flow length (m) to each catchment's outlet, for CalSim-node routing.
-
-    The native HRU ``flowlen`` is the distance to the *CDEC reservoir* outlet, which
-    is wrong for a CalSim sub-node.  Lacking explicit node coordinates in the GIS,
-    the catchment outlet (pour point) is taken as the **lowest-elevation HRU cell**;
-    each HRU's flow length is the great-circle distance to it x ``sinuosity`` (a
-    channel-meander factor).  The outlet cell gets ``flowlen_m=0``/``is_outlet=1``
-    (Lohmann channel UH becomes identity there).  Returns ``mapping`` with added
-    ``elev, flowlen_m, is_outlet`` columns.
-    """
-    m = mapping.merge(cells[["key", "elev"]], on="key", how="left")
-    parts = []
-    for _cid, g in m.groupby("cid", sort=False):
-        g = g.copy()
-        i = int(np.asarray(g["elev"].values).argmin())
-        olat, olon = g["lat"].values[i], g["lon"].values[i]
-        g["flowlen_m"] = _haversine_m(g["lat"].values, g["lon"].values, olat, olon) * sinuosity
-        g["is_outlet"] = 0
-        g.iloc[i, g.columns.get_loc("is_outlet")] = 1
-        parts.append(g)
-    return pd.concat(parts, ignore_index=True)
-
-
 # --------------------------------------------------------------------------
 # Run
 # --------------------------------------------------------------------------
@@ -734,96 +696,38 @@ def run_calsim(
     start: str | None = None,
     end: str | None = None,
     forcing: DomainForcing | None = None,
-    route: bool = False,
-    sinuosity: float = 1.4,
     covered_frac: float = COVERED_FRAC,
-    progress: bool = False,
-    comp_cache: dict | None = None,
-    parallel: bool = False,
 ):
-    """Simulate area-weighted inflow for every covered catchment.
-
-    With ``route=False`` (default) each catchment's inflow is the area-weighted
-    HRU **local runoff** (SMA ``surf+base``).  With ``route=True`` each HRU's flow
-    is first Lohmann-routed to the catchment outlet using a **special CalSim
-    flowlen** (:func:`assign_flowlens`) before area-weighting — a physically routed
-    daily inflow at the CalSim node (negligible at monthly aggregation, matters for
-    daily shape).
-
-    ``parallel=True`` computes the per-cell local runoff via the Numba ``prange``
-    kernel (:func:`sacsma.model.run_local_runoff_parallel`) — **bit-exact** vs the
-    serial path (each cell is independent), only available for ``route=False``, and
-    it bypasses ``comp_cache`` (the kernel computes every cell itself).
+    """Simulate area-weighted inflow for every covered catchment: the HRU **local runoff**
+    (SAC-SMA ``surf + base``, not routed) of the GA optimum, weighted by each HRU's area in
+    the catchment.
 
     Returns ``(flows, coverage, mapping)`` where ``flows`` is long-format
-    [date, cid, node, flow_mmday, flow_cfs] over all catchments that have >=1 HRU,
-    and ``mapping`` carries the per-HRU ``flowlen_m``/``is_outlet`` columns.
+    [date, cid, node, flow_mmday, flow_cfs] over all catchments that have >=1 HRU.
     """
     catch = load_catchments(data_dir, layer=layer, rim_only=rim_only)
     cells = load_hru_cells(data_dir, domain=domain)
     mapping, cov = map_hrus_to_catchments(catch, cells, covered_frac=covered_frac)
-    mapping = assign_flowlens(mapping, cells, sinuosity=sinuosity)
-
     if forcing is None:
-        if progress:
-            print("loading domain forcing once...", flush=True)
         forcing = load_domain_forcing(data_dir, domain=domain, start=start, end=end)
     # per-watershed calibrations repeat shared cells; one param set per cell suffices
     # for the CalSim aggregation, so keep the first.
     params = load_params(domain=domain).drop_duplicates("key").set_index("key")
 
-    # compute each unique HRU cell once; an HRU may feed several catchments.
+    # each HRU cell runs once; an HRU may feed several catchments
     keys = mapping["key"].unique()
-    meta = cells.set_index("key")
-    label = "routed" if route else "local runoff"
-    local: dict[str, np.ndarray] = {}
-    comp: dict[str, tuple[np.ndarray, np.ndarray]] = {}
-    if parallel and not route and run_local_runoff_parallel is not None:
-        # bit-exact with the serial loop below (per-cell, no cross-HRU reduction);
-        # bypasses comp_cache (the kernel computes every cell itself).
-        mat = run_local_runoff_parallel(keys, meta, params, forcing)
-        local = {k: mat[i] for i, k in enumerate(keys)}
-    else:
-        for i, k in enumerate(keys):
-            if progress and (i % 500 == 0):
-                print(f"  {label}: HRU {i + 1}/{len(keys)}", flush=True)
-            c = forcing.pos[k]
-            # components cached (and shared with the basin-anchor run_basin pass via comp_cache);
-            # local runoff is just surf+base, identical to run_hru_local.
-            surf, base = run_hru_components_cached(
-                comp_cache, domain, k, forcing.prcp[c], forcing.tavg[c], forcing.doy, forcing.is_leap,
-                lat=float(meta.at[k, "lat"]), elev=float(meta.at[k, "elev"]), ga_row=params.loc[k])
-            if route:
-                comp[k] = (surf, base)
-            else:
-                local[k] = surf + base
+    hrus = cells.set_index("key").loc[keys, ["lat", "elev"]].reset_index().assign(flowlen=0.0)
+    node = mapping.groupby("cid")["node"].first()       # catchments in order
+    cids = list(node.index)
+    W = np.zeros((len(cids), len(keys)))
+    area = mapping["area_mi2"].to_numpy(float)
+    np.add.at(W, (pd.Index(cids).get_indexer(mapping["cid"]),
+                  pd.Index(keys).get_indexer(mapping["key"])), area)
+    W /= W.sum(axis=1, keepdims=True)
+    depth = simulate_ga(hrus, params.loc[keys], W, forcing, output="runoff")
 
-    if route:
-        from .. import parameters as P
-        from ..routing import lohmann
-
-    dates = forcing.dates
     sqmi = catch.set_index("cid")["sq_mi"].to_dict()
-    frames = []
-    for cid, grp in mapping.groupby("cid"):
-        w = grp["area_mi2"].to_numpy(dtype=float)
-        w = w / w.sum()
-        depth = np.zeros(len(dates))
-        if route:
-            for wi, row in zip(w, grp.itertuples(index=False)):
-                surf, base = comp[row.key]
-                routed, _b = lohmann(surf, base, float(row.flowlen_m),
-                                     P.routing_par(params.loc[row.key]), int(row.is_outlet))
-                depth += wi * routed
-        else:
-            for wi, k in zip(w, grp["key"]):
-                depth += wi * local[k]
-        frames.append(pd.DataFrame({
-            "date": dates,
-            "cid": cid,
-            "node": grp["node"].iloc[0],
-            "flow_mmday": depth,
-            "flow_cfs": mmday_to_cfs(depth, sqmi[cid]),
-        }))
-    flows = pd.concat(frames, ignore_index=True)
-    return flows, cov, mapping
+    frames = [pd.DataFrame({"date": forcing.dates, "cid": cid, "node": node[cid],
+                            "flow_mmday": depth[i], "flow_cfs": mmday_to_cfs(depth[i], sqmi[cid])})
+              for i, cid in enumerate(cids)]
+    return pd.concat(frames, ignore_index=True), cov, mapping

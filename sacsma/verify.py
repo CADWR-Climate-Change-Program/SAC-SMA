@@ -18,6 +18,10 @@ The repository has no test suite; the model is verified by running it.  The chec
 ``parity``
     the Python model against the archived MATLAB simulation, one watershed per domain
     (:data:`PARITY_BASINS`): KGE > 0.9999 and max daily difference < 0.1 mm/day
+``learned``
+    the learned model's step on the CPU engine (``sacsma.sma_learned``) against the torch step it
+    mirrors, one tracked run per physics (:data:`LEARNED_RUNS`): 32 rows, two years from the
+    cold start, the flow and its six routed components within 1e-9 mm/day
 ``product``
     the share model applied to the tier-2 pass kept beside each forcing's series
     (``artifacts/product/calsim3/<forcing>/tier2/``) reproduces the tracked
@@ -46,10 +50,16 @@ PARITY_BASINS = (("15cdec", "BND"), ("9unimp", "CacheCreek"), ("11obs", "SHA"),
                  ("12rim", "SHAST"))
 PARITY_KGE = 0.9999
 PARITY_MAX_MM = 0.1
+#: one tracked run per physics of the learned step: Noah-lite with the SAC exchanges and a
+#: learned PXTEMP, Noah-lite, SAC ET with the refined Priestley-Taylor PET, SAC ET with Hamon
+LEARNED_RUNS = (("multifamily",
+                 "noah_cdec_uf_usgs_cs64_ho7685_ufx_areaw_all_kref05_sacx_carry_px_aef"),
+                ("15cdec", "noah"), ("15cdec", "pt"), ("15cdec", "hamon_dense"))
+LEARNED_MAX_MM = 1e-9
 #: relative tolerance of the product check (the fit and ``apply`` agree to about 3e-7)
 PRODUCT_RTOL = 1e-5
 
-CHECKS = ("imports", "cli", "links", "artifacts", "parity", "product")
+CHECKS = ("imports", "cli", "links", "artifacts", "parity", "learned", "product")
 QUICK = ("imports", "cli", "links", "artifacts")
 #: the tracked parts of the output tree; ``_local/`` is ignored
 ARTIFACT_PARTS = ("product", "models", "results")
@@ -237,13 +247,14 @@ def check_parity(data_dir: str = "data", **_) -> tuple[bool, str]:
 
     from .io import load_reference
     from .metrics import kge
-    from .model import run_basin
+    from .model import run_basins
 
     ok, rows = True, []
+    sims = {d: run_basins([b for d2, b in PARITY_BASINS if d2 == d], data_dir=data_dir, domain=d)
+            for d in dict.fromkeys(d for d, _ in PARITY_BASINS)}
     for domain, basin in PARITY_BASINS:
-        sim = run_basin(basin, data_dir=data_dir, domain=domain)
+        s = sims[domain][basin]
         ref = load_reference(data_dir, basin, domain=domain)
-        s = pd.Series(sim["flow"].to_numpy(), index=pd.DatetimeIndex(sim["date"]))
         r = pd.Series(ref["flow"].to_numpy(), index=pd.DatetimeIndex(ref["date"]))
         j = s.index.intersection(r.index)
         k = kge(s[j].to_numpy(), r[j].to_numpy())
@@ -254,6 +265,45 @@ def check_parity(data_dir: str = "data", **_) -> tuple[bool, str]:
                     + ("" if good else "   FAIL"))
     return ok, (f"KGE > {PARITY_KGE} and max |d| < {PARITY_MAX_MM} mm/day against the MATLAB "
                 "simulation" + "".join(rows))
+
+
+# ------------------------------------------------------------------------------- learned
+def check_learned(data_dir: str = "data", artifacts_dir: str = "artifacts",
+                  **_) -> tuple[bool | None, str]:
+    if not _has_torch():
+        return None, "torch is not installed"
+    import numpy as np
+    import torch
+
+    from .dpl.evaluate import load_net_from_checkpoint, simulate_field
+    from .dpl.forward import initial_state, routing_uh, run_window
+    from .engine import OUTPUTS
+
+    ok, rows, T = True, [], 730
+    for group, run in LEARNED_RUNS:
+        ck = paths.dpl_checkpoint(artifacts_dir, run, group)
+        net, x, dom, cfg, _ = load_net_from_checkpoint(ck, data_dir, device="cpu")
+        pick = np.unique(np.linspace(0, dom.n_hru - 1, 32).astype(int))
+        W = np.zeros((len(pick), dom.n_hru))
+        W[np.arange(len(pick)), pick] = 1.0
+        got = simulate_field(net, x, dom, cfg, dom.dates[0], dom.dates[T - 1], W, spinup="cold",
+                             outputs=OUTPUTS)
+        rt = torch.as_tensor(pick)
+        with torch.no_grad():
+            p = {k: v[rt] for k, v in net(x).items()}
+            res = run_window(
+                dom.window(0, T).rows(rt), dom.lat_rad[rt], dom.elev[rt], p,
+                routing_uh(p, dom.flowlen[rt]), initial_state(len(pick), dom.device, dom.dtype),
+                cfg.physics(), veg_frac=None if dom.veg_frac is None else dom.veg_frac[rt],
+                return_components=True, return_parts=True)
+        ref = dict(zip(OUTPUTS, [res[0], *res[2], *res[3]], strict=True))
+        d = max(float(np.abs(got[o] - ref[o].numpy()).max()) for o in OUTPUTS)
+        good = d < LEARNED_MAX_MM
+        ok &= good
+        rows.append(f"\n    {group}/{run[:40]:40s} max |d| {d:.1e} mm/day"
+                    + ("" if good else "   FAIL"))
+    return ok, (f"the engine's learned step against torch within {LEARNED_MAX_MM:g} mm/day"
+                + "".join(rows))
 
 
 # ------------------------------------------------------------------------------- product
@@ -347,7 +397,8 @@ def check_product(data_dir: str = "data", artifacts_dir: str = "artifacts",
 
 
 _FUNCS = {"imports": check_imports, "cli": check_cli, "links": check_links,
-          "artifacts": check_artifacts, "parity": check_parity, "product": check_product}
+          "artifacts": check_artifacts, "parity": check_parity, "learned": check_learned,
+          "product": check_product}
 
 
 def run_checks(checks=None, *, data_dir: str = "data", quick: bool = False) -> int:

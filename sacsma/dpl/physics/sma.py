@@ -1,33 +1,17 @@
-"""Differentiable SAC-SMA — torch mirror of the frozen ``sacsma.sma``.
+"""Differentiable SAC-SMA: the torch step the learned parameter fields are trained with.
 
-Every reference branch/clamp (``sma.py::_sacsma_core``) is expressed as a
-mask/`torch.where` blend whose FORWARD values match the reference exactly,
-including the ``thres_zero = 1e-5`` and ``0.0001`` storage snaps, the
-``(pinc + uzfwc) <= 0.01`` percolation short-circuit, the ``ratio**2`` ADIMP
-runoff, and the reference et4/et5 channel-inflow adjustment (``et4`` from the
-UNWEIGHTED ``et1+et2+et3`` — the prior tmp/src_dpl port weighted it too early).
+Every branch and clamp of the reference (``sacsma.sma._sacsma_core``) is written as a mask or
+``torch.where`` blend with the reference's forward values: the ``thres_zero = 1e-5`` and
+``0.0001`` storage snaps, the ``(pinc + uzfwc) <= 0.01`` percolation short-circuit, the
+``ratio**2`` ADIMP runoff and the et4 channel-inflow adjustment (``et4`` from the unweighted
+``et1 + et2 + et3``).  It departs from the reference in a fixed number of substeps a day
+(``n_inc``; the reference takes ``floor(1 + 0.2 * (uzfwc + twx))``), a floor on the
+denominator of the lower-zone fill fraction (``fracp_floor``) and the percolation cap at the
+lower-zone deficit (``sacsma.sma_learned``, its Numba copy, lists the differences).
 
-The ONE structural deviation from the reference is the substep count: the
-reference ``ninc = floor(1 + 0.2*(uzfwc + twx))`` is data-dependent (graph
-shape would change per step/HRU); here it is a fixed ``n_inc`` (fidelity vs
-``n_inc`` is quantified by ``sacsma dpl benchmark`` before any training).
-
-``perc_mode`` selects the percolation numerics:
-
-* ``"reference"`` — linear demand ``percm*uzfwc/uzfwm*(1+zperc*defr**rexp)``
-  hard-capped at ``uzfwc`` then at the LZ deficit (exact frozen forward; the
-  unclipped local Jacobian is huge — zperc reaches 500 — so this mode is for
-  fidelity checks, not training);
-* ``"implicit"`` — ``uzfwc*(1-exp(-k*dinc))`` implicit-Euler saturator;
-* ``"tanh"`` — ``uzfwc*tanh(k)`` saturator.  Both bound the gradient in [0,1]
-  and add a ``defr + 1e-6`` guard (NaN d/d(rexp) at defr=0) and a
-  ``fracp_floor`` on the LZ fill-fraction denominator.
-
-Parameter dict keys are the ga_optimum column names (lowercase SMA names);
-bounds (config.BOUNDS) are a precondition — divisions by uztwm/uzfwm/lztwm/…
-are unguarded exactly like the reference because the bounds keep them >= 1.
-State order matches the reference vector: [uztwc, uzfwc, lztwc, lzfsc, lzfpc,
-adimc]; reference cold start [0, 0, 100, 100, 100, 0].
+Parameter keys are the ga_optimum names (lowercase SMA names); the bounds (config.BOUNDS) keep
+every capacity >= 1, so the divisions are unguarded as in the reference.  State order is the
+reference vector [uztwc, uzfwc, lztwc, lzfsc, lzfpc, adimc], cold start [0, 0, 100, 100, 100, 0].
 """
 
 from __future__ import annotations
@@ -35,6 +19,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import torch
+
+from .et_noah import noah_lite_et
 
 _THRES = 1e-5    # reference thres_zero
 _BF_EPS = 1e-4   # reference baseflow depletion snap (0.0001 — a DIFFERENT constant)
@@ -108,13 +94,6 @@ class SacState:
         return cls(uztwc=z.clone(), uzfwc=z.clone(), lztwc=h.clone(),
                    lzfsc=h.clone(), lzfpc=h.clone(), adimc=z.clone())
 
-    @classmethod
-    def capacity_init(cls, p: dict[str, torch.Tensor]) -> SacState:
-        """Storages at capacity (the tmp/src_dpl convention; NOT the reference)."""
-        return cls(uztwc=p["uztwm"].clone(), uzfwc=torch.zeros_like(p["uztwm"]),
-                   lztwc=p["lztwm"].clone(), lzfsc=p["lzfsm"].clone(),
-                   lzfpc=p["lzfpm"].clone(), adimc=(p["uztwm"] + p["lztwm"]).clone())
-
     def detach(self) -> SacState:
         return SacState(*(getattr(self, f).detach() for f in
                           ("uztwc", "uzfwc", "lztwc", "lzfsc", "lzfpc", "adimc")))
@@ -131,11 +110,8 @@ def sacsma_step(
     pet_t: torch.Tensor,   # (N,) PET, mm/day
     p: dict[str, torch.Tensor],
     *,
-    n_inc: int = 5,
-    perc_mode: str = "reference",
-    fracp_floor: float = 0.0,
-    ninc_mode: str = "fixed",
-    et_mode: str = "sac",
+    n_inc: int,
+    fracp_floor: float,
     eused_ext: torch.Tensor | None = None,
     sac_exchanges: bool = False,
     uztwc_pre: torch.Tensor | None = None,
@@ -143,26 +119,19 @@ def sacsma_step(
 ) -> tuple[SacState, torch.Tensor, torch.Tensor, torch.Tensor]:
     """One daily step; returns (new_state, surf, base, tet) in mm/day.
 
-    ``return_parts`` (off by default; the four default outputs are unchanged either
-    way) appends the runoff PARTS, a tuple in :data:`PART_NAMES` order: ``roimp``
-    (impervious), ``sdro`` (ADIMP direct), ``ssur`` (surface), ``sif`` (interflow,
-    parea-weighted) of ``surf``, and ``supplemental`` / ``primary`` baseflow of
-    ``base`` (separate accumulators, each x ``parea / (1 + side)``).  The riparian
-    et4 channel-ET deduction and the dry-channel clamp act on the aggregate
-    ``surf`` / ``base``; the parts are the FINAL (net) ``surf`` / ``base``
-    apportioned in proportion to the parts' pre-deduction values
-    (:func:`_apportion_parts`), so ``roimp + sdro + ssur + sif == surf`` and
-    ``supplemental + primary == base`` bitwise.
+    ``return_parts`` appends the runoff parts in :data:`PART_NAMES` order: ``roimp``
+    (impervious), ``sdro`` (ADIMP direct), ``ssur`` (surface), ``sif`` (interflow) of
+    ``surf`` and ``supplemental`` / ``primary`` baseflow of ``base`` -- the final ``surf`` /
+    ``base`` (after the et4 channel-ET deduction and the dry-channel clamp) apportioned in
+    proportion to the parts' pre-deduction values (:func:`_apportion_parts`), so the sums are
+    exact.
 
-    ``et_mode="sac"`` (default) runs the exact-parity E1-E5 cascade.
-    ``et_mode="external"`` skips it: the caller (Noah ET) has already applied
-    the soil withdrawals to ``state`` and passes ``pr_t`` as canopy-throughfall
-    effective precip; ``eused_ext`` (the soil ET actually withdrawn) feeds the
-    unchanged riparian ``et4`` channel adjustment.  With ``sac_exchanges`` the
-    external withdrawals stand in for E1-E3 only and the rest of the reference
-    ET block runs after them: the upper free -> tension rebalance, the lower
-    free -> tension resupply and the ADIMP ET(5), whose ET1 is the upper-tension
-    withdrawal ``uztwc_pre - uztwc`` (``uztwc_pre`` = the content before it).
+    Without ``eused_ext`` the reference ET cascade E1-E5 runs.  With it the ET was withdrawn
+    upstream (Noah-lite, :func:`run_sacsma`): ``eused_ext`` is the soil ET taken, which feeds
+    the riparian ``et4`` only; with ``sac_exchanges`` the rest of the reference ET block runs
+    after the withdrawal -- the upper free -> tension rebalance, the lower free -> tension
+    resupply and the ADIMP ET(5), whose ET1 is the upper-tension withdrawal ``uztwc_pre -
+    uztwc``.
     """
     uztwm, uzfwm, lztwm = p["uztwm"], p["uzfwm"], p["lztwm"]
     lzfpm, lzfsm = p["lzfpm"], p["lzfsm"]
@@ -179,10 +148,10 @@ def sacsma_step(
     parea = 1.0 - adimp - pctim
     edmnd = pet_t
 
-    if et_mode == "external":
+    if eused_ext is not None:
         # ET applied upstream; no withdrawal here.  eused feeds et4 only.
         et1 = et2 = et3 = et5 = zero
-        eused = eused_ext if eused_ext is not None else zero
+        eused = eused_ext
         if sac_exchanges:
             if uztwc_pre is None:
                 raise ValueError("sac_exchanges needs uztwc_pre (the UZ tension "
@@ -270,12 +239,7 @@ def sacsma_step(
     adimc = adimc + pr_t - twx
     roimp = pr_t * pctim
 
-    # ---- substep loop ----
-    # ninc_mode="fixed": n_inc substeps for every lane (the trainable numerics).
-    # ninc_mode="dynamic": the reference's data-dependent
-    # ninc = floor(1 + 0.2*(uzfwc + twx)) per lane, run to max(ninc) with
-    # finished lanes masked through — EXACT frozen numerics (fidelity only:
-    # the .item() sync and unbounded loop length make it untrainable).
+    # ---- substep loop: n_inc substeps for every lane ----
     sbf = torch.zeros_like(uztwc)
     ssur = torch.zeros_like(uztwc)
     sif = torch.zeros_like(uztwc)
@@ -284,22 +248,14 @@ def sacsma_step(
         sbf_p = torch.zeros_like(uztwc)
         sbf_s = torch.zeros_like(uztwc)
 
-    if ninc_mode == "dynamic":
-        ninc = torch.floor(1.0 + 0.2 * (uzfwc + twx))
-        n_steps = int(ninc.max().item())
-        dinc = 1.0 / ninc
-        pinc = twx / ninc
-    else:
-        ninc = None
-        n_steps = n_inc
-        dinc = 1.0 / n_inc
-        pinc = twx / n_inc
+    dinc = 1.0 / n_inc
+    pinc = twx / n_inc
     duz = 1.0 - (1.0 - uzk) ** dinc
     dlzp = 1.0 - (1.0 - lzpk) ** dinc
     dlzs = 1.0 - (1.0 - lzsk) ** dinc
     percm = lzfpm * dlzp + lzfsm * dlzs
 
-    for s in range(n_steps):
+    for _ in range(n_inc):
         # ADIMP direct runoff (hardcoded ratio**2, as the reference)
         ratio = ((adimc - uztwc) / lztwm).clamp_min(0.0)
         addro = pinc * ratio * ratio
@@ -323,15 +279,8 @@ def sacsma_step(
 
         lz_deficit = (lztwm + lzfpm + lzfsm) - (lztwc + lzfpc_s + lzfsc_s)
         defr = (1.0 - (lztwc + lzfpc_s + lzfsc_s) / (lztwm + lzfpm + lzfsm)).clamp_min(0.0)
-        if perc_mode == "reference":
-            amp = 1.0 + zperc * defr ** rexp
-            perc = torch.minimum(percm * uzfwc / uzfwm * amp, uzfwc)
-        else:
-            k_perc = (percm / uzfwm) * (1.0 + zperc * (defr + 1e-6) ** rexp)
-            if perc_mode == "implicit":
-                perc = uzfwc * (1.0 - torch.exp(-(k_perc * dinc).clamp_max(50.0)))
-            else:  # "tanh"
-                perc = uzfwc * torch.tanh(k_perc)
+        amp = 1.0 + zperc * defr ** rexp
+        perc = torch.minimum(percm * uzfwc / uzfwm * amp, uzfwc)
         # the reference "check" correction == cap at the LZ deficit
         perc = act * torch.minimum(perc, lz_deficit.clamp_min(0.0))
         uzfwc_a = uzfwc - perc
@@ -378,29 +327,17 @@ def sacsma_step(
         addro = addro + over
         adimc_n = _snap(adimc_n - over)
 
-        if ninc is None:
-            live = None
-            uzfwc, lztwc, lzfsc, lzfpc, adimc = uzfwc_n, lztwc_n, lzfsc_n, lzfpc_n, adimc_n
-        else:
-            # lanes whose own ninc is exhausted pass through unchanged
-            live = (ninc > s).to(dtype)
-            hold = 1.0 - live
-            uzfwc = live * uzfwc_n + hold * uzfwc
-            lztwc = live * lztwc_n + hold * lztwc
-            lzfsc = live * lzfsc_n + hold * lzfsc
-            lzfpc = live * lzfpc_n + hold * lzfpc
-            adimc = live * adimc_n + hold * adimc
-        gate = 1.0 if live is None else live
-        sbf = sbf + gate * (bf_p + bf_s)
+        uzfwc, lztwc, lzfsc, lzfpc, adimc = uzfwc_n, lztwc_n, lzfsc_n, lzfpc_n, adimc_n
+        sbf = sbf + (bf_p + bf_s)
         if return_parts:
-            sbf_p = sbf_p + gate * bf_p
-            sbf_s = sbf_s + gate * bf_s
-        sif = sif + gate * act * dele_if
-        ssur = ssur + gate * act * (sur * parea + adsur * adimp)
-        sdro = sdro + gate * (addro * adimp)
+            sbf_p = sbf_p + bf_p
+            sbf_s = sbf_s + bf_s
+        sif = sif + act * dele_if
+        ssur = ssur + act * (sur * parea + adsur * adimp)
+        sdro = sdro + addro * adimp
 
     # ---- aggregate channel inflow (reference order: et4 from UNWEIGHTED eused) ----
-    # eused is set above per et_mode (et1+et2+et3 for "sac"; eused_ext for "external")
+    # eused: et1 + et2 + et3 of the cascade, or the upstream withdrawal
     sif = sif * parea
     bfcc = sbf * parea / (1.0 + side)
     base = bfcc
@@ -438,57 +375,29 @@ def sacsma_step(
 def run_sacsma(
     pet: torch.Tensor,       # (N, T) mm/day
     pr_eff: torch.Tensor,    # (N, T) mm/day (Snow-17 outflow)
-    params: dict[str, torch.Tensor],   # (N,) each, ga_optimum names
-    state: SacState | None = None,
+    params: dict[str, torch.Tensor],   # (N,) each, ga_optimum names (+ soil_chi for Noah-lite)
+    state: SacState,
+    physics,                 # sacsma.engine.Physics
     *,
-    n_inc: int = 5,
-    perc_mode: str = "reference",
-    fracp_floor: float = 0.0,
-    ninc_mode: str = "fixed",
-    et_mode: str = "sac",
-    noah: dict | None = None,
-    recession: dict[str, torch.Tensor] | None = None,
+    veg_frac: torch.Tensor | None = None,   # (N,) observed green fraction (Noah-lite)
+    lai: torch.Tensor | None = None,        # (N, T) observed LAI (Noah-lite)
     return_parts: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, SacState]:
     """Run SAC-SMA over a window; returns (surf, base, tet, final_state).
 
-    ``return_parts`` (off by default; the four default outputs are unchanged either
-    way) appends the per-day runoff parts of :func:`sacsma_step`, a tuple of six
-    (N, T) tensors in :data:`PART_NAMES` order — net of the et4 channel-ET
-    deduction, ``roimp + sdro + ssur + sif == surf`` and ``supplemental + primary
-    == base`` bitwise.
+    ``return_parts`` appends the per-day runoff parts of :func:`sacsma_step`, six (N, T)
+    tensors in :data:`PART_NAMES` order.
 
-    ``et_mode="noah"`` runs the Noah canopy-resistance ET each day (interception
-    reduces the precip that enters the SAC balance; the three ET components are
-    withdrawn upstream of the water-balance step).  ``noah`` then carries the
-    per-day drivers and the canopy state::
-
-        {"tavg","tmin","tmax": (N,T); "doy": (T,); "lat_rad","elev": (N,);
-         "cp": {canopy params}; "canopy": NoahCanopyState;
-         "lite": bool; "sac_exchanges": bool (see sacsma_step)}
-
-    The updated canopy ``wc`` is written back into ``noah["canopy"]``.
+    ``physics.et == "noah_lite"`` withdraws the Noah-lite ET (:func:`.et_noah.noah_lite_et`,
+    exponent ``params["soil_chi"]``) ahead of each day's water balance.
     """
-    n, t_len = pet.shape
-    if state is None:
-        state = SacState.reference_init(n, pet.device, pet.dtype)
-    if et_mode == "noah":
-        from .et_noah import NoahCanopyState, noah_et_step, noah_lite_et_step
-        if noah is None:
-            raise ValueError("et_mode='noah' requires the noah driver dict")
-        lite = bool(noah.get("lite"))
-        sac_exchanges = bool(noah.get("sac_exchanges"))
-        if sac_exchanges and not lite:
-            # the full path moves water UZ<->LZ itself (redist_k), so the UZ tension
-            # change is not the withdrawal that stands in for ET1
-            raise ValueError("sac_exchanges is defined for the Noah-lite path only")
-        cstate = noah.get("canopy") or NoahCanopyState.zeros(n, pet.device, pet.dtype)
-        wc = cstate.wc
+    t_len = pet.shape[1]
+    noah = physics.et == "noah_lite"
+    step_kw = {"n_inc": physics.n_inc, "fracp_floor": physics.fracp_floor,
+               "return_parts": return_parts}
     grad = torch.is_grad_enabled() and (
         pet.requires_grad or pr_eff.requires_grad
-        or any(v.requires_grad for v in params.values())
-        or (recession is not None and any(v.requires_grad for v in recession.values()))
-    )
+        or any(v.requires_grad for v in params.values()))
     if grad:
         surf_s: list[torch.Tensor] = []
         base_s: list[torch.Tensor] = []
@@ -500,48 +409,20 @@ def run_sacsma(
     if return_parts:
         parts_s: list[tuple[torch.Tensor, ...]] = []
     for t in range(t_len):
-        # per-day params: override the seasonal recession rates when supplied
-        # (the day-of-year harmonic experiment); otherwise the shared dict.
-        p_t = params if recession is None else {
-            **params, "uzk": recession["uzk"][:, t],
-            "lzpk": recession["lzpk"][:, t], "lzsk": recession["lzsk"][:, t]}
-        if et_mode == "noah":
-            st = {"uztwc": state.uztwc, "uzfwc": state.uzfwc, "lztwc": state.lztwc,
-                  "lzfsc": state.lzfsc, "lzfpc": state.lzfpc, "adimc": state.adimc,
-                  "wc": wc}
-            doy_t = noah["doy"][t] if noah["doy"].dim() == 1 else noah["doy"][:, t]
-            # index any (N,T) dynamic canopy param (e.g. soil_chi) to day t;
-            # static (N,) canopy params pass through unchanged.
-            cp_t = {k: (v[:, t] if v.dim() == 2 else v)
-                    for k, v in noah["cp"].items()}
-            if lite:
-                eff_p, ns, et_soil = noah_lite_et_step(
-                    st, pr_eff[:, t], pet[:, t], params, cp_t,
-                    noah["veg_frac"], noah["lai"][:, t])
-            else:
-                eff_p, ns, et_soil = noah_et_step(
-                    st, pr_eff[:, t], pet[:, t],
-                    noah["tavg"][:, t], noah["tmin"][:, t], noah["tmax"][:, t],
-                    doy_t, noah["lat_rad"], noah["elev"], params, cp_t,
-                    noah["veg_frac"], noah["lai"][:, t])
+        if noah:
             uztwc_pre = state.uztwc
-            state = SacState(uztwc=ns["uztwc"], uzfwc=ns["uzfwc"], lztwc=ns["lztwc"],
-                             lzfsc=ns["lzfsc"], lzfpc=ns["lzfpc"], adimc=ns["adimc"])
-            wc = ns["wc"]
-            # pass the Noah ET as eused so the step's existing eused*parea term
-            # reports it (pervious-area weighted) — no double count.  te is then
-            # tet_noah*parea + et4 (riparian channel) [+ et5 with sac_exchanges].
-            step = sacsma_step(
-                state, eff_p, pet[:, t], p_t, n_inc=n_inc, perc_mode=perc_mode,
-                fracp_floor=fracp_floor, ninc_mode=ninc_mode,
-                et_mode="external", eused_ext=et_soil,
-                sac_exchanges=sac_exchanges, uztwc_pre=uztwc_pre,
-                return_parts=return_parts)
+            uztwc, uzfwc, lztwc, et_soil = noah_lite_et(
+                state.uztwc, state.uzfwc, state.lztwc, pet[:, t], params, params["soil_chi"],
+                veg_frac, lai[:, t])
+            state = SacState(uztwc=uztwc, uzfwc=uzfwc, lztwc=lztwc, lzfsc=state.lzfsc,
+                             lzfpc=state.lzfpc, adimc=state.adimc)
+            # the Noah ET is the step's eused, so its eused*parea term reports it (no double
+            # count): te = tet_noah*parea + et4 [+ et5 with sac_exchanges]
+            step = sacsma_step(state, pr_eff[:, t], pet[:, t], params, eused_ext=et_soil,
+                               sac_exchanges=physics.sac_exchanges, uztwc_pre=uztwc_pre,
+                               **step_kw)
         else:
-            step = sacsma_step(
-                state, pr_eff[:, t], pet[:, t], p_t, n_inc=n_inc,
-                perc_mode=perc_mode, fracp_floor=fracp_floor, ninc_mode=ninc_mode,
-                return_parts=return_parts)
+            step = sacsma_step(state, pr_eff[:, t], pet[:, t], params, **step_kw)
         state, sf, bs, te = step[:4]
         if return_parts:
             parts_s.append(step[4])
@@ -557,8 +438,6 @@ def run_sacsma(
         surf = torch.stack(surf_s, dim=-1)
         base = torch.stack(base_s, dim=-1)
         tet = torch.stack(tet_s, dim=-1)
-    if et_mode == "noah":
-        noah["canopy"] = NoahCanopyState(wc=wc)
     if return_parts:
         parts = tuple(torch.stack([p[k] for p in parts_s], dim=-1)
                       for k in range(len(PART_NAMES)))

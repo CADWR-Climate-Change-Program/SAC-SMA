@@ -90,8 +90,8 @@ sidecars. Products, units, encodings and the sampling conventions are in
 
 ## Read by
 
-- `sacsma.io`: `load_hru_table`, `load_basin_area`, `soilveg_path`, `lai_climatology_path`,
-  `load_canopy_obs` (and `load_params`, which reads the GA optimum from `artifacts/models/`). Through them
+- `sacsma.io`: `load_hru_table`, `load_basin_area`, `soilveg_path`, `lai_climatology_path`
+  (and `load_params`, which reads the GA optimum from `artifacts/models/`). Through them
   every model run (`sacsma run`, `sacsma plots`, `sacsma calsim`, `sacsma product`, `sacsma dpl ...`).
 - `12rim/basin_area.csv`: `sacsma.product` (the CalLite file of the 12 rim inflows).
 - `basin_tminmax_livneh.csv`: `sacsma.dpl.hybrid.data` (inputs of the hybrid and LSTM models, which add the

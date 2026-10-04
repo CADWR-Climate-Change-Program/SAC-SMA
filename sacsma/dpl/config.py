@@ -3,15 +3,15 @@
 Bounds are the ORIGINAL GA feasible ranges from the archived calibration setup
 (``tmp/sacsma_module/sacramento_ga_15cdec_pool.txt``, parameter-description
 block) — the same box the pooled optimum was drawn from, so every value in
-``artifacts/models/15cdec/ga_optimum.csv`` lies inside them (asserted by
-:func:`validate_ga_optimum`).  ``side``, ``SCF`` and ``PXTEMP`` had degenerate
+``artifacts/models/15cdec/ga_optimum.csv`` lies inside them.  ``side``, ``SCF`` and
+``PXTEMP`` had degenerate
 ranges there (held fixed) and stay fixed here.
 
 TWO bounds are deliberately widened past the archived GA box for the dPL search
 (bound-pinch probe, 2026-07-11 — the learned field pinned ~30%/23% of HRUs at
 these limits and releasing them improved frozen cal/val KGE): ``rexp`` ceiling
 10 -> 15 and ``lzsk`` floor 0.01 -> 0.003.  Both only EXPAND the box (never
-exclude an archived GA value), so ``validate_ga_optimum`` still passes.  The
+exclude an archived GA value).  The
 probe found NMF/Diff/UADJ pinned but inert (no daily-flow leverage), so those
 stay at the archived limits.
 
@@ -22,9 +22,8 @@ core package paths.
 from __future__ import annotations
 
 import math
-
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 
 from ..parameters import _ROUT_COLS, _SMA_COLS, _SNOW_COLS
 
@@ -92,89 +91,49 @@ PARAM_GROUPS: dict[str, tuple[str, ...]] = {
 }
 assert tuple(p for ps in PARAM_GROUPS.values() for p in ps) == FREE_PARAMS
 
-# ---------------------------------------------------------------------------
-# Noah canopy-resistance ET (et_mode="noah") — a SEPARATE parameter set
-# ---------------------------------------------------------------------------
-# These drive sacsma.dpl.physics.et_noah and are NEVER part of PARAM_ORDER / the
-# ga_optimum export (the frozen model has no Noah ET).  Bounds from NWS 53
-# (Koren et al. 2010) and the Noah land-surface parameter tables.
-CANOPY_BOUNDS: dict[str, tuple[float, float]] = {
-    "rcmin":     (5.0, 400.0),   # min stomatal resistance, s/m (wetness-dependent)
-    "lai":       (0.5, 6.0),     # leaf area index
-    "veg_frac":  (0.0, 1.0),     # green vegetation fraction (sigma)
-    "rgl":       (30.0, 150.0),  # solar-radiation limit, W/m2 (veg-class)
-    "hs":        (30.0, 55.0),   # vapour-pressure-deficit coefficient
-    "wilt_frac": (0.05, 0.5),    # wilting point as a fraction of tension capacity
-    "froot":     (0.3, 0.9),     # fraction of roots in the SAC upper zone
-    "redist_k":  (0.0, 0.5),     # lower<->upper tension redistribution rate
-    "soil_chi":  (0.5, 2.5),     # bare-soil evap nonlinearity (Ek 2003 chi; was a
-                                 # fixed 2.0 — LEARNED so sparse-veg dry basins can
-                                 # lift bare-soil ET while wet basins keep it high)
-}
-
-#: Canopy parameters mapped in log space (rcmin spans ~2 decades).
-CANOPY_LOG_PARAMS: frozenset[str] = frozenset({"rcmin"})
-
-CANOPY_PARAMS: tuple[str, ...] = tuple(CANOPY_BOUNDS)
-
-#: Canopy structure SUPPLIED FROM OBSERVATION (LANDFIRE EVC cover fraction and
-#: the MODIS/Landsat LAI climatology), NOT learned — these two params scale ET
-#: magnitude almost 1:1, and a uniform midpoint init (veg_frac 0.5, lai 3.25 vs
-#: observed ~0.36 / ~1.3) drove the dry-basin ET-partition failure.  Pinning
-#: them per-cell fixes the magnitude and removes the low-signal overfit; the net
-#: then learns only the unobservable physiology below.  ``veg_frac`` is static
-#: per cell; ``lai`` is the per-cell SEASONAL daily climatology (threaded like a
-#: forcing).  Neither is ever a net output or part of ga_optimum.
-CANOPY_OBSERVED_PARAMS: tuple[str, ...] = ("veg_frac", "lai")
-
-#: The physiology parameters the net actually learns (unobservable): minimum
-#: stomatal resistance, the radiation/VPD Jarvis coefficients, wilting point,
-#: root split, and the lower->upper redistribution rate.  Order follows
-#: CANOPY_BOUNDS insertion (so head columns stay stable).
-CANOPY_LEARNED_PARAMS: tuple[str, ...] = tuple(
-    p for p in CANOPY_PARAMS if p not in CANOPY_OBSERVED_PARAMS)
-
-#: Noah-LITE (``canopy_lite=True``) learned set: ``soil_chi`` ALONE.  A
-#: streamflow-only calibration cannot identify the full 7-param ET partition —
-#: the three Jarvis resistance params (rcmin/rgl/hs) collapse into one
-#: multiplicative factor confounded with Kpet, and froot/redist_k merely
-#: re-implement SAC's own UZ<->LZ machinery.  Lite keeps the ONE identifiable
-#: knob (the moisture-limiter exponent) and drops the rest (dropped params are
-#: pinned at the physical constants in et_noah: ``_LITE_WILT``, ``_LITE_FROOT``;
-#: the Jarvis transpiration + interception + redistribution terms are removed
-#: entirely).  veg_frac + lai stay pinned from observation (0 DOF).
-CANOPY_LITE_LEARNED: tuple[str, ...] = ("soil_chi",)
-
-#: SAC parameters eligible for the climate-state dynamic response.  Kpet ONLY:
-#: it is the ET-volume knob (`pet = Kpet * potential`) and already accepts a
-#: per-day (N,T) field via forward._seasonal — no new physics threading.  The
-#: recessions (uzk/lzpk/lzsk) are deliberately excluded: making them SEASONAL
-#: already hurt (only seasonal Kpet helped), so a dynamic response would too.
-DYNAMIC_SAC_PARAMS: tuple[str, ...] = ("Kpet",)
+#: Bounds of the Noah-lite moisture exponent ``soil_chi`` (Ek et al. 2003 chi), the one
+#: parameter of the Noah-lite ET the network learns; the green fraction and the LAI are
+#: observed.  Never part of PARAM_ORDER or a ga_optimum export.
+SOIL_CHI_BOUNDS: tuple[float, float] = (0.5, 2.5)
 
 
-#: DplConfig fields retired from the schema, with the inert default each had.  A
-#: checkpoint that records one at this value loads without comment; any other value
-#: is named when the field is dropped (evaluate.load_net_from_checkpoint).
+#: DplConfig fields retired from the schema, with the inert value each had.  A checkpoint that
+#: records one at this value loads without comment; any other value is named when the field is
+#: dropped (:func:`config_from_checkpoint`).
 RETIRED_CFG_DEFAULTS: dict[str, object] = {
     "smooth_eps": 0.0,
-    # the ET/SWE observation losses (removed 2026-10)
+    # the ET/SWE observation losses
     "et_loss_lambda": 0.0, "et_level_lambda": 0.0, "swe_loss_lambda": 0.0,
+    "et_loss_sigma_floor": 0.2,
     "shape_sigma_floor": 0.1, "et_anchor_band": 0.0, "et_products": (),
+    # settings of the retired seasonal and dynamic heads, inert without them
+    "seasonal_amp": 0.18, "seasonal_amp_frac": 0.10, "dynamic_amp": 0.5, "dynamic_window": 365,
+}
+#: retired physics options, with the value a checkpoint must record to run: any other value
+#: is a physics this version does not have, and the checkpoint is refused.  The canopy flags
+#: follow et_mode ("noah" is Noah-lite, its head on the shared trunk).
+RETIRED_PHYSICS: dict[str, object] = {
+    "ninc_mode": "fixed", "perc_mode": "reference", "init_mode": "reference",
+    "seasonal_params": (), "dynamic_params": (),
 }
 
 
-def validate_ga_optimum(params_df) -> None:
-    """Assert every archived GA value lies inside BOUNDS (call at startup)."""
-    for name in PARAM_ORDER:
-        lo, hi = BOUNDS[name]
-        col = params_df[name]
-        bad = (col < lo) | (col > hi)
-        if bad.any():
-            raise ValueError(
-                f"ga_optimum column {name!r} has {int(bad.sum())} values outside "
-                f"[{lo}, {hi}] (e.g. {float(col[bad].iloc[0])})"
-            )
+def config_from_checkpoint(ck: dict) -> DplConfig:
+    """The training configuration of the checkpoint ``ck``: its recorded fields, a retired
+    training field dropped (named unless inert), a retired physics option refused."""
+    rec = {k: tuple(v) if isinstance(v, list) else v for k, v in ck["cfg"].items()}
+    noah = rec.get("et_mode") == "noah"
+    physics = {**RETIRED_PHYSICS, "canopy": noah, "canopy_lite": noah}
+    bad = sorted(k for k, v in physics.items() if k in rec and rec[k] != v)
+    if bad:
+        raise ValueError(f"the checkpoint was trained with retired physics options: "
+                         f"{', '.join(f'{k}={rec[k]!r}' for k in bad)}")
+    known = {f.name for f in fields(DplConfig)}
+    dropped = sorted(k for k in set(rec) - known - set(physics) - {"canopy_separate_trunk"}
+                     if k not in RETIRED_CFG_DEFAULTS or rec[k] != RETIRED_CFG_DEFAULTS[k])
+    if dropped:
+        print(f"note: dropping retired cfg keys from checkpoint: {dropped}", flush=True)
+    return DplConfig(**{k: v for k, v in rec.items() if k in known})
 
 
 # ---------------------------------------------------------------------------
@@ -184,31 +143,16 @@ def validate_ga_optimum(params_df) -> None:
 
 @dataclass
 class DplConfig:
-    """Numerics + training settings for the differentiable model.
-
-    The *forward numerics* block controls how far the torch model departs from
-    the frozen reference; the named fidelity configs in
-    :func:`sacsma.dpl.evaluate.fidelity_benchmark` are instances of this.
-    """
+    """Physics and training settings of a learned-parameter run (:meth:`physics` is the
+    physics as the engine describes it)."""
 
     # -- forward numerics -------------------------------------------------
-    #: fixed SAC-SMA substep count (reference uses data-dependent
-    #: ``ninc = floor(1 + 0.2*(uzfwc + twx))`` — not batchable/differentiable).
-    n_inc: int = 5
-    #: "fixed" = n_inc substeps everywhere (trainable); "dynamic" = the exact
-    #: reference per-lane ninc via masking (fidelity checks only — has a
-    #: per-day .item() sync and unbounded loop length).
-    ninc_mode: str = "fixed"
-    #: percolation-cap treatment: "reference" = linear demand + hard min cap
-    #: (exact frozen numerics apart from n_inc); "implicit" = implicit-Euler
-    #: saturator exp(-k); "tanh" = tanh(k) saturator (both bound the Jacobian).
-    perc_mode: str = "reference"
-    #: floor on the LZ free-water fill-fraction denominator (reference: none;
-    #: training needs ~0.1 to bound the division backward at double saturation).
-    fracp_floor: float = 0.0
-    #: initial states: "reference" = SMA [0,0,100,100,100,0] + Snow-17 zeros
-    #: (the frozen cold start); "capacity" = storages at capacity (tmp/src_dpl).
-    init_mode: str = "reference"
+    #: fixed SAC-SMA substep count (the reference takes the data-dependent
+    #: ``ninc = floor(1 + 0.2*(uzfwc + twx))``)
+    n_inc: int = 10
+    #: floor on the LZ free-water fill-fraction denominator (reference: none; it bounds the
+    #: division's backward at double saturation)
+    fracp_floor: float = 1e-3
     dtype: str = "float32"
 
     # -- device ------------------------------------------------------------
@@ -366,7 +310,7 @@ class DplConfig:
     #: without it
     mt_loss_ref_power: float | None = None
     #: warm-start checkpoint path: the net's weights are loaded strict=False
-    #: BEFORE training (heads absent from the donor — e.g. a fresh seasonal
+    #: BEFORE training (heads absent from the donor — e.g. a fresh PXTEMP
     #: head — keep their zero-init, so the run starts EXACTLY at the donor's
     #: parameter field).  The donor's feature standardization is reused, so
     #: the start is exact even when this run trains a different entity subset
@@ -405,42 +349,15 @@ class DplConfig:
     #: (exact v1 at init).  0 = off.  The learned counterpart of spatial_reg.
     gnn_k: int = 0
     gnn_attr_scale: float = 1.0     # attr-distance decay of the neighbor weights
-    #: parameters given a day-of-year harmonic shape (the net emits 2 zero-init
-    #: coeffs each; physics reconstructs param(doy)=clamp(mean+a_sin*sin(w*doy)+
-    #: a_cos*cos(w*doy), bounds)).  Empty = static field (default).  The frozen
-    #: model reconstructs the identical series (sacsma.parameters), so exported
-    #: seasonal params score exactly.
-    seasonal_params: tuple[str, ...] = ()
-    #: tanh amplitude cap on the harmonic coeffs (|a_sin|,|a_cos| <= this, in
-    #: additive Kpet units): the day-of-year swing is hard-bounded so unbounded
-    #: coeffs cannot diverge (they did at LR 1e-3).  0.18 ~ +/-25% of Kpet~1.
-    seasonal_amp: float = 0.18
-    #: PER-PARAMETER harmonic cap as a FRACTION of each seasonal param's bound
-    #: range: |a_sin|,|a_cos| <= seasonal_amp_frac*(hi-lo).  Supersedes the flat
-    #: ``seasonal_amp`` so a mixed set (Kpet + melt factors, whose native ranges
-    #: differ by ~2x) gets a comparable RELATIVE day-of-year swing rather than the
-    #: same additive one (0.10 -> Kpet +/-0.21, MFMAX/MFMIN +/-0.50, MBASE +/-0.50).
-    seasonal_amp_frac: float = 0.10
     #: LEARN the Snow-17 rain/snow threshold PXTEMP per cell (otherwise the GA
     #: constant 0 degC of FIXED_PARAMS).  A separate zero-init head emits PXTEMP
     #: inside ``pxtemp_box`` (exactly 0 at init, so the untrained forward is the
     #: fixed-threshold one); the physics keeps the reference HARD split — forward
     #: values unchanged — and trains the threshold through a straight-through
-    #: sigmoid surrogate of width ``pxtemp_tau`` degC.  The exported per-HRU
-    #: PXTEMP column runs as-is in the frozen run_basin (same hard split).
+    #: sigmoid surrogate of width ``pxtemp_tau`` degC.
     pxtemp_learn: bool = False
     pxtemp_box: tuple[float, float] = (-1.0, 3.0)
     pxtemp_tau: float = 1.0
-    #: parameters made time-varying via a CLIMATE-STATE response (generalizes the
-    #: seasonal harmonic): the net emits a bounded coeff b per param and the
-    #: physics reconstructs param(t) = clamp(base + b*state(t), lo, hi), where
-    #: state(t) is a cal-standardized rolling-precip wetness index.  SAC params
-    #: must be in DYNAMIC_SAC_PARAMS (already (N,T)-capable via the seasonal path);
-    #: canopy params in CANOPY_LEARNED_PARAMS (e.g. soil_chi).  Empty = static
-    #: (default).  Zero-init coeffs => exact static field at init (clean superset).
-    dynamic_params: tuple[str, ...] = ()
-    dynamic_amp: float = 0.5     # tanh cap on |b| (state-response amplitude)
-    dynamic_window: int = 365    # rolling-mean window (days) for the wetness state
     #: re-foot the basin aggregation (``dom.W``) onto the CalSim3 catchment
     #: geometry: each cell is area-weighted by its overlap fraction with the
     #: basin's CalSim3 catchment, so out-of-catchment cells drop and boundary
@@ -449,56 +366,27 @@ class DplConfig:
     #: CalSim3 catchment are re-footed (the 4 Tulare/Kern basins keep their full
     #: footprint).  Opt-in; default False => the exact area_weight aggregation.
     calsim_footprint: bool = False
-    #: ET scheme: "sac" = the frozen Hamon PET (default; scorable through
-    #: run_basin).  "noah" = the Noah canopy-resistance ET (et_noah.py) — NEW
-    #: physics, NOT scorable through run_basin (skill via score_noah_torch).
-    #: Requires ``canopy=True`` (the net's canopy head) and per-cell tmin/tmax.
+    #: ET: "sac" = the SAC-SMA ET cascade E1-E5; "noah" = the Noah-lite ET
+    #: (physics.et_noah.noah_lite_et: bare soil + canopy on the observed green fraction, one
+    #: learned exponent soil_chi), which needs the observed veg_frac and LAI
     et_mode: str = "sac"
-    #: Noah potential-ET source: "hamon" = the temperature-only Hamon PET the
-    #: canopy params modulate (v1-v4; total ET <= Kpet*Hamon = a low ceiling that
-    #: makes Noah under-extract vs SAC); "priestley_taylor" = an energy-based PET
-    #: from Bristow-Campbell net radiation (FAO-56 Rn) — lifts the ceiling and
-    #: removes the Kpet/canopy ET-scaling redundancy.  Only used when et_mode="noah".
+    #: the PET of the Noah-lite ET: "hamon" or "priestley_taylor"
     noah_pet: str = "hamon"
-    #: PET source for the PLAIN SAC ET path (et_mode="sac"): "hamon" (default,
-    #: the frozen temperature PET) or "priestley_taylor" — the energy-based PET
-    #: (Bristow-Campbell Rn, from et_noah.potential_et_priestley_taylor) driving
-    #: the frozen SAC ET cascade directly, with NO Noah canopy module.  A warming-
-    #: robust ET without the canopy-parameter identifiability problems of Noah.
+    #: the PET of the SAC-SMA ET: "hamon" or "priestley_taylor" (the energy-based PET of
+    #: physics.et_noah.potential_et_priestley_taylor; needs per-cell tmin/tmax)
     sac_pet: str = "hamon"
-    #: Priestley-Taylor refinements (any PT PET — sac_pet OR noah_pet =
-    #: "priestley_taylor"; both default 0 => the plain fixed-albedo / Tdew=Tmin
-    #: PT).  ``pt_snow_albedo``>0
-    #: raises the PT net-radiation albedo toward this value over snow (driven by
-    #: the model's own Snow-17 SWE, so PET collapses under a pack — a bright-snow
-    #: value is ~0.5-0.7); ``pt_dewpoint_depression``>0 lowers the dewpoint up to
-    #: this many degC below Tmin in ARID air (scaled by the diurnal range) so the
-    #: net longwave loss is not under-counted in dry basins (FAO-56 arid Tdew).
-    #: Neither is absorbable by the per-HRU Kpet (both are seasonal/spatial SHAPE
-    #: corrections), unlike a global albedo/alpha which Kpet would just rescale.
+    #: Priestley-Taylor refinements (0 = off): ``pt_snow_albedo`` raises the albedo toward
+    #: this value over the model's own Snow-17 snowpack (a bright-snow value is ~0.5-0.7);
+    #: ``pt_dewpoint_depression`` lowers the dewpoint up to this many degC below Tmin in arid
+    #: air (scaled by the diurnal range), so the net longwave loss is not under-counted in dry
+    #: basins (FAO-56 arid Tdew).  Neither is absorbable by the per-HRU Kpet.
     pt_snow_albedo: float = 0.0
     pt_dewpoint_depression: float = 0.0
-    #: emit the learned CANOPY_LEARNED_PARAMS from a canopy head (needed for
-    #: et_mode="noah"; veg_frac + seasonal lai come from observation, not here).
-    canopy: bool = False
-    #: give the canopy head its OWN encoder (decoupled from the SAC trunk) so
-    #: the weak dry-basin canopy signal cannot corrupt the GA-prior SAC pathway
-    #: through a shared embedding.  Only used when canopy=True.
-    canopy_separate_trunk: bool = True
-    #: Noah-LITE ET: the minimal, identifiable rebuild — AET = ed_bare +
-    #: et_canopy on pinned veg with a SINGLE learned exponent (soil_chi); the
-    #: Jarvis resistance (rcmin/rgl/hs), the learned root split (froot) and the
-    #: UZ<->LZ redistribution (redist_k) are dropped, and the canopy head emits
-    #: only CANOPY_LITE_LEARNED off the SHARED trunk (no separate encoder).
-    #: Requires et_mode="noah"; noah_pet still selects Hamon | Priestley-Taylor.
-    canopy_lite: bool = False
-    #: Noah ET replaces only the reference E1-E3 withdrawals; with this set the
-    #: rest of the reference ET block runs after them as in ``sma._sacsma_core``:
-    #: the upper free -> tension rebalance, the lower free -> tension resupply
-    #: (``rserv``) and the ADIMP ET(5), with Noah's upper-tension withdrawal as
-    #: ET1.  Off (the runs so far), the external-ET path skips all three, which
-    #: leaves the riparian ``riva`` channel ET as the only sink for lower free
-    #: water.  Requires the Noah-lite path (canopy_lite).
+    #: Noah-lite replaces only the reference E1-E3 withdrawals; with this set the rest of the
+    #: reference ET block runs after them as in ``sma._sacsma_core``: the upper free ->
+    #: tension rebalance, the lower free -> tension resupply (``rserv``) and the ADIMP ET(5),
+    #: with Noah's upper-tension withdrawal as ET1.  Off, those three are skipped, which leaves
+    #: the riparian ``riva`` channel ET as the only sink for lower free water.
     noah_sac_exchanges: bool = False
     lr: float = 1e-3
     lr_min: float = 1e-5        # cosine-annealed floor
@@ -554,7 +442,7 @@ class DplConfig:
     #: sequence).  "relative": each incoming SAC content c is carried as
     #: c * (cap / cap.detach()) — the same value (x/x == 1 exactly), but the backward
     #: holds the relative saturation fixed, dc/dcap = c/cap (ADIMC against
-    #: uztwm + lztwm).  Snow, routing history and canopy water pass unchanged.
+    #: uztwm + lztwm).  Snow and the routing history pass unchanged.
     #: "flux": "relative" plus lzfsc * lzsk.detach()/lzsk and lzfpc * lzpk.detach()/lzpk
     #: — the backward also holds each lower-zone free store's carried drainage flux
     #: k*S fixed, dS/dk = -S/k: a faster store carries less water into the next water
@@ -631,12 +519,6 @@ class DplConfig:
     extras: dict = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        if self.perc_mode not in ("reference", "implicit", "tanh"):
-            raise ValueError(f"perc_mode {self.perc_mode!r}")
-        if self.init_mode not in ("reference", "capacity"):
-            raise ValueError(f"init_mode {self.init_mode!r}")
-        if self.ninc_mode not in ("fixed", "dynamic"):
-            raise ValueError(f"ninc_mode {self.ninc_mode!r}")
         if self.n_inc < 1:
             raise ValueError("n_inc must be >= 1")
         if self.et_mode not in ("sac", "noah"):
@@ -747,11 +629,6 @@ class DplConfig:
                                  f"{blo} <= lo <= hi <= {bhi}")
             box[name] = (lo, hi)
         self.param_box = box
-        clash = sorted(set(box) & (set(self.seasonal_params) | set(self.dynamic_params)))
-        if clash:
-            # forward._seasonal clamps a time-varying parameter to BOUNDS, not the box
-            raise ValueError(f"param_box {clash}: a boxed parameter cannot also be "
-                             "seasonal or dynamic")
         plo, phi = (float(v) for v in self.pxtemp_box)
         if not (math.isfinite(plo) and math.isfinite(phi) and plo <= 0.0 <= phi
                 and plo < phi):
@@ -762,9 +639,6 @@ class DplConfig:
         self.pxtemp_box = (plo, phi)
         if not (math.isfinite(self.pxtemp_tau) and self.pxtemp_tau > 0.0):
             raise ValueError(f"pxtemp_tau {self.pxtemp_tau} must be finite and > 0")
-        if self.pxtemp_learn and "PXTEMP" in (set(self.seasonal_params)
-                                              | set(self.dynamic_params)):
-            raise ValueError("a learned PXTEMP cannot also be seasonal or dynamic")
         if isinstance(self.obs_mask, str):      # tolerate a bare string
             self.obs_mask = tuple(s for s in self.obs_mask.split(",") if s)
         self.obs_mask = tuple(str(s) for s in self.obs_mask)
@@ -804,32 +678,25 @@ class DplConfig:
             raise ValueError("pt_snow_albedo must be in [0, 1)")
         if self.pt_dewpoint_depression < 0.0:
             raise ValueError("pt_dewpoint_depression must be >= 0")
-        pt_active = (
-            (self.et_mode == "sac" and self.sac_pet == "priestley_taylor")
-            or (self.et_mode == "noah" and self.noah_pet == "priestley_taylor"))
-        if (self.pt_snow_albedo > 0.0 or self.pt_dewpoint_depression > 0.0) \
-                and not pt_active:
+        if ((self.pt_snow_albedo > 0.0 or self.pt_dewpoint_depression > 0.0)
+                and self.physics().pet != "priestley_taylor"):
             raise ValueError(
                 "pt_snow_albedo / pt_dewpoint_depression apply only to a "
                 "Priestley-Taylor PET (sac_pet or noah_pet = 'priestley_taylor')")
-        if self.dynamic_params:
-            allowed = set(DYNAMIC_SAC_PARAMS) | set(CANOPY_LEARNED_PARAMS)
-            bad = [p for p in self.dynamic_params if p not in allowed]
-            if bad:
-                raise ValueError(
-                    f"dynamic_params {bad} not in {sorted(allowed)} "
-                    f"(SAC dynamic limited to the (N,T)-capable set)")
-        if self.et_mode == "noah":
-            self.canopy = True   # the canopy head is required to emit CANOPY_PARAMS
-        if self.canopy_lite:
-            if self.et_mode != "noah":
-                raise ValueError("canopy_lite requires et_mode='noah'")
-            # lite emits only soil_chi off the shared trunk (the separate canopy
-            # encoder existed to protect the SAC pathway from the 6 dropped params)
-            self.canopy_separate_trunk = False
-        if self.noah_sac_exchanges and not self.canopy_lite:
-            raise ValueError("noah_sac_exchanges requires the Noah-lite path "
-                             "(et_mode='noah' with canopy_lite)")
+        if self.noah_sac_exchanges and self.et_mode != "noah":
+            raise ValueError("noah_sac_exchanges needs the Noah-lite ET (et_mode='noah')")
+
+    def physics(self):
+        """The run's physics as a :class:`sacsma.engine.Physics` (the learned step)."""
+        from ..engine import Physics
+
+        noah = self.et_mode == "noah"
+        return Physics(et="noah_lite" if noah else "sac",
+                       pet=self.noah_pet if noah else self.sac_pet,
+                       pt_snow_albedo=self.pt_snow_albedo,
+                       pt_dewpoint_depression=self.pt_dewpoint_depression, learned=True,
+                       n_inc=self.n_inc, fracp_floor=self.fracp_floor,
+                       sac_exchanges=noah and self.noah_sac_exchanges)
 
 
 def _ensure_conda_dlls_on_path() -> None:

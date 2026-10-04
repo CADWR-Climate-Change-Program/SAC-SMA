@@ -1,7 +1,7 @@
 """Enable ``python -m sacsma ...`` -> the :mod:`sacsma.cli` entry point.
 
-So ``python -m sacsma calsim --parallel`` and ``python -m sacsma run BND --parallel``
-work the same as the ``sacsma`` console script.
+So ``python -m sacsma calsim`` and ``python -m sacsma run BND`` work the same as the
+``sacsma`` console script.
 """
 
 from .cli import main

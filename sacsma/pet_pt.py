@@ -1,8 +1,7 @@
-"""Priestley-Taylor potential ET (Numba) — frozen-pipeline mirror of the torch
+"""Priestley-Taylor potential ET (Numba) — the mirror of the torch
 ``sacsma.dpl.physics.et_noah.potential_et_priestley_taylor`` (with its snow-cover-albedo
-and arid dewpoint-depression refinements) so PT-trained dPL exports score
-through the fast ``run_basin`` path instead of streaming the full record
-through the torch pipeline.
+and arid dewpoint-depression refinements) that the engine (:mod:`sacsma.engine`) runs a
+trained PT field with.
 
 A NEW module: the frozen Hamon ``pet.py`` is untouched.  Constants and formula
 order replicate the torch source EXACTLY (Bristow-Campbell shortwave from the

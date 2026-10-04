@@ -5,7 +5,7 @@ LE=2400): a gamma hillslope UH (Nres, Kres; 12 daily bins x 1001-point
 rectangle quadrature) convolved with the Saint-Venant Green's-function channel
 UH (Velo, Diff, per-HRU flowlen), normalized to sum 1, applied as a 107-tap
 causal convolution.  ``flowlen == 0`` (outlet HRUs) collapses the channel UH
-to the identity, exactly like ``model.default_is_outlet``.
+to the identity, as in the reference model.
 
 Differentiability notes: the gamma density is evaluated as
 ``exp((n-1)*log(x) - x/theta - lgamma(n))/theta`` with the single ``x = 0``

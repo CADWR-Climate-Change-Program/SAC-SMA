@@ -19,9 +19,8 @@ step against CalSim3 FNF:
   d  PT              vs  Noah            (PT cascade -> Noah-lite ET)
   e  Noah -> Hybrid -> Hybrid DT          (the LSTM step on the noah physics)
 
-``Hybrid`` / ``Hybrid DT`` are the CANONICAL seed ENSEMBLES (mean of member
-daily flows) on the noah physics baseline — the sim channel is the noah daily
-simulation each member checkpoint records (``sim_daily.csv`` of the ``noah`` run).
+The learned runs are run as trained (:func:`sacsma.dpl.evaluate.basin_daily`); ``Hybrid`` /
+``Hybrid DT`` are the seed ENSEMBLES (mean of member daily flows) on the noah physics.
 Output: ``artifacts/results/dpl/15cdec/studies/climatology/climatology_{a..e}.png``.
 
 A dPL-side artifact (needs torch for the hybrids) that reads the lightweight
@@ -44,37 +43,14 @@ _PERIOD = [("1949-10-01", "1987-09-30"), ("2003-10-01", "2018-12-31")]
 _WY = [10, 11, 12, 1, 2, 3, 4, 5, 6, 7, 8, 9]
 _WY_LABELS = ["O", "N", "D", "J", "F", "M", "A", "M", "J", "J", "A", "S"]
 
-#: frozen-model sims: label -> run_basin spec (csv=None => archived GA optimum).
-#: ``PT`` IS the refined PT (snow-albedo 0.6 + dewpoint 2.0); ``Noah`` is
-#: the Noah-lite external-ET canopy on PT potential.
-FROZEN: dict[str, dict] = {
-    "GA SAC-SMA":     dict(csv=None, domain="15cdec", pet="hamon", alb=0.0, dew=0.0),
-    "Hamon (dense)":  dict(csv=paths.dpl_run(run="hamon_dense") / "params_dpl.csv",
-                           domain="15cdec", pet="hamon", alb=0.0, dew=0.0),
-    "Hamon":          dict(csv=paths.dpl_run(run="hamon") / "params_dpl.csv",
-                           domain="15cdec_grid", pet="hamon", alb=0.0, dew=0.0),
-    "PT":             dict(csv=paths.dpl_run(run="pt") / "params_dpl.csv",
-                           domain="15cdec_grid", pet="priestley_taylor", alb=0.6, dew=2.0),
-    "Noah":           dict(csv=paths.dpl_run(run="noah") / "params_dpl.csv",
-                           domain="15cdec_grid", pet="priestley_taylor", alb=0.0, dew=0.0,
-                           et_scheme="noah_lite",
-                           canopy_csv=paths.dpl_run(run="noah") / "params_canopy.csv"),
+#: the physics runs: label -> the 15-CDEC learned run (None: the GA calibration).  ``PT`` is
+#: the refined PT (snow albedo 0.6, dewpoint 2.0); ``Noah`` the Noah-lite ET on PT potential.
+RUNS: dict[str, str | None] = {
+    "GA SAC-SMA": None, "Hamon (dense)": "hamon_dense", "Hamon": "hamon", "PT": "pt",
+    "Noah": "noah",
 }
-#: explicit cache tag per FROZEN label -- the label is a chart legend, the tag
-#: is a stable cache filename key independent of that text.
-_FROZEN_TAG: dict[str, str] = {
-    "GA SAC-SMA": "sac-sma", "Hamon (dense)": "hamon_dense", "Hamon": "hamon",
-    "PT": "pt", "Noah": "noah",
-}
-#: torch-only sims: label -> canonical daily-sim CSV (for models the frozen
-#: run_basin cannot reconstruct).  Empty: no current run needs it.
-TORCH_SIM: dict[str, str] = {}
-#: hybrid sims: label -> canonical ENSEMBLE dir (seed*/checkpoints/best.pt
-#: averaged; physics settings read from the member ckpt cfg).  Both sit on the
-#: noah physics baseline (sim channel = its torch daily dump): ``Hybrid`` is the
-#: plain feature ensemble (no PET channel, no dT loss — the skill step),
-#: ``Hybrid DT`` adds the PT-potential input + the temperature-consistency
-#: loss (the physics-consistent climate response, same skill).
+#: hybrid sims: label -> ensemble dir (seed*/checkpoints/best.pt averaged), both on the noah
+#: physics: ``Hybrid`` the skill step, ``Hybrid DT`` with the response-consistency loss.
 HYBRID: dict[str, Path] = {
     "Hybrid": paths.dpl_run(run="hybrid"),
     "Hybrid DT": paths.dpl_run(run="hybrid_dt"),
@@ -111,13 +87,16 @@ COMPARISONS: list[tuple[str, str, list[str]]] = [
 # --------------------------------------------------------------------------- #
 # daily model sims (mm/day, date x basin) -- all cached to CSV
 # --------------------------------------------------------------------------- #
-def _daily_frozen(spec: dict, data_dir: str, cache: Path) -> pd.DataFrame:
-    from ..hybrid.data import build_frozen_sim
-    return build_frozen_sim(data_dir, spec["csv"], cache=cache, domain=spec["domain"],
-                            pet_source=spec["pet"], pt_snow_albedo=spec["alb"],
-                            pt_dewpoint_depression=spec["dew"],
-                            et_scheme=spec.get("et_scheme", "sac"),
-                            canopy_csv=spec.get("canopy_csv"))
+def _daily_run(run: str | None, data_dir: str) -> pd.DataFrame:
+    """Daily flow (date x basin, mm/day) of a learned run as trained, or of the GA calibration."""
+    if run is not None:
+        from ..evaluate import basin_daily
+
+        return basin_daily(run, data_dir=data_dir)
+    from ...cdec15 import BASINS
+    from ...model import run_basins
+
+    return run_basins(list(BASINS), data_dir=data_dir, domain="15cdec")
 
 
 def _daily_ensemble(ens_dir: str, data_dir: str, device, cache: Path) -> pd.DataFrame:
@@ -128,7 +107,7 @@ def _daily_ensemble(ens_dir: str, data_dir: str, device, cache: Path) -> pd.Data
         return pd.read_csv(cache, parse_dates=["date"]).set_index("date")
     import torch
 
-    from ..hybrid.data import load_hybrid_data
+    from ..hybrid.data import data_for
     from ..hybrid.model import HybridLSTM
     from ..hybrid.train import predict_days
 
@@ -137,19 +116,7 @@ def _daily_ensemble(ens_dir: str, data_dir: str, device, cache: Path) -> pd.Data
         raise FileNotFoundError(f"no seed*/checkpoints/best.pt under {ens_dir}")
     ck0 = torch.load(ckpts[0], map_location="cpu", weights_only=False)
     cfg = ck0["cfg"]
-    if ck0.get("variant", "feature") != "feature":
-        raise ValueError("residual hybrid checkpoints are retired (2026-07-16)")
-    data = load_hybrid_data(
-        data_dir, physics_csv=ck0.get("physics_csv"),
-        sim_cache=ck0.get("sim_cache"), use_statics=bool(ck0["n_static"]),
-        use_doy=cfg.get("use_doy", True),
-        use_pet=cfg.get("use_pet", False),
-        domain=cfg.get("physics_domain", "15cdec"),
-        pet_source=cfg.get("pet_source", "hamon"),
-        pt_snow_albedo=cfg.get("pt_snow_albedo", 0.0),
-        pt_dewpoint_depression=cfg.get("pt_dewpoint_depression", 0.0),
-        et_scheme=cfg.get("physics_et_scheme", "sac"),
-        canopy_csv=cfg.get("canopy_csv") or None, device=device)
+    data = data_for(ck0, data_dir, device)
     bb, tt = data.eval_days("all")
     accum = None
     for cp in ckpts:
@@ -261,24 +228,17 @@ def assemble(data_dir: str = "data", *, device: str = "cuda") -> dict:
 
     monthly: dict[str, pd.DataFrame] = {}
     clim: dict[str, pd.DataFrame] = {}
-    for label, spec in FROZEN.items():
-        tag = _FROZEN_TAG[label]
-        daily = _daily_frozen(spec, data_dir, cachedir / f"sim_{tag}.csv")
-        monthly[label] = _monthly_taf(daily, areas)
+    for label, run in RUNS.items():
+        monthly[label] = _monthly_taf(_daily_run(run, data_dir), areas)
         clim[label] = _climatology(monthly[label])
         print(f"  assembled {label}", flush=True)
 
-    for label, csv in TORCH_SIM.items():   # torch-only exports: read the dump
-        daily = pd.read_csv(csv, parse_dates=["date"]).set_index("date")
-        monthly[label] = _monthly_taf(daily, areas)
-        clim[label] = _climatology(monthly[label])
-        print(f"  assembled {label} (torch daily sim)", flush=True)
-
     dev = pick_device(device)
     for label, ens_dir in HYBRID.items():
-        tag = Path(ens_dir).name                # sim_hybrid / sim_hybrid_dt
-        daily = _daily_ensemble(ens_dir, data_dir, dev,
-                                cachedir / f"sim_{tag}.csv")
+        from ..evaluate import ensemble_key
+
+        daily = _daily_ensemble(ens_dir, data_dir, dev, cachedir / (
+            f"sim_{Path(ens_dir).name}_{ensemble_key(ens_dir)}.csv"))
         monthly[label] = _monthly_taf(daily, areas)
         clim[label] = _climatology(monthly[label])
         print(f"  assembled {label}", flush=True)
@@ -289,7 +249,7 @@ def assemble(data_dir: str = "data", *, device: str = "cuda") -> dict:
 
     # monthly KGE/NSE of each model vs CalSim3 FNF over the combined period
     metrics: dict[str, dict[str, tuple[float, float, float, float]]] = {}
-    for label in [*FROZEN, *TORCH_SIM, *HYBRID]:
+    for label in [*RUNS, *HYBRID]:
         metrics[label] = {b: _score(monthly[label][b], obs[b])
                           for b in order if b in monthly[label] and b in obs}
     print(f"  observed: CalSim3 FNF for {order}", flush=True)
@@ -391,7 +351,7 @@ def _plot_metrics_bars(data: dict, path: Path) -> None:
     import matplotlib.pyplot as plt
 
     metrics, order = data["metrics"], data["order"]
-    models = [*FROZEN, *TORCH_SIM, *HYBRID]
+    models = [*RUNS, *HYBRID]
     n = len(models)
     width = 0.86 / n
     # (row label, value from a (kge,nse,pbias,smv) tuple, y-lower)
@@ -447,7 +407,7 @@ def _plot_metrics_bars_agg(data: dict, path: Path) -> None:
     import matplotlib.pyplot as plt
 
     metrics, order = data["metrics"], data["order"]
-    models = [*FROZEN, *TORCH_SIM, *HYBRID]
+    models = [*RUNS, *HYBRID]
     rows = [
         ("KGE", lambda m: m[0], (0.0, 1.05)),
         ("| PBIAS |  (%)", lambda m: abs(m[2]), None),

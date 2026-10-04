@@ -15,14 +15,14 @@ from pathlib import Path
 
 from . import calsim as _calsim_pkg
 from . import cdec15 as _cdec15_pkg
-from .io import DEFAULT_FORCING, forcing_path, load_hru_table
+from .io import DEFAULT_FORCING, load_hru_table
 
 #: selectable modeling domains (calibration sets): the 15-CDEC application + CalLite sets.
 DOMAINS = [_cdec15_pkg.DOMAIN, *_calsim_pkg.DOMAINS]
 
 
 def _run(args: argparse.Namespace) -> int:
-    from .model import load_domain_forcing, run_basin
+    from .model import run_basins
 
     domain = args.domain
     if args.basin.upper() == "ALL":
@@ -33,32 +33,10 @@ def _run(args: argparse.Namespace) -> int:
     else:
         basins = [args.basin]  # CalLite basin codes are case-sensitive (CamelCase / mixed)
 
-    # For multi-basin native runs, read the ~900 MB/var forcing store ONCE and
-    # reuse it across every basin instead of re-reading it per basin.
-    product = args.forcing or DEFAULT_FORCING
-    forcing = None
-    if (
-        len(basins) > 1
-        and args.data_dir is not None
-        and forcing_path(args.data_dir, domain, product).exists()
-    ):
-        print(f"loading domain forcing once for all basins ({product})...", flush=True)
-        forcing = load_domain_forcing(args.data_dir, domain=domain, start=args.start,
-                                      end=args.end, product=product)
-
+    flow = run_basins(basins, data_dir=args.data_dir, domain=domain, start=args.start,
+                      end=args.end, product=args.forcing or DEFAULT_FORCING)
     for basin in basins:
-        df = run_basin(
-            basin,
-            data_dir=args.data_dir,
-            domain=domain,
-            start=args.start,
-            end=args.end,
-            progress=args.progress,
-            forcing=forcing,
-            parallel=args.parallel,
-            product=product,
-            spinup_years=args.spinup_years,
-        )
+        df = flow[basin].rename("flow").reset_index()
         if args.out:
             out = Path(args.out)
             if len(basins) > 1:
@@ -94,7 +72,7 @@ def _calsim(args: argparse.Namespace) -> int:
 
     if getattr(args, "sacsma_vic_bcm", False):
         from .calsim.sacsma_vic_bcm import make_all as svb_all
-        svb_all(args.data_dir, args.artifacts_dir, parallel=args.parallel)
+        svb_all(args.data_dir, args.artifacts_dir)
         return 0
     if getattr(args, "forcing_compare", False):
         from .calsim.forcing_compare import make_all as fc_all
@@ -102,7 +80,7 @@ def _calsim(args: argparse.Namespace) -> int:
         return 0
     sets = tuple(args.sets) if args.sets else DEFAULT_CALSETS
     make_all(args.data_dir, args.artifacts_dir, sets,
-             covered_frac=getattr(args, "covered_frac", None), parallel=args.parallel)
+             covered_frac=getattr(args, "covered_frac", None))
     return 0
 
 
@@ -142,14 +120,6 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--start", default=None, help="start date YYYY-MM-DD")
     run.add_argument("--end", default=None, help="end date YYYY-MM-DD")
     run.add_argument("--out", default=None, help="output CSV path")
-    run.add_argument("--progress", action="store_true", help="print HRU progress")
-    run.add_argument("--parallel", action="store_true",
-                     help="fan HRUs across cores (Numba prange); ~8x faster, matches "
-                          "the serial result to floating tolerance")
-    run.add_argument("--spinup-years", type=int, default=None, metavar="N",
-                     help="prepend an N-year climatological average-year burn-in "
-                          "so the run starts from an equilibrated state at any "
-                          "--start (default: none = reference cold start)")
     run.set_defaults(func=_run)
 
     pl = sub.add_parser("plots", help="per-watershed cal/val diagnostic figures for a domain")
@@ -180,9 +150,6 @@ def build_parser() -> argparse.ArgumentParser:
     cs.add_argument("--covered-frac", type=float, default=None,
                     help="informational 'covered'/'partial' status label only "
                          "(default: catchments.COVERED_FRAC); inclusion is crosswalk-driven")
-    cs.add_argument("--parallel", action="store_true",
-                    help="fan the SAC-SMA model runs across cores (Numba prange); "
-                         "results unchanged, ~8x faster on the model-run phase")
     cs.add_argument("--sacsma-vic-bcm", action="store_true",
                     help="instead of the standard cross-compare, build the SAC-SMA vs VIC "
                          "vs BCM comparison on WGEN Product A over WY1989-2018, "
@@ -210,10 +177,12 @@ def build_parser() -> argparse.ArgumentParser:
     vf = sub.add_parser(
         "verify",
         help="check the installation: imports, commands, document links, the layout of "
-             "artifacts/, parity with the MATLAB reference, and the tracked products",
+             "artifacts/, parity with the MATLAB reference, the learned step against torch, "
+             "and the tracked products",
     )
     vf.add_argument("checks", nargs="*", metavar="CHECK",
-                    help="subset of: imports cli links artifacts parity product (default: all)")
+                    help="subset of: imports cli links artifacts parity learned product "
+                         "(default: all)")
     vf.add_argument("--quick", action="store_true",
                     help="only the checks that need no model run (imports, cli, links, artifacts)")
     vf.add_argument("--data-dir", default="data", help="organized data/ store")

@@ -164,9 +164,9 @@ WY1950: Trinity rises from 0.40 to 0.83 and the Cosumnes falls from 0.96 to 0.81
 with CalSim3 before 1950 therefore comes from the precipitation data and not from the model.
 
 Figures for both: [`artifacts/results/forcing/figures/`](../artifacts/results/forcing/figures/), each product against the
-Livneh baseline on both models, split at WY1950. The daily runs of the three CalLite sets under
-each product, `<product>/sim_daily_<set>.csv`, are written by the comparison when they are
-missing.
+Livneh baseline on both models, split at WY1950. The comparison simulates the daily runs of
+the three CalLite sets under each product when it needs them and caches them in
+`artifacts/_local/cache/forcing/`.
 
 ## Products
 

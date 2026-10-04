@@ -36,7 +36,7 @@ daily difference < 0.1 mm/day against these files. Measured:
 - `flow` is area-normalized (mm/day). `basin` holds each domain's own watershed codes (for
   example `BND`, `CacheCreek`, `SHA`, `SHAST`).
 - The baseline is the default run: historical Livneh-unsplit forcing and the reference cold
-  start (no `--spinup-years`).
+  start.
 - Run the parity check after any change that touches the model or the path the data takes into
   it. The physics modules are not edited without it.
 - The three CalLite domains differ more than `15cdec` because the shared forcing store carries

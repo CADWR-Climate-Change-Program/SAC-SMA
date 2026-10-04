@@ -19,11 +19,9 @@ calibration sets 9unimp + 11obs (:data:`SETS`), basins north->south.
 
 Inputs:
 
-* SAC-SMA — the committed run tables: the parity-exact ``simflow`` reference
-  (the Livneh-unsplit run) and ``sim_daily_<domain>.csv`` of each product under
-  ``artifacts/results/forcing/<product>/`` (:func:`run_table`, which simulates a
-  missing one: every watershed of the set under the product, the GA optima).  Regenerated, a
-  table differs from the tracked one in the sixth decimal on a few days in a thousand.
+* SAC-SMA — the parity-exact ``simflow`` reference (the Livneh-unsplit run) and the daily
+  run of each set under each product (:func:`run_table`: every watershed of the set from its
+  GA optimum, simulated when missing and cached in ``artifacts/_local/cache/forcing/``).
 * VIC — the routed monthly tables ``data/reference/vic/vic_routed_monthly[_<product>].csv``
   (TAF/month; the ``Historical_Unsplit`` baseline / ``Historical`` split /
   ``Product_A`` detrended runs), aggregated to basins exactly like the
@@ -142,18 +140,11 @@ def run_table(data_dir, artifacts_dir, product: str, domain: str) -> Path:
     csv = paths.forcing_run(artifacts_dir, product) / f"sim_daily_{domain}.csv"
     if csv.exists():
         return csv
-    from ..io import load_hru_table
-    from ..model import load_domain_forcing, run_basin
+    from ..model import run_basins
 
     print(f"simulating {domain} under {product} -> {csv}", flush=True)
-    forcing = load_domain_forcing(data_dir, domain=domain, product=product)
-    parts = []
-    for b in sorted(load_hru_table(data_dir, domain=domain)["basin"].unique()):
-        s = run_basin(b, data_dir=data_dir, domain=domain, forcing=forcing, parallel=True,
-                      product=product)
-        parts.append(s.assign(basin=b)[["date", "basin", "flow"]])
-    df = pd.concat(parts, ignore_index=True)
-    df["flow"] = df["flow"].round(6)
+    df = (run_basins(data_dir=data_dir, domain=domain, product=product).round(6)
+          .melt(ignore_index=False, var_name="basin", value_name="flow").reset_index())
     csv.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(csv, index=False)
     return csv
