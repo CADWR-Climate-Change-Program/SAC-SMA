@@ -1,519 +1,38 @@
-"""Coupled per-HRU pipeline and basin aggregation driver.
+"""Running the calibrated models: a domain's GA optimum through the reference model.
 
-Per HRU: Hamon PET -> SNOW-17 -> SAC-SMA -> Lohmann routing.  Basin flow is
-the area-weighted sum of routed HRU flow (mm/day) at the gauge.
-
-This reproduces the distributed SAC-SMA forward run from the archived GA
-optimum (the run-from-pre-done-calibration path).
+Per HRU: Hamon PET -> Snow-17 -> SAC-SMA -> Lohmann routing, from the cold start on the first day
+of the forcing, on the engine (:mod:`sacsma.engine`); a basin's flow is the area-weighted sum of
+its routed HRU flow (mm/day).  This is the run from the archived calibration.  The basins of a
+domain run together, in one engine run (:func:`run_basins`).
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
 from . import parameters as P
-from ._compat import HAVE_NUMBA, njit
+from .engine import Field, Physics, simulate
 from .io import (
     DEFAULT_DOMAIN,
     DEFAULT_FORCING,
     doy_and_leap,
-    forcing_path,
     load_forcing,
+    load_hru_table,
     load_params,
 )
-from .pet import _hamon_core, hamon_pet
-from .pet_pt import _pt_core, pt_raw_pet
-from .routing import _lohmann_core_nb, lohmann
-from .sma import _sacsma_core, sac_sma
-from .sma_noah_lite import _sacsma_noah_lite_core, sac_sma_noah_lite
-from .snow17 import _snow17_core, snow17
-
-if HAVE_NUMBA:
-    from numba import prange
-
-    @njit(parallel=True)
-    def _basin_kernel(
-        prcp_cells, tavg_cells, cell_idx, doy_f, doy_i, is_leap,
-        lat_rad, elev, flowlen, is_outlet,
-        kpet, snow_par, sma_par, rout_par, wnorm,
-    ):
-        """Area-weighted routed basin flow, fanned across HRUs with ``prange``.
-
-        Each HRU runs the full PET -> Snow-17 -> SAC-SMA -> Lohmann pipeline using the
-        same njit cores as the serial path; ``total`` is a flat 1-D array reduction so
-        memory stays at one time series per thread.  ``prcp_cells``/``tavg_cells`` are the
-        shared ``(n_cell, T)`` forcing; ``cell_idx[h]`` selects HRU ``h``'s grid cell."""
-        T = prcp_cells.shape[1]
-        nh = cell_idx.shape[0]
-        total = np.zeros(T)
-        for h in prange(nh):
-            c = cell_idx[h]
-            pr = prcp_cells[c]
-            tv = tavg_cells[c]
-            pet = _hamon_core(tv, doy_f, lat_rad[h], kpet[h])
-            snow_init = np.zeros(4)
-            eff = _snow17_core(pr, tv, doy_i, is_leap, elev[h], snow_par[h], snow_init)[0]
-            sma_init = np.empty(6)
-            sma_init[0] = 0.0; sma_init[1] = 0.0; sma_init[2] = 100.0
-            sma_init[3] = 100.0; sma_init[4] = 100.0; sma_init[5] = 0.0
-            surf, base, _t, _s = _sacsma_core(pet, eff, sma_par[h], sma_init)
-            runoff = _lohmann_core_nb(surf, base, flowlen[h], rout_par[h], is_outlet[h])
-            total += wnorm[h] * runoff
-        return total
-
-    @njit(parallel=True)
-    def _basin_kernel_pt(
-        prcp_cells, tavg_cells, tmin_cells, tmax_cells, cell_idx,
-        doy_f, doy_i, is_leap, lat_rad, elev, flowlen, is_outlet,
-        kpet, snow_par, sma_par, rout_par, wnorm,
-        snow_albedo, dewpoint_depression,
-    ):
-        """:func:`_basin_kernel` with the Priestley-Taylor PET (sac_pet=PT dPL
-        exports).  Snow-17 runs FIRST so its daily SWE can drive the snow-cover
-        albedo (the frozen core always computed SWE; it was just discarded)."""
-        T = prcp_cells.shape[1]
-        nh = cell_idx.shape[0]
-        total = np.zeros(T)
-        for h in prange(nh):
-            c = cell_idx[h]
-            pr = prcp_cells[c]
-            tv = tavg_cells[c]
-            snow_init = np.zeros(4)
-            eff, _melt, swe, _st, _in = _snow17_core(
-                pr, tv, doy_i, is_leap, elev[h], snow_par[h], snow_init)
-            raw = _pt_core(tv, tmin_cells[c], tmax_cells[c], doy_f, lat_rad[h],
-                           elev[h], swe, snow_albedo, dewpoint_depression)
-            pet = kpet[h] * raw
-            sma_init = np.empty(6)
-            sma_init[0] = 0.0; sma_init[1] = 0.0; sma_init[2] = 100.0
-            sma_init[3] = 100.0; sma_init[4] = 100.0; sma_init[5] = 0.0
-            surf, base, _t, _s = _sacsma_core(pet, eff, sma_par[h], sma_init)
-            runoff = _lohmann_core_nb(surf, base, flowlen[h], rout_par[h], is_outlet[h])
-            total += wnorm[h] * runoff
-        return total
-
-    @njit(parallel=True)
-    def _basin_kernel_noah_lite(
-        prcp_cells, tavg_cells, tmin_cells, tmax_cells, cell_idx,
-        doy_f, doy_i, is_leap, lat_rad, elev, flowlen, is_outlet,
-        kpet, snow_par, sma_par, rout_par, wnorm,
-        veg_frac, soil_chi, lai_lut, snow_albedo, dewpoint_depression, sac_ex,
-    ):
-        """:func:`_basin_kernel_pt` with the Noah-LITE external ET (canopy_lite dPL
-        exports): Snow-17 -> Priestley-Taylor PET -> the Noah-lite SAC core
-        (:func:`sacsma.sma_noah_lite._sacsma_noah_lite_core`), Lohmann-routed.
-        ``veg_frac``/``soil_chi`` are per-HRU; ``lai_lut`` is the (nh, 366) daily
-        LAI climatology, indexed per day by ``doy_i``; ``sac_ex`` (nh,) int flags
-        the reference SAC exchanges (``sma_noah_lite`` ``sac_exchanges``)."""
-        T = prcp_cells.shape[1]
-        nh = cell_idx.shape[0]
-        total = np.zeros(T)
-        for h in prange(nh):
-            c = cell_idx[h]
-            pr = prcp_cells[c]
-            tv = tavg_cells[c]
-            snow_init = np.zeros(4)
-            eff, _melt, swe, _st, _in = _snow17_core(
-                pr, tv, doy_i, is_leap, elev[h], snow_par[h], snow_init)
-            raw = _pt_core(tv, tmin_cells[c], tmax_cells[c], doy_f, lat_rad[h],
-                           elev[h], swe, snow_albedo, dewpoint_depression)
-            pet = kpet[h] * raw
-            lai_h = np.empty(T)
-            for t in range(T):
-                lai_h[t] = lai_lut[h, doy_i[t] - 1]
-            sma_init = np.empty(6)
-            sma_init[0] = 0.0; sma_init[1] = 0.0; sma_init[2] = 100.0
-            sma_init[3] = 100.0; sma_init[4] = 100.0; sma_init[5] = 0.0
-            surf, base, _t, _s = _sacsma_noah_lite_core(
-                pet, eff, veg_frac[h], lai_h, soil_chi[h], sma_par[h], sma_init,
-                sac_ex[h] != 0)
-            runoff = _lohmann_core_nb(surf, base, flowlen[h], rout_par[h], is_outlet[h])
-            total += wnorm[h] * runoff
-        return total
-
-    @njit(parallel=True)
-    def _local_runoff_kernel(
-        prcp_cells, tavg_cells, cell_idx, doy_f, doy_i, is_leap,
-        lat_rad, elev, kpet, snow_par, sma_par,
-    ):
-        """Per-HRU **local runoff** depth ``surf + base`` (mm/day, un-routed), one row
-        per cell, fanned across cores.  Each ``prange`` iteration writes its own row, so
-        the result is **bit-exact** vs the serial path (no cross-HRU reduction).  Backs
-        the local-runoff aggregation in :func:`sacsma.calsim.catchments.run_calsim`."""
-        nk = cell_idx.shape[0]
-        T = prcp_cells.shape[1]
-        out = np.empty((nk, T))
-        for h in prange(nk):
-            c = cell_idx[h]
-            pr = prcp_cells[c]
-            tv = tavg_cells[c]
-            pet = _hamon_core(tv, doy_f, lat_rad[h], kpet[h])
-            snow_init = np.zeros(4)
-            eff = _snow17_core(pr, tv, doy_i, is_leap, elev[h], snow_par[h], snow_init)[0]
-            sma_init = np.empty(6)
-            sma_init[0] = 0.0; sma_init[1] = 0.0; sma_init[2] = 100.0
-            sma_init[3] = 100.0; sma_init[4] = 100.0; sma_init[5] = 0.0
-            surf, base, _t, _s = _sacsma_core(pet, eff, sma_par[h], sma_init)
-            for t in range(T):
-                out[h, t] = surf[t] + base[t]
-        return out
-else:  # pragma: no cover - Numba absent
-    _basin_kernel = None
-    _basin_kernel_pt = None
-    _basin_kernel_noah_lite = None
-    _local_runoff_kernel = None
-
-
-def default_is_outlet(flowlen: float) -> int:
-    """Default outlet rule: the HRU at the watershed outlet has flowlen 0.
-
-    NOTE: confirm this against the MATLAB driver's outlet/flowlen convention.
-    """
-    return 1 if flowlen == 0.0 else 0
-
-
-def _pet_and_recession(tavg, doy, lat, ga_row):
-    """PET series and the optional seasonal ``(uzk, lzpk, lzsk)`` override.
-
-    Static rows: PET = ``hamon_pet(..., Kpet)`` and ``recession=None`` (the
-    bit-identical reference path).  Seasonal rows (day-of-year harmonics): PET =
-    ``Kpet(doy) * rawPET`` and the three recession rates become per-day arrays,
-    selecting the seasonal SAC-SMA path (:func:`sacsma.sma._sacsma_core_seasonal`).
-    """
-    if P.is_seasonal(ga_row):
-        pet = P.kpet_series(ga_row, doy) * hamon_pet(tavg, doy, lat, 1.0)
-        return pet, P.recession_series(ga_row, doy)
-    return hamon_pet(tavg, doy, lat, P.kpet(ga_row)), None
-
-
-def _pet_and_recession_pt(tavg, tmin, tmax, doy, lat, elev, swe, ga_row,
-                          snow_albedo, dewpoint_depression):
-    """Priestley-Taylor counterpart of :func:`_pet_and_recession` (sac_pet=PT
-    dPL exports): ``Kpet`` scales the raw PT PET exactly as it scales Hamon;
-    seasonal-Kpet rows reconstruct the same day-of-year series."""
-    raw = pt_raw_pet(tavg, tmin, tmax, doy, lat, elev, swe=swe,
-                     snow_albedo=snow_albedo,
-                     dewpoint_depression=dewpoint_depression)
-    if P.is_seasonal(ga_row):
-        return P.kpet_series(ga_row, doy) * raw, P.recession_series(ga_row, doy)
-    return P.kpet(ga_row) * raw, None
-
-
-def run_hru(
-    prcp: np.ndarray,
-    tavg: np.ndarray,
-    doy: np.ndarray,
-    is_leap: np.ndarray,
-    *,
-    lat: float,
-    elev: float,
-    flowlen: float,
-    ga_row,
-    is_outlet: int | None = None,
-) -> np.ndarray:
-    """Run the full coupled pipeline for one HRU; return routed flow (mm/day)."""
-    pet, recession = _pet_and_recession(tavg, doy, lat, ga_row)
-    eff_p = snow17(prcp, tavg, doy, is_leap, elev, P.snow_par(ga_row))[0]
-    surf, base, _tet, _state = sac_sma(pet, eff_p, P.sma_par(ga_row), recession=recession)
-    if is_outlet is None:
-        is_outlet = default_is_outlet(flowlen)
-    runoff, _baseflow = lohmann(surf, base, flowlen, P.routing_par(ga_row), is_outlet)
-    return runoff
-
-
-def run_hru_components(
-    prcp: np.ndarray,
-    tavg: np.ndarray,
-    doy: np.ndarray,
-    is_leap: np.ndarray,
-    *,
-    lat: float,
-    elev: float,
-    ga_row,
-    pet_source: str = "hamon",
-    tmin: np.ndarray | None = None,
-    tmax: np.ndarray | None = None,
-    pt_snow_albedo: float = 0.0,
-    pt_dewpoint_depression: float = 0.0,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Per-HRU SMA outputs ``(surf, base)`` (mm/day), **before** channel routing.
-
-    PET -> SNOW-17 -> SAC-SMA.  Returned separately so an arbitrary sub-catchment
-    (e.g. a CalSim node) can either area-weight the un-routed runoff (``surf+base``)
-    or Lohmann-route with a catchment-specific ``flowlen``.  See :mod:`sacsma.calsim.catchments`.
-
-    ``pet_source="priestley_taylor"`` swaps the Hamon PET for the energy-based
-    PT PET (sac_pet=PT dPL exports): Snow-17 runs FIRST so its daily SWE can
-    drive the optional snow-cover albedo; requires per-cell ``tmin``/``tmax``.
-    The Hamon path is bit-identical to before.
-    """
-    if pet_source == "priestley_taylor":
-        if tmin is None or tmax is None:
-            raise ValueError(
-                "pet_source='priestley_taylor' requires per-cell tmin/tmax")
-        eff_p, _melt, swe, _st, _in = snow17(prcp, tavg, doy, is_leap, elev,
-                                             P.snow_par(ga_row))
-        pet, recession = _pet_and_recession_pt(
-            tavg, tmin, tmax, doy, lat, elev, swe, ga_row,
-            pt_snow_albedo, pt_dewpoint_depression)
-    elif pet_source == "hamon":
-        pet, recession = _pet_and_recession(tavg, doy, lat, ga_row)
-        eff_p = snow17(prcp, tavg, doy, is_leap, elev, P.snow_par(ga_row))[0]
-    else:
-        raise ValueError(f"pet_source {pet_source!r}")
-    surf, base, _tet, _state = sac_sma(pet, eff_p, P.sma_par(ga_row), recession=recession)
-    return surf, base
-
-
-def run_hru_noah_lite(
-    prcp: np.ndarray,
-    tavg: np.ndarray,
-    tmin: np.ndarray,
-    tmax: np.ndarray,
-    doy: np.ndarray,
-    is_leap: np.ndarray,
-    *,
-    lat: float,
-    elev: float,
-    ga_row,
-    veg_frac: float,
-    lai_series: np.ndarray,
-    soil_chi: float,
-    pt_snow_albedo: float = 0.0,
-    pt_dewpoint_depression: float = 0.0,
-    sac_exchanges: bool = False,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Per-HRU SMA outputs ``(surf, base)`` for the Noah-LITE external ET path
-    (``canopy_lite`` dPL exports) — the frozen-pipeline mirror of the torch
-    ``et_mode='noah'`` + ``canopy_lite`` scoring.
-
-    Snow-17 (its SWE drives the optional PT snow-cover albedo) -> Priestley-Taylor
-    PET (``Kpet`` scaled) -> the Noah-lite SAC core.  ``veg_frac``/``soil_chi``
-    are the per-HRU pinned green fraction and learned moisture-limiter exponent;
-    ``lai_series`` is the (T,) observed daily LAI (day-of-year climatology).
-    Requires per-cell ``tmin``/``tmax`` (the PT PET).  Seasonal ``Kpet`` is not
-    supported here (no canonical Noah-lite export uses it).  ``sac_exchanges``
-    keeps the reference SAC exchanges (:mod:`sacsma.sma_noah_lite`)."""
-    if P.is_seasonal(ga_row):
-        raise NotImplementedError(
-            "seasonal Kpet is not supported on the Noah-lite frozen path")
-    eff_p, _melt, swe, _st, _in = snow17(prcp, tavg, doy, is_leap, elev,
-                                         P.snow_par(ga_row))
-    raw = pt_raw_pet(tavg, tmin, tmax, doy, lat, elev, swe=swe,
-                     snow_albedo=pt_snow_albedo,
-                     dewpoint_depression=pt_dewpoint_depression)
-    pet = P.kpet(ga_row) * raw
-    surf, base, _tet, _state = sac_sma_noah_lite(
-        pet, eff_p, veg_frac, lai_series, soil_chi, P.sma_par(ga_row),
-        sac_exchanges=sac_exchanges)
-    return surf, base
-
-
-def run_hru_local(
-    prcp: np.ndarray,
-    tavg: np.ndarray,
-    doy: np.ndarray,
-    is_leap: np.ndarray,
-    *,
-    lat: float,
-    elev: float,
-    ga_row,
-) -> np.ndarray:
-    """Local runoff depth (mm/day) generated by one HRU (``surf + base``)."""
-    surf, base = run_hru_components(prcp, tavg, doy, is_leap, lat=lat, elev=elev, ga_row=ga_row)
-    return surf + base
-
-
-def _comp_key(domain: str, key: str, lat: float, elev: float, ga_row,
-              pet_extra: tuple = ()):
-    """Hashable identity of everything feeding the SMA components ``(surf, base)``: the
-    ``(domain, cell)`` (which fix the forcing) plus lat/elev and the PET/Snow-17/SAC-SMA
-    params.  Routing params are deliberately excluded — they only affect the downstream
-    Lohmann routing, not the components — so the cache is shared between the routed
-    (``run_basin``) and local (``run_calsim``) aggregations.  ``pet_extra`` extends the
-    key for non-Hamon PET sources (source name + its knobs)."""
-    return (domain, key, float(lat), float(elev), float(P.kpet(ga_row)),
-            tuple(float(x) for x in P.snow_par(ga_row)),
-            tuple(float(x) for x in P.sma_par(ga_row)), pet_extra)
-
-
-def run_hru_components_cached(
-    comp_cache: dict | None,
-    domain: str,
-    key: str,
-    prcp: np.ndarray,
-    tavg: np.ndarray,
-    doy: np.ndarray,
-    is_leap: np.ndarray,
-    *,
-    lat: float,
-    elev: float,
-    ga_row,
-    pet_source: str = "hamon",
-    tmin: np.ndarray | None = None,
-    tmax: np.ndarray | None = None,
-    pt_snow_albedo: float = 0.0,
-    pt_dewpoint_depression: float = 0.0,
-) -> tuple[np.ndarray, np.ndarray]:
-    """:func:`run_hru_components` with an optional cross-builder cache.
-
-    Within a single cross-compare the same per-cell PET->Snow-17->SAC-SMA physics is needed
-    by BOTH the basin anchor (``run_basin``, routed to the CDEC gauge) and the per-catchment
-    view (``run_calsim``, local runoff at the CalSim node).  Passing one ``comp_cache`` dict to
-    both computes each cell's components **once**.  The cache key (:func:`_comp_key`) includes
-    the params, so a 9unimp cell shared between watersheds with different params is computed
-    per param set — numerically identical to the un-cached path.  Returned arrays are treated
-    as read-only by all consumers (Lohmann routing and area-weighting only read them)."""
-    def _run():
-        return run_hru_components(
-            prcp, tavg, doy, is_leap, lat=lat, elev=elev, ga_row=ga_row,
-            pet_source=pet_source, tmin=tmin, tmax=tmax,
-            pt_snow_albedo=pt_snow_albedo,
-            pt_dewpoint_depression=pt_dewpoint_depression)
-
-    if comp_cache is None:
-        return _run()
-    pet_extra = (() if pet_source == "hamon"
-                 else (pet_source, float(pt_snow_albedo),
-                       float(pt_dewpoint_depression)))
-    ck = _comp_key(domain, key, lat, elev, ga_row, pet_extra)
-    sb = comp_cache.get(ck)
-    if sb is None:
-        sb = _run()
-        comp_cache[ck] = sb
-    return sb
-
-
-def run_basin(
-    basin: str,
-    *,
-    data_dir: str | Path | None = "data",
-    domain: str = DEFAULT_DOMAIN,
-    start: str | None = None,
-    end: str | None = None,
-    progress: bool = False,
-    forcing: DomainForcing | None = None,
-    comp_cache: dict | None = None,
-    parallel: bool = False,
-    product: str = DEFAULT_FORCING,
-    params: pd.DataFrame | None = None,
-    pet_source: str = "hamon",
-    pt_snow_albedo: float = 0.0,
-    pt_dewpoint_depression: float = 0.0,
-    et_scheme: str = "sac",
-    canopy_params: pd.DataFrame | None = None,
-    spinup_years: int | None = None,
-) -> pd.DataFrame:
-    """Forward-simulate one basin from the GA optimum.
-
-    ``data_dir`` points at the organized ``data/`` store and the ``domain``
-    forcing store is used.  ``domain`` selects the application/calibration set
-    (``"15cdec"`` default, or one of the CalSim/CalLite domains); ``product``
-    selects the forcing store (default: the historical Livneh-unsplit grid —
-    e.g. ``"wgen_product_a"`` for the WGEN historical-parallel sequence).
-
-    For multi-basin runs, build the domain forcing once with
-    :func:`load_domain_forcing` and pass it as ``forcing`` so the ~900 MB/var
-    read happens a single time across all basins.
-
-    ``params`` substitutes an alternate parameter table for the domain's
-    archived GA optimum (same columns as ``ga_optimum.csv``; keyed by ``key``
-    with an optional per-basin ``basin`` column — the dPL exports use this).
-    Everything else, including the physics, is unchanged.
-
-    ``pet_source="priestley_taylor"`` scores a PT-trained dPL export: the
-    energy-based PT PET (``sacsma.pet_pt``, numba mirror of the torch
-    ``et_noah`` formulation) replaces Hamon, with the optional snow-cover
-    albedo (Snow-17 SWE-driven) and arid dewpoint depression.  Needs the
-    per-cell tmin/tmax sidecar (attached on demand).
-
-    ``et_scheme="noah_lite"`` scores a Noah-lite (``canopy_lite``) dPL export:
-    the frozen E1-E5 ET cascade is replaced by the Noah-lite two-term external
-    ET (``sacsma.sma_noah_lite``, numba mirror of the torch
-    ``et_mode='noah'`` + ``canopy_lite`` path).  It forces the Priestley-Taylor
-    PET, needs the per-cell tmin/tmax and the observed canopy sidecars
-    (``io.load_canopy_obs``), and takes the learned per-HRU ``soil_chi`` from
-    ``canopy_params`` (a ``params_canopy.csv``-shaped table keyed by
-    ``key``/``basin``).
-
-    ``spinup_years`` (opt-in, default ``None`` = today's cold start) prepends
-    that many years of a repeated climatological *average year* before the run
-    window, so the simulation starts from an equilibrated state (soil moisture,
-    snowpack, routing ramp) at any ``start`` instead of the reference cold start.
-    It is a pure forcing-level prepend (:mod:`sacsma.spinup`) run through this
-    same path with the lead-in dropped — the physics is untouched and the default
-    (``None``) path is byte-identical to before.
-
-    Returns DataFrame[date, flow] of area-weighted gauge flow (mm/day).
-    """
-    if spinup_years is not None:
-        return _run_basin_spunup(
-            basin, data_dir=data_dir, domain=domain, start=start, end=end,
-            progress=progress, forcing=forcing, parallel=parallel, product=product,
-            params=params, pet_source=pet_source, pt_snow_albedo=pt_snow_albedo,
-            pt_dewpoint_depression=pt_dewpoint_depression, et_scheme=et_scheme,
-            canopy_params=canopy_params, spinup_years=spinup_years)
-    if forcing is None and (
-        data_dir is None
-        or not forcing_path(data_dir, domain, product).exists()
-    ):
-        raise FileNotFoundError(
-            f"forcing store not found: {forcing_path(data_dir or 'data', domain, product)}"
-        )
-    return _run_basin_native(
-        basin, data_dir=data_dir, domain=domain, start=start, end=end,
-        progress=progress, forcing=forcing, comp_cache=comp_cache, parallel=parallel,
-        product=product, params=params, pet_source=pet_source,
-        pt_snow_albedo=pt_snow_albedo,
-        pt_dewpoint_depression=pt_dewpoint_depression,
-        et_scheme=et_scheme, canopy_params=canopy_params,
-    )
-
-
-def _run_basin_spunup(basin, *, data_dir, domain, start, end, progress, forcing,
-                      parallel, product, params, pet_source, pt_snow_albedo,
-                      pt_dewpoint_depression, et_scheme, canopy_params,
-                      spinup_years) -> pd.DataFrame:
-    """``run_basin`` with a climatological average-year spinup (opt-in).
-
-    Prepends ``spinup_years`` average-years to the base forcing, runs the combined
-    series through the normal native path, and drops the lead-in rows so only the
-    original window is returned — now started from an equilibrated state.  The
-    component cache is disabled (its key does not encode the extended time axis).
-    """
-    from . import spinup as _spinup
-
-    dd: str | Path = data_dir if data_dir is not None else "data"
-    base = forcing
-    if base is None:
-        base = load_domain_forcing(dd, domain=domain, start=start, end=end,
-                                   product=product)
-    # PT / Noah-lite need per-cell tmin/tmax on the base so the prepended block
-    # carries them too (then the native path's attach_tminmax no-ops).
-    if pet_source == "priestley_taylor" or et_scheme == "noah_lite":
-        attach_tminmax(dd, domain, base, product=product)
-    extended, n_spin = _spinup.prepend_spinup(base, years=spinup_years)
-    df = _run_basin_native(
-        basin, data_dir=dd, domain=domain, start=None, end=None, progress=progress,
-        forcing=extended, comp_cache=None, parallel=parallel, product=product,
-        params=params, pet_source=pet_source, pt_snow_albedo=pt_snow_albedo,
-        pt_dewpoint_depression=pt_dewpoint_depression, et_scheme=et_scheme,
-        canopy_params=canopy_params)
-    return df.iloc[n_spin:].reset_index(drop=True)
 
 
 @dataclass
 class DomainForcing:
-    """Domain-wide forcing read into memory once, reusable across basins.
+    """A domain's forcing in memory, read once and shared by every run on it.
 
-    ``prcp``/``tavg`` are the full ``(n_cells, n_time)`` arrays (stored as
-    float32 to halve memory); ``pos`` maps a grid-cell ``key`` to its row.
-    ``doy``/``is_leap`` are precomputed for the (possibly time-sliced) ``dates``.
-    """
+    ``prcp`` / ``tavg`` are ``(cells, days)`` as stored (float32); ``pos`` maps a grid-cell
+    ``key`` to its row; ``doy`` / ``is_leap`` belong to ``dates``.  ``tmin`` / ``tmax`` are
+    attached where a learned run with the Priestley-Taylor PET needs them."""
 
     pos: dict[str, int]
     prcp: np.ndarray
@@ -521,23 +40,8 @@ class DomainForcing:
     dates: pd.DatetimeIndex
     doy: np.ndarray
     is_leap: np.ndarray
-    #: per-cell Tmin/Tmax, attached on demand (attach_tminmax) for the
-    #: Priestley-Taylor PET; None for the plain Hamon path.
     tmin: np.ndarray | None = None
     tmax: np.ndarray | None = None
-    _f64: dict = field(default_factory=dict, repr=False, compare=False)
-
-    def forcing_f64(self) -> tuple[np.ndarray, np.ndarray]:
-        """``(prcp, tavg)`` as C-contiguous float64, converted **once** and cached.
-
-        The physics cores run in float64 (the serial path up-converts each row), so
-        the parallel kernel needs the whole store in float64.  Converting once here
-        (vs per basin) keeps the cost off the per-basin path; the float32 originals
-        are retained so serial-only runs keep their smaller footprint."""
-        if "prcp" not in self._f64:
-            self._f64["prcp"] = np.ascontiguousarray(self.prcp, dtype=np.float64)
-            self._f64["tavg"] = np.ascontiguousarray(self.tavg, dtype=np.float64)
-        return self._f64["prcp"], self._f64["tavg"]
 
 
 def load_domain_forcing(
@@ -548,14 +52,10 @@ def load_domain_forcing(
     end: str | None = None,
     product: str = DEFAULT_FORCING,
 ) -> DomainForcing:
-    """Read the whole forcing store into memory ONCE (reuse across basins).
+    """Read the domain's forcing store ``product`` into memory, over ``start``..``end``.
 
-    The store is zlib-compressed; xarray/HDF5 fancy-indexing ~2000 non-contiguous
-    keys re-decompresses overlapping chunks per key and takes minutes, whereas a
-    single contiguous read of each variable is ~4s and NumPy row-indexing is
-    instant.  For multi-basin runs, build this once and pass it to every
-    :func:`run_basin` call so the ~900 MB/var read happens a single time.
-    """
+    One contiguous read per variable (seconds); indexing ~2000 non-contiguous keys in the
+    compressed store instead would decompress overlapping chunks per key (minutes)."""
     ds = load_forcing(data_dir, domain=domain, product=product)
     try:
         if start is not None or end is not None:
@@ -570,322 +70,67 @@ def load_domain_forcing(
     return DomainForcing(pos=pos, prcp=prcp, tavg=tavg, dates=dates, doy=doy, is_leap=is_leap)
 
 
-def attach_tminmax(data_dir: str | Path, domain: str, forcing: DomainForcing,
-                   product: str = DEFAULT_FORCING) -> None:
-    """Attach per-cell Tmin/Tmax to a :class:`DomainForcing` in place (no-op if
-    already attached) — required by the Priestley-Taylor PET
-    (``pet_source="priestley_taylor"``).  Grid-based domains read them from
-    the same unified region forcing store the prcp/tavg came from
-    (``data/inputs/forcing/<product>.nc``); the fine ``15cdec`` domain has no
-    per-cell tmin/tmax (its HRU points are off the 1/16-deg grid)."""
-    if forcing.tmin is not None and forcing.tmax is not None:
-        return
-    from .io import REGION_DOMAINS, norm_grid_key
-
-    if domain not in REGION_DOMAINS:
-        raise FileNotFoundError(
-            f"Priestley-Taylor PET needs per-cell tmin/tmax; domain {domain!r} "
-            "has no grid-based forcing store (only the region domains do)")
-    import xarray as xr
-
-    from . import wgen_scenarios
-
-    if wgen_scenarios.scenario_of(product) is not None:     # decoded exactly against its base
-        want = [norm_grid_key(k) for k in forcing.pos]
-        ds = wgen_scenarios.load_region_subset(data_dir, product, want, ("tmin", "tmax"))
-        tmin, tmax = ds["tmin"].values, ds["tmax"].values
-    else:
-        ds = xr.open_dataset(forcing_path(data_dir, domain, product))
-        try:
-            key_row = {str(k): i for i, k in enumerate(ds["key"].values)}
-            order = np.array([key_row[norm_grid_key(k)] for k in forcing.pos],
-                             dtype=np.int64)
-            tmin = ds["tmin"].values[order]
-            tmax = ds["tmax"].values[order]
-        finally:
-            ds.close()
-    t = forcing.prcp.shape[1]
-    if tmin.shape[1] != t:   # e.g. a time-sliced forcing window
-        raise ValueError(
-            f"tminmax time axis ({tmin.shape[1]}) != forcing ({t}); "
-            "PT runs currently require the full unsliced record")
-    forcing.tmin = tmin
-    forcing.tmax = tmax
+def simulate_ga(hrus: pd.DataFrame, params: pd.DataFrame, weights: np.ndarray,
+                forcing: DomainForcing, output: str = "flow", *,
+                physics: Physics | None = None) -> np.ndarray:
+    """``weights`` (K, rows) sums over the rows of ``hrus`` (``key``, ``lat``, ``elev``,
+    ``flowlen``), each run with the GA parameters in the same row of ``params``, over the whole
+    of ``forcing`` from the cold start: (K, days) mm/day of the routed flow (``output="flow"``)
+    or of the runoff before routing (``"runoff"``).  ``physics`` (default: the reference model)
+    runs them through other numerics (the benchmark)."""
+    keys = hrus["key"].to_numpy()
+    col = lambda names: params[list(names)].to_numpy(float)  # noqa: E731
+    field = Field.from_rows(
+        physics or Physics(), np.fromiter((forcing.pos[k] for k in keys), np.int64, len(keys)),
+        np.deg2rad(hrus["lat"].to_numpy(float)), hrus["elev"].to_numpy(float),
+        hrus["flowlen"].to_numpy(float), params["Kpet"].to_numpy(float), col(P._SNOW_COLS),
+        col(P._SMA_COLS), col(P._ROUT_COLS))
+    return simulate(field, forcing, forcing.dates[0], forcing.dates[-1], weights, spinup="cold",
+                    outputs=(output,))[output]
 
 
-def _run_basin_native(
-    basin: str,
+def area_weights(hrus: pd.DataFrame, basins) -> np.ndarray:
+    """(basins, rows) each basin's HRU ``area_weight`` over the rows of ``hrus``, summing to 1."""
+    codes = pd.Categorical(hrus["basin"], categories=list(basins)).codes
+    missing = sorted(set(basins) - set(hrus["basin"]))
+    if missing:
+        raise ValueError(f"no HRUs for basin(s) {missing}")
+    rows = np.flatnonzero(codes >= 0)
+    W = np.zeros((len(basins), len(hrus)))
+    W[codes[rows], rows] = hrus["area_weight"].to_numpy(float)[rows]
+    return W / W.sum(axis=1, keepdims=True)
+
+
+def run_basins(
+    basins=None,
     *,
-    data_dir: str | Path | None = None,
+    data_dir: str | Path = "data",
     domain: str = DEFAULT_DOMAIN,
     start: str | None = None,
     end: str | None = None,
-    progress: bool = False,
     forcing: DomainForcing | None = None,
-    comp_cache: dict | None = None,
-    parallel: bool = False,
     product: str = DEFAULT_FORCING,
-    params: pd.DataFrame | None = None,
-    pet_source: str = "hamon",
-    pt_snow_albedo: float = 0.0,
-    pt_dewpoint_depression: float = 0.0,
-    et_scheme: str = "sac",
-    canopy_params: pd.DataFrame | None = None,
+    physics: Physics | None = None,
+    weights: np.ndarray | None = None,
 ) -> pd.DataFrame:
-    """Native-path basin run from the organized ``data/`` artifacts.
-
-    Forcing is the domain-wide grid-cell store; HRU attributes (elev, flowlen,
-    area_weight, lat) come from the HRU table.  Each HRU pulls its grid cell's
-    forcing by ``key``.  Pass a preloaded ``forcing`` (from
-    :func:`load_domain_forcing`) to avoid re-reading the store per basin.
-
-    ``parallel=True`` fans the HRUs across cores via :func:`_basin_kernel` (Numba
-    ``prange``); the result matches the serial path to floating tolerance (the
-    only difference is reduction order).  It bypasses ``comp_cache``.
-    """
-    from .io import load_hru_table
-
-    if et_scheme not in ("sac", "noah_lite"):
-        raise ValueError(f"et_scheme {et_scheme!r}")
-    dd: str | Path = data_dir if data_dir is not None else "data"
+    """Forward-simulate ``basins`` of ``domain`` (default: all, sorted) from their GA optimum in
+    one engine run: the daily gauge flow (mm/day), date x basin.  A basin's flow weighs its HRU
+    rows by ``weights`` (basins, rows of the domain's HRU table; default :func:`area_weights`).
+    ``forcing`` (:func:`load_domain_forcing`) reuses a read; without it the store ``product``
+    is read over ``start``..``end``.  ``physics`` as in :func:`simulate_ga`."""
     if forcing is None:
-        forcing = load_domain_forcing(dd, domain=domain, start=start, end=end, product=product)
-    noah_lite = et_scheme == "noah_lite"
-    if pet_source == "priestley_taylor" or noah_lite:
-        attach_tminmax(dd, domain, forcing, product=product)   # no-op if already attached
-    params_df = params if params is not None else load_params(domain=domain)
-    # per-watershed calibrations (e.g. 9unimp) repeat shared cells with different
-    # params per basin; filter to this basin before indexing by key.
-    if "basin" in params_df.columns:
-        params_df = params_df[params_df["basin"] == basin]
-    params_df = params_df.set_index("key")
-    # Seasonal (day-of-year harmonic) params run only on the serial path — the
-    # numba kernels take scalar params.  Fall back to serial rather than
-    # silently dropping the seasonality.
-    if parallel and any(str(c).endswith("_asin") for c in params_df.columns):
-        parallel = False
-    hrus = load_hru_table(dd, domain=domain)
-    sub = hrus[hrus["basin"] == basin].reset_index(drop=True)
-    if sub.empty:
-        raise ValueError(f"No HRUs for basin {basin} in {data_dir}")
-    # Source HRU weights are PER-BASIN PERCENTAGES (sum to 100); normalize to
-    # area fractions (sum to 1) before area-weighting the routed flow.
-    wnorm = sub["area_weight"].to_numpy(dtype=float)
-    wnorm = wnorm / wnorm.sum()
-
-    dates, doy, is_leap = forcing.dates, forcing.doy, forcing.is_leap
-
-    if noah_lite:
-        return _run_basin_noah_lite(
-            basin, sub, params_df, canopy_params, forcing, wnorm, dd, domain,
-            dates, doy, is_leap, parallel=parallel, progress=progress,
-            pt_snow_albedo=pt_snow_albedo,
-            pt_dewpoint_depression=pt_dewpoint_depression)
-
-    if parallel and _basin_kernel is not None:
-        total = _run_basin_parallel(sub, params_df, forcing, wnorm,
-                                    pet_source=pet_source,
-                                    pt_snow_albedo=pt_snow_albedo,
-                                    pt_dewpoint_depression=pt_dewpoint_depression)
-        return pd.DataFrame({"date": dates, "flow": total})
-
-    total = np.zeros(len(dates))
-    n = len(sub)
-    for i, hru in enumerate(sub.itertuples(index=False)):
-        if progress and (i % 200 == 0):
-            print(f"  {basin}: HRU {i + 1}/{n}", flush=True)
-        c = forcing.pos[hru.key]
-        ga_row = params_df.loc[hru.key]
-        # PET -> Snow-17 -> SAC-SMA (cached across the anchor/per-catchment builds), then
-        # Lohmann-route to the gauge — equivalent to run_hru() but reusing shared components.
-        surf, base = run_hru_components_cached(
-            comp_cache, domain, hru.key, forcing.prcp[c], forcing.tavg[c], doy, is_leap,
-            lat=float(hru.lat), elev=float(hru.elev), ga_row=ga_row,
-            pet_source=pet_source,
-            tmin=None if forcing.tmin is None else forcing.tmin[c],
-            tmax=None if forcing.tmax is None else forcing.tmax[c],
-            pt_snow_albedo=pt_snow_albedo,
-            pt_dewpoint_depression=pt_dewpoint_depression,
-        )
-        is_outlet = default_is_outlet(float(hru.flowlen))
-        runoff, _baseflow = lohmann(surf, base, float(hru.flowlen),
-                                    P.routing_par(ga_row), is_outlet)
-        total += wnorm[i] * runoff
-    return pd.DataFrame({"date": dates, "flow": total})
-
-
-def _resolve_canopy(sub, canopy_params: pd.DataFrame | None, basin: str,
-                    dd: str | Path, domain: str):
-    """Per-HRU ``(veg_frac (n,), soil_chi (n,), lai_lut (n, 366), sac_ex (n,))``
-    for the Noah-lite path, aligned to ``sub`` HRU order.  ``veg_frac``/LAI come
-    from the observed canopy sidecars (:func:`sacsma.io.load_canopy_obs`);
-    ``soil_chi`` from ``canopy_params`` (a ``params_canopy.csv`` table, filtered
-    to ``basin`` and keyed by ``key`` — cells shared between basins carry
-    per-basin values); ``sac_ex`` from its optional ``sac_exchanges`` column (an
-    export of a ``noah_sac_exchanges`` run carries it; absent = 0, the default
-    external-ET physics)."""
-    from .io import load_canopy_obs
-
-    if canopy_params is None:
-        raise ValueError("et_scheme='noah_lite' requires canopy_params (soil_chi)")
-    cp = canopy_params
-    if "basin" in cp.columns:
-        cp = cp[cp["basin"] == basin]
-    cp = cp.set_index("key")
-    veg_obs, lai_obs = load_canopy_obs(dd, domain)
-    keys = sub["key"].to_numpy()
-    veg = veg_obs.reindex(keys).to_numpy(dtype=float)
-    soil_chi = cp["soil_chi"].reindex(keys).to_numpy(dtype=float)
-    lai_lut = lai_obs.reindex(keys).to_numpy(dtype=float)      # (n, 366)
-    if np.isnan(veg).any() or np.isnan(lai_lut).any():
-        raise ValueError(f"missing observed canopy (veg/LAI) for basin {basin}")
-    if np.isnan(soil_chi).any():
-        raise ValueError(f"missing soil_chi in canopy_params for basin {basin}")
-    if "sac_exchanges" in cp.columns:
-        sac_ex = cp["sac_exchanges"].reindex(keys).fillna(0).to_numpy(dtype=np.int64)
-    else:
-        sac_ex = np.zeros(len(keys), dtype=np.int64)
-    return veg, soil_chi, lai_lut, sac_ex
-
-
-def _run_basin_noah_lite(basin, sub, params_df, canopy_params, forcing, wnorm,
-                         dd, domain, dates, doy, is_leap, *, parallel, progress,
-                         pt_snow_albedo, pt_dewpoint_depression) -> pd.DataFrame:
-    """Noah-lite (``canopy_lite``) basin run: PT PET + the Noah-lite external ET
-    SAC core, area-weighted to the gauge (serial or the ``prange`` kernel)."""
-    veg, soil_chi, lai_lut, sac_ex = _resolve_canopy(sub, canopy_params, basin, dd,
-                                                     domain)
-
-    if parallel and _basin_kernel_noah_lite is not None:
-        total = _run_basin_noah_lite_parallel(
-            sub, params_df, forcing, wnorm, veg, soil_chi, lai_lut,
-            pt_snow_albedo, pt_dewpoint_depression, sac_ex)
-        return pd.DataFrame({"date": dates, "flow": total})
-
-    doy_i = np.asarray(doy).astype(np.int64)
-    total = np.zeros(len(dates))
-    n = len(sub)
-    for i, hru in enumerate(sub.itertuples(index=False)):
-        if progress and (i % 200 == 0):
-            print(f"  {basin}: HRU {i + 1}/{n}", flush=True)
-        c = forcing.pos[hru.key]
-        ga_row = params_df.loc[hru.key]
-        lai_series = lai_lut[i][doy_i - 1]
-        surf, base = run_hru_noah_lite(
-            forcing.prcp[c], forcing.tavg[c], forcing.tmin[c], forcing.tmax[c],
-            doy, is_leap, lat=float(hru.lat), elev=float(hru.elev), ga_row=ga_row,
-            veg_frac=veg[i], lai_series=lai_series, soil_chi=soil_chi[i],
-            pt_snow_albedo=pt_snow_albedo,
-            pt_dewpoint_depression=pt_dewpoint_depression,
-            sac_exchanges=bool(sac_ex[i]))
-        is_outlet = default_is_outlet(float(hru.flowlen))
-        runoff, _baseflow = lohmann(surf, base, float(hru.flowlen),
-                                    P.routing_par(ga_row), is_outlet)
-        total += wnorm[i] * runoff
-    return pd.DataFrame({"date": dates, "flow": total})
-
-
-def _run_basin_noah_lite_parallel(sub, params_df, forcing, wnorm, veg, soil_chi,
-                                  lai_lut, pt_snow_albedo, pt_dewpoint_depression,
-                                  sac_ex):
-    """Flat per-HRU bundle -> :func:`_basin_kernel_noah_lite` (the PT + Noah-lite
-    external-ET kernel).  Requires the per-cell tmin/tmax (attach_tminmax)."""
-    if forcing.tmin is None or forcing.tmax is None:
-        raise ValueError("Noah-lite parallel run needs attach_tminmax() first")
-    keys = sub["key"].to_numpy()
-    cell_idx = np.fromiter((forcing.pos[k] for k in keys), dtype=np.int64, count=len(keys))
-    pr = params_df.loc[keys]
-    kpet = np.ascontiguousarray(pr["Kpet"].to_numpy(dtype=float))
-    snow_par = np.ascontiguousarray(pr[list(P._SNOW_COLS)].to_numpy(dtype=float))
-    sma_par = np.ascontiguousarray(pr[list(P._SMA_COLS)].to_numpy(dtype=float))
-    rout_par = np.ascontiguousarray(pr[list(P._ROUT_COLS)].to_numpy(dtype=float))
-    lat_rad = np.ascontiguousarray(np.deg2rad(sub["lat"].to_numpy(dtype=float)))
-    elev = np.ascontiguousarray(sub["elev"].to_numpy(dtype=float))
-    flowlen = np.ascontiguousarray(sub["flowlen"].to_numpy(dtype=float))
-    is_outlet = (flowlen == 0.0).astype(np.int64)
-    prcp_cells, tavg_cells = forcing.forcing_f64()
-    if "tmin" not in forcing._f64:
-        forcing._f64["tmin"] = np.ascontiguousarray(forcing.tmin, dtype=np.float64)
-        forcing._f64["tmax"] = np.ascontiguousarray(forcing.tmax, dtype=np.float64)
-    doy_f = forcing.doy.astype(np.float64)
-    doy_i = forcing.doy.astype(np.int64)
-    is_leap = forcing.is_leap.astype(np.int64)
-    return _basin_kernel_noah_lite(
-        prcp_cells, tavg_cells, forcing._f64["tmin"], forcing._f64["tmax"],
-        cell_idx, doy_f, doy_i, is_leap, lat_rad, elev, flowlen, is_outlet,
-        kpet, snow_par, sma_par, rout_par, np.ascontiguousarray(wnorm),
-        np.ascontiguousarray(veg), np.ascontiguousarray(soil_chi),
-        np.ascontiguousarray(lai_lut), float(pt_snow_albedo),
-        float(pt_dewpoint_depression), np.ascontiguousarray(sac_ex, dtype=np.int64))
-
-
-def _run_basin_parallel(sub, params_df, forcing: DomainForcing, wnorm: np.ndarray,
-                        *, pet_source: str = "hamon",
-                        pt_snow_albedo: float = 0.0,
-                        pt_dewpoint_depression: float = 0.0) -> np.ndarray:
-    """Build the flat per-HRU array bundle and call :func:`_basin_kernel` (or
-    :func:`_basin_kernel_pt` for the Priestley-Taylor PET).
-
-    All per-HRU pandas lookups happen here (vectorized, once); the kernel sees only
-    contiguous NumPy arrays.  The full ``(n_cell, T)`` forcing is passed by reference
-    with a per-HRU ``cell_idx`` so it is never duplicated.
-    """
-    keys = sub["key"].to_numpy()
-    cell_idx = np.fromiter((forcing.pos[k] for k in keys), dtype=np.int64, count=len(keys))
-    pr = params_df.loc[keys]
-    kpet = np.ascontiguousarray(pr["Kpet"].to_numpy(dtype=float))
-    snow_par = np.ascontiguousarray(pr[list(P._SNOW_COLS)].to_numpy(dtype=float))
-    sma_par = np.ascontiguousarray(pr[list(P._SMA_COLS)].to_numpy(dtype=float))
-    rout_par = np.ascontiguousarray(pr[list(P._ROUT_COLS)].to_numpy(dtype=float))
-    lat_rad = np.ascontiguousarray(np.deg2rad(sub["lat"].to_numpy(dtype=float)))
-    elev = np.ascontiguousarray(sub["elev"].to_numpy(dtype=float))
-    flowlen = np.ascontiguousarray(sub["flowlen"].to_numpy(dtype=float))
-    is_outlet = (flowlen == 0.0).astype(np.int64)
-    prcp_cells, tavg_cells = forcing.forcing_f64()
-    doy_f = forcing.doy.astype(np.float64)
-    doy_i = forcing.doy.astype(np.int64)
-    is_leap = forcing.is_leap.astype(np.int64)
-    if pet_source == "priestley_taylor":
-        if forcing.tmin is None or forcing.tmax is None:
-            raise ValueError("PT parallel run needs attach_tminmax() first")
-        if "tmin" not in forcing._f64:
-            forcing._f64["tmin"] = np.ascontiguousarray(forcing.tmin, dtype=np.float64)
-            forcing._f64["tmax"] = np.ascontiguousarray(forcing.tmax, dtype=np.float64)
-        return _basin_kernel_pt(
-            prcp_cells, tavg_cells, forcing._f64["tmin"], forcing._f64["tmax"],
-            cell_idx, doy_f, doy_i, is_leap,
-            lat_rad, elev, flowlen, is_outlet,
-            kpet, snow_par, sma_par, rout_par, np.ascontiguousarray(wnorm),
-            float(pt_snow_albedo), float(pt_dewpoint_depression),
-        )
-    return _basin_kernel(
-        prcp_cells, tavg_cells, cell_idx, doy_f, doy_i, is_leap,
-        lat_rad, elev, flowlen, is_outlet,
-        kpet, snow_par, sma_par, rout_par, np.ascontiguousarray(wnorm),
-    )
-
-
-def run_local_runoff_parallel(keys, meta, params, forcing: DomainForcing) -> np.ndarray:
-    """Local runoff depth (``surf + base``, mm/day) for ``keys``, fanned across cores.
-
-    Returns an ``(len(keys), T)`` matrix, row ``i`` = cell ``keys[i]``'s un-routed runoff,
-    **bit-exact** vs computing each cell with :func:`run_hru_local`.  ``meta`` is the cell
-    table indexed by ``key`` (lat/elev); ``params`` is the GA table indexed by ``key``.
-    Used by :func:`sacsma.calsim.catchments.run_calsim` (``parallel=True``)."""
-    keys = np.asarray(keys)
-    cell_idx = np.fromiter((forcing.pos[k] for k in keys), dtype=np.int64, count=len(keys))
-    pr = params.loc[keys]
-    kpet = np.ascontiguousarray(pr["Kpet"].to_numpy(dtype=float))
-    snow_par = np.ascontiguousarray(pr[list(P._SNOW_COLS)].to_numpy(dtype=float))
-    sma_par = np.ascontiguousarray(pr[list(P._SMA_COLS)].to_numpy(dtype=float))
-    mm = meta.loc[keys]
-    lat_rad = np.ascontiguousarray(np.deg2rad(mm["lat"].to_numpy(dtype=float)))
-    elev = np.ascontiguousarray(mm["elev"].to_numpy(dtype=float))
-    prcp_cells, tavg_cells = forcing.forcing_f64()
-    doy_f = forcing.doy.astype(np.float64)
-    doy_i = forcing.doy.astype(np.int64)
-    is_leap = forcing.is_leap.astype(np.int64)
-    return _local_runoff_kernel(
-        prcp_cells, tavg_cells, cell_idx, doy_f, doy_i, is_leap,
-        lat_rad, elev, kpet, snow_par, sma_par,
-    )
+        forcing = load_domain_forcing(data_dir, domain=domain, start=start, end=end,
+                                      product=product)
+    hrus = load_hru_table(data_dir, domain=domain)
+    names = sorted(hrus["basin"].unique()) if basins is None else list(basins)
+    W = area_weights(hrus, names) if weights is None else np.asarray(weights, float)
+    use = W.any(axis=0)
+    hrus = hrus[use].reset_index(drop=True)
+    params = load_params(domain=domain)
+    # a per-watershed calibration (a ``basin`` column) repeats shared cells with its own values
+    on = ["basin", "key"] if "basin" in params.columns else ["key"]
+    pr = hrus[on].merge(params, on=on, how="left", validate="many_to_one")
+    if pr["Kpet"].isna().any():
+        raise ValueError(f"{int(pr['Kpet'].isna().sum())} HRU rows have no GA parameters")
+    flow = simulate_ga(hrus, pr, W[:, use], forcing, physics=physics)
+    return pd.DataFrame(flow.T, index=forcing.dates.rename("date"), columns=names)

@@ -13,8 +13,8 @@ All four models share the climate-ADAPTIVE ``noah`` physics (the
     climate-adaptive statics (pmean/snowf co-vary) — the no-physics ablation.
 
 Per-watershed figure: 4 metrics × 4 model columns, % change vs each model's own
-present climate.  The physics daily flow is the frozen numba noah-lite core
-(``adaptive_physics.noah_daily``); the hybrids are forwarded on the perturbed features
+present climate.  The physics daily flow is ``noah`` run as trained
+(:func:`sacsma.dpl.evaluate.basin_daily`); the hybrids are forwarded on the perturbed features
 (:func:`_ensemble_perturbed_daily`, with the climate statics co-varying).  Ensembles = mean
 over the seed members.  The grid, the metrics and the regimes are those of
 :mod:`.surfaces`.  Also writes ``compare_ga_dpl_hybrid.csv``, the GA, dPL and hybrid scores
@@ -31,7 +31,7 @@ import pandas as pd
 from ... import paths
 from ..._figures import plt  # noqa: F401
 from ...io import load_basin_area
-from .adaptive_physics import noah_daily
+from ..hybrid.train import RESPONSE_ANCHORS as ANCHORS
 from .climatology import _basin_order
 from .surfaces import (
     DOMAIN,
@@ -44,8 +44,8 @@ from .surfaces import (
     metrics_from_daily,
 )
 
-# the runs the figures compare; `hybrid` and `hybrid_dt` read `noah`'s parameter tables
-# and daily simulation, `lstm` has no physics channel at all (use_sim=False)
+# the runs the figures compare; `hybrid` and `hybrid_dt` read `noah`'s daily flow, `lstm`
+# has no physics channel at all (use_sim=False)
 BASE_DIR = paths.dpl_run(run="hybrid")
 DTDP_DIR = paths.dpl_run(run="hybrid_dt")
 LSTM_DIR = paths.dpl_run(run="lstm")
@@ -61,14 +61,9 @@ COL_ORDER = [PHYSICS, BASE, DTDP, LSTM]
 ENSEMBLES = {BASE: BASE_DIR, DTDP: DTDP_DIR, LSTM: LSTM_DIR}
 #: the run folder name of each figure label (for its score table)
 RUN = {PHYSICS: "noah", BASE: "hybrid", DTDP: "hybrid_dt", LSTM: "lstm"}
-#: 14-anchor set the dt·dp hybrid was supervised on (marked on its column):
-#: {−20%,−10%,0,+10%,+20%} × {0,+2,+4 °C}, precip extended to the ±20% edges.
-ANCHORS = [(dp, dt) for dp in (-0.2, -0.1, 0.0, 0.1, 0.2) for dt in (0.0, 2.0, 4.0)
-           if not (dp == 0.0 and dt == 0.0)]
-
-
-#: gitignored per-(dp,dt) ensemble daily-flow cache — lets a metric-only change
-#: (e.g. a different percentile) reduce on CPU instead of re-running the GPU sweep.
+#: untracked per-(dp,dt) ensemble daily-flow cache, one folder per ensemble and checkpoint
+#: content -- lets a metric-only change (e.g. a different percentile) reduce on CPU instead of
+#: re-running the GPU sweep.
 _HYBRID_CACHE = paths.local(name="cache/hybrid_daily")
 _ENS_TAG = {BASE: "base", DTDP: "dtdp", LSTM: "lstm"}
 
@@ -78,9 +73,9 @@ def _out(out_dir: str | Path | None) -> Path:
     return Path(out_dir) if out_dir is not None else paths.dpl_study(name="hybrids")
 
 
-def _hybrid_cache_path(tag: str, dp: float, dt: float) -> Path:
+def _hybrid_cache_path(folder: Path, dp: float, dt: float) -> Path:
     dp, dt = dp + 0.0, dt + 0.0                   # normalize IEEE -0.0 (arange)
-    return _HYBRID_CACHE / f"{tag}_dp{dp:+.2f}_dt{dt:+.1f}.csv"
+    return folder / f"dp{dp:+.2f}_dt{dt:+.1f}.csv"
 
 
 def _load_ensemble(ens_dir: str | Path, data_dir: str, dev, n_seeds: int):
@@ -88,7 +83,7 @@ def _load_ensemble(ens_dir: str | Path, data_dir: str, dev, n_seeds: int):
     seed shares the physics/domain/normalization config)."""
     import torch
 
-    from ..hybrid.data import feature_names, load_hybrid_data
+    from ..hybrid.data import data_for, feature_names
     from ..hybrid.model import HybridLSTM
 
     ckpts = sorted(Path(ens_dir).glob("seed*/checkpoints/best.pt"))[:n_seeds]
@@ -96,19 +91,7 @@ def _load_ensemble(ens_dir: str | Path, data_dir: str, dev, n_seeds: int):
         raise FileNotFoundError(f"no seed*/checkpoints/best.pt under {ens_dir}")
     ck0 = torch.load(ckpts[0], map_location="cpu", weights_only=False)
     cfg = ck0["cfg"]
-    if ck0.get("variant", "feature") != "feature":
-        raise ValueError("residual hybrid checkpoints are retired (2026-07-16)")
-    h = load_hybrid_data(
-        data_dir, physics_csv=ck0.get("physics_csv"), sim_cache=ck0.get("sim_cache"),
-        use_statics=bool(ck0["n_static"]),
-        use_doy=cfg.get("use_doy", True), use_pet=cfg.get("use_pet", False),
-        use_sim=cfg.get("use_sim", True),
-        domain=cfg.get("physics_domain", "15cdec"),
-        pet_source=cfg.get("pet_source", "hamon"),
-        pt_snow_albedo=cfg.get("pt_snow_albedo", 0.0),
-        pt_dewpoint_depression=cfg.get("pt_dewpoint_depression", 0.0),
-        et_scheme=cfg.get("physics_et_scheme", "sac"),
-        canopy_csv=cfg.get("canopy_csv") or None, device=dev)
+    h = data_for(ck0, data_dir, dev)
     models = []
     for cp in ckpts:
         ck = torch.load(cp, map_location="cpu", weights_only=False)
@@ -182,16 +165,17 @@ def assemble(data_dir: str = "data", *, device: str = "cuda",
     reduction) reduces from the cache on CPU in seconds instead of re-running the
     ~700 full-record GPU forwards.  The heavy objects (domain tensors, seed
     models, device) are lazy-loaded ONLY on the first cache miss, so a fully
-    cached re-run never touches the GPU.  Clear the cache dir if the ensembles are
-    retrained (it is keyed by (ensemble, dp, dt) only, not by weights)."""
+    cached re-run never touches the GPU.  The cache follows a retrain and a change to the
+    engine (:func:`sacsma.dpl.evaluate.ensemble_key`)."""
     areas = load_basin_area(data_dir, domain="15cdec").set_index(
         "basin")["area_mi2"].to_dict()
     grid = [(float(dp), float(dt)) for dp in DP for dt in DT]
-    _HYBRID_CACHE.mkdir(parents=True, exist_ok=True)
 
     # noah ADAPTIVE physics over the grid (cached by the physics sweep) — the
     # reference AND the hybrids' perturbed sim channel.
-    phys = {(dp, dt): noah_daily(dp, dt, "adaptive", data_dir) for dp, dt in grid}
+    from ..evaluate import basin_daily
+
+    phys = {(dp, dt): basin_daily("noah", data_dir=data_dir, dp=dp, dt=dt) for dp, dt in grid}
     print(f"  physics: {len(grid)} (dp,dt) points", flush=True)
 
     # lazy holders — built only when a hybrid cache MISS actually needs them.
@@ -235,10 +219,13 @@ def assemble(data_dir: str = "data", *, device: str = "cuda",
     for dp, dt in grid:
         _emit(PHYSICS, dp, dt, metrics_from_daily(phys[(dp, dt)], areas))
 
+    from ..evaluate import ensemble_key
+
     for label, ens in ENSEMBLES.items():
-        tag, n_miss = _ENS_TAG[label], 0
+        folder, n_miss = _HYBRID_CACHE / f"{_ENS_TAG[label]}_{ensemble_key(ens)}", 0
+        folder.mkdir(parents=True, exist_ok=True)
         for dp, dt in grid:
-            cache = _hybrid_cache_path(tag, dp, dt)
+            cache = _hybrid_cache_path(folder, dp, dt)
             if cache.exists():
                 daily = pd.read_csv(cache, index_col=0, parse_dates=[0])
             else:

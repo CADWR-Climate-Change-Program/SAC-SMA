@@ -275,8 +275,8 @@ def dwr_swat(data_dir="data", name: str = "swat_monthly.csv") -> Path:
 # name: ``models/dpl/<group>/<run>``, ``results/dpl/<group>/<run>`` and
 # ``_local/runs/dpl/<group>/<run>``, where ``<group>`` is ``15cdec`` (both 15-CDEC domains) or
 # ``multifamily``.  Every function takes the output root (``artifacts_dir``, default
-# ``"artifacts"``) and touches no file, except :func:`run_roles` and :func:`run_file`, which
-# look for a run's model folder.
+# ``"artifacts"``) and touches no file, except :func:`run_roles`, which looks for a run's
+# model folder.
 
 #: the folder that groups the three CalLite calibration sets in models/, results/, product/
 CALLITE_DIR = "callite"
@@ -338,8 +338,8 @@ def calibrated(artifacts_dir="artifacts", name: str = CDEC15) -> Path:
 
 def forcing_run(artifacts_dir="artifacts", product: str = "wgen_product_a") -> Path:
     """Daily flow of the calibrated sets under another forcing product
-    (``sim_daily_<domain>.csv``), written and read by the forcing comparison."""
-    return calibrated(artifacts_dir, "forcing") / product
+    (``sim_daily_<domain>.csv``): the forcing comparison's cache, untracked."""
+    return local(artifacts_dir, f"cache/forcing/{product}")
 
 
 def dpl_run(artifacts_dir="artifacts", run: str = "noah", domain: str = CDEC15,
@@ -349,6 +349,11 @@ def dpl_run(artifacts_dir="artifacts", run: str = "noah", domain: str = CDEC15,
         raise ValueError(f"unknown role {role!r} (expected one of {ROLES})")
     sub = Path("dpl") / _group(domain) / run
     return _art(artifacts_dir) / ("_local/runs" if role == "local" else role) / sub
+
+
+def dpl_checkpoint(artifacts_dir="artifacts", run: str = "noah", domain: str = CDEC15) -> Path:
+    """The selected checkpoint of a learned-parameter run."""
+    return dpl_run(artifacts_dir, run, domain) / "checkpoints" / "best.pt"
 
 
 def dpl_metrics(artifacts_dir="artifacts", run: str = "noah", domain: str = CDEC15) -> Path:
@@ -380,24 +385,6 @@ def run_roles(run_dir, artifacts_dir="artifacts") -> RunDirs:
     if in_local and not dpl_run(artifacts_dir, run, group).is_dir():   # a run kept in _local/ only
         return RunDirs(p, p, p)
     return RunDirs(*(dpl_run(artifacts_dir, run, group, role).joinpath(*rest) for role in ROLES))
-
-
-def run_file(recorded, name: str, artifacts_dir="artifacts") -> Path | None:
-    """A file of a learned-parameter run that a checkpoint recorded when it was trained (the
-    hybrids record their physics run's tables): the path as recorded while its folder exists,
-    else the file ``name`` of the run named by that folder, in the folder of its role (the
-    daily simulation ``sim_daily.csv`` in the results, the parameter tables in the model
-    folder).  None stays None; a path that names no run is returned as it is."""
-    if recorded is None or str(recorded) == "":
-        return None
-    p = Path(recorded)
-    if p.parent.is_dir():
-        return p
-    role = "results" if name.startswith("sim_daily") else "models"
-    for group in (CDEC15, MULTIFAMILY):
-        if dpl_run(artifacts_dir, p.parent.name, group).is_dir():
-            return dpl_run(artifacts_dir, p.parent.name, group, role) / name
-    return p
 
 
 def dpl_study(artifacts_dir="artifacts", name: str = "climatology") -> Path:

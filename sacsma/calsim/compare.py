@@ -80,8 +80,7 @@ DEFAULT_CALSETS = (CDEC15, "9unimp", "11obs")
 ADJUST_SETS = ("9unimp", "11obs")
 
 
-def _calset_monthly_taf(domain: str, data_dir: str | Path = "data", *, covered_frac=None,
-                        comp_cache=None, parallel=False):
+def _calset_monthly_taf(domain: str, data_dir: str | Path = "data", *, covered_frac=None):
     """Per-catchment monthly TAF for the catchments this set's HRUs **own** and score.
 
     Scored catchments are the basin -> node mapping (:func:`load_basin_nodes`) restricted
@@ -99,8 +98,7 @@ def _calset_monthly_taf(domain: str, data_dir: str | Path = "data", *, covered_f
     cf = COVERED_FRAC if covered_frac is None else covered_frac
     # the MERGED layer makes the cumulative single-node systems whole catchments, so they
     # are scored as one piece (Merced runoff vs I_MCLRE) instead of a sliver / grey hole.
-    flows, cov, _map = run_calsim(data_dir, domain=domain, layer=MERGED_LAYER, covered_frac=cf,
-                                  comp_cache=comp_cache, parallel=parallel)
+    flows, cov, _map = run_calsim(data_dir, domain=domain, layer=MERGED_LAYER, covered_frac=cf)
     flows["arc"] = flows["node"].map(series_arc)
     nodes = load_basin_nodes(data_dir, domain)
     scored = nodes[nodes["in_calsim3"].astype(bool)].copy()   # cumulative now whole -> kept
@@ -141,7 +139,7 @@ def _apply_anchor_mass_balance(long, data_dir, sets, anchor_long):
     Within each distributed rim system, rescale **every estimate's** sub-arc flows so they
     sum to that system's anchor total, in proportion to each sub-arc's own value
     (``trib_adj = trib * anchor / sum_tribs``).  The anchor is the estimate's OWN basin
-    aggregate — SAC-SMA: the area-nudged ``run_basin`` total (from ``anchor_long``); VIC:
+    aggregate — SAC-SMA: the area-nudged ``run_basins`` total (from ``anchor_long``); VIC:
     the 8-River index series — matching the reference's use of each estimate's own anchor.
     CalSim3 (the actual) and non-distributed arcs pass through unchanged."""
     from .catchments import BASIN_RIM_SYSTEM, load_crosswalk
@@ -183,7 +181,7 @@ def _apply_anchor_mass_balance(long, data_dir, sets, anchor_long):
 
 def build_calsets_long(
     data_dir: str | Path = "data", sets=DEFAULT_CALSETS, *, covered_frac=None,
-    anchor_long=None, mass_balance=False, comp_cache=None, parallel=False
+    anchor_long=None, mass_balance=False
 ) -> tuple[pd.DataFrame, list[str], pd.DataFrame]:
     """Long [date, arc, node, source, flow_taf] for each calibration set + CalSim3 + VIC.
 
@@ -194,9 +192,7 @@ def build_calsets_long(
     **proportional sub-arc (anchor mass-balance) adjustment** is applied to every estimate
     (SAC sets + VIC) within the distributed rim systems (:func:`_apply_anchor_mass_balance`).
     """
-    per = [_calset_monthly_taf(d, data_dir, covered_frac=covered_frac,
-                               comp_cache=comp_cache, parallel=parallel)
-           for d in sets]
+    per = [_calset_monthly_taf(d, data_dir, covered_frac=covered_frac) for d in sets]
     sac = pd.concat([p[0] for p in per], ignore_index=True)
     coverage = pd.concat([p[1] for p in per], ignore_index=True)
     sac_arcs = set(sac["arc"])
@@ -252,7 +248,7 @@ def subarc_validation_metrics(
        port of CalSim's ``utils/quantile_mapping.qmap_single``).
     2. **Mass-balance to the SAC-SMA simulated basin total** — the QMAPped sub-arcs are
        proportionally rescaled so each basin sums to **that estimate's own simulated
-       unimpaired total**: the **un-nudged** ``run_basin`` series for a SAC set, the basin's
+       unimpaired total**: the **un-nudged** ``run_basins`` series for a SAC set, the basin's
        VIC total for VIC (both from ``anchor_long``).  QMAP fixes the per-catchment *shape*
        while the estimate keeps its own basin *volume*.  This target is **not** the CalSim
        base (FLOW-UNIMPAIRED) and **not** the estimate's raw sub-arc sum.
@@ -263,7 +259,7 @@ def subarc_validation_metrics(
     the **test** period only, plus the ``anchor_kind`` used (``sac_sim``/``vic_sim``/``own_sum``).
     A **nested cumulative inflow** is included in each basin that lists it — e.g. ``I_SHSTA`` is
     both its own SHA basin *and* a Bend Bridge sub-arc (``BASIN_NESTS``) — so a cumulative basin's
-    sub-arcs (local tributaries + the upstream rim inflow) reconstruct its ``run_basin`` total.
+    sub-arcs (local tributaries + the upstream rim inflow) reconstruct its ``run_basins`` total.
     Such a nested inflow is **held fixed**: because Shasta is independently modeled as its own SHA
     basin, ``I_SHSTA`` is passed through **raw** (not QMAPped) and its volume is subtracted from the
     Bend Bridge anchor, so step 2's mass balance only redistributes the *remaining* basin volume
@@ -303,7 +299,7 @@ def _subarc_validate(
 
     # QMAP mass-balance target: each estimate's own simulated basin total -> {(source, basin):
     # Series-by-month}.  Per the user's choice the area nudge enters HERE, on the anchor basin
-    # total (the run_basin series carries it; VIC uses its own 8RI total) — and ONLY here; the
+    # total (the run_basins series carries it; VIC uses its own 8RI total) — and ONLY here; the
     # sub-arc INPUTS above are the un-nudged true-area per-catchment runoff.
     sac_tot: dict[tuple[str, str], pd.Series] = {}
     if method == "qmap":
@@ -413,7 +409,7 @@ def _subarc_validate(
         # Group by the nodes frame, NOT a per-arc dict: an arc can belong to several basins (a
         # nested cumulative inflow like I_SHSTA is both its own SHA basin AND a Bend Bridge
         # sub-arc, BASIN_NESTS), so it must join EACH basin that lists it — otherwise BND's
-        # sub-arcs miss Shasta and can't reconstruct its run_basin total.
+        # sub-arcs miss Shasta and can't reconstruct its run_basins total.
         sysmap = BASIN_RIM_SYSTEM.get(st, {})
         byb: dict[str, list] = {}
         valley_of: dict[str, str] = {}
@@ -588,7 +584,7 @@ def make_basin_maps(data_dir, out, anchor_met, sets=ADJUST_SETS):
     """Write the CalSim<->SAC-SMA **basin-level** maps (one PNG per metric) + the metrics CSV.
 
     Every sub-area polygon is coloured by its MAIN BASIN's anchor skill — the basin's
-    ``run_basin`` total vs its faithful CalSim3 reference (:func:`anchor_metrics`) — so all
+    ``run_basins`` total vs its faithful CalSim3 reference (:func:`anchor_metrics`) — so all
     sub-areas of a watershed share one colour.  The partition is the union of the gauge-
     calibrated ``sets`` (9unimp priority on overlap).  Three layers: the SAC-SMA composite,
     VIC on the same basins, and the SAC-SMA − VIC **difference** (RdBu diverging, blue = SAC
@@ -990,7 +986,6 @@ def make_all(
     sets=DEFAULT_CALSETS,
     covered_frac=None,
     mass_balance=False,
-    parallel=False,
 ) -> Path:
     """Cross-compare each calibration set + VIC vs CalSim3; best-of set per node.
 
@@ -998,19 +993,10 @@ def make_all(
     mass-balance) adjustment to every estimate's per-catchment series before scoring
     (:func:`_apply_anchor_mass_balance`).  It is off by default because it does NOT improve
     per-catchment skill — our per-catchment error is the spatial split among a system's
-    sub-arcs, which a single per-system rescale cannot correct.
-
-    ``parallel`` (default off) fans the SAC-SMA model runs (the basin anchors via
-    ``run_basin`` and the per-catchment local runoff via ``run_calsim``) across cores
-    with the Numba ``prange`` kernels — the model results are unchanged (bit-exact for
-    the per-catchment build, floating-tolerance for the routed anchors)."""
+    sub-arcs, which a single per-system rescale cannot correct."""
     out = paths.calibrated(artifacts_dir, "calsim3")
     (out / "figures").mkdir(parents=True, exist_ok=True)
 
-    # Shared per-cell SMA-component cache: the anchor (run_basin, routed) and per-catchment
-    # (run_calsim, local) builds need the same PET->Snow-17->SAC-SMA physics per HRU cell, so
-    # compute it once and reuse — keyed by (domain, cell, params) for exact parity.
-    comp_cache: dict = {}
     # the basin anchors drive BOTH the sub-arc QMAP mass-balance target and the basin-level
     # anchor view (built once).  The OFFICIAL anchor basis is the corrected (GIS-screened)
     # footprint: each CalLite anchor basin simulated only on the HRUs inside its true CalSim
@@ -1019,11 +1005,9 @@ def make_all(
     # ANCHOR_SET) keeps its full footprint.  The CalSim catchment area
     # (basin_area_<set>_calsim.csv, consistent with the sub-arcs + reference) carries the
     # volume reconciliation, leaving honest depth biases (e.g. BND +4.8%, Fresno +29%) visible.
-    anchor_long = build_anchor_long(data_dir, sets, comp_cache=comp_cache, parallel=parallel,
-                                    footprint=_screened_fp(data_dir, sets))
+    anchor_long = build_anchor_long(data_dir, sets, footprint=_screened_fp(data_dir, sets))
     long, matched, coverage = build_calsets_long(data_dir, sets, covered_frac=covered_frac,
-                                                 anchor_long=anchor_long, mass_balance=mass_balance,
-                                                 comp_cache=comp_cache, parallel=parallel)
+                                                 anchor_long=anchor_long, mass_balance=mass_balance)
     # Clip BOTH views to one shared scoring period — the intersection of every source feeding
     # either the anchor (FLOW-UNIMPAIRED / 8RI-VIC) or the per-catchment (INFLOW / per-node VIC)
     # view — so they score identical months.  The references' native spans differ (FLOW-UNIMPAIRED
@@ -1073,7 +1057,7 @@ def make_all(
     # the calibration-target-vs-CalSim3 table; the fnf_* calibration basis is untouched
     # (see tmp/CALSIM3_FNF_FOOTPRINT.md).
     make_anchor_full(data_dir, artifacts_dir, sets, anchor_long=anchor_long,
-                     period=(start, end), comp_cache=comp_cache, parallel=parallel)
+                     period=(start, end))
     target_vs_calsim3(data_dir, sets=tuple(s for s in sets if s in ANCHOR_SETS)).to_csv(
         out / "target_vs_calsim3.csv", index=False)
     # per-sub-arc QMAP bias-correction validation (train/test) + SAC-sim mass balance + VIC.
@@ -1970,39 +1954,7 @@ def load_basin_nodes(data_dir: str | Path = "data", domain: str = "15cdec") -> p
     return derive_basin_nodes(data_dir, domain)
 
 
-def _screened_basin_flow(basin, domain, fp_basin, forcing, hru_tbl, params_df, *, comp_cache=None):
-    """Daily area-weighted flow (mm/day) for a basin's HRUs **screened to its true CalSim
-    catchment** (:func:`sacsma.calsim.catchments.screened_footprint`), weighted by GIS-overlap
-    area.  Routing is identical to :func:`sacsma.model.run_basin` (PET -> Snow-17 -> SAC-SMA ->
-    Lohmann per HRU, then area-weight) — only the HRU **subset** and the **weights** differ, so
-    the returned series is directly comparable to the full-footprint run.  ``comp_cache`` is the
-    same (domain, key, params)-keyed cache the full anchor uses, so shared HRUs are computed once
-    and are bit-identical across the two footprints."""
-    from .. import parameters as P
-    from ..model import default_is_outlet, run_hru_components_cached
-    from ..routing import lohmann
-
-    w = fp_basin.set_index("key")["overlap_area_mi2"]
-    sub = hru_tbl[(hru_tbl["basin"] == basin) & (hru_tbl["key"].isin(w.index))]
-    sub = sub.reset_index(drop=True)
-    wnorm = sub["key"].map(w).to_numpy(dtype=float)
-    wnorm = wnorm / wnorm.sum()
-    dates, doy, is_leap = forcing.dates, forcing.doy, forcing.is_leap
-    total = np.zeros(len(dates))
-    for i, hru in enumerate(sub.itertuples(index=False)):
-        c = forcing.pos[hru.key]
-        ga_row = params_df.loc[hru.key]
-        surf, base = run_hru_components_cached(
-            comp_cache, domain, hru.key, forcing.prcp[c], forcing.tavg[c], doy, is_leap,
-            lat=float(hru.lat), elev=float(hru.elev), ga_row=ga_row)
-        is_outlet = default_is_outlet(float(hru.flowlen))
-        runoff, _ = lohmann(surf, base, float(hru.flowlen), P.routing_par(ga_row), is_outlet)
-        total += wnorm[i] * runoff
-    return pd.DataFrame({"date": dates, "flow": total})
-
-
-def _anchor_set_taf(domain, data_dir, nodes, forcing=None, *, comp_cache=None,
-                    parallel=False, footprint=None, vic_product=None):
+def _anchor_set_taf(domain, data_dir, nodes, forcing=None, *, footprint=None, vic_product=None):
     """Per basin monthly TAF for one set: SAC-SMA basin run + CalSim3 reference + VIC.
 
     The CalSim3 **reference** is chosen per basin (``ref_kind``):
@@ -2023,8 +1975,8 @@ def _anchor_set_taf(domain, data_dir, nodes, forcing=None, *, comp_cache=None,
     official anchor is unchanged.  Pass it whenever ``forcing`` is an alternate product
     and the VIC column has to be on the *same* climate (:mod:`~sacsma.calsim.sacsma_vic_bcm`).
     """
-    from ..io import mmday_to_cfs
-    from ..model import run_basin
+    from ..io import load_hru_table, mmday_to_cfs
+    from ..model import area_weights, run_basins
     from .catchments import BASIN_RIM_SYSTEM, basin_areas
 
     areas = basin_areas(data_dir, domain=domain)
@@ -2034,27 +1986,23 @@ def _anchor_set_taf(domain, data_dir, nodes, forcing=None, *, comp_cache=None,
     bsys = BASIN_RIM_SYSTEM.get(domain, {})
     unimp_by_sys = {s: g for s, g in load_unimpaired_monthly(data_dir).groupby("system")}
     summable = nodes[nodes["in_calsim3"].astype(bool)]
-    # optional corrected-footprint override: for basins in `footprint`, replace the full-footprint
-    # run_basin with the GIS-screened HRU subset (screened_footprint), overlap-area weighted.  The
-    # CalSim3/VIC references below are unchanged, so the screened anchor is row-comparable to full.
-    fp_basins: set = set()
-    hru_tbl = pfull = None
-    if footprint is not None and len(footprint):
-        from ..io import load_hru_table, load_params
-        fp_basins = set(footprint["basin"].unique())
-        hru_tbl = load_hru_table(data_dir, domain=domain)
-        pfull = load_params(domain=domain)
+    # the basins' runs, all in one: each basin's HRUs area-weighted, or, for the basins in
+    # `footprint` (the corrected-footprint override), its HRUs screened to the true CalSim
+    # catchment (screened_footprint) and weighted by their GIS-overlap area.  The CalSim3/VIC
+    # references below are unchanged, so a screened anchor is row-comparable to a full one.
+    names = sorted(summable["basin"].unique())
+    hru_tbl = load_hru_table(data_dir, domain=domain)
+    W = area_weights(hru_tbl, names)
+    if footprint is not None:
+        for i, basin in enumerate(names):
+            ov = footprint[footprint["basin"] == basin].set_index("key")["overlap_area_mi2"]
+            if len(ov):
+                w = hru_tbl["key"].map(ov).where(hru_tbl["basin"] == basin).fillna(0.0)
+                W[i] = w.to_numpy(float) / w.sum()
+    flows = run_basins(names, data_dir=data_dir, domain=domain, forcing=forcing, weights=W)
     parts = []
     for basin, g in summable.groupby("basin"):
-        if basin in fp_basins:
-            pb = pfull[pfull["basin"] == basin] if "basin" in pfull.columns else pfull
-            df = _screened_basin_flow(basin, domain, footprint[footprint["basin"] == basin],
-                                      forcing, hru_tbl, pb.set_index("key"), comp_cache=comp_cache)
-        else:
-            df = run_basin(basin, data_dir=data_dir, domain=domain, forcing=forcing,
-                           comp_cache=comp_cache, parallel=parallel)
-        s = pd.Series(mmday_to_cfs(df["flow"].to_numpy(), areas[basin]),
-                      index=pd.to_datetime(df["date"]))
+        s = pd.Series(mmday_to_cfs(flows[basin].to_numpy(), areas[basin]), index=flows.index)
         sac = _cfs_day_to_taf(s.groupby(s.index.to_period("M")).sum())
         sac.index = sac.index.to_timestamp("M")
         # Reference: faithful whole-watershed FLOW-UNIMPAIRED where a rim system exists,
@@ -2086,23 +2034,18 @@ def _anchor_set_taf(domain, data_dir, nodes, forcing=None, *, comp_cache=None,
 
 
 def build_anchor_long(data_dir: str | Path = "data", sets=DEFAULT_CALSETS,
-                      *, comp_cache=None, parallel=False, footprint=None,
-                      product: str | None = None,
+                      *, footprint=None, product: str | None = None,
                       vic_product: str | None = None) -> pd.DataFrame:
     """Long [date, set, basin, source, flow_taf, ref_kind] for the basin-level anchor.
 
-    The SAC volume is on the canonical CalSim catchment area.  Pass a shared
-    ``comp_cache`` dict to reuse per-cell SMA components across the anchor and
-    per-catchment builds — never share one across ``product``s (it is keyed per cell).
-    ``footprint`` (a ``{domain: screened_footprint_df}`` dict) switches
-    the basins it names onto the GIS-screened footprint (see :func:`_anchor_set_taf`) —
-    in the **official** :func:`make_all` anchor that is
-    :data:`~.catchments.SCREENED_BASINS` (SHA/BND Goose Lake + SNS/Chowchilla
-    over-reach; every other basin runs its full calibrated footprint); omit it for the
-    everything-unscreened view (the parallel artifact, :func:`make_anchor_full`).
-    ``product`` selects an
-    alternate forcing (e.g. ``historical_lto``; default = the Livneh-unsplit baseline)
-    — the CalSim3/VIC reference columns are unaffected
+    The SAC volume is on the canonical CalSim catchment area.  ``footprint`` (a
+    ``{domain: screened_footprint_df}`` dict) switches the basins it names onto the
+    GIS-screened footprint (see :func:`_anchor_set_taf`) — in the **official**
+    :func:`make_all` anchor that is :data:`~.catchments.SCREENED_BASINS` (SHA/BND Goose Lake
+    + SNS/Chowchilla over-reach; every other basin runs its full calibrated footprint); omit
+    it for the everything-unscreened view (the parallel artifact, :func:`make_anchor_full`).
+    ``product`` selects an alternate forcing (e.g. ``historical_lto``; default = the
+    Livneh-unsplit baseline) — the CalSim3/VIC reference columns are unaffected
     (:mod:`~sacsma.calsim.forcing_compare` uses this for the forcing-effect skill).
     ``vic_product`` additionally moves the VIC column onto that product's routed table,
     which is what you want when comparing models *on one climate* rather than measuring
@@ -2115,8 +2058,7 @@ def build_anchor_long(data_dir: str | Path = "data", sets=DEFAULT_CALSETS,
         kw = {} if product is None else {"product": product}
         forcing = load_domain_forcing(data_dir, domain=dom, **kw)
         fp = footprint.get(dom) if footprint else None
-        parts.append(_anchor_set_taf(dom, data_dir, nodes, forcing,
-                                     comp_cache=comp_cache, parallel=parallel, footprint=fp,
+        parts.append(_anchor_set_taf(dom, data_dir, nodes, forcing, footprint=fp,
                                      vic_product=vic_product))
     return pd.concat([p for p in parts if len(p)], ignore_index=True)
 
@@ -2319,7 +2261,7 @@ def target_vs_calsim3(data_dir: str | Path = "data", sets=ANCHOR_SETS) -> pd.Dat
 
 def make_anchor_full(data_dir: str | Path = "data", artifacts_dir: str | Path = "artifacts",
                      sets=DEFAULT_CALSETS, *, anchor_long=None,
-                     period=None, comp_cache=None, parallel=False) -> Path:
+                     period=None) -> Path:
     """Parallel full-HRU-footprint anchor + the screened-vs-full delta.
 
     The **official** anchor (``anchor_metrics.csv``/``anchor_monthly.csv`` and everything
@@ -2343,10 +2285,9 @@ def make_anchor_full(data_dir: str | Path = "data", artifacts_dir: str | Path = 
     (out / "figures").mkdir(parents=True, exist_ok=True)
     ssets = tuple(s for s in sets if s in ANCHOR_SETS)
     if anchor_long is None:
-        anchor_long = build_anchor_long(data_dir, ssets, comp_cache=comp_cache, parallel=parallel,
-                                        footprint=_screened_fp(data_dir, ssets))
+        anchor_long = build_anchor_long(data_dir, ssets, footprint=_screened_fp(data_dir, ssets))
     screened_long = anchor_long[anchor_long["set"].isin(ssets)].copy()
-    full = build_anchor_long(data_dir, ssets, comp_cache=comp_cache, parallel=parallel)
+    full = build_anchor_long(data_dir, ssets)
     if period is not None:
         s0, e0 = period
         full = full[full["date"].between(s0, e0)].reset_index(drop=True)
@@ -2485,7 +2426,7 @@ def make_anchor_15cdec(data_dir: str | Path = "data", artifacts_dir: str | Path 
     own convention.
 
     15cdec's own calibration target is DAILY (the CDEC gage); ``build_anchor_long``
-    aggregates its ``run_basin`` output to **monthly** TAF (identical treatment to
+    aggregates its ``run_basins`` output to **monthly** TAF (identical treatment to
     9unimp/11obs) so the KGE is comparable to VIC (monthly-only in this repo).
     ``anchor_long`` may be passed in (already built by :func:`make_all`, which includes
     15cdec by default via ``DEFAULT_CALSETS``) to avoid recompute. Writes
@@ -2828,13 +2769,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--mass-balance", action="store_true",
                    help="apply CalSim's proportional sub-arc (anchor mass-balance) adjustment "
                         "to the per-catchment estimates (does not improve per-catchment skill)")
-    p.add_argument("--parallel", action="store_true",
-                   help="fan the SAC-SMA model runs across cores (Numba prange); "
-                        "results unchanged, ~6-8x faster on the model-run phase")
     args = p.parse_args(argv)
     sets = tuple(args.sets) if args.sets else DEFAULT_CALSETS
     make_all(args.data_dir, args.artifacts_dir, sets, covered_frac=args.covered_frac,
-             mass_balance=args.mass_balance, parallel=args.parallel)
+             mass_balance=args.mass_balance)
     return 0
 
 

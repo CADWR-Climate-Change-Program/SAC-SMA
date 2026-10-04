@@ -12,29 +12,24 @@ For each of the 15 CDEC basins, on the shared 1915->2018 daily record:
 * optionally one or more CLIMATE-PERTURBED copies of the feature tensor
   (``feat_anchors``) for the response-consistency loss: each anchor shifts
   tavg/tmin/tmax by ``dt`` and re-scales precip by ``×(1+dp)`` in normalized
-  space, recomputes PET under ``dt``, and re-feeds the sim channel from a
-  physics run under the same (dp, dt) (the teacher daily-sim CSVs).  The legacy
-  ``temp_delta``/``temp_sim_cache`` args map to a single ``dt`` anchor.
+  space, recomputes PET under ``dt``, and re-feeds the sim channel from the
+  physics run under the same (dp, dt).
 
-The frozen physics comes from ``run_basin`` under a REQUIRED, explicitly chosen
-parameter table (a canonical dPL export e.g. ``hamon_dense``/``pt``/``noah``,
-or GA) — cached to CSV so the ~15 basin runs happen once.  A torch-only export
-(e.g. the canonical noah TORCH run) enters through ``sim_cache`` pointing at its
-``daily_sim_*.csv`` dump, which short-circuits ``run_basin`` entirely.
+The physics is a 15-CDEC learned run, named in the configuration (``physics``): its daily flow
+as trained, and under each anchor's climate, comes from
+:func:`sacsma.dpl.evaluate.basin_daily` (the engine, cached).
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import torch
 
 from ... import paths
-from ...cdec15 import BASINS, CAL_END, load_gage
-from ...model import load_domain_forcing, run_basin
+from ...cdec15 import CAL_END, load_gage
 from ..data import load_domain_tensors
 
 SEQ_LEN = 365                     # lookback window (last day = target); == spinup
@@ -66,63 +61,6 @@ def feature_names(use_doy: bool, use_pet: bool,
     if not use_sim:
         drop.add("sac_sim")
     return tuple(n for n in DYNAMIC_FEATURES if n not in drop)
-#: basin-average daily Tmin/Tmax (pre-ingested from the WGEN 1/16-deg grid;
-#: see scratchpad/ingest_tminmax.py).  Adds the diurnal-range signal a single
-#: tavg discards; basin tavg reproduces the stored forcing to 0.37 degC.
-
-
-def build_frozen_sim(
-    data_dir: str = "data",
-    physics_csv: str | Path | None = None,
-    cache: str | Path | None = None,
-    *,
-    domain: str = "15cdec",
-    pet_source: str = "hamon",
-    pt_snow_albedo: float = 0.0,
-    pt_dewpoint_depression: float = 0.0,
-    et_scheme: str = "sac",
-    canopy_csv: str | Path | None = None,
-) -> pd.DataFrame:
-    """Frozen SAC-SMA daily sim (mm/day) for all 15 basins: index=date, cols=basins.
-
-    ``physics_csv`` = a ga_optimum-shaped parameter table (with a ``basin``
-    column), e.g. the ``params_dpl.csv`` of the ``pt`` run; ``None`` uses the
-    archived GA optimum.  ``domain`` + ``pet_source`` + the PT refinement knobs
-    reproduce the chosen export's sim EXACTLY as ``dpl.evaluate.score_frozen``
-    does (a ``15cdec_grid`` PT export needs ``domain="15cdec_grid"``,
-    ``pet_source="priestley_taylor"`` and its albedo/dewpoint).
-
-    ``et_scheme="noah_lite"`` scores a Noah-lite (``canopy_lite``) export through
-    the numba Noah-lite core (``sacsma.sma_noah_lite``): PT PET forced, the
-    per-HRU ``soil_chi`` read from ``canopy_csv`` (a ``params_canopy.csv``
-    table).  Cached to ``cache`` if given — an EXISTING ``cache`` is returned
-    verbatim, which is how a torch daily-sim dump becomes the physics baseline.
-    """
-    if cache is not None and Path(cache).exists():
-        return pd.read_csv(cache, parse_dates=["date"]).set_index("date")
-    forcing = load_domain_forcing(data_dir, domain=domain)
-    params = pd.read_csv(physics_csv) if physics_csv is not None else None
-    canopy = pd.read_csv(canopy_csv) if canopy_csv is not None else None
-    parallel = params is None or not _has_seasonal(params)
-    cols = {}
-    for b in BASINS:
-        s = run_basin(b, data_dir=data_dir, domain=domain, forcing=forcing,
-                      params=params, parallel=parallel,
-                      pet_source=pet_source, pt_snow_albedo=pt_snow_albedo,
-                      pt_dewpoint_depression=pt_dewpoint_depression,
-                      et_scheme=et_scheme, canopy_params=canopy)
-        cols[b] = s.set_index("date")["flow"]
-    df = pd.DataFrame(cols)
-    df.index.name = "date"
-    if cache is not None:
-        Path(cache).parent.mkdir(parents=True, exist_ok=True)
-        df.to_csv(cache)
-    return df
-
-
-def _has_seasonal(params: pd.DataFrame) -> bool:
-    return any(str(c).endswith("_asin") for c in params.columns)
-
 
 def basin_pet_pt(dom, delta_t: float | np.ndarray = 0.0) -> np.ndarray:
     """(B, T) basin-average raw PT PET (mm/day) — alb 0 / dew 0, i.e. exactly
@@ -207,22 +145,6 @@ def perturbed_static(ing: dict, dp: float, dt: float) -> np.ndarray:
     return (s_p - ing["s_mean"]) / ing["s_std"]
 
 
-def _check_physics_domain(physics_csv: str | Path, domain_keys: set[str],
-                          domain: str) -> None:
-    """Fail loudly if a ``--physics`` table doesn't cover the domain's HRUs — the
-    usual cause is a ``--physics`` / ``--physics-domain`` mismatch (fine-HRU
-    15cdec tables carry ~6033 cell keys; the 15cdec_grid coarse grid ~2074), which
-    would otherwise ``KeyError`` deep inside ``run_basin``."""
-    pk = set(pd.read_csv(physics_csv, usecols=["key"])["key"].astype(str))
-    missing = domain_keys - pk
-    if missing:
-        raise ValueError(
-            f"--physics {physics_csv} has {len(pk)} keys but --physics-domain "
-            f"{domain!r} needs {len(domain_keys)} ({len(missing)} missing, e.g. "
-            f"{sorted(missing)[:2]}) — likely a --physics / --physics-domain "
-            f"mismatch (fine 15cdec ~6033 keys, 15cdec_grid ~2074).")
-
-
 @dataclass
 class HybridData:
     """Everything the hybrid trainer/evaluator need, all aligned on ``dates``."""
@@ -294,34 +216,21 @@ class HybridData:
 def load_hybrid_data(
     data_dir: str = "data",
     *,
-    physics_csv: str | Path | None = None,
-    sim_cache: str | Path | None = None,
+    physics: str = "",
     use_statics: bool = False,
     use_doy: bool = True,
     use_pet: bool = False,
     use_sim: bool = True,
     domain: str = "15cdec",
-    pet_source: str = "hamon",
-    pt_snow_albedo: float = 0.0,
-    pt_dewpoint_depression: float = 0.0,
-    et_scheme: str = "sac",
-    canopy_csv: str | Path | None = None,
-    temp_sim_cache: str | Path | None = None,
-    temp_delta: float = 0.0,
-    response_anchors: list[dict] | None = None,
+    response_anchors: tuple = (),
     device: torch.device | str = "cuda",
     dtype: torch.dtype = torch.float32,
 ) -> HybridData:
-    # a checkpoint records its physics run's files where they were when it was trained;
-    # a run that has moved since is found again by its name (sacsma.paths.run_file)
-    physics_csv = paths.run_file(physics_csv, "params_dpl.csv")
-    canopy_csv = paths.run_file(canopy_csv, "params_canopy.csv")
-    sim_cache = paths.run_file(sim_cache, "sim_daily.csv")
-    # legacy single ΔT anchor (temp_sim_cache/temp_delta) -> one response anchor
-    if response_anchors is None:
-        response_anchors = ([{"dp": 0.0, "dt": float(temp_delta),
-                              "sim_cache": str(temp_sim_cache)}]
-                            if temp_sim_cache is not None else [])
+    """The hybrid's data on ``domain``'s basins: forcing, the daily flow of the 15-CDEC run
+    ``physics`` (with ``use_sim``), the gauges, and one perturbed copy per response anchor
+    (``{"dp", "dt"}``)."""
+    if use_sim and not physics:
+        raise ValueError("the physics channel needs a physics run (use_sim=False for a pure LSTM)")
     if not use_sim and response_anchors:
         raise ValueError("use_sim=False (pure LSTM) is incompatible with response "
                          "anchors — the response-consistency loss needs the "
@@ -347,20 +256,15 @@ def load_hybrid_data(
     tmax = np.vstack([tmm[f"tmax_{b}"].reindex(dates).to_numpy(np.float64)
                       for b in basins])                     # (B, T) degC
 
-    # guard: the --physics table must cover this domain's HRUs (catch a
-    # --physics / --physics-domain mismatch before run_basin KeyErrors deep in).
-    if physics_csv is not None:
-        _check_physics_domain(physics_csv, set(dom.hrus["key"].astype(str)), domain)
+    # -- the physics run's flow (skipped for a pure LSTM: no physics channel) ----
+    def _sim(dp: float = 0.0, dt: float = 0.0) -> np.ndarray:
+        from ..evaluate import basin_daily
 
-    # -- frozen SAC-SMA sim (skipped for a pure LSTM: no physics channel) -----
+        df = basin_daily(physics, data_dir=data_dir, dp=dp, dt=dt)
+        return np.vstack([df[b].reindex(dates).to_numpy(np.float64) for b in basins])
+
     if use_sim:
-        sim_df = build_frozen_sim(data_dir, physics_csv, cache=sim_cache,
-                                  domain=domain, pet_source=pet_source,
-                                  pt_snow_albedo=pt_snow_albedo,
-                                  pt_dewpoint_depression=pt_dewpoint_depression,
-                                  et_scheme=et_scheme, canopy_csv=canopy_csv)
-        sim = np.vstack([sim_df[b].reindex(dates).to_numpy(np.float64)
-                         for b in basins])
+        sim = _sim()
     else:
         sim = np.zeros((B, T))   # placeholder: no sac_sim channel, no anchors
 
@@ -437,24 +341,12 @@ def load_hybrid_data(
     # -- response-perturbed copies (response-consistency loss) ----------------
     # One per (Δprecip, ΔT) anchor: the SAME recipe the (dp, dt) response-surface
     # evaluation uses (apply_response_perturbation), applied at load time.  Each
-    # re-feeds the sim channel from the TEACHER sim — the physics run under the
-    # anchor's (dp, dt) (`sacsma dpl evaluate --temp-delta`, or a study's cached physics
-    # run under (dp, dt)).  Statics are unchanged.
+    # re-feeds the sim channel from the physics run under the anchor's (dp, dt).
     norm = {n: (mu_pooled[n], sd_pooled[n]) for n in mu_pooled}
     feat_anchors: list[np.ndarray] = []
     sim_anchors: list[np.ndarray] = []
     for anc in response_anchors:
-        sc = anc["sim_cache"]
-        if not sc or not Path(sc).exists():
-            raise FileNotFoundError(
-                f"response anchor teacher sim {sc!r} not found (dump it with "
-                "`sacsma dpl evaluate <physics ckpt> --temp-delta <dT>`)")
-        sdf = pd.read_csv(sc, parse_dates=["date"]).set_index("date")
-        sim_a = np.vstack([sdf[b].reindex(dates).to_numpy(np.float64)
-                           for b in basins])
-        if not np.isfinite(sim_a).all():
-            raise ValueError(f"response anchor teacher {sc} does not cover the "
-                             "full daily record")
+        sim_a = _sim(float(anc["dp"]), float(anc["dt"]))
         pet_a = basin_pet_pt(dom, delta_t=float(anc["dt"])) if use_pet else None
         feat_a = apply_response_perturbation(
             feat, names, dp=float(anc["dp"]), dt=float(anc["dt"]),
@@ -511,3 +403,18 @@ def load_hybrid_data(
         static_anchors=[_t(sa) for sa in static_np_anchors],
         static_ing=static_ing,
     )
+
+
+def data_for(ck: dict, data_dir: str = "data", device: torch.device | str = "cuda",
+             **kw) -> HybridData:
+    """:func:`load_hybrid_data` for a hybrid checkpoint, as it was trained (``kw``: e.g. the
+    response anchors)."""
+    if ck.get("variant", "feature") != "feature":
+        raise ValueError("residual hybrid checkpoints are retired; only feature checkpoints "
+                         "can be scored")
+    cfg = ck["cfg"]
+    return load_hybrid_data(
+        data_dir, physics=cfg.get("physics", ""), use_statics=bool(ck["n_static"]),
+        use_doy=cfg.get("use_doy", True), use_pet=cfg.get("use_pet", False),
+        use_sim=cfg.get("use_sim", True), domain=cfg.get("physics_domain", "15cdec"),
+        device=device, **kw)

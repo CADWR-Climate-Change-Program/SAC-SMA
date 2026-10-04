@@ -1,11 +1,10 @@
 """Score the hybrid vs the observed gage, apples-to-apples with GA and dPL.
 
-Reconstruct the daily flow (net output, clipped >= 0), split at
-:data:`sacsma.cdec15.CAL_END`, and run the SAME ``_figures._period_stats``
-used for GA/dPL -> ``metrics.csv`` (the columns of the calibrated model's
-``metrics.csv``).  ``compare_all`` merges the GA, dPL and hybrid tables into one cal/val
-KGE comparison table, written by ``sacsma dpl study hybrids`` (the per-basin dumbbell view
-is ``hybrid_progression.png``, :func:`sacsma.dpl.studies.hybrids.make_hybrid_progression`).
+Reconstruct the daily flow (net output, clipped >= 0) and score it like a dPL run
+(:func:`sacsma.dpl.evaluate.score_basins`) -> ``metrics.csv``.  ``compare_all`` merges the GA,
+dPL and hybrid tables into one cal/val KGE comparison table, written by ``sacsma dpl study
+hybrids`` (the per-basin dumbbell view is ``hybrid_progression.png``,
+:func:`sacsma.dpl.studies.hybrids.make_hybrid_progression`).
 """
 
 from __future__ import annotations
@@ -17,11 +16,9 @@ import pandas as pd
 import torch
 
 from ... import paths
-from ..._figures import _period_stats
-from ...cdec15 import CAL_END
-from ...io import load_basin_area, mmday_to_cfs
 from ..config import pick_device
-from .data import load_hybrid_data
+from ..evaluate import score_basins
+from .data import data_for
 from .model import HybridLSTM
 from .train import predict_days
 
@@ -44,41 +41,7 @@ def _device() -> torch.device:
         return torch.device("cpu")
 
 
-def _check_feature(ck: dict) -> None:
-    """The residual variant was retired 2026-07-16 — its checkpoints are dead."""
-    if ck.get("variant", "feature") != "feature":
-        raise ValueError("residual hybrid checkpoints are retired (dropped "
-                         "2026-07-16); only feature checkpoints can be scored")
-
-
-def _load_data(ck: dict, data_dir: str, dev: torch.device,
-               physics_csv: str | None = None, sim_cache: str | None = None):
-    """Rebuild the HybridData for a checkpoint's physics config.
-
-    ``physics_csv`` / ``sim_cache`` override the checkpoint-stored training-time
-    paths (used when an ensemble was canonicalized out of ``testing/`` and its
-    stored paths are now stale — the canonical caller passes the moved paths)."""
-    _check_feature(ck)
-    cfg = ck["cfg"]
-    return load_hybrid_data(
-        data_dir,
-        physics_csv=physics_csv if physics_csv is not None else ck.get("physics_csv"),
-        sim_cache=sim_cache if sim_cache is not None else ck.get("sim_cache"),
-        use_statics=bool(ck["n_static"]),
-        use_doy=cfg.get("use_doy", True),
-        use_pet=cfg.get("use_pet", False),
-        use_sim=cfg.get("use_sim", True),
-        domain=cfg.get("physics_domain", "15cdec"),
-        pet_source=cfg.get("pet_source", "hamon"),
-        pt_snow_albedo=cfg.get("pt_snow_albedo", 0.0),
-        pt_dewpoint_depression=cfg.get("pt_dewpoint_depression", 0.0),
-        et_scheme=cfg.get("physics_et_scheme", "sac"),
-        canopy_csv=cfg.get("canopy_csv") or None,
-        device=dev)
-
-
 def _build_model(ck: dict, data, dev: torch.device) -> HybridLSTM:
-    _check_feature(ck)
     model = HybridLSTM(data.n_feat, data.n_static,
                        hidden=ck["cfg"]["hidden"],
                        static_embed=ck["cfg"]["static_embed"],
@@ -88,40 +51,9 @@ def _build_model(ck: dict, data, dev: torch.device) -> HybridLSTM:
 
 
 def _score_pred(pred: np.ndarray, data, data_dir: str, out: Path) -> pd.DataFrame:
-    """Score a (B, T) daily-flow prediction vs the gage, cal/val split ->
-    ``metrics.csv`` (the columns of the calibrated model's ``metrics.csv``)."""
-    obs = data.obs.cpu().numpy()
-    is_cal = np.asarray(data.dates <= pd.Timestamp(CAL_END))
-    try:
-        areas = load_basin_area(data_dir, domain="15cdec").set_index(
-            "basin")["area_mi2"].to_dict()
-    except FileNotFoundError:
-        areas = {}
-    rows = []
-    for i, b in enumerate(data.basins):
-        cal = _period_stats(pred[i][is_cal], obs[i][is_cal])
-        val = _period_stats(pred[i][~is_cal], obs[i][~is_cal])
-        area = areas.get(b, np.nan)
-        rows.append({
-            "basin": b, "area_mi2": area,
-            "cal_kge": cal.get("kge"), "cal_nse": cal.get("nse"),
-            "cal_pbias": cal.get("pbias"), "cal_r": cal.get("r"),
-            "cal_n": cal.get("n", 0),
-            "val_kge": val.get("kge"), "val_nse": val.get("nse"),
-            "val_pbias": val.get("pbias"), "val_r": val.get("r"),
-            "val_n": val.get("n", 0),
-            "obs_mean_mmday": cal.get("obs_mean"),
-            "obs_mean_cfs": mmday_to_cfs(cal.get("obs_mean") or np.nan, area),
-        })
-        print(f"  {b}: CAL KGE={cal.get('kge', float('nan')):.3f} "
-              f"VAL KGE={val.get('kge', float('nan')):.3f}", flush=True)
-    metrics = pd.DataFrame(rows)
+    """Score a (B, T) daily-flow prediction against the gauges -> ``metrics.csv``."""
     out.mkdir(parents=True, exist_ok=True)
-    csv = out / "metrics.csv"
-    metrics.round(4).to_csv(csv, index=False)
-    print(f"wrote {csv}  (mean cal {metrics['cal_kge'].mean():.3f} / "
-          f"val {metrics['val_kge'].mean():.3f})", flush=True)
-    return metrics
+    return score_basins(pred, data.basins, data.dates, out, data_dir=data_dir, figures=False)
 
 
 def score_hybrid(ckpt_path: str | Path, *, data_dir: str = "data",
@@ -131,24 +63,20 @@ def score_hybrid(ckpt_path: str | Path, *, data_dir: str = "data",
     out = (Path(out_dir) if out_dir is not None
            else paths.run_roles(Path(ckpt_path).parents[1]).local)
     dev = _device()
-    data = _load_data(ck, data_dir, dev)
+    data = data_for(ck, data_dir, dev)
     pred = _reconstruct(_build_model(ck, data, dev), data)
     return _score_pred(pred, data, data_dir, out)
 
 
 def score_ensemble(ens_dir: str | Path, *, data_dir: str = "data",
-                   out_dir: str | Path | None = None,
-                   physics_csv: str | None = None,
-                   sim_cache: str | None = None) -> pd.DataFrame:
+                   out_dir: str | Path | None = None) -> pd.DataFrame:
     """Score the ENSEMBLE-MEAN daily flow across all trained seeds.
 
     Averages the per-seed reconstructed flow (mean of member flows — the
     canonical "keep full ensemble, use mean" convention) then scores it vs the
     gage exactly like :func:`score_hybrid` -> ``metrics.csv`` in the
     ensemble's results folder.  ``seed*/checkpoints/best.pt`` are the members; data is
-    loaded once (every seed shares the physics/domain config).  ``physics_csv`` /
-    ``sim_cache`` override the checkpoint-stored paths (for canonicalized
-    ensembles whose training-time ``testing/`` paths are now stale)."""
+    loaded once (every seed shares the physics/domain config)."""
     run = paths.run_roles(ens_dir)
     ens = run.model
     ckpts = sorted(ens.glob("seed*/checkpoints/best.pt"))
@@ -157,8 +85,7 @@ def score_ensemble(ens_dir: str | Path, *, data_dir: str = "data",
     out = Path(out_dir) if out_dir is not None else run.results
     dev = _device()
     ck0 = torch.load(ckpts[0], map_location="cpu", weights_only=False)
-    data = _load_data(ck0, data_dir, dev, physics_csv=physics_csv,
-                      sim_cache=sim_cache)
+    data = data_for(ck0, data_dir, dev)
     preds = []
     for cp in ckpts:
         ck = torch.load(cp, map_location="cpu", weights_only=False)

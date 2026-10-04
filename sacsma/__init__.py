@@ -4,7 +4,7 @@ for California watersheds (Wi & Steinschneider; CA DWR Watershed Studies).
 Public API:
   * :func:`hamon_pet`, :func:`snow17`, :func:`sac_sma`, :func:`lohmann`
     — the four physics modules.
-  * :func:`run_hru`, :func:`run_basin` — coupled pipeline / basin driver.
+  * :func:`run_basins` — basins from their GA optimum (:mod:`sacsma.engine` runs the field).
   * :mod:`sacsma.metrics` — skill metrics.
   * :mod:`sacsma.cdec15` — the 15-CDEC application (daily gage calibration).
   * :mod:`sacsma.calsim` — the CalSim/CalLite application (9unimp/11obs/12rim
@@ -14,7 +14,7 @@ Public API:
 from __future__ import annotations
 
 from .metrics import kge, nse, pbias, pearson
-from .model import run_basin, run_hru
+from .model import run_basins
 from .pet import hamon_pet
 from .routing import lohmann
 from .sma import sac_sma
@@ -27,8 +27,7 @@ __all__ = [
     "snow17",
     "sac_sma",
     "lohmann",
-    "run_hru",
-    "run_basin",
+    "run_basins",
     "kge",
     "nse",
     "pbias",

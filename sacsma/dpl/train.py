@@ -60,14 +60,14 @@ import pandas as pd
 import torch
 
 from .. import paths
+from ..engine import block_end, spinup_line
 from ..io import MULTI_TIMESCALE_DOMAIN, load_params, soilveg_path
 from .config import (
-    CANOPY_LEARNED_PARAMS,
-    CANOPY_LITE_LEARNED,
     EQUAL_FAMILY_SHARES,
     FAMILY_KEYS,
     MONTHLY_FAMILIES,
     DplConfig,
+    config_from_checkpoint,
     family_loss_refs,
     family_shares,
     pick_device,
@@ -96,14 +96,7 @@ from .regularize import (
     param_norm_scales,
     spatial_smoothness,
 )
-from .spinup import (
-    annual_totals,
-    block_end,
-    cycle_spinup,
-    describe,
-    cold_state,
-    year_index,
-)
+from .spinup import annual_totals, cycle_spinup, year_index
 
 _DTYPES = {"float32": torch.float32, "float64": torch.float64}
 
@@ -145,59 +138,28 @@ _RESUME_DEFAULTED = {"obs_mask": (), "pxtemp_learn": False, "pxtemp_box": (-1.0,
                      "uf_train_start": "", "calsim_arcs": "none", "mt_select_weight": ""}
 
 
-def _split_out(out: dict, et_mode: str):
-    """Split a net forward into (PARAM_ORDER dict, canopy dict|None).  The
-    canopy subdict must be peeled off before params reach run_window
-    (``sma.py`` iterates ``params.values()``, which must all be tensors)."""
-    if et_mode == "noah":
-        return {k: v for k, v in out.items() if k != "_canopy"}, out.get("_canopy")
-    return out, None
-
-
 def _stream_nograd(
     dom: DomainTensors, cfg: DplConfig,
     params: dict[str, torch.Tensor], uh, t0: int, t1: int,
     state: PipelineState, *, graph=None, collect: bool = False,
-    canopy_params: dict[str, torch.Tensor] | None = None,
 ) -> tuple[torch.Tensor | None, PipelineState]:
-    """No-grad basin flow over [t0, t1): graph replays + an eager remainder.
-
-    ``params`` must be the PARAM_ORDER dict only (no ``_canopy`` subdict);
-    ``canopy_params``/tmin/tmax drive the Noah ET path (``cfg.et_mode='noah'``);
-    ``dom.chunk_tmm`` returns (None, None) for non-grid domains (tavg fallback)."""
+    """No-grad basin flow over [t0, t1): graph replays + an eager remainder."""
     outs: list[torch.Tensor] = []
     t = t0
     if graph is not None:
         graph.set_state(state)
         while t + graph.length <= t1:
-            pr, ta, doy, leap = dom.chunk(t, t + graph.length)
-            tn, tx = dom.chunk_tmm(t, t + graph.length)
-            basin = graph.replay(pr, ta, doy, leap, tn, tx,
-                                 dom.chunk_lai(t, t + graph.length),
-                                 dom.chunk_state(t, t + graph.length))
+            basin = graph.replay(dom.window(t, t + graph.length))
             if collect:
                 outs.append(basin.clone())
             t += graph.length
         state = graph.get_state()
+    physics = cfg.physics()
     with torch.no_grad():
         while t < t1:
             te = min(t + cfg.nograd_window, t1)
-            pr, ta, doy, leap = dom.chunk(t, te)
-            tn, tx = dom.chunk_tmm(t, te)
-            flow, state = run_window(pr, ta, doy, leap, dom.phys_lat_rad, dom.phys_elev,
-                                     params, uh, state, n_inc=cfg.n_inc,
-                                     perc_mode=cfg.perc_mode,
-                                     fracp_floor=cfg.fracp_floor,
-                                     ninc_mode="fixed", et_mode=cfg.et_mode,
-                                     canopy_params=canopy_params, tmin=tn, tmax=tx,
-                                     veg_frac=dom.phys_veg_frac,
-                                     lai=dom.chunk_lai(t, te),
-                                     noah_pet=cfg.noah_pet, sac_pet=cfg.sac_pet,
-                                     pt_snow_albedo=cfg.pt_snow_albedo,
-                                     pt_dewpoint_depression=cfg.pt_dewpoint_depression,
-                                     canopy_lite=cfg.canopy_lite,
-                                     sac_exchanges=cfg.noah_sac_exchanges,
-                                     state_idx=dom.chunk_state(t, te),
+            flow, state = run_window(dom.window(t, te), dom.phys_lat_rad, dom.phys_elev,
+                                     params, uh, state, physics, veg_frac=dom.phys_veg_frac,
                                      row_cell=dom.row_cell)
             if collect:
                 outs.append(dom.W @ flow)
@@ -212,7 +174,7 @@ def _relative_carry(state: PipelineState, params: dict[str, torch.Tensor], *,
     unchanged (x / x == 1 exactly for the positive capacities), but the backward sees
     the store's relative saturation as fixed, ``dc/dcap = c / cap``, instead of the
     detached content treating a larger capacity as free deficit.  ADIMC is carried
-    against ``uztwm + lztwm``; snow, routing history and canopy water pass unchanged.
+    against ``uztwm + lztwm``; snow and the routing history pass unchanged.
 
     ``flux=True`` (``tbptt_carry = "flux"``) also multiplies the lower-zone free
     contents by ``k.detach() / k`` of their drainage rates (lzfsc by lzsk, lzfpc by
@@ -238,7 +200,7 @@ def _relative_carry(state: PipelineState, params: dict[str, torch.Tensor], *,
                   lztwc=rel(s.lztwc, params["lztwm"]), lzfsc=lzfsc,
                   lzfpc=lzfpc, adimc=rel(s.adimc, adim_cap))
     return PipelineState(snow=state.snow, sac=sac, hist_surf=state.hist_surf,
-                         hist_base=state.hist_base, canopy=state.canopy)
+                         hist_base=state.hist_base)
 
 
 def _obs_chunk(calobs: CalObs, c0: int, c1: int) -> torch.Tensor:
@@ -429,9 +391,7 @@ def train(
     run (any of its folders): checkpoints and the training log go to its model folder, the
     diagnostics logs and per-epoch snapshots to its local folder."""
     cfg = cfg or DplConfig()
-    if cfg.ninc_mode != "fixed":
-        raise ValueError("training requires ninc_mode='fixed' (dynamic mode "
-                         "has per-day host syncs and unbounded loop length)")
+    physics = cfg.physics()
     dev = pick_device(cfg.device)
     torch.manual_seed(cfg.seed)
     dtype = _DTYPES[cfg.dtype]
@@ -450,7 +410,6 @@ def train(
         basins = _with_calsim_arcs(data_dir, basins)
     dom = load_domain_tensors(
         data_dir, domain=domain, device=dev, dtype=dtype, basins=basins,
-        dynamic_window=cfg.dynamic_window if cfg.dynamic_params else None,
         calsim_footprint=cfg.calsim_footprint)
     eobs = d_rows = m_rows = midx = None
     if domain == MULTI_TIMESCALE_DOMAIN:
@@ -825,14 +784,7 @@ def train(
                        dropout=cfg.dropout, grouped_heads=cfg.grouped_heads,
                        gnn_k=cfg.gnn_k,
                        n_nodes=x.shape[0] if cfg.gnn_k > 0 else None,
-                       seasonal_params=cfg.seasonal_params,
-                       seasonal_amp=cfg.seasonal_amp,
-                       seasonal_amp_frac=cfg.seasonal_amp_frac,
-                       canopy=cfg.canopy,
-                       canopy_separate_trunk=cfg.canopy_separate_trunk,
-                       canopy_lite=cfg.canopy_lite,
-                       dynamic_params=cfg.dynamic_params,
-                       dynamic_amp=cfg.dynamic_amp,
+                       canopy=cfg.et_mode == "noah",
                        pxtemp_learn=cfg.pxtemp_learn,
                        pxtemp_box=cfg.pxtemp_box,
                        pxtemp_tau=cfg.pxtemp_tau,
@@ -843,27 +795,13 @@ def train(
               f"(exactly the fixed 0 degC at init); hard split forward, "
               f"straight-through sigmoid surrogate (tau {cfg.pxtemp_tau:g} degC)",
               flush=True)
-    if cfg.seasonal_params:
-        print(f"train: seasonal (day-of-year harmonic) params {cfg.seasonal_params} "
-              f"— 2 zero-init coeffs each, tanh-capped per-param at "
-              f"{cfg.seasonal_amp_frac:g}*(hi-lo) "
-              f"(field is exactly static at init)", flush=True)
     if cfg.et_mode == "noah":
-        faithful = dom.tmin is not None
-        obs_canopy = dom.veg_frac is not None and dom.lai_lut is not None
-        trunk = "separate" if cfg.canopy_separate_trunk else "shared"
-        learned = CANOPY_LITE_LEARNED if cfg.canopy_lite else CANOPY_LEARNED_PARAMS
-        kind = ("MINIMAL/LITE — beta(soil moisture)*PET" if cfg.canopy_lite
-                else "full canopy-resistance")
-        print(f"train: Noah {kind} ET ON (potential={cfg.noah_pet}; "
-              f"canopy head: {len(learned)} LEARNED {learned} params/cell on a "
-              f"{trunk} trunk, zero-init at bound midpoints; veg_frac + seasonal "
-              f"LAI PINNED from observation={obs_canopy}; scored via torch "
-              f"pipeline, NOT run_basin).  faithful per-cell tmin/tmax={faithful}"
-              f"{'' if faithful else ' — WARNING using tavg fallback'}", flush=True)
-        if not obs_canopy:
+        if dom.veg_frac is None or dom.lai_lut is None:
             raise ValueError("et_mode='noah' needs observed veg_frac + lai "
                              "(soilveg_continuous.csv + lai_climatology.csv)")
+        print(f"train: Noah-lite ET (potential {cfg.noah_pet}; soil_chi learned per cell, "
+              "zero-init at its bound midpoint; veg_frac and seasonal LAI observed)",
+              flush=True)
     if cfg.gnn_k > 0:
         from .regularize import dense_neighbors
         nb_idx, nb_w = dense_neighbors(dom.hrus, fs.x, k=cfg.gnn_k,
@@ -1020,6 +958,9 @@ def train(
         if changed:
             raise ValueError("resume: the loss / TBPTT settings differ from the "
                              "checkpoint's (repeat its flags): " + "; ".join(changed))
+        if config_from_checkpoint(ck).physics() != cfg.physics():
+            raise ValueError("resume: the physics differ from the checkpoint's (repeat its "
+                             "flags)")
         if ((ck_cfg.get("timing_loss_lambda", 0.0) > 0.0
              or ck_cfg.get("peak_loss_lambda", 0.0) > 0.0) and "shape_min_days" not in ck_cfg):
             # the timing / peak terms of the checkpoint's code had different forms
@@ -1078,12 +1019,11 @@ def train(
         try:
             net.eval()
             with torch.no_grad():
-                params0, canopy0 = _split_out(net(x_net), cfg.et_mode)
+                params0 = net(x_net)
                 uh0 = routing_uh(params0, dom.flowlen, row_cell=dom.row_cell)
             print("train: capturing CUDA graphs (no-grad window + train chunk) ...",
                   flush=True)
-            nograd_g = NoGradWindow(dom, cfg, cfg.nograd_window, params0, uh0,
-                                    canopy_params=canopy0)
+            nograd_g = NoGradWindow(dom, cfg, cfg.nograd_window, params0, uh0)
         except Exception as e:  # noqa: BLE001 — any capture failure -> eager
             print(f"train: no-grad capture failed ({e!r}); running eager",
                   flush=True)
@@ -1094,8 +1034,7 @@ def train(
             # forward-only window of the shortest chunk (static buffers only, no
             # activations), a leap year's last day eager
             try:
-                nograd_dead = NoGradWindow(dom, cfg, min(cap_lens), params0, uh0,
-                                           canopy_params=canopy0)
+                nograd_dead = NoGradWindow(dom, cfg, min(cap_lens), params0, uh0)
             except Exception as e:  # noqa: BLE001 — fall back to the stream window
                 print(f"train: dead-chunk window capture failed ({e!r}); dead chunks "
                       f"stream through the {cfg.nograd_window}-day window", flush=True)
@@ -1108,8 +1047,7 @@ def train(
             from .graphs import RecomputeTrainWindow
             try:
                 rec_g = RecomputeTrainWindow(dom, cfg, cfg.graph_recompute_days,
-                                             params0, uh0, canopy_params=canopy0,
-                                             sample_c0=calobs.t0)
+                                             params0, uh0, sample_c0=calobs.t0)
                 print(f"train: activation-recompute train graph ({cfg.graph_recompute_days}"
                       " days, fwd+bwd, replayed per segment; backward re-runs each "
                       "segment from its stored state)", flush=True)
@@ -1139,8 +1077,7 @@ def train(
                 n_seg = cfg.train_graph_segments * n_win
                 try:
                     seg_gs[clen] = SegmentedTrainWindow(
-                        dom, cfg, clen, n_seg,
-                        params0, uh0, canopy_params=canopy0, sample_c0=calobs.t0)
+                        dom, cfg, clen, n_seg, params0, uh0, sample_c0=calobs.t0)
                     print(f"train: segmented train-chunk graphs ({clen} days) -- "
                           f"{n_seg} x {seg_gs[clen].lens} days "
                           "(fwd+bwd captured per segment; net/routing/loss eager)",
@@ -1283,12 +1220,11 @@ def train(
         (pooled scalar + the per-basin vector for adaptive weighting)."""
         net.eval()
         with torch.no_grad():
-            pe, cp_e = _split_out(net(x_net), cfg.et_mode)
+            pe = net(x_net)
             ue = routing_uh(pe, dom.flowlen, row_cell=dom.row_cell)
         if nograd_g is not None:
-            nograd_g.set_params(pe, ue, canopy_params=cp_e)
-        st0 = initial_state(dom.n_phys, dev, dtype, init_mode=cfg.init_mode,
-                            params=pe, et_mode=cfg.et_mode, n_rows=dom.n_hru)
+            nograd_g.set_params(pe, ue)
+        st0 = initial_state(dom.n_phys, dev, dtype, n_rows=dom.n_hru)
         if cfg.spinup_mode == "cycle":
             from .graphs import _clone_state
             # the cold start and spinup_passes the first time; then from the previous
@@ -1296,26 +1232,26 @@ def train(
             # tracking the fixed point as the parameters move
             def _basins(a: int, b: int, s: PipelineState):
                 sim_b, s = _stream_nograd(dom, cfg, pe, ue, a, b, s, graph=nograd_g,
-                                          collect=True, canopy_params=cp_e)
+                                          collect=True)
                 return annual_totals(sim_b, spin_yidx), s
 
             first = "state" not in spin_cache
             st, n_pass, change = cycle_spinup(
                 _basins, calobs.t0, spin_t1,
-                cold_state(dom, cfg, pe) if first else spin_cache["state"], cfg.spinup_passes,
+                st0 if first else spin_cache["state"], cfg.spinup_passes,
                 min_passes=None if first else cfg.spinup_warm_passes,
                 until=None if first else cfg.spinup_warm_tol)
             spin_cache.update(state=_clone_state(st), cycles=n_pass, change=change)
             if first:
-                print("train: " + describe(dom.dates, calobs.t0, spin_t1, n_pass, change),
+                print("train: " + spinup_line(dom.dates, calobs.t0, spin_t1, n_pass, change),
                       flush=True)
         else:
             _, st = _stream_nograd(dom, cfg, pe, ue, spin_t0, calobs.t0, st0,
-                                   graph=nograd_g, canopy_params=cp_e)
+                                   graph=nograd_g)
         pooled, per_basin = float("nan"), None
         if do_eval:
             sim, _ = _stream_nograd(dom, cfg, pe, ue, calobs.t0, calobs.t1, st,
-                                    graph=nograd_g, collect=True, canopy_params=cp_e)
+                                    graph=nograd_g, collect=True)
             per_basin, pooled = (_mt_kge(sim) if eobs is not None
                                  else _cal_kge(sim, calobs.obs))
             if cfg.diagnostics:
@@ -1351,16 +1287,7 @@ def train(
                                "dropout": cfg.dropout,
                                "grouped_heads": cfg.grouped_heads,
                                "gnn_k": cfg.gnn_k,
-                               "seasonal_params": cfg.seasonal_params,
-                               "seasonal_amp": cfg.seasonal_amp,
-                               "seasonal_amp_frac": cfg.seasonal_amp_frac,
-                               "canopy": cfg.canopy,
-                               "canopy_separate_trunk":
-                                   cfg.canopy_separate_trunk,
-                               "canopy_lite": cfg.canopy_lite,
-                               "dynamic_params": cfg.dynamic_params,
-                               "dynamic_amp": cfg.dynamic_amp,
-                               "dynamic_window": cfg.dynamic_window,
+                               "canopy": cfg.et_mode == "noah",
                                "pxtemp_learn": cfg.pxtemp_learn,
                                "pxtemp_box": cfg.pxtemp_box,
                                "pxtemp_tau": cfg.pxtemp_tau},
@@ -1593,7 +1520,7 @@ def train(
              f"{' = record start' if spin_t0 == 0 else f' = {dom.dates[spin_t0].date()}'}) ")
           + f"({cfg.chunk_grid} grid: {_grid_summary(grid)}) | {cfg.loss} loss "
           f"(log lambda {cfg.log_loss_lambda}) | n_inc={cfg.n_inc} "
-          f"perc={cfg.perc_mode} {cfg.dtype} on {dev.type}"
+          f"{cfg.dtype} on {dev.type}"
           + (f' [cuda-graphs {sorted(train_gs)}]' if train_gs else
              f' [cuda-graphs x{cfg.train_graph_segments} segments {sorted(seg_gs)}]' if seg_gs
              else f' [cuda-graphs recompute {cfg.graph_recompute_days} days]' if rec_g is not None
@@ -1693,7 +1620,7 @@ def train(
             net.train()
             # the carried state lives in the Python variable between chunks:
             # a graphed chunk takes it through set_state and hands it back
-            # through get_state (a detached clone, routing history and canopy
+            # through get_state (a detached clone, routing history
             # included), so graph objects of different lengths and eager
             # chunks interleave freely
             if dev.type == "cuda" and (win2 or rec_g is not None):
@@ -1727,15 +1654,12 @@ def train(
                 # so its LAST chunk is short (ce < c0 + the captured length)
                 # and replays eagerly; every other domain has forcing headroom
                 # past cal_end
-                pr, ta, doy, leap = dom.chunk(w0, ce)
-                tn, tx = dom.chunk_tmm(w0, ce)
-                lai_c = dom.chunk_lai(w0, ce)
-                st_c = dom.chunk_state(w0, ce)
+                win = dom.window(w0, ce)
                 obs_c = _obs_chunk(calobs, c0, ce)
                 split: dict[str, float] = {}
                 if g is not None:
                     g.set_state(state)
-                    loss = g.run(pr, ta, doy, leap, obs_c, tn, tx, lai_c, st_c,
+                    loss = g.run(win, obs_c,
                                  mt_target=(mt_targets[k]
                                             if mt_targets is not None
                                             else None))
@@ -1750,7 +1674,7 @@ def train(
                     # net(x) (one dropout draw) and the same graphed forward,
                     # without autograd
                     with torch.no_grad() if dead_nograd else contextlib.nullcontext():
-                        params, cp = _split_out(net(x_net), cfg.et_mode)
+                        params = net(x_net)
                         uh = routing_uh(params, dom.flowlen, row_cell=dom.row_cell)
                         if two:
                             state = burn[0][0]      # the burn-in's carried state
@@ -1767,50 +1691,33 @@ def train(
                             # activation recompute over the whole window (under
                             # no_grad for a dead chunk: a plain graphed forward)
                             n_g = -1
-                            flow_g, state_g = rec_g.forward(w0, ce - w0, params, uh, cp, state)
+                            flow_g, state_g = rec_g.forward(w0, ce - w0, params, uh, state)
                         elif dead_nograd and win2 and nograd_g is not None:
                             # the multi-year mode captures no 1-year train graph:
                             # a dead chunk replays the forward-only dead-chunk
                             # window (the stream window if that capture failed)
                             n_g = -1
                             dg = nograd_dead if nograd_dead is not None else nograd_g
-                            dg.set_params(params, uh, canopy_params=cp)
+                            dg.set_params(params, uh)
                             _, state_g = _stream_nograd(dom, cfg, params, uh, c0, ce, state,
-                                                        graph=dg, canopy_params=cp)
+                                                        graph=dg)
                             flow_g = None
                         elif n_g:
-                            flow_g, state_g = seg_gs[n_g].forward(w0, params, uh, cp, state)
+                            flow_g, state_g = seg_gs[n_g].forward(w0, params, uh, state)
                         else:
                             flow_g, state_g = None, state
 
-                        def _eager(d0: int):
-                            sl = slice(d0, None)
-                            return run_window(
-                                pr[:, sl], ta[:, sl], doy[sl], leap[sl], dom.phys_lat_rad,
-                                dom.phys_elev,
-                                params, uh, state_g, n_inc=cfg.n_inc, perc_mode=cfg.perc_mode,
-                                fracp_floor=cfg.fracp_floor, ninc_mode="fixed",
-                                et_mode=cfg.et_mode, canopy_params=cp,
-                                tmin=None if tn is None else tn[:, sl],
-                                tmax=None if tx is None else tx[:, sl],
-                                veg_frac=dom.phys_veg_frac,
-                                lai=None if lai_c is None else lai_c[:, sl],
-                                noah_pet=cfg.noah_pet,
-                                sac_pet=cfg.sac_pet, pt_snow_albedo=cfg.pt_snow_albedo,
-                                pt_dewpoint_depression=cfg.pt_dewpoint_depression,
-                                canopy_lite=cfg.canopy_lite,
-                                sac_exchanges=cfg.noah_sac_exchanges,
-                                state_idx=None if st_c is None else st_c[:, sl],
-                                row_cell=dom.row_cell)
-
                         if n_g == -1 or n_g == ce - w0:
-                            res = (flow_g, state_g)
-                        elif n_g:
-                            res_e = _eager(n_g)
-                            res = (torch.cat([flow_g, res_e[0]], dim=1), res_e[1], *res_e[2:])
+                            flow, state = flow_g, state_g
                         else:
-                            res = _eager(0)
-                        flow, state = res[0], res[1]
+                            # the days past the graphed ones (all of them without a graph)
+                            # run eagerly from the graphed state, autograd through both
+                            flow, state = run_window(
+                                win.days(slice(n_g, None)), dom.phys_lat_rad, dom.phys_elev,
+                                params, uh, state_g, physics, veg_frac=dom.phys_veg_frac,
+                                row_cell=dom.row_cell)
+                            if n_g:
+                                flow = torch.cat([flow_g, flow], dim=1)
                         if two:
                             flow = flow[:, c0 - w0:]    # the scored year only
                     if dead_nograd:
@@ -1849,7 +1756,7 @@ def train(
                 # for both the graph and eager paths) — the CUDA graph is never
                 # touched, so capture stability is unaffected.
                 if reg_lambda > 0.0:
-                    reg_params, _ = _split_out(net(x), cfg.et_mode)
+                    reg_params = net(x)
                     reg_t = reg_lambda * spatial_smoothness(
                         reg_params, e_i, e_j, e_w, p_scale, p_islog)
                     reg_t.backward()

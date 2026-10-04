@@ -1,23 +1,18 @@
-"""Fidelity benchmark: the archived GA parameters through the torch forward
-vs the frozen reference model.
+"""A trained run: rebuilt from its checkpoint, run as trained, scored.
 
-For each named numerics config the whole domain (7891 HRUs) is streamed
-through the differentiable pipeline under ``torch.no_grad()`` over the full
-1915-2018 record (reference protocol: cold start, no warmup drop), basin flow
-aggregated with the exact ``run_basin`` weights, then scored per basin:
-
-* sim-vs-sim daily KGE / NSE / pbias / max|delta| against the frozen truth;
-* obs-scored cal/val KGE (split at ``CAL_END``) for both models -> deltas.
-
-Gates (see the dpl plan): G1 structural — best ``ref-ninc*`` config KGE >=
-0.999 and |dKGE_obs| <= 0.005 everywhere; G2 training numerics —
-``train-default`` KGE >= 0.99, |dKGE_obs| <= 0.02; G3 precision — float32 vs
-float64 same-config KGE >= 0.9999.
+:func:`load_net_from_checkpoint` rebuilds the network, its inputs and the domain;
+:func:`learned_field` and :func:`simulate_field` run the trained field on the CPU engine with
+the physics it was trained with (:mod:`sacsma.engine`); :func:`evaluate_checkpoint` scores a
+15-CDEC run against the gauges (a multifamily run: :mod:`.evaluate_multi_timescale`);
+:func:`basin_daily` is its daily flow under a changed climate, for the hybrids and the studies.
+:func:`fidelity_benchmark` runs the GA optimum through the learned numerics against the reference
+model.
 """
 
 from __future__ import annotations
 
-import time
+import dataclasses
+import functools
 from pathlib import Path
 
 import numpy as np
@@ -28,134 +23,45 @@ from .. import paths
 from ..cdec15 import BASINS, CAL_END, load_gage
 from ..io import DEFAULT_FORCING
 from ..metrics import kge, nse, pbias
-from ..model import run_basin
-from .config import (CANOPY_LEARNED_PARAMS, PARAM_ORDER, RETIRED_CFG_DEFAULTS, DplConfig,
-                     pick_device)
-from .data import DomainTensors, load_domain_tensors, with_cell_dedup
-from .forward import initial_state, routing_uh, run_window
+from ..model import run_basins
+from .config import PARAM_ORDER, DplConfig, config_from_checkpoint, pick_device
+from .data import DomainTensors, load_domain_tensors
 
 
 def export_params(net: torch.nn.Module, dom: DomainTensors,
                   x: torch.Tensor) -> pd.DataFrame:
-    """Learned per-HRU parameters as a ga_optimum-shaped table (+ ``basin``).
-
-    Directly consumable by ``run_basin(..., params=...)``: the exact 34
-    ``ga_optimum.csv`` columns keyed by grid-cell ``key``, plus the per-basin
-    ``basin`` column the model.py filter uses — the ~1835 cells shared between
-    basins intentionally carry per-basin values.  Fixed parameters
-    (side/SCF/PXTEMP) come out at their GA constants — PXTEMP at its learned
-    per-cell value for a ``pxtemp_learn`` net (the frozen model applies the same
-    hard split at it).
-    """
+    """Learned per-HRU parameters as a ga_optimum-shaped table (+ ``basin``): the 34
+    ``ga_optimum.csv`` columns keyed by grid-cell ``key``, plus the per-basin ``basin`` column
+    (the cells shared between basins carry per-basin values).  Fixed parameters
+    (side/SCF/PXTEMP) come out at their GA constants -- PXTEMP at its learned per-cell value
+    for a ``pxtemp_learn`` net."""
     net.eval()
     with torch.no_grad():
         out = net(x)
     df = dom.hrus[["basin", "key", "lat", "lon"]].copy()
     for p in PARAM_ORDER:
         df[p] = out[p].double().cpu().numpy()
-    # seasonal harmonic coefficients (2 extra columns per seasonal param); the
-    # frozen run_basin detects the ``_asin`` columns and reconstructs the same
-    # day-of-year series.  Absent for a static net -> a plain ga_optimum table.
-    for p in getattr(net, "seasonal_params", ()):
-        df[f"{p}_asin"] = out[f"{p}_asin"].double().cpu().numpy()
-        df[f"{p}_acos"] = out[f"{p}_acos"].double().cpu().numpy()
     return df
 
 
-def export_canopy_params(net: torch.nn.Module, dom: DomainTensors,
-                         x: torch.Tensor) -> pd.DataFrame:
-    """Learned per-HRU Noah canopy-ET physiology params keyed by key/basin, plus
-    the OBSERVED (pinned) veg_frac and annual-mean LAI for reference.  Kept
-    SEPARATE from :func:`export_params` — canopy params must NEVER enter the
-    ga_optimum / PARAM_ORDER export (the frozen run_basin has no Noah ET)."""
+def export_canopy_params(net: torch.nn.Module, dom: DomainTensors, x: torch.Tensor,
+                         cfg: DplConfig) -> pd.DataFrame:
+    """The learned Noah-lite exponent ``soil_chi`` per HRU keyed by key/basin, with the
+    observed (pinned) veg_frac and annual-mean LAI beside it, and ``sac_exchanges`` = 1 for a
+    run that keeps the reference ET exchanges.  Kept apart from :func:`export_params`: the
+    reference model has no Noah ET."""
     net.eval()
     with torch.no_grad():
-        cp = net(x)["_canopy"]
+        chi = net(x)["soil_chi"]
     df = dom.hrus[["basin", "key", "lat", "lon"]].copy()
-    # LITE nets emit only soil_chi; FULL nets the 7 physiology params.  Use the
-    # net's actual learned set (fall back to the full list for older nets).
-    learned = getattr(net, "_canopy_learned", CANOPY_LEARNED_PARAMS)
-    for p in learned:
-        df[p] = cp[p].double().cpu().numpy()
-    if dom.veg_frac is not None:                 # pinned observed structure
+    df["soil_chi"] = chi.double().cpu().numpy()
+    if dom.veg_frac is not None:
         df["veg_frac_obs"] = dom.veg_frac.double().cpu().numpy()
     if dom.lai_lut is not None:
         df["lai_obs_mean"] = dom.lai_lut[dom.cell_idx].mean(axis=1)
-    if getattr(net, "noah_sac_exchanges", False):
-        # the frozen Noah-lite path (model._resolve_canopy) reads it per HRU;
-        # absent = the default external-ET physics
+    if cfg.noah_sac_exchanges:
         df["sac_exchanges"] = 1
     return df
-
-#: named numerics configs — (ninc, perc_mode, fracp_floor, dtype)
-FIDELITY_CONFIGS: dict[str, DplConfig] = {
-    # exact reference numerics (dynamic per-lane ninc): proves the port itself
-    "ref-exact": DplConfig(ninc_mode="dynamic", perc_mode="reference", dtype="float64"),
-    "ref-ninc1": DplConfig(n_inc=1, perc_mode="reference", dtype="float64"),
-    "ref-ninc2": DplConfig(n_inc=2, perc_mode="reference", dtype="float64"),
-    "ref-ninc5": DplConfig(n_inc=5, perc_mode="reference", dtype="float64"),
-    "ref-ninc10": DplConfig(n_inc=10, perc_mode="reference", dtype="float64"),
-    "ref-ninc20": DplConfig(n_inc=20, perc_mode="reference", dtype="float64"),
-    "train-default": DplConfig(n_inc=5, perc_mode="implicit", fracp_floor=0.1,
-                               dtype="float64"),
-    "train-default-f32": DplConfig(n_inc=5, perc_mode="implicit", fracp_floor=0.1,
-                                   dtype="float32"),
-    "train-tanh": DplConfig(n_inc=5, perc_mode="tanh", fracp_floor=0.1,
-                            dtype="float64"),
-}
-
-_DTYPES = {"float32": torch.float32, "float64": torch.float64}
-
-
-def frozen_truth(data_dir: str = "data") -> dict[str, pd.DataFrame]:
-    """Full-record frozen-model flow per basin (the parity-exact reference)."""
-    from ..model import load_domain_forcing
-
-    forcing = load_domain_forcing(data_dir, domain="15cdec")
-    out: dict[str, pd.DataFrame] = {}
-    for b in BASINS:
-        out[b] = run_basin(b, data_dir=data_dir, domain="15cdec",
-                           forcing=forcing, parallel=True)
-    return out
-
-
-def torch_domain_flow(
-    dom: DomainTensors,
-    params: dict[str, torch.Tensor],
-    cfg: DplConfig,
-    *,
-    chunk_days: int = 4096,
-    progress: bool = True,
-) -> np.ndarray:
-    """Stream the full record through the torch pipeline; (B, T) basin flow."""
-    n, t_total = dom.n_hru, dom.n_time
-    uh = routing_uh(params, dom.flowlen)
-    state = initial_state(n, dom.device, dom.dtype, init_mode=cfg.init_mode,
-                          params=params)
-    basin_flow = torch.empty(len(dom.basins), t_total, device=dom.device,
-                             dtype=dom.dtype)
-    t0 = 0
-    tic = time.time()
-    with torch.no_grad():
-        while t0 < t_total:
-            t1 = min(t0 + chunk_days, t_total)
-            pr, ta, doy, leap = dom.chunk(t0, t1)
-            tn, tx = dom.chunk_tmm(t0, t1)   # real per-cell tmin/tmax (required by
-                                             # the PT PET; None for a Hamon domain)
-            flow, state = run_window(pr, ta, doy, leap, dom.lat_rad, dom.elev,
-                                     params, uh, state, n_inc=cfg.n_inc,
-                                     perc_mode=cfg.perc_mode,
-                                     fracp_floor=cfg.fracp_floor,
-                                     ninc_mode=cfg.ninc_mode, sac_pet=cfg.sac_pet,
-                                     tmin=tn, tmax=tx,
-                                     pt_snow_albedo=cfg.pt_snow_albedo,
-                                     pt_dewpoint_depression=cfg.pt_dewpoint_depression,
-                                     state_idx=dom.chunk_state(t0, t1))
-            basin_flow[:, t0:t1] = dom.W @ flow
-            if progress:
-                print(f"    days {t1}/{t_total}  ({time.time() - tic:.0f}s)", flush=True)
-            t0 = t1
-    return basin_flow.double().cpu().numpy()
 
 
 def _obs_kge(sim: pd.Series, obs: pd.Series, dates: pd.DatetimeIndex,
@@ -168,38 +74,13 @@ def _obs_kge(sim: pd.Series, obs: pd.Series, dates: pd.DatetimeIndex,
     return kge(sim.to_numpy()[m], obs.to_numpy()[m])
 
 
-def score_frozen(
-    params: pd.DataFrame,
-    data_dir: str = "data",
-    out_dir: str | Path | None = None,
-    *,
-    cal_end: str = CAL_END,
-    domain: str = "15cdec",
-    parallel: bool = True,
-    pet_source: str = "hamon",
-    pt_snow_albedo: float = 0.0,
-    pt_dewpoint_depression: float = 0.0,
-    et_scheme: str = "sac",
-    canopy_params: pd.DataFrame | None = None,
-) -> pd.DataFrame:
-    """Score a parameter table through the FROZEN model vs the observed gage.
-
-    The dPL reporting path: full-record ``run_basin(..., params=...)`` per
-    basin (frozen physics — the torch pipeline is never a source of reported
-    skill), daily cal/val split at ``cal_end``, per-basin diagnostics + skill
-    summary in the cdec15 figure conventions ->
-    ``<out_dir>/metrics.csv`` + ``figures/``.  Same columns as the calibrated model's
-    ``metrics.csv`` so the GA-vs-dPL comparison is a plain merge.
-
-    ``pet_source="priestley_taylor"`` scores a PT-trained export through the
-    numba PT PET (``sacsma.pet_pt``) with the given refinement knobs — the
-    same fast frozen-numerics convention as the Hamon exports.
-
-    ``et_scheme="noah_lite"`` scores a Noah-lite (``canopy_lite``) export through
-    the numba Noah-lite external-ET SAC core (``sacsma.sma_noah_lite``): PT PET
-    forced, the learned per-HRU ``soil_chi`` taken from ``canopy_params`` (a
-    ``params_canopy.csv`` table).  Same frozen-numerics convention — the Noah-ET
-    dPL then reports on the identical footing as the Hamon/PT runs."""
+def score_basins(sim: np.ndarray, basins, dates: pd.DatetimeIndex, out: Path, *,
+                 data_dir: str = "data", figures: bool = True,
+                 cal_end: str = CAL_END) -> pd.DataFrame:
+    """Score daily basin flow ``sim`` (B, T mm/day on ``basins`` x ``dates``; NaN days are
+    skipped) against the gauges, calibration up to ``cal_end`` and validation after it, north
+    to south: ``metrics.csv`` in ``out`` (the columns of the calibrated model's), and with
+    ``figures`` the diagnostics under ``out/figures/``."""
     from .._figures import (
         _period_stats,
         basin_diagnostics_fig,
@@ -207,352 +88,44 @@ def score_frozen(
         skill_summary_fig,
     )
     from ..io import load_basin_area, load_hru_table, mmday_to_cfs
-    from ..model import load_domain_forcing
 
-    out = Path(out_dir) if out_dir is not None else paths.local(name="eval")
-    figdir = out / "figures"
-    figdir.mkdir(parents=True, exist_ok=True)
     cal_end_ts = pd.Timestamp(cal_end)
-
-    ref = "15cdec" if domain.endswith("_grid") else domain  # basins shared w/ 15cdec
-    hru = load_hru_table(data_dir, domain=domain)
-    basins = folsom_before_yuba(
-        ref,
-        hru.groupby("basin")["lat"].mean().sort_values(ascending=False).index.tolist())
-    forcing = load_domain_forcing(data_dir, domain=domain)
-    try:
-        areas = load_basin_area(data_dir, domain=ref).set_index(
-            "basin")["area_mi2"].to_dict()
-    except FileNotFoundError:
-        areas = {}
-
+    lat = load_hru_table(data_dir, domain="15cdec").groupby("basin")["lat"].mean()
+    order = folsom_before_yuba("15cdec", lat.sort_values(ascending=False).index.tolist())
+    areas = load_basin_area(data_dir, domain="15cdec").set_index("basin")["area_mi2"].to_dict()
+    is_cal = np.asarray(dates <= cal_end_ts)
+    figdir = out / "figures"
+    if figures:
+        figdir.mkdir(parents=True, exist_ok=True)
     records = []
-    for b in basins:
-        sim = run_basin(b, data_dir=data_dir, domain=domain, forcing=forcing,
-                        params=params, parallel=parallel,
-                        pet_source=pet_source,
-                        pt_snow_albedo=pt_snow_albedo,
-                        pt_dewpoint_depression=pt_dewpoint_depression,
-                        et_scheme=et_scheme, canopy_params=canopy_params).rename(
-                            columns={"flow": "flow_sim"})
-        obs = load_gage(data_dir, basin=b)[["date", "flow"]].rename(
-            columns={"flow": "flow_obs"})
-        m = pd.merge(sim, obs, on="date", how="left").sort_values(
-            "date").reset_index(drop=True)
-        is_cal = m["date"] <= cal_end_ts
-        cal = _period_stats(m.loc[is_cal, "flow_sim"].to_numpy(),
-                            m.loc[is_cal, "flow_obs"].to_numpy())
-        val = _period_stats(m.loc[~is_cal, "flow_sim"].to_numpy(),
-                            m.loc[~is_cal, "flow_obs"].to_numpy())
-        obs_dates = m.loc[m["flow_obs"].notna(), "date"]
-        mplot = (m[m["date"] >= obs_dates.min()].reset_index(drop=True)
-                 if not obs_dates.empty else m)
-        basin_diagnostics_fig(b, mplot, cal_end_ts, cal, val,
-                              figdir / f"{b}_diagnostics.png")
+    for b in [b for b in order if b in basins]:
+        s = sim[list(basins).index(b)]
+        obs = load_gage(data_dir, basin=b).set_index("date")["flow"].reindex(dates)
+        cal = _period_stats(s[is_cal], obs.to_numpy()[is_cal])
+        val = _period_stats(s[~is_cal], obs.to_numpy()[~is_cal])
+        if figures:
+            m = pd.DataFrame({"date": dates, "flow_sim": s, "flow_obs": obs.to_numpy()})
+            m = m[m["date"] >= obs.first_valid_index()].reset_index(drop=True)
+            basin_diagnostics_fig(b, m, cal_end_ts, cal, val, figdir / f"{b}_diagnostics.png")
         area = areas.get(b, np.nan)
         records.append({
             "basin": b, "area_mi2": area,
             "cal_kge": cal.get("kge"), "cal_nse": cal.get("nse"),
-            "cal_pbias": cal.get("pbias"), "cal_r": cal.get("r"),
-            "cal_n": cal.get("n", 0),
+            "cal_pbias": cal.get("pbias"), "cal_r": cal.get("r"), "cal_n": cal.get("n", 0),
             "val_kge": val.get("kge"), "val_nse": val.get("nse"),
-            "val_pbias": val.get("pbias"), "val_r": val.get("r"),
-            "val_n": val.get("n", 0),
+            "val_pbias": val.get("pbias"), "val_r": val.get("r"), "val_n": val.get("n", 0),
             "obs_mean_mmday": cal.get("obs_mean"),
             "obs_mean_cfs": mmday_to_cfs(cal.get("obs_mean") or np.nan, area),
         })
         print(f"  {b}: CAL KGE={cal.get('kge', float('nan')):.3f} "
               f"VAL KGE={val.get('kge', float('nan')):.3f}", flush=True)
-
     metrics = pd.DataFrame(records)
-    skill_summary_fig(metrics, figdir / "skill_summary.png")
-    csv = out / "metrics.csv"
-    metrics.round(4).to_csv(csv, index=False)
-    print(f"wrote {csv}", flush=True)
-    return metrics
-
-
-def _pipeline_storage(st, row_cell: torch.Tensor | None = None) -> torch.Tensor:
-    """Total liquid-equivalent water (N,) held in a PipelineState — for the
-    Noah mass-balance closure.  Snow SWE + the 5 SAC stores + canopy wc +
-    in-transit routing history.  adimc is EXCLUDED (it overlaps uztwc/uzfwc).
-    ``row_cell`` (cell dedup): the cell stores are per distinct cell and are
-    gathered to the HRU rows of the routing histories."""
-    if row_cell is not None:
-        c = (st.snow.w_i + st.snow.w_q
-             + st.sac.uztwc + st.sac.uzfwc + st.sac.lztwc + st.sac.lzfsc + st.sac.lzfpc)
-        if st.canopy is not None:
-            c = c + st.canopy.wc
-        return c.index_select(0, row_cell) + st.hist_surf.sum(-1) + st.hist_base.sum(-1)
-    s = (st.snow.w_i + st.snow.w_q
-         + st.sac.uztwc + st.sac.uzfwc + st.sac.lztwc + st.sac.lzfsc + st.sac.lzfpc
-         + st.hist_surf.sum(-1) + st.hist_base.sum(-1))
-    if st.canopy is not None:
-        s = s + st.canopy.wc
-    return s
-
-
-def _noah_stream(net: torch.nn.Module, x: torch.Tensor, dom: DomainTensors,
-                 cfg: DplConfig, *, temp_delta: float | np.ndarray = 0.0,
-                 precip_scale: float = 1.0, chunk_days: int = 4096,
-                 components: bool | str = False,
-                 dedup_cells: bool = False) -> dict:
-    """Stream the full record through the torch Noah pipeline -> the basin daily
-    flow (``sim``, (B, T) ndarray mm/day) + per-HRU ET sums + water-balance
-    closure.  ``temp_delta`` adds to tavg/tmin/tmax: a scalar degC (warming
-    projection), or a per-forcing-row ``(rows, T)`` array (e.g. the WGEN
-    detrending field) gathered to HRU rows via ``dom.cell_idx``.  ``precip_scale``
-    MULTIPLIES precip (e.g. 1.1 for +10%): the precipitation-perturbation knob
-    parallel to ``temp_delta``, applied before the model AND the closure sum so
-    the water balance stays consistent under the counterfactual.  ``components``
-    adds ``sim_fast`` / ``sim_slow`` ((B, T) each): the basin aggregates of the
-    routed fast (direct) and slow (baseflow) runoff components, ``sim_fast +
-    sim_slow`` = ``sim`` (off by default; ``sim`` is unchanged either way);
-    ``components="parts"`` also adds ``sim_quick`` / ``sim_interflow`` /
-    ``sim_supplemental`` / ``sim_primary``, the four routed runoff parts
-    (``quick + interflow = fast``, ``supplemental + primary = slow`` up to
-    rounding; :func:`sacsma.dpl.forward.run_window` ``return_parts``).  All are
-    NET of SAC-SMA's riparian et4 channel-ET deduction (and dry-channel clamp),
-    which act on the aggregate direct inflow / baseflow before routing.
-
-    ``dedup_cells`` (or a ``dom`` already carrying ``dedup``): the per-cell
-    physics runs once per distinct cell (:func:`sacsma.dpl.data.with_cell_dedup`,
-    ``x`` = the per-row features, checked identical within each cell); the flow,
-    ET sums and closure stay per HRU row."""
-    if components not in (False, True, "fastslow", "parts"):
-        raise ValueError(f"components {components!r} (False, True/'fastslow' or 'parts')")
-    parts = components == "parts"
-    if dedup_cells:
-        dom = with_cell_dedup(dom, x)
-    net.eval()
-    with torch.no_grad():
-        o = net(dom.phys_x(x))
-    params = {k: v for k, v in o.items() if k != "_canopy"}
-    cp = o.get("_canopy")
-    rc = dom.row_cell
-    uh = routing_uh(params, dom.flowlen, row_cell=rc)
-    n, tt = dom.n_hru, dom.n_time
-    st0 = initial_state(dom.n_phys, dom.device, dom.dtype, init_mode=cfg.init_mode,
-                        params=params, et_mode="noah", n_rows=n)
-    state = st0
-    basin = torch.empty(len(dom.basins), tt, device=dom.device, dtype=dom.dtype)
-    if components:
-        basin_fast = torch.empty_like(basin)
-        basin_slow = torch.empty_like(basin)
-    if parts:
-        basin_parts = [torch.empty_like(basin) for _ in range(4)]
-    sum_pr = torch.zeros(n, device=dom.device, dtype=dom.dtype)
-    sum_fl = torch.zeros(n, device=dom.device, dtype=dom.dtype)
-    sum_et = torch.zeros(n, device=dom.device, dtype=dom.dtype)
-    dt_field = None
-    if not isinstance(temp_delta, (int, float)):
-        dt_field = torch.as_tensor(np.ascontiguousarray(
-            np.asarray(temp_delta)[dom.phys_idx])).to(dom.device, dom.dtype)
-    with torch.no_grad():
-        t0 = 0
-        while t0 < tt:
-            t1 = min(t0 + chunk_days, tt)
-            pr, ta, doy, leap = dom.chunk(t0, t1)
-            tn, tx = dom.chunk_tmm(t0, t1)
-            if precip_scale != 1.0:             # multiplicative precip perturbation
-                pr = pr * precip_scale
-            if dt_field is not None:            # per-cell temperature field
-                d = dt_field[:, t0:t1]
-                ta = ta + d
-                if tn is not None:
-                    tn, tx = tn + d, tx + d
-            elif temp_delta:                    # scalar warming perturbation
-                ta = ta + temp_delta
-                if tn is not None:
-                    tn, tx = tn + temp_delta, tx + temp_delta
-            res = run_window(
-                pr, ta, doy, leap, dom.phys_lat_rad, dom.phys_elev, params, uh, state,
-                n_inc=cfg.n_inc, perc_mode=cfg.perc_mode,
-                fracp_floor=cfg.fracp_floor, ninc_mode=cfg.ninc_mode,
-                et_mode="noah", canopy_params=cp, tmin=tn, tmax=tx,
-                veg_frac=dom.phys_veg_frac, lai=dom.chunk_lai(t0, t1),
-                noah_pet=cfg.noah_pet, canopy_lite=cfg.canopy_lite, sac_exchanges=cfg.noah_sac_exchanges,
-                pt_snow_albedo=cfg.pt_snow_albedo,
-                pt_dewpoint_depression=cfg.pt_dewpoint_depression,
-                state_idx=dom.chunk_state(t0, t1),
-                return_tet=True, return_components=bool(components),
-                return_parts=parts, row_cell=rc)
-            flow, state, tet = res[0], res[1], res[2]
-            basin[:, t0:t1] = dom.W @ flow
-            if components:
-                basin_fast[:, t0:t1] = dom.W @ res[3][0]
-                basin_slow[:, t0:t1] = dom.W @ res[3][1]
-            if parts:
-                for k in range(4):
-                    basin_parts[k][:, t0:t1] = dom.W @ res[4][k]
-            if rc is None:
-                sum_pr += pr.sum(1)
-            else:                               # per-cell precip -> the cell's rows
-                sum_pr += pr.sum(1).index_select(0, rc)
-            sum_fl += flow.sum(1)
-            sum_et += tet.sum(1)
-            t0 = t1
-
-    # per-HRU water-balance closure: Σprcp ≈ Σflow + Σtet + ΔS (the routing-tail
-    # residual is the only expected slack over the full record)
-    dS = _pipeline_storage(state, rc) - _pipeline_storage(st0, rc)
-    resid = (sum_pr - sum_fl - sum_et - dS).abs()
-    closure_rel = float((resid / sum_pr.clamp_min(1e-6)).max())
-    out = dict(sim=basin.double().cpu().numpy(), sum_et=sum_et,
-               closure_rel=closure_rel)
-    if components:
-        out.update(sim_fast=basin_fast.double().cpu().numpy(),
-                   sim_slow=basin_slow.double().cpu().numpy())
-    if parts:
-        for name, b in zip(("quick", "interflow", "supplemental", "primary"), basin_parts,
-                           strict=True):
-            out[f"sim_{name}"] = b.double().cpu().numpy()
-    return out
-
-
-def score_noah_torch(net: torch.nn.Module, x: torch.Tensor, dom: DomainTensors,
-                     cfg: DplConfig, *, data_dir: str = "data",
-                     out_dir: str | Path | None = None,
-                     temp_delta: float = 0.0,
-                     chunk_days: int = 4096, cal_end: str = CAL_END) -> pd.DataFrame:
-    """Score a Noah-ET net through the TORCH pipeline (Noah is NEW physics — NOT
-    scorable via ``run_basin``).  Streams the full record with ``et_mode='noah'``
-    + per-cell tmin/tmax, aggregates ``dom.W @ flow`` to the outlet, and scores
-    cal/val KGE vs the gage (same columns as ``score_frozen``).  Also reports
-    the per-basin ET partition and a per-HRU water-balance closure.  ``temp_delta``
-    adds ΔT to tavg/tmin/tmax (a one-knob warming-projection run): its files carry the suffix
-    ``_plus<ΔT>C``.  Writes ``metrics.csv`` and the daily simulation ``sim_daily.csv``."""
-    from .._figures import _period_stats, folsom_before_yuba, skill_summary_fig
-    from ..io import load_basin_area, load_hru_table, mmday_to_cfs
-
-    out = Path(out_dir) if out_dir is not None else paths.local(name="eval")
-    (out / "figures").mkdir(parents=True, exist_ok=True)
-    res = _noah_stream(net, x, dom, cfg, temp_delta=temp_delta,
-                       chunk_days=chunk_days)
-    sim = res["sim"]
-    closure_rel = res["closure_rel"]
-    sum_et = res["sum_et"]
-    years = dom.n_time / 365.25
-
-    hru = load_hru_table(data_dir, domain="15cdec")
-    basins = folsom_before_yuba(
-        "15cdec", hru.groupby("basin")["lat"].mean().sort_values(
-            ascending=False).index.tolist())
-    b_index = {b: i for i, b in enumerate(dom.basins)}
-    try:
-        areas = load_basin_area(data_dir, domain="15cdec").set_index(
-            "basin")["area_mi2"].to_dict()
-    except FileNotFoundError:
-        areas = {}
-    et_mmyr = dom.W.cpu().numpy() @ (sum_et / years).cpu().numpy()   # basin ET
-    is_cal = dom.dates <= pd.Timestamp(cal_end)
-
-    rows = []
-    for b in basins:
-        i = b_index[b]
-        obs = load_gage(data_dir, basin=b).set_index("date")["flow"].reindex(
-            dom.dates).to_numpy()
-        cal = _period_stats(sim[i][is_cal], obs[is_cal])
-        val = _period_stats(sim[i][~is_cal], obs[~is_cal])
-        area = areas.get(b, np.nan)
-        rows.append({
-            "basin": b, "area_mi2": area,
-            "cal_kge": cal.get("kge"), "cal_nse": cal.get("nse"),
-            "cal_pbias": cal.get("pbias"), "cal_r": cal.get("r"),
-            "cal_n": cal.get("n", 0),
-            "val_kge": val.get("kge"), "val_nse": val.get("nse"),
-            "val_pbias": val.get("pbias"), "val_r": val.get("r"),
-            "val_n": val.get("n", 0),
-            "obs_mean_mmday": cal.get("obs_mean"),
-            "obs_mean_cfs": mmday_to_cfs(cal.get("obs_mean") or np.nan, area),
-            "noah_et_mmyr": float(et_mmyr[i]),
-        })
-        print(f"  {b}: CAL KGE={cal.get('kge', float('nan')):.3f} "
-              f"VAL KGE={val.get('kge', float('nan')):.3f}  "
-              f"ET={et_mmyr[i]:.0f}mm/yr", flush=True)
-
-    metrics = pd.DataFrame(rows)
-    if not temp_delta:      # a perturbed run must not clobber the run's figure
-        skill_summary_fig(metrics, out / "figures" / "skill_summary.png")
-    tag = f"_plus{temp_delta:g}C" if temp_delta else ""
-    csv = out / f"metrics{tag}.csv"
-    metrics.round(4).to_csv(csv, index=False)
-    # daily sim (date x basin, mm/day) — the torch reporting path's only route to
-    # a daily series (run_basin can't reconstruct a seasonal/Noah net).
-    daily_csv = out / f"sim_daily{tag}.csv"
-    pd.DataFrame(sim.T, index=dom.dates, columns=list(dom.basins)).rename_axis(
-        "date").to_csv(daily_csv)
-    print(f"wrote {daily_csv} (daily sim mm/day)", flush=True)
-    scc_isb = metrics.set_index("basin")["val_kge"].reindex(
-        ["SCC", "ISB"]).round(3).tolist()
-    print(f"wrote {csv}  (mean cal {metrics['cal_kge'].mean():.3f} / "
-          f"val {metrics['val_kge'].mean():.3f}; SCC/ISB val {scc_isb})", flush=True)
-    print(f"[closure] max per-HRU |sum(prcp-flow-tet)-dS|/sum(prcp) = {closure_rel:.2e}",
-          flush=True)
-    return metrics
-
-
-def score_sac_torch(net: torch.nn.Module, x: torch.Tensor, dom: DomainTensors,
-                    cfg: DplConfig, *, data_dir: str = "data",
-                    out_dir: str | Path | None = None,
-                    cal_end: str = CAL_END) -> pd.DataFrame:
-    """Score a Hamon (et_mode='sac') net through the TORCH pipeline — needed when
-    the parameter field is TIME-VARYING (dynamic params), which the frozen
-    run_basin cannot reconstruct.  Same per-basin columns as score_frozen."""
-    from .._figures import _period_stats, folsom_before_yuba, skill_summary_fig
-    from ..io import load_basin_area, load_hru_table, mmday_to_cfs
-
-    out = Path(out_dir) if out_dir is not None else paths.local(name="eval")
-    (out / "figures").mkdir(parents=True, exist_ok=True)
-    net.eval()
-    with torch.no_grad():
-        params = {k: v for k, v in net(x).items() if k != "_canopy"}
-    sim = torch_domain_flow(dom, params, cfg, progress=False)     # (B, T)
-
-    hru = load_hru_table(data_dir, domain="15cdec")
-    basins = folsom_before_yuba(
-        "15cdec", hru.groupby("basin")["lat"].mean().sort_values(
-            ascending=False).index.tolist())
-    b_index = {b: i for i, b in enumerate(dom.basins)}
-    try:
-        areas = load_basin_area(data_dir, domain="15cdec").set_index(
-            "basin")["area_mi2"].to_dict()
-    except FileNotFoundError:
-        areas = {}
-    is_cal = dom.dates <= pd.Timestamp(cal_end)
-    rows = []
-    for b in basins:
-        i = b_index[b]
-        obs = load_gage(data_dir, basin=b).set_index("date")["flow"].reindex(
-            dom.dates).to_numpy()
-        cal = _period_stats(sim[i][is_cal], obs[is_cal])
-        val = _period_stats(sim[i][~is_cal], obs[~is_cal])
-        area = areas.get(b, np.nan)
-        rows.append({
-            "basin": b, "area_mi2": area,
-            "cal_kge": cal.get("kge"), "cal_nse": cal.get("nse"),
-            "cal_pbias": cal.get("pbias"), "cal_r": cal.get("r"),
-            "cal_n": cal.get("n", 0),
-            "val_kge": val.get("kge"), "val_nse": val.get("nse"),
-            "val_pbias": val.get("pbias"), "val_r": val.get("r"),
-            "val_n": val.get("n", 0),
-            "obs_mean_mmday": cal.get("obs_mean"),
-            "obs_mean_cfs": mmday_to_cfs(cal.get("obs_mean") or np.nan, area),
-        })
-        print(f"  {b}: CAL KGE={cal.get('kge', float('nan')):.3f} "
-              f"VAL KGE={val.get('kge', float('nan')):.3f}", flush=True)
-    metrics = pd.DataFrame(rows)
-    skill_summary_fig(metrics, out / "figures" / "skill_summary.png")
-    csv = out / "metrics.csv"
-    metrics.round(4).to_csv(csv, index=False)
-    print(f"wrote {csv}  (mean cal {metrics['cal_kge'].mean():.3f} / "
+    if figures:
+        skill_summary_fig(metrics, figdir / "skill_summary.png")
+    metrics.round(4).to_csv(out / "metrics.csv", index=False)
+    print(f"wrote {out / 'metrics.csv'}  (mean cal {metrics['cal_kge'].mean():.3f} / "
           f"val {metrics['val_kge'].mean():.3f})", flush=True)
     return metrics
-
-
-def _plain(v):
-    """A checkpoint cfg value in comparable form (lists and tuples alike)."""
-    return tuple(v) if isinstance(v, (list, tuple)) else v
 
 
 def load_net_from_checkpoint(
@@ -562,37 +135,13 @@ def load_net_from_checkpoint(
     device: torch.device | str | None = None,
     product: str = DEFAULT_FORCING,
 ) -> tuple[torch.nn.Module, torch.Tensor, DomainTensors, DplConfig, dict]:
-    """Rebuild ``(net, x, dom, cfg, ck)`` from a training checkpoint — the
-    shared front half of :func:`evaluate_checkpoint` (feature rebuild +
-    ParameterNet restore).  ``device=None`` -> cuda if available, else cpu.
-    ``product`` is the forcing the domain tensors carry (default: the training forcing)."""
-    import dataclasses as _dc
-
-    import numpy as _np
-
-    from ..io import soilveg_path
-    from .features import AEF_STORE_VARIANTS, FeatureSet, aef_store, build_features
+    """Rebuild ``(net, x, dom, cfg, ck)`` from a training checkpoint: the domain (the
+    checkpoint's basins, on the forcing ``product``), the network inputs and the network.
+    ``device=None`` -> cuda if available, else cpu."""
     from .parameter_net import ParameterNet
 
     ck = torch.load(ckpt_path, map_location="cpu", weights_only=False)
-    variant = ck["variant"]
-    domain = ck.get("domain", "15cdec")
-    nc = ck.get("net_config", {})
-    # rebuild the training config tolerantly: checkpoints persist the cfg dict
-    # verbatim, so fields REMOVED in later schema versions must be dropped, not
-    # crash the scoring.  A retired field at its inert default is dropped
-    # silently; anything else is named (a checkpoint trained with a retired
-    # option — e.g. the ET/SWE observation losses — still scores, since the
-    # forward does not depend on the loss).
-    known = {f.name for f in _dc.fields(DplConfig)}
-    dropped = sorted(k for k in set(ck["cfg"]) - known
-                     if k not in RETIRED_CFG_DEFAULTS
-                     or _plain(ck["cfg"][k]) != RETIRED_CFG_DEFAULTS[k])
-    if dropped:
-        print(f"note: dropping retired cfg keys from checkpoint: {dropped}",
-              flush=True)
-    cfg = DplConfig(**{k: v for k, v in ck["cfg"].items() if k in known})
-    dyn = tuple(nc.get("dynamic_params", ()))
+    cfg = config_from_checkpoint(ck)
     if device is None:
         try:
             dev = pick_device("cuda")
@@ -600,281 +149,217 @@ def load_net_from_checkpoint(
             dev = torch.device("cpu")
     else:
         dev = torch.device(device)
-    dom = load_domain_tensors(data_dir, domain=domain, device=dev,
+    dom = load_domain_tensors(data_dir, domain=ck.get("domain", "15cdec"), device=dev,
                               dtype=torch.float64,
-                              # honor a --basins training subset stored in the
-                              # checkpoint; checkpoints without the key load
-                              # the full domain
-                              basins=(tuple(ck["basins"])
-                                      if ck.get("basins") else None),
-                              dynamic_window=(nc.get("dynamic_window", 365)
-                                              if dyn else None),
-                              calsim_footprint=ck.get("cfg", {}).get(
-                                  "calsim_footprint", False),
-                              product=product)
-    stats = FeatureSet(x=_np.empty((0, 0), dtype=_np.float32), **ck["features"])
-    fs = build_features(dom.hrus, variant=variant,
-                        forcing=(dom.forcing if variant in ("climate",
-                                 "physical_climate") else None),
-                        climate_window=stats.climate_window,
-                        climate_product=stats.climate_product,
-                        physical_path=(soilveg_path(data_dir, domain)
-                                       if variant in ("physical",
-                                       "physical_climate") else None),
-                        aef_path=aef_store(data_dir) if variant in AEF_STORE_VARIANTS else None,
-                        stats=stats)
-    x = torch.as_tensor(fs.x).to(dev, torch.float64)
-    gnn_k = nc.get("gnn_k", 0)
-    net = ParameterNet(x.shape[1], hidden=nc.get("hidden", 64),
-                       embed=nc.get("embed", 32),
-                       dropout=nc.get("dropout", 0.1),
-                       grouped_heads=nc.get("grouped_heads", False),
-                       gnn_k=gnn_k,
-                       n_nodes=x.shape[0] if gnn_k > 0 else None,
-                       seasonal_params=tuple(nc.get("seasonal_params", ())),
-                       seasonal_amp=nc.get("seasonal_amp", 0.18),
-                       seasonal_amp_frac=nc.get("seasonal_amp_frac", 0.10),
-                       canopy=nc.get("canopy", False),
-                       canopy_separate_trunk=nc.get("canopy_separate_trunk", True),
-                       canopy_lite=nc.get("canopy_lite", False),
-                       dynamic_params=dyn,
-                       dynamic_amp=nc.get("dynamic_amp", 0.5),
-                       pxtemp_learn=nc.get("pxtemp_learn", False),
-                       pxtemp_box=tuple(nc.get("pxtemp_box", (-1.0, 3.0))),
-                       pxtemp_tau=nc.get("pxtemp_tau", 1.0),
-                       ).to(dev, torch.float64)
-    net.load_state_dict(ck["net"])   # restores baked neighbor buffers too
-    # the physics switch rides on the net so every canopy export carries it
-    # (export_canopy_params), whichever caller builds the table
-    net.noah_sac_exchanges = bool(cfg.noah_sac_exchanges)
+                              basins=tuple(ck["basins"]) if ck.get("basins") else None,
+                              calsim_footprint=cfg.calsim_footprint, product=product)
+    x = checkpoint_features(ck, dom, data_dir)
+    net = ParameterNet.from_checkpoint(ck, x.shape[1]).to(dev, torch.float64)
     return net, x, dom, cfg, ck
 
 
-def noah_torch_daily(ckpt_path: str | Path, *, data_dir: str = "data",
-                     temp_delta: float | np.ndarray = 0.0,
-                     precip_scale: float = 1.0,
-                     chunk_days: int = 4096,
-                     device: torch.device | str | None = None) -> pd.DataFrame:
-    """Daily basin flow (date x basin, mm/day) from a torch-scored Noah
-    checkpoint, optionally under a climate perturbation: ``temp_delta`` adds to
-    tavg/tmin/tmax (a scalar degC, or a per-forcing-row ``(rows, T)`` field e.g.
-    the WGEN detrending delta) and ``precip_scale`` multiplies precip (1.1 =
-    +10%).  Pure compute — writes nothing; the counterfactual runner for
-    torch-side (dp, dt) response surfaces and the forcing-sensitivity detrended
-    noah sim channel."""
-    net, x, dom, cfg, ck = load_net_from_checkpoint(ckpt_path, data_dir,
-                                                    device=device)
-    if not ck.get("net_config", {}).get("canopy", False):
-        raise ValueError("noah_torch_daily needs a Noah (canopy) checkpoint")
-    res = _noah_stream(net, x, dom, cfg, temp_delta=temp_delta,
-                       precip_scale=precip_scale, chunk_days=chunk_days)
-    df = pd.DataFrame(res["sim"].T, index=dom.dates, columns=list(dom.basins))
-    df.index.name = "date"
-    return df
+def checkpoint_features(ck: dict, dom: DomainTensors, data_dir: str = "data",
+                        forcing=None) -> torch.Tensor:
+    """The network inputs of the checkpoint's variant on ``dom``'s rows, scaled with its
+    training statistics; a climate variant takes its indices from ``forcing`` (default: the
+    domain's)."""
+    from ..io import soilveg_path
+    from .features import AEF_STORE_VARIANTS, FeatureSet, aef_store, build_features
 
-
-def evaluate_checkpoint(
-    ckpt_path: str | Path,
-    data_dir: str = "data",
-    out_dir: str | Path | None = None,
-    *,
-    parallel: bool = True,
-    temp_delta: float = 0.0,
-) -> pd.DataFrame:
-    """best.pt -> params_dpl.csv -> frozen-model metrics (the full Phase-4 path).
-
-    ``temp_delta`` != 0 re-runs the TORCH scorer with tavg/tmin/tmax + delta and
-    dumps the perturbed daily sim (``sim_daily_plus<delta>C.csv``) — the
-    teacher for the hybrid temperature-consistency loss.  Torch-scored
-    checkpoints only (seasonal/canopy/dynamic)."""
-    ck = torch.load(ckpt_path, map_location="cpu", weights_only=False)
     variant = ck["variant"]
-    domain = ck.get("domain", "15cdec")
-    nc = ck.get("net_config", {})
-    canopy = nc.get("canopy", False)
-    dyn = tuple(nc.get("dynamic_params", ()))
-    # canopy (Noah ET) and dynamic (time-varying) params are torch-only; a
-    # STATIC checkpoint — Hamon OR Priestley-Taylor — scores through the fast
-    # numba run_basin (PT via sacsma.pet_pt, verified vs the torch pipeline).
-    torch_score = canopy or bool(dyn)
-    if temp_delta and not canopy:
-        raise ValueError("--temp-delta teacher dumps run through the torch Noah "
-                         "scorer only (canopy checkpoints)")
-    # The run's folders: the parameter tables go to its model folder, the scores and
-    # figures to its results folder.  Default: the run of the checkpoint
-    # (<run>/checkpoints/x.pt); a bare checkpoint outside that layout falls back to the
-    # variant's run.
+    stats = FeatureSet(x=np.empty((0, 0), dtype=np.float32), **ck["features"])
+    fs = build_features(dom.hrus, variant=variant,
+                        forcing=((dom.forcing if forcing is None else forcing)
+                                 if variant in ("climate", "physical_climate") else None),
+                        climate_window=stats.climate_window,
+                        climate_product=stats.climate_product,
+                        physical_path=(soilveg_path(data_dir, ck.get("domain", "15cdec"))
+                                       if variant in ("physical", "physical_climate") else None),
+                        aef_path=aef_store(data_dir) if variant in AEF_STORE_VARIANTS else None,
+                        stats=stats)
+    return torch.as_tensor(fs.x).to(dom.device, torch.float64)
+
+
+def learned_field(net: torch.nn.Module, x: torch.Tensor, dom: DomainTensors, cfg: DplConfig):
+    """The trained field of ``net`` on ``dom``'s rows as a :class:`sacsma.engine.Field` (the
+    network evaluated once, in eval mode, in float64) with the physics it was trained with."""
+    from .. import parameters as P
+    from ..engine import Field
+
+    net.eval()
+    with torch.no_grad():
+        out = net(x)
+    noah = cfg.et_mode == "noah"
+    a = lambda t: t.detach().cpu().double().numpy()  # noqa: E731
+    cols = lambda names: np.stack([a(out[k]) for k in names], axis=1)  # noqa: E731
+    cell = np.asarray(dom.cell_idx, np.int64)
+    return Field.from_rows(cfg.physics(), cell, a(dom.lat_rad), a(dom.elev), a(dom.flowlen),
+                           a(out["Kpet"]), cols(P._SNOW_COLS), cols(P._SMA_COLS),
+                           cols(P._ROUT_COLS), veg=a(dom.veg_frac) if noah else None,
+                           chi=a(out["soil_chi"]) if noah else None,
+                           lai=dom.lai_lut[cell] if noah else None)
+
+
+def simulate_field(net: torch.nn.Module, x: torch.Tensor, dom: DomainTensors, cfg: DplConfig,
+                   start, end, weights, *, spinup: str = "cycle", **kw) -> dict:
+    """The trained field over ``[start, end]`` on the CPU engine (:func:`sacsma.engine.simulate`),
+    the state at ``start`` from the run's spin-up settings; ``weights`` (K, rows)."""
+    from ..engine import simulate
+    from .spinup import window_start
+
+    forcing = dataclasses.replace(dom.forcing, tmin=dom.tmin, tmax=dom.tmax)
+    t0 = int(dom.dates.searchsorted(pd.Timestamp(start)))
+    return simulate(learned_field(net, x, dom, cfg), forcing, start, end, weights, spinup=spinup,
+                    years=cfg.spinup_years, passes=cfg.spinup_passes,
+                    window_start=dom.dates[window_start(dom.dates, t0, cfg.spinup_start)], **kw)
+
+
+#: the engine's code: a change to it re-runs a cached daily flow
+ENGINE_CODE = tuple(Path(__file__).parents[1] / f for f in (
+    "engine.py", "sma_learned.py", "sma.py", "snow17.py", "pet.py", "pet_pt.py", "routing.py"))
+
+
+def content_key(*files) -> str:
+    """The first 10 hex digits of the SHA-1 of the files' bytes, in order: a cache key that
+    follows a retrained checkpoint."""
+    import hashlib
+
+    h = hashlib.sha1()
+    for f in files:
+        h.update(Path(f).read_bytes())
+    return h.hexdigest()[:10]
+
+
+def ensemble_key(ens_dir: str | Path) -> str:
+    """:func:`content_key` of an LSTM ensemble: its members' checkpoints and, for a physics input,
+    the checkpoint of the physics run and the engine's code (:data:`ENGINE_CODE`)."""
+    members = sorted(Path(ens_dir).glob("seed*/checkpoints/best.pt"))
+    if not members:
+        raise FileNotFoundError(f"no seed*/checkpoints/best.pt under {ens_dir}")
+    physics = torch.load(members[0], map_location="cpu", weights_only=False)["cfg"].get("physics")
+    run = [paths.dpl_checkpoint(run=physics), *ENGINE_CODE] if physics else []
+    return content_key(*members, *run)
+
+
+@functools.lru_cache(maxsize=2)
+def _loaded(ckpt: str, data_dir: str):
+    """:func:`load_net_from_checkpoint` on the CPU, kept for the next call on the same run."""
+    return load_net_from_checkpoint(ckpt, data_dir, device="cpu")
+
+
+def basin_daily(run: str | Path, *, data_dir: str = "data", dp: float = 0.0,
+                dt: float | np.ndarray = 0.0) -> pd.DataFrame:
+    """Daily flow (date x basin, mm/day) of a 15-CDEC run (its name, or a checkpoint path) over
+    the whole record from the cold start, on the engine as trained (its numerics, its basin
+    weights), in a climate changed by ``dp`` (precipitation x (1 + dp)) and ``dt`` (degC on the
+    temperatures: a number, or a field on the domain's forcing rows and days).  A field with
+    climate inputs follows the changed climate: its parameters are recomputed from it.
+
+    Cached under ``artifacts/_local/cache/basin_daily/`` by run, by the content of the
+    checkpoint and of the engine's code, and by climate; clear it after a change to the
+    forcing."""
+    import hashlib
+
+    ckpt = Path(run if str(run).endswith(".pt") else paths.dpl_checkpoint(run=str(run))).resolve()
+    dp = float(dp) + 0.0                                    # -0.0 -> 0.0
+    if np.ndim(dt) == 0:
+        dt = float(dt) + 0.0
+        tag = f"dt{dt:+g}"
+    else:
+        dt = np.ascontiguousarray(dt, np.float64)
+        tag = f"dt{hashlib.sha1(dt.tobytes()).hexdigest()[:10]}"
+    key = content_key(ckpt, *ENGINE_CODE)
+    cache = (paths.local(name="cache/basin_daily") / f"{ckpt.parents[1].name}_{key}"
+             / f"dp{dp:+g}_{tag}.npz")
+    if cache.exists():
+        z = np.load(cache)
+        return pd.DataFrame(z["flow"].T, index=pd.DatetimeIndex(z["dates"], name="date"),
+                            columns=z["basins"].tolist())
+    net, x, dom, cfg, ck = _loaded(str(ckpt), str(data_dir))
+    if (dp or np.any(dt)) and ck["variant"] in ("climate", "physical_climate"):
+        f = dom.forcing
+        x = checkpoint_features(ck, dom, data_dir, dataclasses.replace(
+            f, prcp=f.prcp * (1.0 + dp), tavg=f.tavg + dt))
+    flow = simulate_field(net, x, dom, cfg, dom.dates[0], dom.dates[-1], dom.W.cpu().numpy(),
+                          spinup="cold", precip_scale=1.0 + dp, temp_delta=dt)["flow"]
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    np.savez(cache, flow=flow, dates=dom.dates.values, basins=np.array(dom.basins))
+    return pd.DataFrame(flow.T, index=dom.dates.rename("date"), columns=list(dom.basins))
+
+
+def evaluate_checkpoint(ckpt_path: str | Path, data_dir: str = "data",
+                        out_dir: str | Path | None = None) -> pd.DataFrame:
+    """A 15-CDEC run: its parameter tables (``params_dpl.csv``, and ``params_canopy.csv`` for a
+    Noah-ET field) to the model folder, then its daily flow as trained (:func:`basin_daily`)
+    scored against the gauges (:func:`score_basins`) into the results folder."""
+    # the run's folders: by default the run of the checkpoint (<run>/checkpoints/x.pt)
     ckp = Path(ckpt_path).resolve()
-    if out_dir is not None:
-        run = paths.run_roles(out_dir)
-    elif ckp.parent.name == "checkpoints":
-        run = paths.run_roles(ckp.parent.parent)
-    else:
-        run = paths.run_roles(paths.dpl_run(run=variant, domain=domain))
+    run = paths.run_roles(out_dir if out_dir is not None else ckp.parents[1])
     run.model.mkdir(parents=True, exist_ok=True)
-    out = run.results
-    out.mkdir(parents=True, exist_ok=True)
-
-    if torch_score:
-        try:
-            dev = pick_device("cuda")
-        except RuntimeError:
-            dev = torch.device("cpu")
-    else:
-        dev = torch.device("cpu")
-    net, x, dom, cfg, ck = load_net_from_checkpoint(ckpt_path, data_dir,
-                                                    device=dev)
-
-    if canopy:   # Noah ET — a SEPARATE canopy-param table (kept OUT of ga_optimum)
-        ccsv = run.model / "params_canopy.csv"
-        canopy_df = export_canopy_params(net, dom, x)
-        canopy_df.to_csv(ccsv, index=False)
-        print(f"wrote {ccsv} (Noah canopy params; kept OUT of ga_optimum)",
-              flush=True)
-        # The learned SAC params still export (canopy runs used to skip this,
-        # leaving noah with no params_dpl.csv) — the Noah-lite frozen
-        # path and the hybrid physics baseline both need them.
-        dpl_df = export_params(net, dom, x)
-        pcsv = run.model / "params_dpl.csv"
-        dpl_df.to_csv(pcsv, index=False)
-        print(f"wrote {pcsv} ({len(dpl_df)} HRU rows, cal KGE at selection "
-              f"{ck.get('cal_kge', float('nan')):.4f})", flush=True)
-        lite = nc.get("canopy_lite", False)
-        if (lite and cfg.noah_pet == "priestley_taylor"
-                and not cfg.seasonal_params and not temp_delta):
-            # canonical Noah-lite: score through the fast frozen numba core
-            # (sma_noah_lite), verified bit-exact vs the torch pipeline — the
-            # SAME frozen-numerics footing as the Hamon/PT exports.  A SEASONAL
-            # Noah-lite export cannot use this path — the frozen run_basin raises
-            # on day-of-year params (model.py:run_hru_components_noah_lite) and
-            # the exported params_dpl.csv carries {MFMAX,...}_asin columns the
-            # frozen path cannot read (never feed it to build_frozen_sim) — so it
-            # falls through to the torch pipeline below.
-            print("canopy_lite + PT -> frozen Noah-lite scoring "
-                  "(sacsma.sma_noah_lite)", flush=True)
-            pt_alb = cfg.pt_snow_albedo or 0.0
-            pt_dd = cfg.pt_dewpoint_depression or 0.0
-            return score_frozen(
-                dpl_df, data_dir, out, domain=domain, parallel=parallel,
-                pet_source="priestley_taylor", pt_snow_albedo=pt_alb, pt_dewpoint_depression=pt_dd,
-                et_scheme="noah_lite", canopy_params=canopy_df)
-        # full Noah ET (7-param Jarvis) or Hamon-potential lite: NO frozen core
-        # -> the torch pipeline reports skill (mass-balance validated).
-        return score_noah_torch(net, x, dom, cfg, data_dir=data_dir, out_dir=out,
-                                temp_delta=temp_delta)
-
-    dpl_df = export_params(net, dom, x)
-    pcsv = run.model / "params_dpl.csv"
-    dpl_df.to_csv(pcsv, index=False)
-    print(f"wrote {pcsv} ({len(dpl_df)} HRU rows, cal KGE at selection "
-          f"{ck.get('cal_kge', float('nan')):.4f})", flush=True)
-    if dyn:   # time-varying params — the frozen run_basin can't reconstruct them
-        print(f"dynamic params {dyn} -> torch scoring (run_basin can't reconstruct)",
-              flush=True)
-        return score_sac_torch(net, x, dom, cfg, data_dir=data_dir, out_dir=out)
-    if cfg.sac_pet != "hamon":
-        print(f"sac_pet={cfg.sac_pet} -> frozen scoring via the numba PT PET "
-              f"(snow_albedo={cfg.pt_snow_albedo}, "
-              f"dewpoint_depression={cfg.pt_dewpoint_depression})", flush=True)
-    return score_frozen(dpl_df, data_dir, out, domain=domain, parallel=parallel,
-                        pet_source=cfg.sac_pet,
-                        pt_snow_albedo=cfg.pt_snow_albedo,
-                        pt_dewpoint_depression=cfg.pt_dewpoint_depression)
+    run.results.mkdir(parents=True, exist_ok=True)
+    net, x, dom, cfg, _ = _loaded(str(ckp), str(data_dir))
+    export_params(net, dom, x).to_csv(run.model / "params_dpl.csv", index=False)
+    if cfg.et_mode == "noah":
+        export_canopy_params(net, dom, x, cfg).to_csv(run.model / "params_canopy.csv",
+                                                      index=False)
+    print(f"wrote the parameter tables -> {run.model}", flush=True)
+    daily = basin_daily(ckp, data_dir=data_dir)
+    return score_basins(daily.to_numpy().T, list(daily.columns), daily.index, run.results,
+                        data_dir=data_dir)
 
 
-def fidelity_benchmark(
-    data_dir: str = "data",
-    out_dir: str | Path | None = None,
-    *,
-    configs: tuple[str, ...] | None = None,
-    device: str = "cuda",
-    chunk_days: int = 4096,
-) -> pd.DataFrame:
-    """Run the sweep; writes ``fidelity_benchmark.csv`` + a summary figure into ``out_dir``
-    (default: the benchmark's result folder)."""
-    dev = pick_device(device)
-    names = tuple(configs if configs is not None else FIDELITY_CONFIGS)
+#: the substeps a day the benchmark runs the learned numerics with
+BENCHMARK_N_INC = (1, 2, 5, 10, 20)
+
+
+def fidelity_benchmark(data_dir: str = "data", out_dir: str | Path | None = None) -> pd.DataFrame:
+    """The archived GA optimum of the 15 CDEC watersheds through the learned numerics
+    (:mod:`sacsma.sma_learned`, ``n_inc`` substeps a day for each of :data:`BENCHMARK_N_INC`,
+    the training ``fracp_floor``) against the reference model, over the whole record from the
+    cold start, on the engine: per watershed and ``n_inc``, the daily KGE / NSE / bias /
+    largest difference between the two and the calibration / validation KGE of each against
+    the gauge.  Writes ``fidelity_benchmark.csv`` and a figure into ``out_dir`` (default: the
+    benchmark's result folder)."""
+    from ..engine import Physics
+    from ..model import load_domain_forcing
+
     out = Path(out_dir) if out_dir is not None else paths.dpl_benchmark()
     (out / "figures").mkdir(parents=True, exist_ok=True)
-
-    print("fidelity: frozen reference (run_basin, parallel) ...", flush=True)
-    truth = frozen_truth(data_dir)
-    dates = pd.DatetimeIndex(truth[BASINS[0]]["date"])
+    forcing = load_domain_forcing(data_dir, domain="15cdec")
+    dates = forcing.dates
     gage = load_gage(data_dir)
-    obs = {b: g.set_index("date")["flow"].reindex(dates)
-           for b, g in gage.groupby("basin")}
+    obs = {b: g.set_index("date")["flow"].reindex(dates) for b, g in gage.groupby("basin")}
 
+    def flow(physics: Physics | None = None) -> pd.DataFrame:
+        return run_basins(list(BASINS), data_dir=data_dir, domain="15cdec", forcing=forcing,
+                          physics=physics)
+
+    ref = flow()
     rows = []
-    doms: dict[torch.dtype, DomainTensors] = {}
-    for name in names:
-        cfg = FIDELITY_CONFIGS[name]
-        dtype = _DTYPES[cfg.dtype]
-        if dtype not in doms:
-            doms[dtype] = load_domain_tensors(data_dir, device=dev, dtype=dtype)
-        dom = doms[dtype]
-        ga = dom.ga_params(data_dir)
-        print(f"fidelity: config {name} (n_inc={cfg.n_inc}, perc={cfg.perc_mode}, "
-              f"{cfg.dtype}) ...", flush=True)
-        tic = time.time()
-        sim = torch_domain_flow(dom, ga, cfg, chunk_days=chunk_days)
-        wall = time.time() - tic
-        for b_i, b in enumerate(dom.basins):
-            ref = truth[b]["flow"].to_numpy()
-            s = sim[b_i]
-            s_ser = pd.Series(s, index=dates)
-            r_ser = pd.Series(ref, index=dates)
+    for n_inc in BENCHMARK_N_INC:
+        sim = flow(Physics(learned=True, n_inc=n_inc))
+        for b in BASINS:
+            s, r = sim[b], ref[b]
             ob = obs.get(b)
-            rows.append({
-                "config": name, "basin": b,
-                "n_inc": cfg.n_inc, "perc_mode": cfg.perc_mode, "dtype": cfg.dtype,
-                "kge_sim": kge(s, ref), "nse_sim": nse(s, ref),
-                "pbias_sim": pbias(s, ref),
-                "max_abs_diff": float(np.max(np.abs(s - ref))),
-                "cal_kge_torch": _obs_kge(s_ser, ob, dates, "cal") if ob is not None else np.nan,
-                "val_kge_torch": _obs_kge(s_ser, ob, dates, "val") if ob is not None else np.nan,
-                "cal_kge_frozen": _obs_kge(r_ser, ob, dates, "cal") if ob is not None else np.nan,
-                "val_kge_frozen": _obs_kge(r_ser, ob, dates, "val") if ob is not None else np.nan,
-                "wall_s": round(wall, 1),
-            })
-        df_c = pd.DataFrame([r for r in rows if r["config"] == name])
-        print(f"  {name}: sim-vs-sim KGE min {df_c['kge_sim'].min():.6f} | "
-              f"max|d| {df_c['max_abs_diff'].max():.4f} mm/day | {wall:.0f}s", flush=True)
-
+            gauge = [np.nan if ob is None else _obs_kge(q, ob, dates, per)
+                     for q in (s, r) for per in ("cal", "val")]
+            rows.append({"n_inc": n_inc, "basin": b,
+                         "kge_sim": kge(s.to_numpy(), r.to_numpy()),
+                         "nse_sim": nse(s.to_numpy(), r.to_numpy()),
+                         "pbias_sim": pbias(s.to_numpy(), r.to_numpy()),
+                         "max_abs_diff": float(np.max(np.abs(s - r))),
+                         **dict(zip(("cal_kge_learned", "val_kge_learned", "cal_kge_reference",
+                                     "val_kge_reference"), gauge, strict=True))})
+        d = pd.DataFrame(rows[-len(BASINS):])
+        print(f"  n_inc {n_inc:2d}: learned vs reference KGE min {d['kge_sim'].min():.6f} | "
+              f"max |d| {d['max_abs_diff'].max():.4f} mm/day", flush=True)
     df = pd.DataFrame(rows)
-    df["d_cal_kge"] = df["cal_kge_torch"] - df["cal_kge_frozen"]
-    df["d_val_kge"] = df["val_kge_torch"] - df["val_kge_frozen"]
+    df["d_cal_kge"] = df["cal_kge_learned"] - df["cal_kge_reference"]
+    df["d_val_kge"] = df["val_kge_learned"] - df["val_kge_reference"]
     df.to_csv(out / "fidelity_benchmark.csv", index=False)
     _fidelity_figure(df, out / "figures" / "fidelity_benchmark.png")
-    _print_gates(df)
+    print(f"wrote {out / 'fidelity_benchmark.csv'}", flush=True)
     return df
-
-
-def _print_gates(df: pd.DataFrame) -> None:
-    ref = df[df["config"].str.startswith("ref-ninc")]
-    if len(ref):
-        best = ref.groupby("config")["kge_sim"].min().idxmax()
-        b = ref[ref["config"] == best]
-        g1 = (b["kge_sim"].min() >= 0.999
-              and b["d_cal_kge"].abs().max() <= 0.005
-              and b["d_val_kge"].abs().max() <= 0.005)
-        print(f"G1 structural [{best}]: min KGE {b['kge_sim'].min():.6f}, "
-              f"max|dKGE| {max(b['d_cal_kge'].abs().max(), b['d_val_kge'].abs().max()):.4f}"
-              f" -> {'PASS' if g1 else 'FAIL'}")
-    td = df[df["config"] == "train-default"]
-    if len(td):
-        g2 = (td["kge_sim"].min() >= 0.99
-              and td["d_cal_kge"].abs().max() <= 0.02
-              and td["d_val_kge"].abs().max() <= 0.02)
-        print(f"G2 train-default: min KGE {td['kge_sim'].min():.6f} "
-              f"-> {'PASS' if g2 else 'FAIL'}")
-    f32 = df[df["config"] == "train-default-f32"]
-    if len(td) and len(f32):
-        m = td.merge(f32, on="basin", suffixes=("_64", "_32"))
-        # float32-vs-float64 agreement, both scored against the same frozen truth
-        g3 = (m["kge_sim_32"] - m["kge_sim_64"]).abs().max() <= 1e-3
-        print(f"G3 precision: max |KGE_f32 - KGE_f64| "
-              f"{(m['kge_sim_32'] - m['kge_sim_64']).abs().max():.5f} "
-              f"-> {'PASS' if g3 else 'CHECK'}")
 
 
 def _fidelity_figure(df: pd.DataFrame, path: Path) -> None:
@@ -883,27 +368,26 @@ def _fidelity_figure(df: pd.DataFrame, path: Path) -> None:
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    configs = list(dict.fromkeys(df["config"]))
+    n_incs = list(dict.fromkeys(df["n_inc"]))
     basins = [b for b in BASINS if b in set(df["basin"])]
     fig, axes = plt.subplots(2, 1, figsize=(6.5, 5.2), dpi=300, sharex=True)
     x = np.arange(len(basins))
-    width = 0.8 / len(configs)
-    for c_i, c in enumerate(configs):
-        d = df[df["config"] == c].set_index("basin").reindex(basins)
-        axes[0].bar(x + c_i * width, d["kge_sim"], width, label=c)
-        axes[1].bar(x + c_i * width, d["max_abs_diff"], width, label=c)
-    axes[0].set_ylabel("sim-vs-sim daily KGE", fontsize=8)
-    axes[0].set_ylim(0.95, 1.001)
+    width = 0.8 / len(n_incs)
+    for c_i, c in enumerate(n_incs):
+        d = df[df["n_inc"] == c].set_index("basin").reindex(basins)
+        axes[0].bar(x + c_i * width, d["kge_sim"], width, label=f"n_inc {c}")
+        axes[1].bar(x + c_i * width, d["max_abs_diff"], width, label=f"n_inc {c}")
+    axes[0].set_ylabel("daily KGE, learned vs reference", fontsize=8)
+    axes[0].set_ylim(0.8, 1.001)
     axes[0].axhline(0.999, color="0.4", lw=0.6, ls="--")
-    axes[1].set_ylabel("max |torch − frozen| (mm/day)", fontsize=8)
+    axes[1].set_ylabel("max |learned − reference| (mm/day)", fontsize=8)
     axes[1].set_yscale("log")
     axes[1].set_xticks(x + 0.4 - width / 2)
     axes[1].set_xticklabels(basins, fontsize=7, rotation=45)
-    axes[0].legend(fontsize=6, ncol=2, frameon=False)
+    axes[0].legend(fontsize=6, ncol=5, frameon=False, loc="lower center")
     for ax in axes:
         ax.tick_params(labelsize=7)
-    fig.suptitle("dPL torch forward vs frozen reference — archived GA parameters",
-                 fontsize=9)
+    fig.suptitle("Learned numerics vs the reference model — archived GA optimum", fontsize=9)
     fig.tight_layout()
     fig.savefig(path)
     plt.close(fig)

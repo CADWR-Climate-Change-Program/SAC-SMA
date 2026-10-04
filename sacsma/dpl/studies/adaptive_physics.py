@@ -18,15 +18,11 @@ Two runs, left to right in the figure:
 The per-watershed figure is 4 metrics × 2 columns, each a filled contour of %
 change vs that run's own present climate.
 
-Physics is the fast frozen numba noah-lite core (``run_basin`` with
-``et_scheme='noah_lite'``, PT potential) — the same core that scores the frozen
-checkpoints.  The ``noah_noca`` runs are cached under ``artifacts/_local/cache/dtdp/``, the
-``noah`` runs under ``artifacts/_local/cache/adaptive/``.  The grid, the metrics and the
-regimes are those of :mod:`.surfaces`.
+Both run as trained on the engine (:func:`sacsma.dpl.evaluate.basin_daily`, cached).  The
+grid, the metrics and the regimes are those of :mod:`.surfaces`.
 """
 from __future__ import annotations
 
-import dataclasses as dc
 from pathlib import Path
 
 import numpy as np
@@ -35,9 +31,9 @@ import pandas as pd
 from ... import paths
 from ..._figures import plt  # noqa: F401  (house rcParams)
 from ...io import load_basin_area
+from ..hybrid.train import RESPONSE_ANCHORS as ANCHORS
 from .climatology import _basin_order
 from .surfaces import (
-    DOMAIN,
     DP,
     DT,
     METRICS,
@@ -46,12 +42,6 @@ from .surfaces import (
     aggregate_regime,
     metrics_from_daily,
 )
-
-CA_CKPT = paths.dpl_run(run="noah") / "checkpoints" / "best.pt"
-_CA_CACHE = paths.local(name="cache/adaptive")
-NOCA_DPL = paths.dpl_run(run="noah_noca") / "params_dpl.csv"        # frozen noah-lite SAC params
-NOCA_CANOPY = paths.dpl_run(run="noah_noca") / "params_canopy.csv"  # + soil_chi
-_NOCA_CACHE = paths.local(name="cache/dtdp")
 
 
 def _out(out_dir: str | Path | None) -> Path:
@@ -64,134 +54,12 @@ NOAH = "Noah"
 CA_ADAPTIVE = "Noah (climate-adaptive)"
 COL_ORDER = [NOAH, CA_ADAPTIVE]
 
-#: the 14 response-loss anchors of ``hybrid_dt`` (mirrors
-#: ``hybrids.ANCHORS``) — drawn on these physics surfaces too so the eye
-#: can cross-compare the same (Δp, ΔT) reference grid across all figure sets.
-ANCHORS = [(dp, dt) for dp in (-0.2, -0.1, 0.0, 0.1, 0.2) for dt in (0.0, 2.0, 4.0)
-           if not (dp == 0.0 and dt == 0.0)]
-
-_CA: dict | None = None   # in-process cache of the loaded noah net + baseline
-_FA = None                # in-process cache of the noah numba forcing
-_F0 = None                # in-process cache of the noah_noca numba forcing
-
-
-def noah_noca_daily(dp: float, dt: float, data_dir: str = "data") -> pd.DataFrame:
-    """``noah_noca`` daily basin flow (date x basin, mm/day) under (Δprecip fraction ``dp``,
-    ΔT ``dt``): the frozen numba noah-lite core on the perturbed forcing.  Cached to disk; the
-    loaded baseline forcing is reused across calls."""
-    cache = _NOCA_CACHE / f"frozen_dp{dp:+.2f}_dt{dt:+.1f}.csv"
-    if cache.exists():
-        return pd.read_csv(cache, parse_dates=["date"]).set_index("date")
-    global _F0
-    from ...cdec15 import BASINS
-    from ...model import attach_tminmax, load_domain_forcing, run_basin
-    if _F0 is None:
-        f = load_domain_forcing(data_dir, domain=DOMAIN)
-        attach_tminmax(data_dir, DOMAIN, f)
-        _F0 = f
-    fp = dc.replace(_F0, prcp=_F0.prcp * (1.0 + dp), tavg=_F0.tavg + dt,
-                    tmin=_F0.tmin + dt, tmax=_F0.tmax + dt, _f64={})
-    params = pd.read_csv(NOCA_DPL)
-    canopy = pd.read_csv(NOCA_CANOPY)
-    cols = {}
-    for b in BASINS:
-        s = run_basin(b, data_dir=data_dir, domain=DOMAIN, forcing=fp,
-                      params=params, parallel=True, pet_source="priestley_taylor",
-                      pt_snow_albedo=0.0, pt_dewpoint_depression=0.0,
-                      et_scheme="noah_lite", canopy_params=canopy)
-        cols[b] = s.set_index("date")["flow"]
-    df = pd.DataFrame(cols)
-    df.index.name = "date"
-    cache.parent.mkdir(parents=True, exist_ok=True)
-    df.round(6).to_csv(cache)
-    return df
-
-
-def _load_ca(data_dir: str = "data") -> dict:
-    """Load the noah net + present-climate (baseline) params once."""
-    global _CA
-    if _CA is not None:
-        return _CA
-    import numpy as _np
-
-    from ..evaluate import (export_canopy_params, export_params,
-                           load_net_from_checkpoint)
-    from ..features import FeatureSet
-    net, x0, dom, cfg, ck = load_net_from_checkpoint(CA_CKPT, data_dir)
-    if ck.get("variant") != "physical_climate":
-        raise ValueError(f"noah ckpt must be physical_climate, got "
-                         f"{ck.get('variant')!r}")
-    stats = FeatureSet(x=_np.empty((0, 0), _np.float32), **ck["features"])
-    _CA = dict(net=net, x0=x0, dom=dom, stats=stats,
-               base_dpl=export_params(net, dom, x0),
-               base_can=export_canopy_params(net, dom, x0))
-    return _CA
-
-
-def adaptive_params(dp: float, dt: float, data_dir: str = "data"):
-    """(dpl_df, canopy_df) with the climate indices recomputed on (dp,dt)-perturbed
-    forcing (physiographic features + z-scoring unchanged); exact at (0,0)."""
-    import torch
-
-    from ...io import soilveg_path
-    from ..evaluate import export_canopy_params, export_params
-    from ..features import build_features
-    C = _load_ca(data_dir)
-    if dp == 0.0 and dt == 0.0:
-        return C["base_dpl"], C["base_can"]
-    dom, stats, net, x0 = C["dom"], C["stats"], C["net"], C["x0"]
-    f = dom.forcing   # climate_indices uses prcp+tavg only (tmin/tmax may be None)
-    fp = dc.replace(f, prcp=f.prcp * (1.0 + dp), tavg=f.tavg + dt, _f64={})
-    fs = build_features(dom.hrus, variant="physical_climate", forcing=fp,
-                        climate_window=stats.climate_window,
-                        climate_product=stats.climate_product,
-                        physical_path=soilveg_path(data_dir, DOMAIN), stats=stats)
-    x = torch.as_tensor(fs.x).to(x0.device, x0.dtype)
-    return export_params(net, dom, x), export_canopy_params(net, dom, x)
-
-
-def noah_daily(dp: float, dt: float, mode: str,
-               data_dir: str = "data") -> pd.DataFrame:
-    """``noah`` daily basin flow (date x basin, mm/day) under (dp,dt), ``mode`` in
-    {``static``, ``adaptive``}.  Static = present-climate params on perturbed
-    forcing; adaptive = params recomputed under the perturbed climate.  Cached."""
-    dp, dt = dp + 0.0, dt + 0.0    # normalize IEEE -0.0 -> +0.0 (arange artifact)
-    cache = _CA_CACHE / f"{mode}_dp{dp:+.2f}_dt{dt:+.1f}.csv"
-    if cache.exists():
-        return pd.read_csv(cache, parse_dates=["date"]).set_index("date")
-    global _FA
-    from ...cdec15 import BASINS
-    from ...model import attach_tminmax, load_domain_forcing, run_basin
-    if _FA is None:
-        f = load_domain_forcing(data_dir, domain=DOMAIN)
-        attach_tminmax(data_dir, DOMAIN, f)
-        _FA = f
-    if mode == "adaptive":
-        dpl, can = adaptive_params(dp, dt, data_dir)
-    elif mode == "static":
-        C = _load_ca(data_dir)
-        dpl, can = C["base_dpl"], C["base_can"]
-    else:
-        raise ValueError(f"mode {mode!r}")
-    fp = dc.replace(_FA, prcp=_FA.prcp * (1.0 + dp), tavg=_FA.tavg + dt,
-                    tmin=_FA.tmin + dt, tmax=_FA.tmax + dt, _f64={})
-    cols = {}
-    for b in BASINS:
-        s = run_basin(b, data_dir=data_dir, domain=DOMAIN, forcing=fp, params=dpl,
-                      parallel=True, pet_source="priestley_taylor",
-                      pt_snow_albedo=0.0, pt_dewpoint_depression=0.0,
-                      et_scheme="noah_lite", canopy_params=can)
-        cols[b] = s.set_index("date")["flow"]
-    df = pd.DataFrame(cols)
-    df.index.name = "date"
-    cache.parent.mkdir(parents=True, exist_ok=True)
-    df.round(6).to_csv(cache)
-    return df
-
 
 def assemble(data_dir: str = "data") -> pd.DataFrame:
     """Long metrics table: one row per (basin, model, dp, dt) with the 4 raw
     metrics + their signed % change vs that model's own (0, 0) baseline."""
+    from ..evaluate import basin_daily
+
     areas = load_basin_area(data_dir, domain="15cdec").set_index(
         "basin")["area_mi2"].to_dict()
     grid = [(float(dp), float(dt)) for dp in DP for dt in DT]
@@ -205,9 +73,10 @@ def assemble(data_dir: str = "data") -> pd.DataFrame:
                                                            "q999", "q30")}))
 
     for i, (dp, dt) in enumerate(grid):
-        _emit(NOAH, dp, dt, metrics_from_daily(noah_noca_daily(dp, dt, data_dir), areas))
-        _emit(CA_ADAPTIVE, dp, dt,
-              metrics_from_daily(noah_daily(dp, dt, "adaptive", data_dir), areas))
+        _emit(NOAH, dp, dt, metrics_from_daily(
+            basin_daily("noah_noca", data_dir=data_dir, dp=dp, dt=dt), areas))
+        _emit(CA_ADAPTIVE, dp, dt, metrics_from_daily(
+            basin_daily("noah", data_dir=data_dir, dp=dp, dt=dt), areas))
         print(f"  [{i + 1}/{len(grid)}] ({dp:+.2f},{dt:+.1f}) done", flush=True)
 
     tbl = pd.DataFrame(rows)

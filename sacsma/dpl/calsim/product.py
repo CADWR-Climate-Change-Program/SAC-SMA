@@ -45,7 +45,7 @@ Usage::
 
     sacsma dpl calsim product fit <run_dir> [--scenarios DIR ...] [--out DIR] [--data-dir data]
                                   [--mu MU] [--holdout-wy A-B] [--epochs N] [--threads N]
-    sacsma dpl calsim product apply --tier2 DIR --forcing NAME [--wy A-B] [--share-model PT]
+    sacsma dpl calsim product apply --forcing NAME [--tier2 DIR] [--wy A-B] [--share-model PT]
                                     [--out DIR] [--data-dir data]
 
 ``fit`` writes the share model and its records to ``artifacts/product/calsim3/``
@@ -53,8 +53,9 @@ Usage::
 needs), ``share_selection.csv`` (the out-of-fold candidates), ``response_gate.csv`` and
 ``product_info.json`` (with the scores
 of the dPL arcs and of the product on the held-out water years of the base pass).  ``apply``
-runs the fitted model on a tier-2 pass with runoff parts (``sacsma dpl calsim tier2
---components parts``, on any ``--forcing`` and envelope) and writes the product of one forcing
+runs the tier-2 pass of the fitted run on ``--forcing`` over the whole record (a minute on the
+CPU engine; ``--tier2`` uses an existing pass with runoff parts instead), runs the fitted model
+on it and writes the product of one forcing
 to ``artifacts/product/calsim3/<forcing>/`` unless ``--out`` names another folder:
 ``rim_inflow_monthly.csv`` (``arc, month, taf, dpl_taf, kind``) over the complete water years of
 the pass (``--wy`` narrows them), ``tier2/`` (the two tables of the pass and its
@@ -101,6 +102,8 @@ VALIDATION_POINTS = {"t25": (2.5, 1.0), "p95": (0.0, 0.95), "p105": (0.0, 1.05),
                      "t25p95": (2.5, 0.95), "t25p105": (2.5, 1.05)}
 #: the water years the share model is fitted and scored on
 PRODUCT_WY = (1950, 2015)
+#: the first day of a forcing's pass (the first complete water year of every forcing record)
+PASS_START = "1915-10-01"
 MUS = (0.03, 0.1, 0.3)
 EPOCHS = 300
 N_BLOCKS = 7
@@ -620,16 +623,33 @@ def fit_product(run_dir: str | Path, scenario_dirs=None, out: str | Path | None 
             + f"\nfull gate: {'PASS' if ok else 'FAIL'}")
     (out / "product_info.json").write_text(json.dumps(info, indent=1))
     log(f"calsim_product: wrote {out}; the series of a forcing: sacsma dpl calsim product apply "
-        "--tier2 <pass> --forcing <name>")
+        "--forcing <name>")
     return dict(model=model, product=prod, metrics=M, Q=Q, frame=F.B, info=info)
 
 
-def apply_product(tier2_dir: str | Path, forcing: str, share_model: str | Path | None = None,
-                  out: str | Path | None = None, data_dir: str | Path = "data", wy=None,
-                  log=print) -> pd.DataFrame:
+def run_pass(run: str, forcing: str, data_dir: str | Path = "data") -> Path:
+    """The tier-2 pass with runoff parts of ``run`` on ``forcing`` over the whole record, in
+    ``_local/product/calsim3/<forcing>/tier2`` (the extension cells' flow lengths of the run's
+    own tier-2 pass, when it has one)."""
+    from .tier2 import main as tier2_main
+    run_dir = paths.dpl_run(run=run, domain="multifamily")
+    d = paths.local(name=f"product/calsim3/{forcing}") / "tier2"
+    ext = paths.run_roles(run_dir).local / "tier2" / "tier2_extension_cells.csv"
+    tier2_main([str(run_dir), "--out", str(d), "--forcing", forcing, "--start", PASS_START,
+                "--components", "parts", "--no-maps"]
+               + (["--extension-cells", str(ext)] if ext.exists() else []))
+    return d
+
+
+def apply_product(tier2_dir: str | Path | None, forcing: str,
+                  share_model: str | Path | None = None, out: str | Path | None = None,
+                  data_dir: str | Path = "data", wy=None, log=print) -> pd.DataFrame:
     """Write the product of one forcing (module docstring): the series over ``wy`` (default:
-    every complete water year of the pass), the pass, and for a historical forcing its scores."""
+    every complete water year of the pass), the pass, and for a historical forcing its scores.
+    ``tier2_dir`` None runs the pass first (:func:`run_pass`)."""
     model = torch.load(share_model or paths.product() / "share_model.pt", weights_only=False)
+    if tier2_dir is None:
+        tier2_dir = run_pass(model["run"], forcing, data_dir)
     out = Path(out) if out else paths.product(forcing=forcing)
     out.mkdir(parents=True, exist_ok=True)
     wy = tuple(wy) if wy else pass_wy(tier2_dir)
@@ -666,8 +686,10 @@ def main(argv=None, prog=None) -> None:
     f.add_argument("--epochs", type=int, default=EPOCHS)
     f.add_argument("--threads", type=int, default=8,
                    help="torch CPU threads (the fit reproduces at the same count)")
-    g = sub.add_parser("apply", help="the product of one forcing, from its tier-2 pass")
-    g.add_argument("--tier2", required=True, help="the tier-2 pass (with --components parts)")
+    g = sub.add_parser("apply", help="the product of one forcing: its tier-2 pass, then the "
+                                      "share model")
+    g.add_argument("--tier2", default=None,
+                   help="an existing tier-2 pass (with --components parts) instead of running it")
     g.add_argument("--forcing", required=True,
                    help="the forcing of the pass (its --forcing name, or a scenario's name)")
     g.add_argument("--wy", default=None, metavar="A-B",

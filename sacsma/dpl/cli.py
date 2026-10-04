@@ -38,8 +38,7 @@ STUDIES: dict[str, tuple[str, str, str]] = {
 def _dpl_benchmark(args: argparse.Namespace) -> int:
     from .evaluate import fidelity_benchmark
 
-    fidelity_benchmark(args.data_dir, args.out, configs=args.configs,
-                       device=args.device, chunk_days=args.chunk_days)
+    fidelity_benchmark(args.data_dir, args.out)
     return 0
 
 
@@ -90,8 +89,7 @@ def _dpl_train(args: argparse.Namespace) -> int:
     from .train import train
 
     cfg = DplConfig(
-        n_inc=args.n_inc, perc_mode=args.perc_mode,
-        fracp_floor=args.fracp_floor, dtype=args.dtype, device=args.device,
+        n_inc=args.n_inc, fracp_floor=args.fracp_floor, dtype=args.dtype, device=args.device,
         loss=args.loss, log_loss_lambda=args.log_lambda,
         var_loss_lambda=args.var_lambda, bias_loss_lambda=args.bias_lambda,
         timing_loss_lambda=args.timing_lambda,
@@ -124,18 +122,11 @@ def _dpl_train(args: argparse.Namespace) -> int:
         spatial_reg_k=args.spatial_reg_k,
         spatial_reg_attr_scale=args.spatial_reg_attr_scale,
         adaptive_loss=args.adaptive_loss, adaptive_loss_beta=args.adaptive_beta,
-        seasonal_params=(tuple(args.seasonal.split(",")) if args.seasonal else ()),
-        seasonal_amp=args.seasonal_amp,
-        seasonal_amp_frac=args.seasonal_amp_frac,
         et_mode=args.et, noah_pet=args.noah_pet, sac_pet=args.sac_pet,
         pt_snow_albedo=args.pt_snow_albedo,
         pt_dewpoint_depression=args.pt_dewpoint_depression,
-        canopy_lite=args.canopy_lite,
         noah_sac_exchanges=args.noah_sac_exchanges,
         calsim_footprint=args.calsim_footprint,
-        dynamic_params=(tuple(args.dynamic_params.split(","))
-                        if args.dynamic_params else ()),
-        dynamic_amp=args.dynamic_amp, dynamic_window=args.dynamic_window,
         mt_family_weight=args.mt_family_weight,
         mt_share_norm=args.mt_share_norm, mt_select_weight=args.mt_select_weight,
         mt_loss_ref=args.mt_loss_ref, mt_loss_ref_power=args.mt_loss_ref_power,
@@ -161,44 +152,37 @@ def _dpl_evaluate(args: argparse.Namespace) -> int:
         # multi-timescale checkpoints score per entity at native timescales
         from .evaluate_multi_timescale import evaluate_checkpoint_mt
 
-        if args.temp_delta:
-            raise ValueError("--temp-delta is not wired for the "
-                             "multi-timescale domain")
         evaluate_checkpoint_mt(args.checkpoint, data_dir=args.data_dir,
                                out_dir=args.out,
                                hydrographs=args.hydrographs,
-                               spinup=args.spinup, dedup_cells=args.dedup_cells)
+                               spinup=args.spinup)
         return 0
-    if args.dedup_cells:
-        raise ValueError("--dedup-cells is wired for multi-timescale checkpoints only")
-    evaluate_checkpoint(args.checkpoint, data_dir=args.data_dir,
-                        out_dir=args.out, parallel=not args.serial,
-                        temp_delta=args.temp_delta)
+    evaluate_checkpoint(args.checkpoint, data_dir=args.data_dir, out_dir=args.out)
     return 0
 
 
 def _dpl_hybrid(args: argparse.Namespace) -> int:
+    import torch
+
     from .. import paths
     from .hybrid.evaluate import score_hybrid
-    from .hybrid.train import HybridConfig, train_hybrid
+    from .hybrid.train import RESPONSE_ANCHORS, HybridConfig, train_hybrid
 
     out = args.out or paths.local(name="testing/hybrid")
-    physics = (None if str(args.physics).lower() in ("", "none", "ga")
-               else args.physics)
+    domain = args.domain
+    if args.physics:
+        ck = paths.dpl_checkpoint(run=args.physics)
+        domain = torch.load(ck, map_location="cpu", weights_only=False).get("domain", "15cdec")
+    anchors = (tuple({"dp": dp, "dt": dt, "lambda": args.response_lambda}
+                     for dp, dt in RESPONSE_ANCHORS) if args.response_lambda > 0 else ())
     cfg = HybridConfig(
         use_statics=args.statics, n_epochs=args.epochs,
         hidden=args.hidden, dropout=args.dropout, lr=args.lr,
         batch_size=args.batch_size, device=args.device, seed=args.seed,
-        input_noise=args.input_noise,
-        use_doy=not args.no_doy, use_pet=args.pet_input,
-        temp_lambda=args.temp_lambda, temp_delta=args.temp_delta,
-        temp_sim_cache=args.temp_sim_cache,
-        physics_domain=args.physics_domain, pet_source=args.sac_pet,
-        pt_snow_albedo=args.pt_snow_albedo,
-        pt_dewpoint_depression=args.pt_dewpoint_depression,
-        physics_et_scheme=args.physics_et, canopy_csv=args.canopy_params)
-    train_hybrid(cfg, data_dir=args.data_dir, out_dir=out,
-                 physics_csv=physics, sim_cache=args.sim_cache)
+        input_noise=args.input_noise, use_doy=not args.no_doy, use_pet=args.pet_input,
+        use_sim=bool(args.physics), physics=args.physics or "", physics_domain=domain,
+        response_anchors=anchors)
+    train_hybrid(cfg, data_dir=args.data_dir, out_dir=out)
     run = paths.run_roles(out)
     score_hybrid(run.model / "checkpoints" / "best.pt",
                  data_dir=args.data_dir, out_dir=run.local)
@@ -241,6 +225,8 @@ def _dpl_study(args: argparse.Namespace) -> int:
 
 def register(sub) -> None:
     """Add the ``dpl`` command and its sub-commands to the top-level ``sacsma`` parser."""
+    from .config import DplConfig
+
     dpl = sub.add_parser(
         "dpl",
         help="differentiable parameter learning (torch): train, evaluate, the CalSim3 rim-arc "
@@ -249,19 +235,13 @@ def register(sub) -> None:
     dpl_sub = dpl.add_subparsers(dest="dpl_command", required=True)
     bm = dpl_sub.add_parser(
         "benchmark",
-        help="fidelity benchmark: archived GA params through the torch forward "
-             "vs the frozen reference -> artifacts/results/dpl/15cdec/benchmark/",
+        help="fidelity benchmark: the archived GA optimum through the learned numerics "
+             "(n_inc 1-20) vs the reference model, on the CPU engine "
+             "-> artifacts/results/dpl/15cdec/benchmark/",
     )
     bm.add_argument("--data-dir", default="data", help="organized data/ store")
     bm.add_argument("--out", default=None,
                     help="output dir (default: artifacts/results/dpl/15cdec/benchmark)")
-    bm.add_argument("--configs", nargs="+", default=None,
-                    help="subset of named numerics configs (default: all; see "
-                         "dpl.evaluate.FIDELITY_CONFIGS)")
-    bm.add_argument("--device", default="cuda", choices=["cuda", "cpu"],
-                    help="torch device (default: cuda; GPU is asserted)")
-    bm.add_argument("--chunk-days", type=int, default=4096,
-                    help="streaming chunk length in days (memory knob)")
     bm.set_defaults(func=_dpl_benchmark)
 
     tr = dpl_sub.add_parser(
@@ -330,20 +310,18 @@ def register(sub) -> None:
                          "Lbar / L_ref_f^p (1 = equal loss mass at the reference; 0.5 = "
                          "matches the families' optimizer-step shares at trained states)")
     tr.add_argument("--et", default="sac", choices=["sac", "noah"],
-                    help="ET scheme: sac = frozen Hamon PET (scorable via "
-                         "run_basin); noah = Noah canopy-resistance ET (NEW "
-                         "physics, needs per-cell tmin/tmax = 15cdec_grid or "
-                         "multifamily, scored via the torch pipeline)")
+                    help="ET: sac = the SAC-SMA ET cascade; noah = the Noah-lite ET "
+                         "(bare soil + canopy on the observed green fraction, one learned "
+                         "exponent soil_chi; needs the observed veg/LAI tables = "
+                         "15cdec_grid or multifamily)")
     tr.add_argument("--noah-pet", default="hamon",
                     choices=["hamon", "priestley_taylor"],
-                    help="Noah potential-ET source: hamon = temperature-only "
-                         "(low ET ceiling); priestley_taylor = energy-based from "
-                         "Bristow-Campbell net radiation (lifts the ceiling)")
+                    help="the potential ET of the Noah-lite ET: hamon = temperature-only; "
+                         "priestley_taylor = energy-based from Bristow-Campbell net "
+                         "radiation (needs per-cell tmin/tmax)")
     tr.add_argument("--sac-pet", default="hamon",
                     choices=["hamon", "priestley_taylor"],
-                    help="PET source for the PLAIN SAC ET (et=sac): priestley_taylor "
-                         "drives the frozen SAC ET with energy-based PET, no Noah "
-                         "canopy module")
+                    help="the PET of the SAC-SMA ET (--et sac): hamon or priestley_taylor")
     tr.add_argument("--pt-snow-albedo", type=float, default=0.0, metavar="ALBEDO",
                     help="raise the Priestley-Taylor albedo toward this value over "
                          "snow (Snow-17 SWE-driven; ~0.5-0.7 bright snow); 0 = fixed "
@@ -352,40 +330,25 @@ def register(sub) -> None:
                     help="max dewpoint depression (degC) below Tmin in arid air for "
                          "the PT net-longwave term, scaled by diurnal range; 0 = "
                          "Tdew=Tmin (any PT PET: sac-pet OR noah-pet = priestley_taylor)")
-    tr.add_argument("--canopy-lite", action="store_true",
-                    help="minimal identifiable Noah ET: AET=beta(soil moisture)*PET "
-                         "with ONE learned exponent (soil_chi); drops the Jarvis "
-                         "resistance, froot, redist_k and the separate canopy trunk "
-                         "(needs --et noah; --noah-pet still selects the potential)")
     tr.add_argument("--noah-sac-exchanges", action="store_true",
-                    help="Noah ET replaces only the SAC E1-E3 withdrawals: keep the "
+                    help="Noah-lite replaces only the SAC E1-E3 withdrawals: keep the "
                          "upper free->tension rebalance, the lower free->tension "
                          "resupply (rserv) and the ADIMP ET(5) of the reference ET "
-                         "block (off: the external-ET path skips all three; needs --canopy-lite)")
+                         "block (off: the external-ET path skips all three; needs --et noah)")
     tr.add_argument("--calsim-footprint", action="store_true",
                     help="re-foot basin aggregation onto the CalSim3 catchments "
                          "(overlap weights) to correct the coarse-grid footprint "
                          "over-reach; the 4 Tulare/Kern basins keep full footprint "
                          "(15cdec domains only: no effect on multifamily, whose "
                          "entity weights are already footprint overlaps)")
-    tr.add_argument("--dynamic-params", default="",
-                    help="comma list of params made climate-state-dependent "
-                         "(Kpet | canopy params e.g. soil_chi); '' = static")
-    tr.add_argument("--dynamic-window", type=int, default=365,
-                    help="trailing-precip window (days) for the wetness state index")
-    tr.add_argument("--dynamic-amp", type=float, default=0.5,
-                    help="tanh cap on the state-response coeff |b|")
     tr.add_argument("--out", default=None,
                     help="output dir (default: artifacts/models/dpl/<domain>/<variant>)")
     tr.add_argument("--device", default="cuda", choices=["cuda", "cpu"],
                     help="torch device (default: cuda; GPU is asserted)")
     tr.add_argument("--epochs", type=int, default=60)
-    tr.add_argument("--n-inc", type=int, default=10,
-                    help="fixed SAC-SMA substep count (fidelity-gate choice: "
-                         "ref-ninc10, obs-KGE delta <= 0.0102 all basins)")
-    tr.add_argument("--perc-mode", default="reference",
-                    choices=["reference", "implicit", "tanh"])
-    tr.add_argument("--fracp-floor", type=float, default=1e-3,
+    tr.add_argument("--n-inc", type=int, default=DplConfig.n_inc,
+                    help="fixed SAC-SMA substep count a day (sacsma dpl benchmark)")
+    tr.add_argument("--fracp-floor", type=float, default=DplConfig.fracp_floor,
                     help="LZ fill-fraction denominator floor: bounds the one "
                          "unbounded division's backward; engages only above "
                          "99.9%% LZ saturation")
@@ -432,7 +395,7 @@ def register(sub) -> None:
     tr.add_argument("--init-from", default="",
                     help="warm-start checkpoint (e.g. a baseline best.pt): net "
                          "weights load strict=False so fresh zero-init heads "
-                         "(e.g. --seasonal) start EXACTLY at the donor's field, "
+                         "(e.g. --learn-pxtemp) start EXACTLY at the donor's field, "
                          "and the donor's feature standardization is reused "
                          "(exact start even on a different --basins subset); "
                          "fresh optimizer/scheduler — pair with a low --lr for "
@@ -473,21 +436,6 @@ def register(sub) -> None:
                          "(reweight toward the worst-fitting basins each eval)")
     tr.add_argument("--adaptive-beta", type=float, default=1.0,
                     help="exponent on (1 - cal_KGE) for the adaptive weights")
-    tr.add_argument("--seasonal", nargs="?", const="Kpet,uzk,lzpk,lzsk", default=None,
-                    metavar="P1,P2,...",
-                    help="give these params a day-of-year harmonic shape (bare flag "
-                         "= Kpet,uzk,lzpk,lzsk); the net emits 2 zero-init coeffs each "
-                         "so the field is exactly static at init")
-    tr.add_argument("--seasonal-amp", type=float, default=0.18,
-                    help="tanh cap on the harmonic coeffs |a_sin|,|a_cos| (additive "
-                         "param units); hard-bounds the day-of-year swing so it "
-                         "cannot diverge (0.18 ~ +/-25%% of Kpet~1)")
-    tr.add_argument("--seasonal-amp-frac", type=float, default=0.10,
-                    help="PER-PARAM harmonic cap as a fraction of each seasonal "
-                         "param's bound range (supersedes --seasonal-amp): each "
-                         "param gets a comparable RELATIVE day-of-year swing, so a "
-                         "mixed set (Kpet + melt factors) is balanced (0.10 -> Kpet "
-                         "+/-0.21, MFMAX/MFMIN +/-0.50, MBASE +/-0.50)")
     tr.add_argument("--learn-pxtemp", action="store_true",
                     help="learn the Snow-17 rain/snow threshold PXTEMP per cell (else "
                          "the fixed 0 degC): zero-init head, hard split forward, "
@@ -631,8 +579,8 @@ def register(sub) -> None:
 
     ev = dpl_sub.add_parser(
         "evaluate",
-        help="checkpoint -> params_dpl.csv -> FROZEN-model cal/val metrics + "
-             "figures (all reported dPL skill comes from this path)",
+        help="checkpoint -> parameter tables, then the field as trained on the CPU engine "
+             "-> metrics, daily series and figures (all reported dPL skill comes from here)",
     )
     ev.add_argument("checkpoint", help="path to checkpoints/best.pt")
     ev.add_argument("--data-dir", default="data", help="organized data/ store")
@@ -640,13 +588,6 @@ def register(sub) -> None:
                     help="the run to write (any of its folders; default: the run of "
                          "the checkpoint): parameter tables go to its model folder, "
                          "scores and figures to its results folder")
-    ev.add_argument("--serial", action="store_true",
-                    help="disable the parallel (numba prange) frozen model")
-    ev.add_argument("--temp-delta", type=float, default=0.0,
-                    help="add a uniform delta (degC) to tavg/tmin/tmax and dump "
-                         "the perturbed daily sim (torch path only; the files get a "
-                         "_plus<dT>C suffix, the figures are skipped) — the "
-                         "TEACHER for the hybrid temperature-consistency loss")
     ev.add_argument("--hydrographs", default="review",
                     choices=["review", "all", "none"],
                     help="multi-timescale checkpoints only: which per-entity "
@@ -656,11 +597,7 @@ def register(sub) -> None:
                     help="multi-timescale checkpoints only: state at the envelope "
                          "start — cycle = loop its first ten water years 20 times "
                          "from the cold start (timing-independent, default); window "
-                         "= the legacy ten water years before it")
-    ev.add_argument("--dedup-cells", action="store_true",
-                    help="multi-timescale checkpoints only: run the per-cell physics "
-                         "once per distinct grid cell (routing per (entity, cell) row); "
-                         "same flows to float round-off, less compute")
+                         "= the ten water years before it")
     ev.set_defaults(func=_dpl_evaluate)
 
     hy = dpl_sub.add_parser(
@@ -669,37 +606,15 @@ def register(sub) -> None:
              "channel) on the 15cdec daily basis -> artifacts/_local/testing/hybrid/ "
              "(local scratch; the tracked ensembles are under artifacts/models/dpl/15cdec/)",
     )
-    hy.add_argument("--physics", required=True,
-                    help="frozen SAC-SMA parameter table for the physics baseline "
-                         "(REQUIRED, no default); 'GA' or '' -> archived GA optimum. "
-                         "Must match --physics-domain (validated at load: fine "
-                         "15cdec ~6033 keys, 15cdec_grid ~2074).")
-    hy.add_argument("--physics-domain", default="15cdec",
-                    choices=["15cdec", "15cdec_grid"],
-                    help="HRU resolution of the frozen sim + forcing features "
-                         "(default: 15cdec fine; 15cdec_grid for the pt/noah "
-                         "grid exports)")
-    hy.add_argument("--sac-pet", default="hamon",
-                    choices=["hamon", "priestley_taylor"],
-                    help="PET source of the frozen sim -- MUST match the --physics "
-                         "export (priestley_taylor for pt/noah)")
-    hy.add_argument("--pt-snow-albedo", type=float, default=0.0,
-                    help="PT snow-cover albedo refinement, match the export "
-                         "(pt = 0.6; needs --sac-pet priestley_taylor)")
-    hy.add_argument("--pt-dewpoint-depression", type=float, default=0.0,
-                    help="PT arid dewpoint-depression refinement, match the export "
-                         "(pt = 2.0; needs --sac-pet priestley_taylor)")
-    hy.add_argument("--physics-et", default="sac",
-                    choices=["sac", "noah_lite"],
-                    help="frozen-sim ET scheme: sac = the E1-E5 cascade; noah_lite "
-                         "= the Noah-lite external ET (noah; forces PT, "
-                         "needs --canopy-params)")
-    hy.add_argument("--canopy-params", default="",
-                    help="params_canopy.csv (soil_chi) for --physics-et noah_lite")
-    hy.add_argument("--sim-cache", default=None,
-                    help="cache path for the frozen 15-basin daily sim (default: a "
-                         "physics-tagged file in the run's parent dir; delete it if "
-                         "you change the --physics export or PT knobs)")
+    hy.add_argument("--physics", default="",
+                    help="the 15-CDEC learned run whose daily flow, as trained, is the physics "
+                         "channel (e.g. noah); empty: a pure LSTM on the forcing")
+    hy.add_argument("--domain", default="15cdec", choices=["15cdec", "15cdec_grid"],
+                    help="the forcing domain of a pure LSTM (with --physics: the physics run's)")
+    hy.add_argument("--response-lambda", type=float, default=0.0,
+                    help="weight of the response-consistency loss at the 14 (dprecip, dT) "
+                         "anchors (dp 0, +-10, +-20 %%, dT 0, 2, 4 degC): pull the hybrid's "
+                         "response toward the physics run's (0 = off)")
     hy.add_argument("--statics", action="store_true",
                     help="add per-basin static features (elev/flowlen/precip/snow)")
     hy.add_argument("--no-doy", action="store_true",
@@ -712,17 +627,6 @@ def register(sub) -> None:
                          "— the noah energy demand, recomputed from forcing) as "
                          "an LSTM input channel: a physics-shaped temperature "
                          "pathway")
-    hy.add_argument("--temp-lambda", type=float, default=0.0,
-                    help="temperature-consistency loss weight: pull the hybrid's "
-                         "daily warming response Q(T+dT)-Q(T) toward the physics "
-                         "response (0 disables; needs --temp-sim-cache)")
-    hy.add_argument("--temp-delta", type=float, default=2.0,
-                    help="the perturbation (degC) baked into --temp-sim-cache "
-                         "(must match the --temp-delta the teacher was dumped with)")
-    hy.add_argument("--temp-sim-cache", default="",
-                    help="teacher daily-sim CSV: the SAME physics as --sim-cache "
-                         "re-run under +temp_delta (`sacsma dpl evaluate <physics "
-                         "ckpt> --temp-delta <dT>`)")
     hy.add_argument("--data-dir", default="data", help="organized data/ store")
     hy.add_argument("--out", default=None,
                     help="output dir (default: artifacts/_local/testing/hybrid)")

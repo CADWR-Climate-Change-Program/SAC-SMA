@@ -14,8 +14,7 @@ anchor) and the hybrid's daily response ``pred_a - pred`` is pulled toward the
 physics response ``(sim_a - sim)/scale`` by MSE × the anchor weight.  The LSTM
 keeps its within-climate skill but inherits the physics' climate sensitivity —
 the counter to the regime-conditional volume bias cal-only training injects
-under a shifted validation climate.  The legacy ``temp_lambda``/``temp_delta``/
-``temp_sim_cache`` knobs are the single-ΔT special case (one anchor, dp=0).
+under a shifted validation climate.
 """
 
 from __future__ import annotations
@@ -32,6 +31,11 @@ from ...metrics import kge
 from ..config import pick_device
 from .data import load_hybrid_data
 from .model import HybridLSTM
+
+#: the (Δprecip, ΔT) response anchors of ``hybrid_dt``: Δp in ±10, ±20 % and 0, ΔT in 0, 2,
+#: 4 degC, without the present climate
+RESPONSE_ANCHORS = tuple((dp, dt) for dp in (-0.2, -0.1, 0.0, 0.1, 0.2) for dt in (0.0, 2.0, 4.0)
+                         if not (dp == 0.0 and dt == 0.0))
 
 
 @dataclass
@@ -53,24 +57,11 @@ class HybridConfig:
     #: physics baseline input) on the meteorology + PET + statics — the
     #: no-physics ablation baseline.  Incompatible with the response loss.
     use_sim: bool = True
-    physics_domain: str = "15cdec"   # HRU resolution of the frozen sim + forcing
-    pet_source: str = "hamon"        # "hamon" | "priestley_taylor" (match --physics)
-    pt_snow_albedo: float = 0.0      # PT snow-albedo refinement (pt = 0.6)
-    pt_dewpoint_depression: float = 0.0   # PT dewpoint refinement (pt = 2.0)
-    physics_et_scheme: str = "sac"   # "sac" | "noah_lite" (Noah-lite external ET)
-    canopy_csv: str = ""             # params_canopy.csv (soil_chi) for noah_lite
-    #: temperature-consistency loss weight; 0 disables (no second forward).
-    temp_lambda: float = 0.0
-    #: the perturbation (degC) baked into ``temp_sim_cache`` — must match the
-    #: --temp-delta the teacher sim was dumped with.
-    temp_delta: float = 2.0
-    #: teacher daily-sim CSV: the SAME physics as the sim channel, re-run with
-    #: tavg/tmin/tmax + temp_delta (`sacsma dpl evaluate <ckpt> --temp-delta`).
-    temp_sim_cache: str = ""
-    #: explicit (Δprecip, ΔT) response anchors for the multi-anchor
-    #: response-consistency loss.  Each = {"dp": frac, "dt": degC, "lambda": w,
-    #: "sim_cache": teacher daily-sim CSV under (dp, dt)}.  Composes with the
-    #: legacy temp_* single-ΔT anchor (which is prepended when temp_lambda > 0).
+    #: the 15-CDEC learned run whose daily flow is the physics channel (e.g. ``noah``)
+    physics: str = ""
+    physics_domain: str = "15cdec"   # the domain of the forcing features (and of the physics)
+    #: (Δprecip, ΔT) response anchors of the response-consistency loss, each
+    #: {"dp": frac, "dt": degC, "lambda": w}; the physics run supplies the response.
     response_anchors: tuple = ()
     lr: float = 4e-4
     weight_decay: float = 1e-4
@@ -88,13 +79,9 @@ class HybridConfig:
     device: str = "cuda"
 
     def __post_init__(self):
-        if self.temp_lambda > 0 and not self.temp_sim_cache:
-            raise ValueError("temp_lambda > 0 requires temp_sim_cache "
-                             "(the physics daily sim under temp_delta)")
         for a in self.response_anchors:
-            if not a.get("sim_cache") or "lambda" not in a:
-                raise ValueError("each response anchor needs 'sim_cache', "
-                                 "'lambda' (and 'dp', 'dt'): got " + repr(a))
+            if set(a) != {"dp", "dt", "lambda"}:
+                raise ValueError(f"a response anchor is {{dp, dt, lambda}}: got {a!r}")
 
 
 def _denorm_flow(pred_norm, data, bb):
@@ -130,44 +117,16 @@ def pooled_kge(model, data, split: str) -> tuple[float, list[float]]:
     return (float(np.mean(finite)) if finite else float("nan")), ks
 
 
-def train_hybrid(cfg: HybridConfig, *, data_dir: str = "data",
-                 out_dir: str | Path, physics_csv: str | Path | None = None,
-                 sim_cache: str | Path | None = None) -> dict:
+def train_hybrid(cfg: HybridConfig, *, data_dir: str = "data", out_dir: str | Path) -> dict:
     dev = pick_device(cfg.device)
     torch.manual_seed(cfg.seed)
-    run = paths.run_roles(out_dir)
-    out = run.model                 # the checkpoint and the training log
+    out = paths.run_roles(out_dir).model     # the checkpoint and the training log
     out.mkdir(parents=True, exist_ok=True)
-    if sim_cache is None:
-        # physics-tagged so distinct baselines never share a stale sim cache
-        # (et_scheme appended only when != "sac" so existing caches stay valid)
-        tag = f"frozen_sim_{cfg.physics_domain}_{cfg.pet_source}"
-        if cfg.physics_et_scheme != "sac":
-            tag += f"_{cfg.physics_et_scheme}"
-        sim_cache = run.local.parent / f"{tag}.csv"     # a cache, beside the run
-
-    # unified response anchors: the legacy ΔT term (temp_*) first, then any
-    # explicit (dp, dt) anchors.  Same math for the n=1 ΔT case as before.
-    anchors: list[dict] = []
-    if cfg.temp_lambda > 0:
-        anchors.append({"dp": 0.0, "dt": cfg.temp_delta,
-                        "lambda": cfg.temp_lambda,
-                        "sim_cache": cfg.temp_sim_cache})
-    anchors.extend(dict(a) for a in cfg.response_anchors)
+    anchors = [dict(a) for a in cfg.response_anchors]
     anchor_lambdas = [float(a["lambda"]) for a in anchors]
-
-    data = load_hybrid_data(data_dir, physics_csv=physics_csv,
-                            sim_cache=sim_cache, use_statics=cfg.use_statics,
-                            use_doy=cfg.use_doy, use_pet=cfg.use_pet,
-                            use_sim=cfg.use_sim,
-                            domain=cfg.physics_domain, pet_source=cfg.pet_source,
-                            pt_snow_albedo=cfg.pt_snow_albedo,
-                            pt_dewpoint_depression=cfg.pt_dewpoint_depression,
-                            et_scheme=cfg.physics_et_scheme,
-                            canopy_csv=cfg.canopy_csv or None,
-                            response_anchors=[{k: a[k] for k in
-                                               ("dp", "dt", "sim_cache")}
-                                              for a in anchors],
+    data = load_hybrid_data(data_dir, physics=cfg.physics, use_statics=cfg.use_statics,
+                            use_doy=cfg.use_doy, use_pet=cfg.use_pet, use_sim=cfg.use_sim,
+                            domain=cfg.physics_domain, response_anchors=tuple(anchors),
                             device=dev)
     model = HybridLSTM(data.n_feat, data.n_static,
                        hidden=cfg.hidden, static_embed=cfg.static_embed,
@@ -261,9 +220,7 @@ def train_hybrid(cfg: HybridConfig, *, data_dir: str = "data",
 
     if best_state is not None:
         model.load_state_dict(best_state)
-    ckpt = {"model": model.state_dict(), "cfg": asdict(cfg),
-            "physics_csv": str(physics_csv) if physics_csv else None,
-            "sim_cache": str(sim_cache), "n_feat": data.n_feat,
+    ckpt = {"model": model.state_dict(), "cfg": asdict(cfg), "n_feat": data.n_feat,
             "n_static": data.n_static, "best_cal_kge": best}
     (out / "checkpoints").mkdir(exist_ok=True)
     torch.save(ckpt, out / "checkpoints" / "best.pt")

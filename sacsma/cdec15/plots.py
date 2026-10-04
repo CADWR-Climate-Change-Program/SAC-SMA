@@ -1,6 +1,6 @@
 """15-CDEC calibration/validation diagnostics: simulated vs. observed gage flow.
 
-Runs the forward model (``run_basin``) for the 15 CDEC basins and compares to
+Runs the forward model (``run_basins``) for the 15 CDEC basins and compares to
 the observed daily gage full-natural-flow target (missing days are NaN).  The
 record is split at the calibration/validation boundary (:data:`CAL_END`,
 WY2004 start); skill statistics are reported **separately** for each period.
@@ -30,15 +30,16 @@ from .._figures import (
     skill_summary_fig,
 )
 from ..io import load_basin_area, load_hru_table, load_reference, mmday_to_cfs
-from ..model import load_domain_forcing, run_basin
+from ..model import load_domain_forcing, run_basins
 from . import CAL_END, DOMAIN, load_gage
 
 
 def _make_observed(basins, data_dir, forcing, areas, figdir, cal_end_ts):
     """Per-basin calibration/validation vs the observed daily gage."""
     records, parity = [], {}
+    flows = run_basins(basins, data_dir=data_dir, domain=DOMAIN, forcing=forcing)
     for b in basins:
-        sim = run_basin(b, data_dir=data_dir, domain=DOMAIN, forcing=forcing).rename(columns={"flow": "flow_sim"})
+        sim = flows[b].rename("flow_sim").reset_index()
         obs = load_gage(data_dir, basin=b)[["date", "flow"]].rename(columns={"flow": "flow_obs"})
         m = pd.merge(sim, obs, on="date", how="left").sort_values("date").reset_index(drop=True)
 

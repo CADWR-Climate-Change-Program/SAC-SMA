@@ -38,7 +38,7 @@ import pandas as pd
 from .. import cdec15, paths
 from .._figures import _period_stats, basin_diagnostics_fig, parity_fig, skill_summary_fig
 from ..io import load_reference
-from ..model import load_domain_forcing, run_basin
+from ..model import load_domain_forcing, run_basins
 from . import DOMAINS, load_calib_monthly, load_fnf_monthly
 from .compare import _BASIN_ABBREV, basin_order_north_south
 
@@ -50,8 +50,9 @@ def _make_calib_monthly(basins, data_dir, forcing, figdir, domain):
     except FileNotFoundError:
         obs_tbl = load_calib_monthly(data_dir, domain=domain)  # calibration period only
     records, parity = [], {}
+    flows = run_basins(basins, data_dir=data_dir, domain=domain, forcing=forcing)
     for b in basins:
-        sim_d = run_basin(b, data_dir=data_dir, domain=domain, forcing=forcing)
+        sim_d = flows[b].rename("flow").reset_index()
         # daily mm/day -> monthly total mm
         sm = (sim_d.assign(month=sim_d["date"].dt.to_period("M"))
               .groupby("month")["flow"].sum().reset_index())

@@ -102,12 +102,10 @@ def lohmann(inflow_direct, inflow_base, flowlen, route_par, is_outlet):
 
 
 # ---------------------------------------------------------------------------
-# Numba njit re-expression of the above, for the parallel per-HRU batch kernel
-# (:func:`sacsma.model.run_basin` with ``parallel=True``).  ``np.convolve`` and
-# ``math.gamma`` keep this off the JIT path in the reference ``lohmann`` above,
-# so the convolutions are written out as explicit loops here.  This core is
-# validated against ``lohmann`` to floating tolerance in ``tests/test_routing``;
-# ``lohmann`` remains the bit-exact serial reference.
+# Numba re-expression of the unit hydrographs and the convolution above, for the
+# engine (:mod:`sacsma.engine`).  ``np.convolve`` and ``math.gamma`` keep the
+# reference ``lohmann`` off the JIT path, so the convolutions are written out as
+# loops here; ``lohmann`` stays the reference.
 # ---------------------------------------------------------------------------
 
 
@@ -186,48 +184,3 @@ def _hru_uh_direct_nb(n, k):
             acc += (1.0 / theta / gN) * (x / theta) ** (n - 1.0) * np.exp(-x / theta)
         uh[i] = acc * dx
     return uh
-
-
-@njit(cache=True)
-def _lohmann_core_nb(inflow_direct, inflow_base, flowlen, par, is_outlet):
-    """njit port of :func:`lohmann`; returns total routed flow (direct + base)."""
-    n = par[0]; k = par[1]; velo = par[2]; diff = par[3]
-    uh_river = _river_uh_nb(flowlen, velo, diff, is_outlet)
-    uh_hru_direct = _hru_uh_direct_nb(n, k)
-    uh_hru_base = np.zeros(12)
-    uh_hru_base[0] = 1.0
-    uh_direct = _convolve_full_nb(uh_hru_direct, uh_river)
-    uh_base = _convolve_full_nb(uh_hru_base, uh_river)
-    sd = 0.0
-    for i in range(uh_direct.shape[0]):
-        sd += uh_direct[i]
-    sb = 0.0
-    for i in range(uh_base.shape[0]):
-        sb += uh_base[i]
-    for i in range(uh_direct.shape[0]):
-        uh_direct[i] /= sd
-    for i in range(uh_base.shape[0]):
-        uh_base[i] /= sb
-    m = inflow_direct.shape[0]
-    ld = uh_direct.shape[0]
-    lb = uh_base.shape[0]
-    runoff = np.zeros(m)
-    for kk in range(m):
-        acc = 0.0
-        jmax = ld - 1 if (ld - 1) < kk else kk
-        for j in range(jmax + 1):
-            acc += uh_direct[j] * inflow_direct[kk - j]
-        jmaxb = lb - 1 if (lb - 1) < kk else kk
-        for j in range(jmaxb + 1):
-            acc += uh_base[j] * inflow_base[kk - j]
-        runoff[kk] = acc
-    return runoff
-
-
-def lohmann_nb(inflow_direct, inflow_base, flowlen, route_par, is_outlet):
-    """Thin wrapper around :func:`_lohmann_core_nb` (njit) returning total routed
-    flow.  Numerically matches :func:`lohmann`'s ``runoff`` to floating tolerance."""
-    inflow_direct = np.ascontiguousarray(inflow_direct, dtype=float)
-    inflow_base = np.ascontiguousarray(inflow_base, dtype=float)
-    par = np.ascontiguousarray(route_par, dtype=float)
-    return _lohmann_core_nb(inflow_direct, inflow_base, float(flowlen), par, int(is_outlet))

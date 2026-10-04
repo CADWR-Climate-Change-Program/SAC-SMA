@@ -33,7 +33,7 @@ import numpy as np
 import pandas as pd
 
 from . import paths
-from .io import load_basin_area, load_hru_table, mmday_to_cfs
+from .io import load_basin_area, mmday_to_cfs
 
 #: the forcings each product carries
 FORCINGS = {
@@ -67,17 +67,10 @@ CALLITE_VERSION = "2020D09E"
 def simulate(domain: str, forcing: str, data_dir: str | Path = "data") -> pd.DataFrame:
     """Daily flow of every watershed of a calibration set under a forcing:
     ``[date, basin, flow_mm]`` from :data:`START` to :data:`END`."""
-    from .model import load_domain_forcing, run_basin
+    from .model import run_basins
 
-    f = load_domain_forcing(data_dir, domain=domain, product=forcing)
-    parts = []
-    for b in sorted(load_hru_table(data_dir, domain=domain)["basin"].unique()):
-        s = run_basin(b, data_dir=data_dir, domain=domain, forcing=f, parallel=True,
-                      product=forcing)
-        s = s[(s["date"] >= START) & (s["date"] <= END)]
-        parts.append(pd.DataFrame({"date": s["date"].to_numpy(), "basin": b,
-                                   "flow_mm": s["flow"].to_numpy()}))
-    return pd.concat(parts, ignore_index=True)
+    flow = run_basins(data_dir=data_dir, domain=domain, product=forcing).loc[START:END]
+    return flow.melt(ignore_index=False, var_name="basin", value_name="flow_mm").reset_index()
 
 
 def _monthly_mm(daily: pd.DataFrame) -> pd.DataFrame:

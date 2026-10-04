@@ -1,7 +1,7 @@
 """Per-entity evaluation of a multi-timescale (``multifamily``) checkpoint.
 
 The multi-timescale counterpart of :func:`sacsma.dpl.evaluate.evaluate_checkpoint`:
-rebuild the net, stream the full envelope once under ``torch.no_grad()`` (the
+rebuild the net, run the trained field over the full envelope once on the CPU engine (the
 state at its start from the timing-independent cycle spinup of
 :mod:`sacsma.dpl.spinup`, whatever spinup the run trained with), then
 score every entity over its OWN registry window at its NATIVE timescale —
@@ -38,53 +38,32 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import torch
 
 from .. import paths
 from .._figures import _period_stats, basin_diagnostics_fig, plt
 from ..io import MULTI_TIMESCALE_DOMAIN
 from ..metrics import kge, nse, pbias, pearson
-from .evaluate import export_canopy_params, export_params, load_net_from_checkpoint
-from .forward import routing_uh
+from .evaluate import export_canopy_params, export_params, load_net_from_checkpoint, simulate_field
 from .multi_timescale import EntityObs, load_entity_obs
-from .spinup import spin_state, stream_rows
 
 #: hydrograph families drawn by default (69 USGS figures on request only)
 _REVIEW_FAMILIES = ("cdec_daily", "uf_monthly")
 
 
-def _entity_flow(net, x, dom, cfg, *, spinup: str = "cycle",
-                 dedup_cells: bool = False) -> tuple[np.ndarray, int, int]:
-    """Stream the trained field over the envelope; returns the basin daily
-    depth ``(B, t1-t0)`` (numpy float64) plus the envelope indices.
-
-    The state at the envelope start comes from ``spinup``
-    (:func:`sacsma.dpl.spinup.spin_state`): ``"cycle"`` (default) loops the
-    envelope's own first ``cfg.spinup_years`` years ``cfg.spinup_passes`` times
-    from the cold start — nothing before the envelope is read; ``"window"`` is the
-    legacy ten water years ahead of it (or ``cfg.spinup_start`` when earlier).  Eager ``run_window``
-    pieces (no CUDA graphs — a single full pass does not need them).
-    ``dedup_cells``: the per-cell physics once per distinct cell
-    (:func:`sacsma.dpl.data.with_cell_dedup`)."""
-    from .data import with_cell_dedup
+def _entity_flow(net, x, dom, cfg, *, spinup: str = "cycle") -> tuple[np.ndarray, int, int]:
+    """The trained field over the envelope on the CPU engine (:func:`sacsma.dpl.evaluate.
+    simulate_field`): the entity daily depth ``(B, t1-t0)`` and the envelope indices.  The state at
+    the envelope start comes from ``spinup``: ``"cycle"`` (default) loops the envelope's first
+    ``cfg.spinup_years`` years ``cfg.spinup_passes`` times from the cold start; ``"window"`` is
+    the ten water years ahead of it (or ``cfg.spinup_start`` when earlier)."""
     from .multi_timescale import ENVELOPE_END, ENVELOPE_START
 
     t0 = int(dom.dates.searchsorted(pd.Timestamp(ENVELOPE_START)))
     t1 = int(dom.dates.searchsorted(pd.Timestamp(ENVELOPE_END))) + 1
-    if dedup_cells:
-        dom = with_cell_dedup(dom, x)
-
-    net.eval()
-    with torch.no_grad():
-        out = net(dom.phys_x(x))
-        canopy = out.pop("_canopy", None)
-        uh = routing_uh(out, dom.flowlen, row_cell=dom.row_cell)
-        state, how = spin_state(dom, cfg, out, uh, canopy, t0, mode=spinup,
-                                agg=lambda f: dom.W @ f)
-        print(f"eval: {how}", flush=True)
-        sim, _ = stream_rows(dom, cfg, out, uh, canopy, t0, t1, state,
-                             lambda f: (dom.W @ f).cpu())
-    return sim.double().numpy(), t0, t1
+    r = simulate_field(net, x, dom, cfg, ENVELOPE_START, ENVELOPE_END, dom.W.cpu().numpy(),
+                       spinup=spinup)
+    print(f"eval: {r['spinup']}", flush=True)
+    return r["flow"], t0, t1
 
 
 def _components(s: np.ndarray, o: np.ndarray) -> tuple[float, float]:
@@ -249,9 +228,7 @@ def evaluate_checkpoint_mt(
     out_dir: str | Path | None = None,
     *,
     hydrographs: str = "review",   # review (cdec+uf) | all | none
-    device: str | None = None,     # None = cuda if available
-    spinup: str = "cycle",         # cycle (timing-independent) | window (legacy)
-    dedup_cells: bool = False,     # per-cell physics once per distinct cell
+    spinup: str = "cycle",         # cycle (timing-independent) | window
 ) -> pd.DataFrame:
     """Score a ``multifamily`` checkpoint per entity; returns the metrics.  ``out_dir`` names
     the run (any of its folders; default: the run of the checkpoint): the parameter tables go
@@ -259,8 +236,7 @@ def evaluate_checkpoint_mt(
     figures to its local folder."""
     if hydrographs not in ("review", "all", "none"):
         raise ValueError(f"hydrographs {hydrographs!r}")
-    net, x, dom, cfg, ck = load_net_from_checkpoint(ckpt_path, data_dir,
-                                                    device=device)
+    net, x, dom, cfg, ck = load_net_from_checkpoint(ckpt_path, data_dir, device="cpu")
     if ck.get("domain") != MULTI_TIMESCALE_DOMAIN:
         raise ValueError(f"checkpoint domain {ck.get('domain')!r} is not "
                          f"{MULTI_TIMESCALE_DOMAIN!r}")
@@ -275,8 +251,8 @@ def evaluate_checkpoint_mt(
     run.model.mkdir(parents=True, exist_ok=True)
     dpl_df = export_params(net, dom, x)
     dpl_df.to_csv(run.model / "params_dpl.csv", index=False)
-    if ck.get("net_config", {}).get("canopy", False):
-        export_canopy_params(net, dom, x).to_csv(
+    if cfg.et_mode == "noah":
+        export_canopy_params(net, dom, x, cfg).to_csv(
             run.model / "params_canopy.csv", index=False)
     print(f"wrote {run.model / 'params_dpl.csv'} ({len(dpl_df)} entity-cell rows, "
           f"sel cal KGE {ck.get('cal_kge', float('nan')):.4f})", flush=True)
@@ -288,11 +264,9 @@ def evaluate_checkpoint_mt(
                                       uf_train_start=cfg.uf_train_start or None)
     # the holdout / back-extension counts are columns only for a run that used them
     ho_cols = bool(cfg.holdout_wy or cfg.uf_train_start)
-    print(f"eval: streaming the envelope "
-          f"({dom.n_hru} HRUs, {len(dom.basins)} entities, {cfg.dtype} "
-          f"config scored in float64 on {dom.device.type}) ...", flush=True)
-    sim, t0, t1 = _entity_flow(net, x, dom, cfg, spinup=spinup,
-                               dedup_cells=dedup_cells)
+    print(f"eval: the envelope on the engine ({dom.n_hru} HRUs, {len(dom.basins)} entities, "
+          "float64) ...", flush=True)
+    sim, t0, t1 = _entity_flow(net, x, dom, cfg, spinup=spinup)
     assert (t0, t1) == (eobs.t0, eobs.t1)
     dates = dom.dates[t0:t1]
     np.savez_compressed(

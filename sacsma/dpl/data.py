@@ -1,12 +1,10 @@
-"""15cdec store -> torch tensors for the differentiable pipeline.
+"""A domain's data as torch tensors for the differentiable pipeline.
 
-Wraps the existing loaders (``model.load_domain_forcing``, ``io.load_hru_table``,
-``io.load_params``, ``cdec15.load_gage``) into a :class:`DomainTensors` bundle:
-per-HRU static tensors, the basin aggregation matrix ``W`` (normalized
-``area_weight`` per basin, exactly the ``model.py`` convention), and per-chunk
-forcing gathers.  The big forcing arrays stay as CPU float32 NumPy (from
-``DomainForcing``); each chunk is fancy-indexed to the HRU rows and moved to
-the device on demand.
+Wraps the loaders (``model.load_domain_forcing``, ``io.load_hru_table``, ``cdec15.load_gage``)
+into a :class:`DomainTensors` bundle: per-HRU static tensors, the basin aggregation matrix
+``W`` (normalized ``area_weight`` per basin, the ``model.py`` convention) and the forcing by
+window (:class:`Window`).  The forcing arrays stay CPU float32 NumPy (from ``DomainForcing``);
+a window is gathered to the physics rows and moved to the device on demand.
 """
 
 from __future__ import annotations
@@ -20,9 +18,42 @@ import torch
 
 from .. import paths
 from ..cdec15 import BASINS, CAL_END, load_gage
-from ..io import DEFAULT_FORCING, MULTI_TIMESCALE_DOMAIN, load_hru_table, load_params
+from ..io import DEFAULT_FORCING, MULTI_TIMESCALE_DOMAIN, load_hru_table
 from ..model import DomainForcing, load_domain_forcing
-from .config import PARAM_ORDER, validate_ga_optimum
+
+
+@dataclass
+class Window:
+    """One window of the forcing on the physics rows: ``(rows, days)`` tensors and the calendar
+    of the days, with the daily ``tmin`` / ``tmax`` where the domain has them (the
+    Priestley-Taylor PET) and the observed ``lai`` where it has the canopy tables (Noah-lite)."""
+
+    pr: torch.Tensor
+    ta: torch.Tensor
+    doy: torch.Tensor
+    leap: torch.Tensor
+    tmin: torch.Tensor | None = None
+    tmax: torch.Tensor | None = None
+    lai: torch.Tensor | None = None
+
+    def _map(self, f_row, f_day) -> Window:
+        return Window(*(None if v is None else (f_day(v) if v.dim() == 1 else f_row(v))
+                        for v in (getattr(self, k.name) for k in dataclasses.fields(self))))
+
+    def days(self, sl: slice) -> Window:
+        """The days ``sl`` of the window."""
+        return self._map(lambda v: v[:, sl], lambda v: v[sl])
+
+    def rows(self, idx) -> Window:
+        """The rows ``idx`` of the window."""
+        return self._map(lambda v: v[idx], lambda v: v)
+
+    def copy_(self, src: Window) -> None:
+        """Copy ``src`` into these buffers (the static inputs of a captured graph)."""
+        for k in dataclasses.fields(self):
+            buf = getattr(self, k.name)
+            if buf is not None:
+                buf.copy_(getattr(src, k.name))
 
 
 @dataclass
@@ -74,11 +105,6 @@ class DomainTensors:
     #: LAI sidecars.
     veg_frac: torch.Tensor | None = None
     lai_lut: np.ndarray | None = None
-    #: climate-STATE index for dynamic (time-varying) parameters: a per-cell
-    #: (n_cells, T) rolling-precip wetness signal, CAL-standardized (no val
-    #: leakage), clamped ~[-3,3] (CPU float32, like tmin).  None unless a dynamic
-    #: run requested it (drought -> negative, wet -> positive).
-    state: np.ndarray | None = None
     #: distinct-cell physics basis (``DplConfig.dedup_cells``, :func:`with_cell_dedup`);
     #: None = the per-row physics (every HRU row runs its own column — the default)
     dedup: CellDedup | None = None
@@ -92,8 +118,8 @@ class DomainTensors:
         return len(self.dates)
 
     # -- the physics rows: the HRU rows, or the distinct cells under cell dedup.
-    # The chunk_* gathers below, the state vectors and the parameter net run on
-    # these; routing, the routing history, flowlen and W stay per HRU row.
+    # The forcing windows, the state vectors and the parameter net run on these;
+    # routing, the routing history, flowlen and W stay per HRU row.
     @property
     def n_phys(self) -> int:
         """Rows of the per-cell physics: ``n_hru``, or the distinct cells (dedup)."""
@@ -128,63 +154,32 @@ class DomainTensors:
         :func:`with_cell_dedup` asserts it)."""
         return x if self.dedup is None else x.index_select(0, self.dedup.first_row)
 
-    def chunk(self, t0: int, t1: int) -> tuple[torch.Tensor, torch.Tensor,
-                                               torch.Tensor, torch.Tensor]:
-        """(prcp, tavg, doy, is_leap) for days [t0, t1) gathered to the physics
-        rows (the HRU rows; the distinct cells under cell dedup)."""
-        idx = self.phys_idx
-        pr = torch.as_tensor(
-            np.ascontiguousarray(self.forcing.prcp[idx, t0:t1]),
-        ).to(self.device, self.dtype)
-        ta = torch.as_tensor(
-            np.ascontiguousarray(self.forcing.tavg[idx, t0:t1]),
-        ).to(self.device, self.dtype)
-        return pr, ta, self.doy[t0:t1], self.is_leap[t0:t1]
+    def _rows(self, a: np.ndarray, t0: int, t1: int) -> torch.Tensor:
+        return torch.as_tensor(np.ascontiguousarray(a[self.phys_idx, t0:t1])).to(
+            self.device, self.dtype)
 
-    def chunk_tmm(self, t0: int, t1: int):
-        """(tmin, tmax) for days [t0, t1) gathered to the physics rows; (None, None)
-        if the domain has no per-cell Tmin/Tmax (Noah ET then uses the tavg fallback)."""
-        if self.tmin is None or self.tmax is None:
-            return None, None
-        idx = self.phys_idx
-        tn = torch.as_tensor(
-            np.ascontiguousarray(self.tmin[idx, t0:t1]),
-        ).to(self.device, self.dtype)
-        tx = torch.as_tensor(
-            np.ascontiguousarray(self.tmax[idx, t0:t1]),
-        ).to(self.device, self.dtype)
-        return tn, tx
+    def window(self, t0: int, t1: int) -> Window:
+        """The forcing of days [t0, t1) on the physics rows."""
+        lai = None
+        if self.lai_lut is not None:
+            doy_idx = self.forcing.doy[t0:t1].astype(np.int64) - 1   # 0..365
+            lai = torch.as_tensor(np.ascontiguousarray(
+                self.lai_lut[self.phys_idx][:, doy_idx])).to(self.device, self.dtype)
+        tmm = self.tmin is not None and self.tmax is not None
+        return Window(self._rows(self.forcing.prcp, t0, t1), self._rows(self.forcing.tavg, t0, t1),
+                      self.doy[t0:t1], self.is_leap[t0:t1],
+                      self._rows(self.tmin, t0, t1) if tmm else None,
+                      self._rows(self.tmax, t0, t1) if tmm else None, lai)
 
-    def chunk_lai(self, t0: int, t1: int):
-        """Observed daily LAI (physics rows, t1-t0) for the Noah ET path, gathered
-        by each day's day-of-year; None if the domain has no LAI sidecar."""
-        if self.lai_lut is None:
-            return None
-        doy_idx = self.forcing.doy[t0:t1].astype(np.int64) - 1   # 0..365
-        lai = self.lai_lut[self.phys_idx][:, doy_idx]            # (N, t1-t0)
-        return torch.as_tensor(np.ascontiguousarray(lai)).to(self.device, self.dtype)
-
-    def chunk_state(self, t0: int, t1: int):
-        """Climate-state index (physics rows, t1-t0) for days [t0, t1); None if the
-        domain has no dynamic-parameter state field."""
-        if self.state is None:
-            return None
-        s = self.state[self.phys_idx, t0:t1]
-        return torch.as_tensor(np.ascontiguousarray(s)).to(self.device, self.dtype)
-
-    def ga_params(self, data_dir: str = "data") -> dict[str, torch.Tensor]:
-        """Archived GA optimum expanded to per-HRU (N,) tensors, bounds-asserted."""
-        pdf = load_params(domain="15cdec")
-        validate_ga_optimum(pdf)
-        merged = self.hrus.merge(pdf, on="key", how="left", suffixes=("", "_ga"))
-        if merged[PARAM_ORDER[0]].isna().any():
-            missing = merged.loc[merged[PARAM_ORDER[0]].isna(), "key"].unique()
-            raise ValueError(f"{len(missing)} HRU keys missing from ga_optimum")
-        return {
-            name: torch.as_tensor(merged[name].to_numpy(np.float64)).to(
-                self.device, self.dtype)
-            for name in PARAM_ORDER
-        }
+    def window_buffers(self, length: int, physics) -> Window:
+        """Zero buffers of a ``length``-day window for the inputs ``physics``
+        (:class:`sacsma.engine.Physics`) reads -- the static inputs of a captured graph."""
+        z = lambda: torch.zeros(self.n_phys, length, device=self.device, dtype=self.dtype)  # noqa: E731
+        pt = physics.pet == "priestley_taylor"
+        return Window(z(), z(), torch.zeros(length, device=self.device, dtype=self.doy.dtype),
+                      torch.zeros(length, device=self.device, dtype=torch.bool),
+                      z() if pt else None, z() if pt else None,
+                      z() if physics.et == "noah_lite" else None)
 
 
 def _rows_differing(a: np.ndarray, rep: np.ndarray) -> np.ndarray:
@@ -201,15 +196,15 @@ def with_cell_dedup(dom: DomainTensors, x=None, *, verbose: bool = True) -> Doma
     """A copy of ``dom`` whose per-cell physics runs once per DISTINCT grid cell
     (``DplConfig.dedup_cells``; see :class:`CellDedup`).  The row-level fields —
     ``hrus``, ``cell_idx``, ``lat_rad``/``elev``/``veg_frac``, ``flowlen``, ``W`` —
-    are unchanged; the physics accessors (``n_phys``, ``phys_*``, ``chunk*``,
+    are unchanged; the physics accessors (``n_phys``, ``phys_*``, ``window``,
     ``phys_x``, ``row_cell``) switch to the distinct cells, in first-appearance order.
 
     Refuses (``ValueError``) when rows that share a cell do not carry identical
     physics inputs: the parameter-net features ``x`` (``(N, F)`` array or tensor —
     pass it: e.g. a net with the flow length as a feature gives every (entity,
     cell) row its own parameters), the latitude, elevation and observed veg
-    fraction.  Forcing, LAI and the climate-state index are per cell by
-    construction (gathered through ``cell_idx``)."""
+    fraction.  Forcing and LAI are per cell by construction (gathered through
+    ``cell_idx``)."""
     if dom.dedup is not None:
         return dom
     ci = np.asarray(dom.cell_idx)
@@ -334,22 +329,6 @@ def month_chunk_target(dates: pd.DatetimeIndex, c0: int, length: int,
     return bucket, cal_month0, mask
 
 
-def _compute_state_index(forcing, dates, window: int, cal_end: str) -> np.ndarray:
-    """Per-cell climate-state (wetness) index for dynamic parameters: the
-    ``window``-day trailing-mean precipitation, standardized with CALIBRATION-
-    period mean/std only (no val leakage) and clamped to [-3, 3].  Drought reads
-    negative, wet years positive.  ``(n_cells, T)`` float32."""
-    prcp = forcing.prcp.astype(np.float64)                      # (n_cells, T)
-    csum = np.cumsum(prcp, axis=1)
-    roll = np.empty_like(prcp)
-    roll[:, :window] = csum[:, :window] / np.arange(1, window + 1)   # expanding start
-    roll[:, window:] = (csum[:, window:] - csum[:, :-window]) / window
-    cal = dates <= pd.Timestamp(cal_end)
-    mu = roll[:, cal].mean(axis=1, keepdims=True)
-    sd = roll[:, cal].std(axis=1, keepdims=True).clip(min=1e-6)
-    return np.clip((roll - mu) / sd, -3.0, 3.0).astype(np.float32)
-
-
 def _calsim_footprint_weights(hrus: pd.DataFrame, basins: tuple[str, ...],
                               base_w: np.ndarray, data_dir: str) -> tuple[np.ndarray, list[str]]:
     """Re-weight ``base_w`` rows by each cell's overlap fraction with the basin's
@@ -412,7 +391,6 @@ def load_domain_tensors(
     device: torch.device | str = "cuda",
     dtype: torch.dtype = torch.float32,
     basins: tuple[str, ...] | None = None,
-    dynamic_window: int | None = None,
     calsim_footprint: bool = False,
     product: str = DEFAULT_FORCING,
 ) -> DomainTensors:
@@ -420,8 +398,6 @@ def load_domain_tensors(
     forcing = load_domain_forcing(data_dir, domain=domain, product=product)
     tmin_cells, tmax_cells = _load_percell_tminmax(data_dir, domain, forcing, product)
     veg_cells, lai_lut = _load_canopy_obs(data_dir, domain, forcing)
-    state_cells = (None if dynamic_window is None else
-                   _compute_state_index(forcing, forcing.dates, dynamic_window, CAL_END))
     hrus = load_hru_table(data_dir, domain=domain)
     if basins is None:
         if domain == MULTI_TIMESCALE_DOMAIN:
@@ -467,7 +443,7 @@ def load_domain_tensors(
                          lat_rad=lat_rad, elev=elev, flowlen=flowlen,
                          W=w.to(device), device=device, dtype=dtype,
                          tmin=tmin_cells, tmax=tmax_cells,
-                         veg_frac=veg_frac, lai_lut=lai_lut, state=state_cells)
+                         veg_frac=veg_frac, lai_lut=lai_lut)
 
 
 def _load_canopy_obs(data_dir: str, domain: str, forcing):
@@ -477,10 +453,10 @@ def _load_canopy_obs(data_dir: str, domain: str, forcing):
     Returns ``(veg_frac_cells (n_cells,), lai_lut (n_cells, 366))``:
 
     * ``veg_frac`` = LANDFIRE EVC cover fraction (``EVC_cover_pct`` / 100), from
-      ``<domain>/soilveg_continuous.csv``, clamped to CANOPY_BOUNDS.
+      ``<domain>/soilveg_continuous.csv``, clamped to [0, 1].
     * ``lai_lut`` = the per-cell daily LAI climatology, linearly interpolated
       from the 46 8-day samples (``lai_doy001..361``) onto day-of-year 1..366
-      (winter tail flat-held past the last sample), clamped to CANOPY_BOUNDS.
+      (winter tail flat-held past the last sample), clamped to [0.05, 6].
 
     Both are PINNED inputs (never learned).  Paths resolve through the
     suffix-aware ``io.soilveg_path``/``io.lai_climatology_path`` helpers, so
@@ -490,18 +466,14 @@ def _load_canopy_obs(data_dir: str, domain: str, forcing):
     import re
 
     from ..io import lai_climatology_path, soilveg_path
-    from .config import CANOPY_BOUNDS
 
     sv_path = soilveg_path(data_dir, domain)
     lai_path = lai_climatology_path(data_dir, domain)
     if not sv_path.exists() or not lai_path.exists():
         return None, None
 
-    vlo, vhi = CANOPY_BOUNDS["veg_frac"]
-    # observed LAI keeps only a tiny positive floor (numerical safety) — NOT the
-    # learned-param 0.5 bound, which clamped ~half of the driest basins' days and
-    # spuriously inflated their canopy conductance.
-    llo, lhi = 0.05, CANOPY_BOUNDS["lai"][1]
+    vlo, vhi = 0.0, 1.0
+    llo, lhi = 0.05, 6.0      # a small positive floor for numerical safety
 
     # The fine-HRU domains sample these per HRU, so cells shared between HRUs
     # repeat their (identical) row — dedupe to a unique per-cell index before
