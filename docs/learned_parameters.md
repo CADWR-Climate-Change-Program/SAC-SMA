@@ -30,9 +30,10 @@ field.
 | `physical_climate` | the same plus four climate indices computed from the forcing, so the parameters change when the climate is perturbed |
 | `aef` | AlphaEarth satellite embeddings alone: 16 principal components and the vector length |
 
-**The physics.** PyTorch, all units in one batch, forward values equal to the reference model
-([The model](model.md)). Training fixes the number of percolation sub-steps at 10, the one
-place where the reference numerics cannot be batched. Options on top of the reference chain:
+**The physics.** PyTorch, all units in one batch, the reference model's equations
+([The model](model.md)) with the percolation sub-steps fixed at ten a day: the reference takes a
+number that varies with the state, which cannot be batched. Options on top of the reference
+chain:
 Priestley–Taylor PET ([Priestley & Taylor, 1972](references.md#priestleytaylor1972)) with
 radiation from the daily temperature range
 ([Bristow & Campbell, 1984](references.md#bristowcampbell1984); [Allen et al., 1998](references.md#allen1998)),
@@ -45,9 +46,9 @@ plus a log-flow term and a variance-matching term. Optimization is AdamW over ye
 chunks, with the model state carried from chunk to chunk. The network kept is the one with the
 best calibration-period KGE.
 
-**Scoring.** For the 15-CDEC runs the learned parameter table is run through the reference
-model, and the reported skill is that run's (`sacsma dpl evaluate <checkpoint>`). Validation
-years are never read in training or selection.
+**Scoring.** A run is scored as it was trained: its field runs on the engine with the numerics
+and the basin weights of its training, over the whole record from the cold start
+(`sacsma dpl evaluate <checkpoint>`). Validation years are never read in training or selection.
 
 ## Results on the 15 CDEC watersheds
 
@@ -56,21 +57,21 @@ the GA (`hamon_dense`), grid cells in place of HRUs (`hamon`), Priestley–Taylo
 Noah-type ET (`noah`), an LSTM on top (`hybrid`, `hybrid_dt`) and the LSTM alone (`lstm`).
 Their mean daily KGE over the 15 watersheds, calibration WY1989–2003 and validation
 WY2004–2018, is in the table of [Runs](runs.md#runs-on-the-15-cdec-watersheds); validation goes
-0.768 (GA), 0.840, 0.836, 0.826, 0.804, 0.877 (`hybrid`).
+0.768 (GA), 0.838, 0.829, 0.823, 0.801, 0.875 (`hybrid`).
 
 What these runs showed:
 
 - **The network generalizes better than the GA with the same physics.** Validation KGE rises
   from 0.77 to 0.84 with the calibration score unchanged.
-- **The grid costs almost nothing.** One parameter set per grid cell keeps the validation
-  score (0.836 against 0.840), and it is the form that covers the CalSim3 catchments.
+- **The grid costs little.** One parameter set per grid cell scores 0.829 in validation
+  against 0.838, and it is the form that covers the CalSim3 catchments.
 - **Better physics costs a little skill here.** Priestley–Taylor PET and the Noah-type ET
   lower the 15-watershed score slightly. They are kept because PET then responds to radiation
   and snow cover, and ET to modeled soil moisture.
 - **An LSTM adds skill but not a trustworthy response to climate.** See below.
 - **Weaknesses that stayed.** FOL's variability is damped in every run. SCC has the lowest
   validation score from `noah` on (0.63, in the hybrids too). NHG's validation volume bias fell
-  from +18 % to +6 % along the physics runs and turned negative in the LSTM runs.
+  from +18 % to +1 % along the physics runs and turned negative in the LSTM runs.
 
 ## The LSTM hybrids and their response to warming
 
@@ -86,13 +87,14 @@ Change in annual runoff at +3 °C with precipitation unchanged, mean over the 15
 
 | Model | Change | Same sign as `noah` |
 |---|---|---|
-| `noah` | −5.7 % | – |
-| `hybrid` | −8.5 % | 13 of 15 |
-| `hybrid_dt` | −6.5 % | 15 of 15 |
+| `noah` | −5.8 % | – |
+| `hybrid` | −7.2 % | 13 of 15 |
+| `hybrid_dt` | −6.7 % | 15 of 15 |
 | `lstm` | +6.7 % | 5 of 15 |
 
 The LSTM without physics gains runoff under warming, which is wrong. `hybrid` responds too
-strongly. `hybrid_dt` follows the physics, at a cost of about 0.03 validation KGE.
+strongly and strays from the physics by 5.6 points per watershed on average. `hybrid_dt`
+follows the physics (1.6 points), at a cost of about 0.03 validation KGE.
 
 ![Skill and response of the hybrid family](../artifacts/results/dpl/15cdec/studies/hybrids/hybrid_summary.png)
 
@@ -111,10 +113,10 @@ flow into monthly inflows on the CalSim3 rim arcs: [CalSim3 rim inflows](calsim3
 | Studies and their figures | [`artifacts/results/dpl/15cdec/studies/`](../artifacts/results/dpl/15cdec/studies/), one folder per `sacsma dpl study` |
 
 ```bash
-sacsma dpl benchmark                         # differentiable model against the reference model
+sacsma dpl benchmark                         # learned numerics against the reference model
 sacsma dpl train physical_climate --domain 15cdec_grid --et noah \
-    --noah-pet priestley_taylor --canopy-lite --calsim-footprint
+    --noah-pet priestley_taylor --calsim-footprint
 sacsma dpl evaluate <run>/checkpoints/best.pt
-sacsma dpl hybrid --physics <params_dpl.csv> ...   # see --help
+sacsma dpl hybrid --physics noah --statics --no-doy --pet-input --hidden 64 --dropout 0.35 --input-noise 0.2 --seed 0 [--response-lambda 0.18]   # hybrid [hybrid_dt]
 sacsma dpl study climatology                 # and: adaptive, hybrids, forcing
 ```

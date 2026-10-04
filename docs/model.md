@@ -88,10 +88,18 @@ from channel inflow. They are marked ★ in [Model equations](equations.md).
 
 **The differentiable model** (`sacsma/dpl/physics/`) is the same chain in PyTorch, run for all
 units at once so that parameters can be learned by gradient descent
-([Learned parameters](learned_parameters.md)). With the reference numerics it matches the
-reference model to 2 × 10⁻¹³ mm/day on all 15 CDEC watersheds
-(`artifacts/results/dpl/15cdec/benchmark/fidelity_benchmark.csv`). It adds three options the reference
-chain does not have: Priestley–Taylor PET, a soil-moisture-limited ET on observed vegetation
-("Noah-lite"), and a learned rain/snow threshold. The first two have reference counterparts in
-`sacsma/pet_pt.py` and `sacsma/sma_noah_lite.py`, so learned parameter tables can be run through
-the reference model.
+([Learned parameters](learned_parameters.md)). It is trained with ten fixed SAC-SMA sub-steps a
+day and its own forms of the percolation and storage clamps, which differ from the reference in
+over-full states. Run with the archived GA optimum and ten sub-steps, these numerics keep a
+daily KGE of 0.98 or more against the reference model on all 15 CDEC watersheds and move the
+calibration and validation KGE against the gauges by about 0.01 at most; with 1, 2, 5 or 20
+sub-steps they depart further (`artifacts/results/dpl/15cdec/benchmark/fidelity_benchmark.csv`).
+It adds
+three options the reference chain does not have: Priestley–Taylor PET, a soil-moisture-limited
+ET on observed vegetation ("Noah-lite"), and a learned rain/snow threshold.
+
+**The engine** (`sacsma/engine.py`) runs every parameter field that is not being trained, on the
+CPU: the GA optima through the reference model, a trained field through the step it was trained
+with (`sacsma/sma_learned.py`, a Numba copy of the torch step that `sacsma verify learned` holds
+to the torch step within 10⁻⁹ mm/day). Snow-17, the PET and the unit hydrographs are the frozen
+cores in both. A trained field is always scored as trained.

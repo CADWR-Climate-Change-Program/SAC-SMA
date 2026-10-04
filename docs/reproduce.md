@@ -45,7 +45,7 @@ section 7; it is not needed to reproduce results.
 
 ```bash
 sacsma verify --quick    # imports, commands, links: no model run
-sacsma verify            # adds parity and the product check
+sacsma verify            # adds parity, the learned step and the products
 ```
 
 `parity` runs one watershed per calibration set and compares with the archived MATLAB
@@ -66,8 +66,7 @@ sacsma product callite                 # the CalLite inflow files, three forcing
 sacsma product 15cdec                  # the daily flow of the 15 watersheds -> artifacts/product/15cdec/
 ```
 
-All of it runs on CPU in minutes. `sacsma calsim --parallel` uses all cores for the model
-runs; results are unchanged. [`artifacts/results/README.md`](../artifacts/results/README.md) lists every file
+All of it runs on CPU in minutes. [`artifacts/results/README.md`](../artifacts/results/README.md) lists every file
 these commands write. Regenerated tables can differ from the tracked ones in the last digits,
 and the row order of `monthly_calsets.csv` is not fixed; compare before committing.
 
@@ -98,7 +97,7 @@ other two. The tracked folders hold the selected checkpoint and the scores, and
 **Train** (about 21 hours on an 8 GB GPU: 120 epochs of about 10 minutes):
 
 ```bash
-sacsma dpl train aef --domain multifamily --et noah --noah-pet priestley_taylor --canopy-lite \
+sacsma dpl train aef --domain multifamily --et noah --noah-pet priestley_taylor \
     --patience 10 --warmup-epochs 4 --chunk-grid water_year --no-flowlen-feature \
     --nograd-window 256 --train-graph-segments 2 --seed 0 --noah-sac-exchanges \
     --tbptt-carry relative --diagnostics --dead-chunk-nograd --learn-pxtemp --pxtemp-tau 1.0 \
@@ -112,7 +111,8 @@ sacsma dpl train aef --domain multifamily --et noah --noah-pet priestley_taylor 
 A retrained run will not match the tracked one digit for digit: GPU arithmetic is not
 reproducible across drivers. Two epochs of the same command on the same machine do repeat.
 
-**Score** (GPU; the evaluation streams the whole record in double precision, about 45 minutes):
+**Score** (CPU; the trained field runs over the whole record on the engine in double precision,
+a few minutes):
 
 ```bash
 sacsma dpl evaluate <run>/checkpoints/best.pt             # metrics.csv, metrics_holdout.csv, sim_daily.npz
@@ -129,8 +129,8 @@ footprint get straight-line flow lengths instead of traced ones, and the output 
 The scores go to the run's results folder, the monthly series, maps and figures behind them
 to its local folder.
 
-**The share model** is fitted on the base pass and on tier-2 passes at changed climates,
-which are one batched run (into `tier2_scenarios/` of the local folder, `<local>`):
+**The share model** is fitted on the base pass and on tier-2 passes at changed climates, one
+pass each (into `tier2_scenarios/` of the local folder, `<local>`):
 
 ```bash
 sacsma dpl calsim tier2 <run> --components parts \
@@ -144,15 +144,13 @@ The fit runs on CPU and repeats exactly at the same thread count. The scenario p
 local.
 
 **The product** is one series per forcing: a tier-2 pass over the whole forcing record
-(spin-up on its first ten water years, then October 1915 to December 2018), with the share
-model applied over its complete water years:
+(spin-up on its first ten water years, then October 1915 to December 2018, into
+`artifacts/_local/product/calsim3/<forcing>/tier2`), with the share model applied over its
+complete water years:
 
 ```bash
 for f in historical_livneh_unsplit wgen_product_a wgen_product_a_s12; do
-  sacsma dpl calsim tier2 <run> --components parts --forcing $f --start 1915-10-01 \
-      --extension-cells <local>/tier2/tier2_extension_cells.csv \
-      --out artifacts/_local/product/calsim3/$f/tier2 --no-maps     # GPU, one at a time
-  sacsma dpl calsim product apply --tier2 artifacts/_local/product/calsim3/$f/tier2 --forcing $f
+  sacsma dpl calsim product apply --forcing $f            # the pass, then the share model
 done                                                      # -> artifacts/product/calsim3/<forcing>/
 sacsma verify product                                     # each tracked series repeats
 ```

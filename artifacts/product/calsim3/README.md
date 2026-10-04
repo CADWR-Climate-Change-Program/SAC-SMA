@@ -31,17 +31,14 @@ The forcings are described in [`data/inputs/forcing/`](../../../data/inputs/forc
 ```bash
 # the fit, on the run's passes on the training forcing (WY1950-2018 envelope): the base tier 2
 # with runoff parts, and the same at the 11 training and 5 validation climate points
-# (sacsma.dpl.calsim.product.scenario_spec() lists them; split them to fit the GPU, 8 per pass
-# at --batch-window 512 on 8 GB)
+# (sacsma.dpl.calsim.product.scenario_spec() lists them; one pass each, about a minute)
 sacsma dpl calsim tier2 <run> --components parts --trace-python <python of sacsma-gis>
 sacsma dpl calsim tier2 <run> --components parts --scenarios t1=1:1,t3=3:1,...
 sacsma dpl calsim product fit <run>                # CPU, about 30 min; --mu 0.03 skips the selection
 
-# the series of one forcing: the whole record, then the share model
-sacsma dpl calsim tier2 <run> --components parts --forcing <forcing> --start 1915-10-01 \
-    --extension-cells artifacts/_local/runs/dpl/multifamily/<run>/tier2/tier2_extension_cells.csv \
-    --out artifacts/_local/product/calsim3/<forcing>/tier2 --no-maps         # GPU, about 1.5 h
-sacsma dpl calsim product apply --tier2 artifacts/_local/product/calsim3/<forcing>/tier2 --forcing <forcing>
+# the series of one forcing: the tier-2 pass over the whole record (into
+# artifacts/_local/product/calsim3/<forcing>/tier2, a minute or two), then the share model
+sacsma dpl calsim product apply --forcing <forcing>
 sacsma verify product                              # each tracked series repeats
 ```
 

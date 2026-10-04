@@ -63,7 +63,6 @@ the two tables behind the `Kpet` maps (`hru_veg_kpet_15cdec.csv`, `hru_kpet_by_s
 
 `figures/` holds each product against the Livneh baseline on both models, split at WY1950;
 `split_unsplit_anchor_skill.csv` scores both precipitation lineages against CalSim3.
-`wgen_product_a/` and `historical_lto/` hold the daily runs of the three CalLite sets under
-those products (`sim_daily_<set>.csv`, `[date, basin, flow]` in mm/day, from 1915), written by
-the comparison when they are missing. The monthly series of the same model under
+The comparison simulates the daily runs of the three CalLite sets under each product when it
+needs them and caches them in `_local/cache/forcing/`. The monthly series of the same model under
 `wgen_product_a` is delivered in [`product/callite/`](../product/callite/README.md).
