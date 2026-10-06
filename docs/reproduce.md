@@ -88,28 +88,35 @@ of the memory.
 
 ## 6. dPL-CalSim and the rim-inflow product
 
-`<run>` below is any folder of dPL-CalSim: `artifacts/models/dpl/multifamily/noah_cdec_uf_usgs_cs64_ho7685_ufx_areaw_all_kref05_sacx_carry_px_aef/`
+`<run>` below is any folder of dPL-CalSim: `artifacts/models/dpl/multifamily/noah_cdec_uf_usgs_cs64_ho7685_ufx_areaw_all_kref05_sacx_carry_px_w2ft15r10_aef/`
 (the checkpoints), `artifacts/results/dpl/multifamily/...` (the scores) or
 `artifacts/_local/runs/dpl/multifamily/...` (the large local files); every command finds the
 other two. The tracked folders hold the selected checkpoint and the scores, and
 `artifacts/product/calsim3/` the product, so steps can be entered anywhere.
 
-**Train** (about 21 hours on an 8 GB GPU: 120 epochs of about 10 minutes):
+**Train** (about 25 hours on an 8 GB GPU). A base run of 120 epochs of about 10 minutes, then
+two fine-tunes that carry the gradient through two water years instead of one: 15 epochs from
+the base run's network, then 10 more, each restarting the learning rate and keeping its final
+network (about 2.5 and 1.7 hours). `<base>` and `<step>` are local folders.
 
 ```bash
-sacsma dpl train aef --domain multifamily --et noah --noah-pet priestley_taylor \
-    --patience 10 --warmup-epochs 4 --chunk-grid water_year --no-flowlen-feature \
+OPTS="aef --domain multifamily --et noah --noah-pet priestley_taylor \
+    --patience 10 --chunk-grid water_year --no-flowlen-feature \
     --nograd-window 256 --train-graph-segments 2 --seed 0 --noah-sac-exchanges \
     --tbptt-carry relative --diagnostics --dead-chunk-nograd --learn-pxtemp --pxtemp-tau 1.0 \
     --obs-mask data/targets/cdec/fnf_daily_mask.csv --holdout-wy 1976-1985 \
     --uf-train-start 1949-10-01 --calsim-arcs train_default --mt-select-weight area \
     --mt-family-weight usgs=0.2366,cdec=0.5508,uf=0.1226,calsim=0.0900 --mt-share-norm all \
-    --mt-loss-ref usgs=0.7388,cdec=0.4202,uf=0.1140,calsim=0.3549 --mt-loss-ref-power 0.5 \
-    --epochs 120 --out <run>
+    --mt-loss-ref usgs=0.7388,cdec=0.4202,uf=0.1140,calsim=0.3549 --mt-loss-ref-power 0.5"
+FT="--tbptt-window-years 2 --graph-recompute-days 73 --init-gate abort --lr 3e-4 --warmup-epochs 1"
+sacsma dpl train $OPTS --warmup-epochs 4 --epochs 120 --out <base>
+sacsma dpl train $OPTS $FT --init-from <base>/checkpoints/best.pt --epochs 15 --min-stop-epoch 15 --out <step>
+sacsma dpl train $OPTS $FT --init-from <step>/checkpoints/last.pt --epochs 10 --min-stop-epoch 10 --out <run>
 ```
 
-A retrained run will not match the tracked one digit for digit: GPU arithmetic is not
-reproducible across drivers. Two epochs of the same command on the same machine do repeat.
+`--init-gate abort` stops a fine-tune whose first epoch does not reproduce its starting
+network's score. A retrained run will not match the tracked one digit for digit: GPU arithmetic
+is not reproducible across drivers. Two epochs of the same command on the same machine do repeat.
 
 **Score** (CPU; the trained field runs over the whole record on the engine in double precision,
 a few minutes):

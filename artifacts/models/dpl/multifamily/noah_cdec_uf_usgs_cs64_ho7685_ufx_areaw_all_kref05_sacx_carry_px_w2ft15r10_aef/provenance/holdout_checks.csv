@@ -1,0 +1,7 @@
+check,result,detail
+"USGS gauges, WY1976-85 paired median KGE >= -0.01",PASS,"+0.0027, T higher at 26/49"
+"unimpaired subbasins, WY1976-85 paired median KGE >= -0.01",PASS,"-0.0006, T higher at 3/9"
+"CalSim3 arcs, WY1976-85 paired median KGE >= -0.01",PASS,"+0.0012, T higher at 39/64"
+"product arcs, WY1976-85 paired median KGE >= -0.01",PASS,"+0.0007, T higher at 103/196"
+"product arcs, WY1922-49 paired median KGE >= -0.01",PASS,"-0.0003, T higher at 97/196"
+share-model response gate,PASS,True

@@ -88,7 +88,7 @@ under `artifacts/results/dpl/`.
 sacsma dpl evaluate artifacts/models/dpl/15cdec/noah/checkpoints/best.pt
 
 # a CalSim3 run (here dPL-CalSim)
-RUN=artifacts/models/dpl/multifamily/noah_cdec_uf_usgs_cs64_ho7685_ufx_areaw_all_kref05_sacx_carry_px_aef
+RUN=artifacts/models/dpl/multifamily/noah_cdec_uf_usgs_cs64_ho7685_ufx_areaw_all_kref05_sacx_carry_px_w2ft15r10_aef
 sacsma dpl evaluate $RUN/checkpoints/best.pt       # skill at its gauges and unimpaired-flow sites
 sacsma dpl calsim tier1 $RUN                       # vs CalSim3 at the anchor sets
 sacsma dpl calsim tier2 $RUN --trace-python <python of the sacsma-gis environment>   # every rim arc

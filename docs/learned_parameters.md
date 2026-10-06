@@ -44,7 +44,9 @@ learned rain/snow threshold.
 **Training.** The loss is a squared error normalized by each watershed's observed variance,
 plus a log-flow term and a variance-matching term. Optimization is AdamW over year-long
 chunks, with the model state carried from chunk to chunk. The network kept is the one with the
-best calibration-period KGE.
+best calibration-period KGE. dPL-CalSim is then fine-tuned with the gradient carried through two
+water years: with one, the gradient on the slow lower-zone drainage and on `Kpet` at Shasta has the
+wrong sign.
 
 **Scoring.** A run is scored as it was trained: its field runs on the engine with the numerics
 and the basin weights of its training, over the whole record from the cold start
