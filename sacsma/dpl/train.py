@@ -89,7 +89,7 @@ from .multi_timescale import (
     monthly_chunk_target,
     monthly_nnse_loss,
 )
-from .parameter_net import ParameterNet, ga_priors
+from .parameter_net import _RETIRED_BUFFERS, ParameterNet, ga_priors
 from .regularize import (
     adaptive_basin_weights,
     build_neighbor_edges,
@@ -839,7 +839,8 @@ def train(
         # strict=False: heads the donor lacks (e.g. a fresh seasonal head)
         # keep their zero-init, so training starts EXACTLY at the donor's
         # parameter field; donor keys the net lacks are a config error.
-        missing, unexpected = net.load_state_dict(ick["net"], strict=False)
+        missing, unexpected = net.load_state_dict(
+            {k: v for k, v in ick["net"].items() if k not in _RETIRED_BUFFERS}, strict=False)
         if unexpected:
             raise ValueError(f"init_from checkpoint carries heads this net "
                              f"lacks: {sorted(unexpected)}")
