@@ -120,7 +120,7 @@ python data/inputs/forcing/aorc_region.py --assemble               # partials ->
   WGEN scenario. They are flagged, not corrected (no referee in the repository). `--cut` warns about them.
 - caution: runs made before 2026-09-29 read the raw values of the 92 later pairs (82 at
   CalSim3-footprint-only cells, 10 at `15cdec_grid` cells, none at `9unimp`/`11obs`/`12rim` cells). Every
-  multifamily run except dPL-CalSim (dPL-26 and dPL-95 among them) has `cdec_PNF` 1992-07-12 at +1.32 mm
+  multifamily run except dPL-CalSim (dPL-26 among them) has `cdec_PNF` 1992-07-12 at +1.32 mm
   watershed mean (one day, in the loss window); the three 95-entity runs also have `usgs_11218500` that day
   (+1.52 mm). The `15cdec_grid` dPL runs have 10 pairs, only PNF 1992-07-12 inside WY1989-2003. dPL-CalSim,
   the only run that trains arcs, used the corrected store, so the largest exposure (`cs_I_HON021`

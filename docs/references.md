@@ -34,7 +34,7 @@ The sources the guide cites, in alphabetical order. Each entry has an anchor (`r
 
 <a id="jarvis2008"></a>Jarvis, A., Reuter, H. I., Nelson, A., and Guevara, E. (2008). Hole-filled SRTM for the globe, Version 4. CGIAR-CSI SRTM 90m Database.
 
-<a id="koren2014"></a>Koren, V., Smith, M., and Cui, Z. (2014). Physically-based modifications to the Sacramento soil moisture accounting model. Part A: Modeling the effects of frozen ground on the runoff generation process. *Journal of Hydrology*, 519, 3475–3491.
+<a id="koren2010"></a>Koren, V., Smith, M., Cui, Z., Cosgrove, B., Werner, K., and Zamora, R. (2010). Modification of Sacramento Soil Moisture Accounting Heat Transfer Component (SAC-HT) for enhanced evapotranspiration. *NOAA Technical Report NWS 53*. National Weather Service, Silver Spring, MD.
 
 <a id="kratzert2019"></a>Kratzert, F., Klotz, D., Shalev, G., Klambauer, G., Hochreiter, S., and Nearing, G. (2019). Towards learning universal, regional, and local hydrological behaviors via machine learning applied to large-sample datasets. *Hydrology and Earth System Sciences*, 23, 5089–5110.
 

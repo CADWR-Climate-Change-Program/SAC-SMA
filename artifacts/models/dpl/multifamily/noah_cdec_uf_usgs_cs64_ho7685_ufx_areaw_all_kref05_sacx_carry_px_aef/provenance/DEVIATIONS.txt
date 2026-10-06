@@ -1,9 +1,0 @@
-DEVIATION (PREREG_S1): run interrupted 2026-09-30 14:57 by a thermal hibernation during epoch 91;
-resumed Wed Sep 30 16:02:46 PDT 2026 from last.pt (epoch 90) with the identical flags + --resume. The trainer restores
-net/opt/sched/epoch/best/stale; the RNG stream and the EMA shadow are not restored.
-Pre-resume checkpoints and logs: checkpoints/pre_resume_e090/
-
-USER DECISION 2026-09-30 23:17: S1 ADOPTED AS IS ("adopt the s1 as is. no need to retrain"). The frozen PREREG_S1 reading rule
-required the NO-ARCS CONTROL after the readable guard fails C1-NHG (.8266 < .8329) and U1 (uf WY1986-2014 mean .8960
-< .9264; uf_03/04/07/20 below H95 - .04); the control was NOT run. Both are recorded as known costs of S1 (NHG was
-already H95's known cost; the U1 loss coincides with the UF back-extension's gain in WY1950-84, P17b .913 vs H .867).

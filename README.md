@@ -78,7 +78,7 @@ flow = run_basins(domain="9unimp")   # a whole set in one run: date x watershed,
 
 The trained runs are in `artifacts/models/dpl/`: `15cdec/` holds the 15-watershed runs
 (`hamon`, `hamon_dense`, `pt`, `noah`, `noah_noca`) and the LSTM models (`hybrid`,
-`hybrid_dt`, and `lstm` without physics); `multifamily/` holds the CalSim3 runs dPL-26, dPL-95
+`hybrid_dt`, and `lstm` without physics); `multifamily/` holds the CalSim3 runs dPL-26
 and dPL-CalSim (their folder names are in [Runs](docs/runs.md)). `evaluate` takes a run's
 checkpoint, the CalSim3 tools any of its folders; scores and figures go to the run's folder
 under `artifacts/results/dpl/`.
@@ -88,7 +88,7 @@ under `artifacts/results/dpl/`.
 sacsma dpl evaluate artifacts/models/dpl/15cdec/noah/checkpoints/best.pt
 
 # a CalSim3 run (here dPL-CalSim)
-RUN=artifacts/models/dpl/multifamily/noah_cdec_uf_usgs_cs64_ho7685_ufx_areaw_all_kref05_sacx_carry_px_aef
+RUN=artifacts/models/dpl/multifamily/noah_cdec_uf_usgs_cs64_ho7685_ufx_areaw_all_kref05_sacx_carry_px_w2ft15r10_aef
 sacsma dpl evaluate $RUN/checkpoints/best.pt       # skill at its gauges and unimpaired-flow sites
 sacsma dpl calsim tier1 $RUN                       # vs CalSim3 at the anchor sets
 sacsma dpl calsim tier2 $RUN --trace-python <python of the sacsma-gis environment>   # every rim arc

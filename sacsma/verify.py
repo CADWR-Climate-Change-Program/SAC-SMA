@@ -53,7 +53,7 @@ PARITY_MAX_MM = 0.1
 #: one tracked run per physics of the learned step: Noah-lite with the SAC exchanges and a
 #: learned PXTEMP, Noah-lite, SAC ET with the refined Priestley-Taylor PET, SAC ET with Hamon
 LEARNED_RUNS = (("multifamily",
-                 "noah_cdec_uf_usgs_cs64_ho7685_ufx_areaw_all_kref05_sacx_carry_px_aef"),
+                 "noah_cdec_uf_usgs_cs64_ho7685_ufx_areaw_all_kref05_sacx_carry_px_w2ft15r10_aef"),
                 ("15cdec", "noah"), ("15cdec", "pt"), ("15cdec", "hamon_dense"))
 LEARNED_MAX_MM = 1e-9
 #: relative tolerance of the product check (the fit and ``apply`` agree to about 3e-7)

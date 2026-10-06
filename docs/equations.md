@@ -188,7 +188,7 @@ the percentage of annual volume placed in the wrong month. It is reported as a p
 
 ## 6. Parameter table
 
-The table lists the 31-parameter structure with the GA feasible ranges ([Wi & Steinschneider, 2023](references.md#wimemo)). The parameter network of the [learned-parameter model](learned_parameters.md) emits the same 28 free parameters into the same box (with the two noted widenings); `side`, `SCF`, and `PXTEMP` are fixed in both systems.
+The table lists the 31-parameter structure with the GA feasible ranges ([Wi & Steinschneider, 2023](references.md#wimemo)). The parameter network of the [learned-parameter model](learned_parameters.md) emits the same 28 free parameters into the same box (with the two noted widenings); `side` and `SCF` are fixed in both systems, and `PXTEMP` in both except the multi-family runs, which learn it between −1 and 3 °C.
 
 | Process | Parameter | Description | Units | Lower | Upper |
 |---|---|---|---|---|---|

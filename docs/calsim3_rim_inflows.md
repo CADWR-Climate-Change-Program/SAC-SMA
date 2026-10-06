@@ -19,18 +19,18 @@ grid cells that drain to it. Entities come in four *families*:
 | `calsim_monthly` | 64 CalSim3 arcs with a record of their own (of 196 in the table) | monthly | monthly volume |
 
 The training domain is `--domain multifamily`. Each entity is scored over its own record inside
-WY1950–2018. Family weights follow the area the families cover, and a fixed scale per family
+WY1950–2018; the unimpaired-flow subbasins over WY1985–2014, which dPL-CalSim extends back to
+WY1950. Family weights follow the area the families cover, and a fixed scale per family
 keeps one family's loss units from dominating the others.
 
-Three runs are the steps to the current model. Each is named for what it trains on.
+Two runs are the steps to the current model. Each is named for what it trains on.
 
 | Name | Trains on | Run folder (`artifacts/models/dpl/multifamily/`, `results/dpl/multifamily/`) |
 |---|---|---|
 | dPL-26 | 17 CDEC + 9 unimpaired-flow entities | `noah_cdec_uf_sacx_carry_px_aef` |
-| dPL-95 | the same + 69 USGS gauges | `noah_cdec_uf_usgs_areaw_all_kref05_sacx_carry_px_aef` |
-| **dPL-CalSim** | the same + 64 CalSim3 arcs, with WY1976–85 held out of every family | `noah_cdec_uf_usgs_cs64_ho7685_ufx_areaw_all_kref05_sacx_carry_px_aef` |
+| **dPL-CalSim** | the same + 69 USGS gauges + 64 CalSim3 arcs, with WY1976–85 held out of every family; fine-tuned with the gradient carried through two water years | `noah_cdec_uf_usgs_cs64_ho7685_ufx_areaw_all_kref05_sacx_carry_px_w2ft15r10_aef` |
 
-All three use Priestley–Taylor PET, the soil-moisture-limited ET with the SAC-SMA exchange
+Both use Priestley–Taylor PET, the soil-moisture-limited ET with the SAC-SMA exchange
 terms kept, a learned rain/snow threshold, and the AlphaEarth inputs. The folder names spell
 the recipe; the parts are listed in the [Glossary](glossary.md#run-folder-names).
 
@@ -55,8 +55,8 @@ tables:
 | | Median monthly KGE, WY1976–85 |
 |---|---|
 | Tier 1, 20 locations | 0.92 |
-| The 64 trained arcs | 0.73 |
-| The 9 unimpaired-flow subbasins | 0.90 |
+| The 64 trained arcs | 0.74 |
+| The 9 unimpaired-flow subbasins | 0.91 |
 | All 196 arcs (tier 2) | 0.69 |
 
 The whole-watershed flows are good. Single arcs inside a multi-arc watershed are weaker,
@@ -88,14 +88,14 @@ Skill on the held-out decade, median monthly KGE against CalSim3
 
 | Arcs | dPL-CalSim | Product |
 |---|---|---|
-| 139 share arcs | 0.70 | **0.83** |
-| 50 non-anchor arcs | 0.60 | 0.60 |
-| 7 single-arc systems | 0.87 | 0.87 |
+| 139 share arcs | 0.70 | **0.84** |
+| 50 non-anchor arcs | 0.62 | 0.62 |
+| 7 single-arc systems | 0.89 | 0.89 |
 | All 196 | 0.69 | **0.81** |
 
-Over all 196 arcs the product's mean is 0.72 and its 10th percentile 0.42; 7 arcs are below
-zero (13 for the model alone). At the five validation climate points the share arcs' response
-differs from the model's by at most 0.42 % in volume and 0.64 points in the April–July share at
+Over all 196 arcs the product's mean is 0.72 and its 10th percentile 0.45; 8 arcs are below
+zero (14 for the model alone). At the five validation climate points the share arcs' response
+differs from the model's by at most 0.43 % in volume and 0.69 points in the April–July share at
 the 90th percentile (`artifacts/product/calsim3/response_gate.csv`), inside the limits set beforehand
 (median 1, 90th percentile 3).
 
@@ -108,20 +108,20 @@ historical series scores (median monthly KGE):
 
 | Arcs | dPL-CalSim | Product |
 |---|---|---|
-| 139 share arcs | 0.67 | **0.78** |
+| 139 share arcs | 0.65 | **0.78** |
 | 50 non-anchor arcs | 0.42 | 0.42 |
 | 7 single-arc systems | 0.78 | 0.78 |
 | All 196 | 0.64 | **0.76** |
 
-**Under the WGEN weather.** Over WY1916–2018 the product carries 27,540 TAF a year under the
-historical weather, 27,740 under scenario 1 and 27,650 under scenario 12, and the April–July
-share of the year's flow falls from 41.7 % to 38.6 % and 31.1 %. The warmer early record of
+**Under the WGEN weather.** Over WY1916–2018 the product carries 27,670 TAF a year under the
+historical weather, 27,860 under scenario 1 and 27,750 under scenario 12, and the April–July
+share of the year's flow falls from 41.5 % to 38.3 % and 30.8 %. The warmer early record of
 scenario 1 (its temperature is detrended to 1991–2020) moves the melt earlier and leaves the
 volume within 1 %: the response the comparison of the calibrated sets finds in VIC, not in the
 Hamon-PET calibrations, which lose about 3 % ([Calibrated SAC-SMA](calibrated_sacsma.md)). On
 the share arcs the product keeps the model's own response. From scenario 1 to scenario 12 the
-model's arc volume changes by −0.9 % and its April–July share by −5.7 points at the median;
-the product differs from that by 0.05 % and 0.18 points at the median and by 0.11 % and 0.46
+model's arc volume changes by −0.9 % and its April–July share by −6.3 points at the median;
+the product differs from that by 0.05 % and 0.19 points at the median and by 0.13 % and 0.48
 points at the 90th percentile, within half the limits set for the fit's validation points.
 
 ## What was tried and not adopted
@@ -137,14 +137,14 @@ Each with a plan frozen before its held-out numbers were read. The full list is 
 
 ## Known costs
 
-- **NHG (New Hogan).** Daily KGE 0.83 in dPL-CalSim, against 0.92 in dPL-26.
+- **NHG (New Hogan).** Daily KGE 0.82 in dPL-CalSim, against 0.92 in dPL-26.
 - **Unimpaired-flow subbasins after WY1985.** Extending their targets back to WY1950 raised
   the score on the earlier years and lowered it on WY1986–2014 (0.90 against a bar of 0.93).
 - **ORO (Oroville) in dPL-26.** The learned rain/snow threshold stores cool-storm precipitation
-  as snow and damps moderate floods. dPL-95 recovered most of it.
-- **One seed.** Each of the three runs is a single seed, and dPL-CalSim was adopted without the
-  control runs its plan called for (`provenance/DEVIATIONS.txt` in its folder).
-- **The held-out decade has been read** by three experiments, so a further design choice read
+  as snow and damps moderate floods. dPL-CalSim recovered most of it (daily KGE 0.892 against 0.838).
+- **One seed.** Each run is a single seed, and dPL-CalSim's base run has no control without
+  the arcs.
+- **The held-out decade has been read** by four experiments, so a further design choice read
   against WY1976–85 is not a clean test.
 - **The start is remembered for decades in three southern Sierra arcs.** In McClure (Merced),
   Hetch Hetchy (Tuolumne) and Millerton (San Joaquin) the slow lower-zone store keeps its

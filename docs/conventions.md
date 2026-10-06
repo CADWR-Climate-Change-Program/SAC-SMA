@@ -174,5 +174,5 @@ The output tree is described in [`artifacts/README.md`](../artifacts/README.md).
 - One job runs on the GPU at a time.
 - Run folders keep the names they were made with; the files in a run's `provenance/` are the
   record of the run as it was made, including names and module paths of that time.
-- Runs are named for what they train on (dPL-26, dPL-95, dPL-CalSim).
+- Runs are named for what they train on (dPL-26, dPL-CalSim).
 - What is not adopted stays local (`artifacts/_local/`, `tmp/`) and is not committed.

@@ -1,7 +1,7 @@
 # data/targets/usgs: cleaned USGS daily gauge flows inside the CalSim3 domain
 
 Daily discharge at the 69 USGS gauges whose watersheds lie inside the CalSim3 domain. Role:
-target. The `usgs_daily` family of the learned-parameter models (dPL-95, dPL-CalSim) is
+target. The `usgs_daily` family of the learned-parameter models (dPL-CalSim) is
 fitted to them. For the calibrated SAC-SMA they are an observational set independent of the
 full-natural-flow and CDEC series it was fitted to. The flows come from the training store
 of the sibling neuralhyd-ca repository, whose QA/QC pipeline retrieves NWIS parameter `00060`

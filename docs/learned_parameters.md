@@ -38,13 +38,15 @@ Priestley–Taylor PET ([Priestley & Taylor, 1972](references.md#priestleytaylor
 radiation from the daily temperature range
 ([Bristow & Campbell, 1984](references.md#bristowcampbell1984); [Allen et al., 1998](references.md#allen1998)),
 a soil-moisture-limited ET on observed vegetation in the manner of the Noah model
-([Ek et al., 2003](references.md#ek2003); [Koren et al., 2014](references.md#koren2014)), and a
+([Ek et al., 2003](references.md#ek2003); [Koren et al., 2010](references.md#koren2010)), and a
 learned rain/snow threshold.
 
 **Training.** The loss is a squared error normalized by each watershed's observed variance,
 plus a log-flow term and a variance-matching term. Optimization is AdamW over year-long
 chunks, with the model state carried from chunk to chunk. The network kept is the one with the
-best calibration-period KGE.
+best calibration-period KGE. dPL-CalSim is then fine-tuned with the gradient carried through two
+water years: with one, the gradient on the slow lower-zone drainage and on `Kpet` at Shasta has the
+wrong sign.
 
 **Scoring.** A run is scored as it was trained: its field runs on the engine with the numerics
 and the basin weights of its training, over the whole record from the cold start
@@ -67,7 +69,7 @@ What these runs showed:
   against 0.838, and it is the form that covers the CalSim3 catchments.
 - **Better physics costs a little skill here.** Priestley–Taylor PET and the Noah-type ET
   lower the 15-watershed score slightly. They are kept because PET then responds to radiation
-  and snow cover, and ET to modeled soil moisture.
+  (and to snow cover in `pt`), and ET to modeled soil moisture.
 - **An LSTM adds skill but not a trustworthy response to climate.** See below.
 - **Weaknesses that stayed.** FOL's variability is damped in every run. SCC has the lowest
   validation score from `noah` on (0.63, in the hybrids too). NHG's validation volume bias fell

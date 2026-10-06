@@ -7,8 +7,8 @@ and what is still open. The method is in [Learned parameters](learned_parameters
 
 ## Current model and product
 
-**dPL-CalSim** (`noah_cdec_uf_usgs_cs64_ho7685_ufx_areaw_all_kref05_sacx_carry_px_aef`),
-adopted 2026-09-30, and the **CalSim3 rim-inflow product**
+**dPL-CalSim** (`noah_cdec_uf_usgs_cs64_ho7685_ufx_areaw_all_kref05_sacx_carry_px_w2ft15r10_aef`),
+adopted 2026-10-06, and the **CalSim3 rim-inflow product**
 ([`artifacts/product/calsim3/`](../artifacts/product/calsim3/README.md)), adopted 2026-10-01: monthly flow on
 the 196 rim arcs, TAF, WY1916–2018, one series per forcing (historical Livneh, WGEN Product A
 scenarios 1 and 12).
@@ -17,19 +17,19 @@ Median monthly KGE against CalSim3 on the held-out water years 1976–85:
 
 | Arcs | dPL-CalSim | Product |
 |---|---|---|
-| 139 share arcs | 0.699 | 0.834 |
-| 50 non-anchor arcs | 0.604 | 0.604 |
-| 7 single-arc systems | 0.870 | 0.870 |
-| All 196 | 0.690 | 0.812 |
+| 139 share arcs | 0.704 | 0.835 |
+| 50 non-anchor arcs | 0.616 | 0.616 |
+| 7 single-arc systems | 0.885 | 0.885 |
+| All 196 | 0.692 | 0.808 |
 
 On WY1922–1949, before any training year:
 
 | Arcs | dPL-CalSim | Product |
 |---|---|---|
-| 139 share arcs | 0.666 | 0.783 |
-| 50 non-anchor arcs | 0.417 | 0.417 |
-| 7 single-arc systems | 0.778 | 0.778 |
-| All 196 | 0.637 | 0.760 |
+| 139 share arcs | 0.651 | 0.777 |
+| 50 non-anchor arcs | 0.424 | 0.424 |
+| 7 single-arc systems | 0.779 | 0.779 |
+| All 196 | 0.638 | 0.757 |
 
 Source: `artifacts/product/calsim3/historical_livneh_unsplit/product_metrics.csv`; the fit's own scores,
 on its WY1950–2015 pass, are in `artifacts/product/calsim3/product_info.json`. `sacsma verify product`
@@ -40,7 +40,7 @@ checks that `sacsma dpl calsim product apply` reproduces every tracked series.
 One parameter network trained on several families of flow record. Mean KGE of each family's
 entities over their training years (the run's `metrics.csv`), and the two checks against
 CalSim3: the mean over the 20 tier-1 locations and the median over the 196 arcs of tier 2. The
-first five runs are checked over WY1950–84, dPL-CalSim over its held-out WY1976–85.
+first four runs are checked over WY1950–84, dPL-CalSim over its held-out WY1976–85.
 
 | Name | Folder | Entities | usgs | cdec | uf | arcs | Tier 1 mean | Tier 2 median |
 |---|---|---|---|---|---|---|---|---|
@@ -48,12 +48,14 @@ first five runs are checked over WY1950–84, dPL-CalSim over its held-out WY197
 | – | `noah_cdec_uf_usgs_areaw` (local) | 95 | 0.592 | 0.791 | 0.879 | – | 0.825 | 0.599 |
 | – | `noah_cdec_uf` (local) | 26 | – | 0.790 | 0.893 | – | 0.794 | 0.576 |
 | dPL-26 | `noah_cdec_uf_sacx_carry_px_aef` | 26 | – | 0.874 | 0.934 | – | 0.859 | 0.628 |
-| dPL-95 | `noah_cdec_uf_usgs_areaw_all_kref05_sacx_carry_px_aef` | 95 | 0.687 | 0.880 | 0.935 | – | 0.857 | 0.657 |
-| **dPL-CalSim** | `noah_cdec_uf_usgs_cs64_ho7685_ufx_areaw_all_kref05_sacx_carry_px_aef` | 159 | 0.691 | 0.872 | 0.929 | 0.715 | 0.908 | 0.690 |
+| **dPL-CalSim** | `noah_cdec_uf_usgs_cs64_ho7685_ufx_areaw_all_kref05_sacx_carry_px_w2ft15r10_aef` | 159 | 0.697 | 0.874 | 0.930 | 0.720 | 0.909 | 0.692 |
 
 The first three are the first recipe; they are kept locally, not tracked. dPL-26 was the base
-from 2026-09-28, dPL-95 from 2026-09-29; dPL-CalSim starts from dPL-95's recipe. The parts of
-a folder name are explained in the [Glossary](glossary.md#run-folder-names).
+from 2026-09-28. dPL-CalSim adds the 69 USGS gauges, family weights by footprint area with a
+fixed loss scale per family, the 64 CalSim3 arcs and the unimpaired-flow records back to WY1950,
+and holds WY1976–85 out of every family. Its 120-epoch base run is then fine-tuned for 25 epochs
+with the gradient carried through two water years instead of one (`w2ft15r10`; the commands are in
+[Reproduce](reproduce.md#6-dpl-calsim-and-the-rim-inflow-product)). The parts of a folder name are explained in the [Glossary](glossary.md#run-folder-names).
 
 ## Runs on the 15 CDEC watersheds
 
@@ -100,14 +102,13 @@ sacsma dpl calsim atlas <run>
 
 ## Known costs
 
-- **NHG.** Daily KGE 0.827 in dPL-CalSim (dPL-95 0.873, dPL-26 0.924).
-- **Unimpaired-flow subbasins, WY1986–2014.** 0.896 against a bar of 0.926, after their targets
+- **NHG.** Daily KGE 0.822 in dPL-CalSim (dPL-26 0.924).
+- **Unimpaired-flow subbasins, WY1986–2014.** 0.899 against a bar of 0.926, after their targets
   were extended back to WY1950.
 - **ORO in dPL-26.** 0.838 against 0.896 before the learned rain/snow threshold (a run that is
-  kept locally, not tracked); dPL-95 is at 0.888.
-- **Single seed.** No run has a second seed. dPL-95 was adopted without its paired run without
-  the family loss scale, dPL-CalSim without its control without the arcs
-  (`provenance/DEVIATIONS.txt` of its model folder).
+  kept locally, not tracked); dPL-CalSim is at 0.892.
+- **Single seed.** No run has a second seed, and dPL-CalSim's base run has no control without
+  the arcs.
 - **`hybrid`.** Its volume bias moves between calibration and validation at MRC (+1.7 % to
   −8.5 %) and NML (−2.2 % to −7.3 %). For the earlier generation (`hybrid_noca`) the physics
   run was the better out-of-sample answer on monthly flow against CalSim3 at NML, MRC and ORO.
@@ -140,8 +141,9 @@ of commit `f4140c0` (`git show f4140c0:artifacts/dpl/RUNS.md`).
   north-state volume. Dropped, also because it could not be scored through the reference
   model.
 - **A shortened spinup for trained parameters.** Trained fields hold more than ten years of
-  state: one checkpoint scored 0.655 from a 1978 start and 0.759 from the full record. Scoring
-  uses the cycle spinup.
+  state: one checkpoint scored 0.655 from a 1978 start and 0.759 from the full record. The
+  15-CDEC scores run from a cold start at the beginning of the record; the multi-family checks
+  use the cycle spinup.
 
 **LSTM hybrids on the 15 CDEC watersheds**
 
@@ -167,19 +169,28 @@ of commit `f4140c0` (`git show f4140c0:artifacts/dpl/RUNS.md`).
   the exchange terms (`sacx`) the cause.
 - **A second seed of the first recipe** landed in the same state and moved the tier-1 mean by
   0.024. That is the spread the later readings use.
-- **State carry between year chunks** (`carry`) lifted the selection score from 0.845 to
-  0.877. The variant that also holds the drainage flux fixed damped the Sierra flood peaks
+- **Relative state carry** (`carry`): the state was always carried between year chunks;
+  `carry` also holds each store's relative saturation in the gradient. It lifted the selection
+  score from 0.845 to 0.877. The variant that also holds the drainage flux fixed damped the Sierra flood peaks
   (99.9th-percentile flow −25 % against −6 %).
 - **All 64 embedding coordinates** instead of 16 components: higher in training, lower at ORO
   (0.859 against 0.896) and on arcs outside the trained cells.
-- **Gradients through two or three water years.** Three years fixed Shasta's July to November
+- **Gradients through three water years.** Three years fixed Shasta's July to November
   volume (−3.5 % against −27.5 %) and lost the Sierra peaks (the five largest annual maxima
-  −46 % against −24 %). Added timing and peak terms in the loss did not recover them.
+  −46 % against −24 %). Added timing and peak terms in the loss did not recover them. Two
+  years, as a fine-tune, is in dPL-CalSim.
+- **A fine-tune of the same length with one-year gradients** (the control of dPL-CalSim's
+  fine-tune, on its recipe): it moved Shasta's lower-zone drainage the wrong way (`lzsk` 0.020 to
+  0.022). Two years took it to 0.011, and Shasta's August–November flow from 0.63 to 0.82 of
+  observed, with the Sierra peaks within two points.
 - **A lower cap on the learned rain/snow threshold.** Capped at 1.5 °C on dPL-26's field,
   Trinity loses most of its gain and ORO recovers only to 0.871. No such run was trained.
 - **Family shares divided by the entities present in a chunk.** The USGS family then carried
   about 0.57 of the loss against a share of 0.22, because its records start earlier. `all` and
   the fixed family scale (`kref05`) correct that.
+- **95 entities without a holdout** (the USGS gauges and the fixed family loss scale on
+  dPL-26's recipe). Its USGS gauges train on the years the CalSim3 checks score, so it has no
+  clean held-out reading. dPL-CalSim holds WY1976–85 out of every family instead.
 - **Family shares by observed volume or by footprint area** (the first two rows of the table):
   not resolved on one seed.
 
@@ -204,8 +215,27 @@ of commit `f4140c0` (`git show f4140c0:artifacts/dpl/RUNS.md`).
 
 - The share model's response is fitted on uniform climate changes. Under WGEN weather it is
   checked on scenario 12 only: from scenario 1 the product misses the model's own share-arc
-  response by 0.05 % in volume and 0.18 points in the April–July share at the median.
+  response by 0.05 % in volume and 0.19 points in the April–July share at the median.
 - No warmed VIC run exists for a like-for-like comparison of the response.
-- The held-out decade WY1976–85 has been read by three experiments.
+- The held-out decade WY1976–85 has been read by four experiments.
 - A rain/snow partition that does not switch whole storm days (the candidate fix for ORO) has
   not been built.
+- **Shasta's slow store** drains faster than its gauge asks: `lzsk` is 0.011/day in dPL-CalSim,
+  while SHA's training loss is lowest near 0.004, where its August–November flow matches the
+  gauge (now 0.82 of it). The training loss summed over every target on Shasta's cells, weighted
+  as in training, still wants the lower value; training does not reach it.
+- **The Stanislaus' late summer is low** (August–November 0.73 of observed). Doubling `lzfsm` on
+  its cells lifts NML's daily log-KGE from 0.14 to 0.70, inside the parameter box, and the same
+  summed loss wants it; training does not take it either. What stops both, the shared network,
+  the truncated gradient or a barrier on the way, is not resolved.
+- **The Feather's late summer is high** (1.09 of observed). `lzsk`, `lzpk` and `lzfpm` sit on
+  their lower bounds (0.003/day, 0.01/day, 50 mm) over most of ORO's cells, and ORO's loss wants
+  them lower.
+- **Trinity's melt is 12 days early** at Coffee Creek (USGS 11523200, training years). A rain/snow
+  threshold 1 °C higher on Trinity's cells moves it about 5 days and improves the Coffee Creek and
+  Lewiston fits, not CLE's. Elevation bands inside a cell with a temperature lapse do no better
+  once the snow parameters can adapt.
+- **`relief_m`** in the grid statics (`data/inputs/grid/soilveg_continuous.csv`) does not mean the
+  same thing on every cell. Against the 3DEP elevation spread of the whole 1/16° cell (1,357 cells
+  checked), it matches on the cells from the 15-CDEC grid and is 3.6 to 4.2 times smaller on those
+  from the other sources, which `sample_gis.py` takes over a 25-pixel window.
