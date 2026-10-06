@@ -22,15 +22,14 @@ The training domain is `--domain multifamily`. Each entity is scored over its ow
 WY1950–2018. Family weights follow the area the families cover, and a fixed scale per family
 keeps one family's loss units from dominating the others.
 
-Three runs are the steps to the current model. Each is named for what it trains on.
+Two runs are the steps to the current model. Each is named for what it trains on.
 
 | Name | Trains on | Run folder (`artifacts/models/dpl/multifamily/`, `results/dpl/multifamily/`) |
 |---|---|---|
 | dPL-26 | 17 CDEC + 9 unimpaired-flow entities | `noah_cdec_uf_sacx_carry_px_aef` |
-| dPL-95 | the same + 69 USGS gauges | `noah_cdec_uf_usgs_areaw_all_kref05_sacx_carry_px_aef` |
-| **dPL-CalSim** | the same + 64 CalSim3 arcs, with WY1976–85 held out of every family | `noah_cdec_uf_usgs_cs64_ho7685_ufx_areaw_all_kref05_sacx_carry_px_aef` |
+| **dPL-CalSim** | the same + 69 USGS gauges + 64 CalSim3 arcs, with WY1976–85 held out of every family | `noah_cdec_uf_usgs_cs64_ho7685_ufx_areaw_all_kref05_sacx_carry_px_aef` |
 
-All three use Priestley–Taylor PET, the soil-moisture-limited ET with the SAC-SMA exchange
+Both use Priestley–Taylor PET, the soil-moisture-limited ET with the SAC-SMA exchange
 terms kept, a learned rain/snow threshold, and the AlphaEarth inputs. The folder names spell
 the recipe; the parts are listed in the [Glossary](glossary.md#run-folder-names).
 
@@ -141,8 +140,8 @@ Each with a plan frozen before its held-out numbers were read. The full list is 
 - **Unimpaired-flow subbasins after WY1985.** Extending their targets back to WY1950 raised
   the score on the earlier years and lowered it on WY1986–2014 (0.90 against a bar of 0.93).
 - **ORO (Oroville) in dPL-26.** The learned rain/snow threshold stores cool-storm precipitation
-  as snow and damps moderate floods. dPL-95 recovered most of it.
-- **One seed.** Each of the three runs is a single seed, and dPL-CalSim was adopted without the
+  as snow and damps moderate floods. dPL-CalSim recovered most of it (daily KGE 0.889 against 0.838).
+- **One seed.** Each run is a single seed, and dPL-CalSim was adopted without the
   control runs its plan called for (`provenance/DEVIATIONS.txt` in its folder).
 - **The held-out decade has been read** by three experiments, so a further design choice read
   against WY1976–85 is not a clean test.

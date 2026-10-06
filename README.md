@@ -78,7 +78,7 @@ flow = run_basins(domain="9unimp")   # a whole set in one run: date x watershed,
 
 The trained runs are in `artifacts/models/dpl/`: `15cdec/` holds the 15-watershed runs
 (`hamon`, `hamon_dense`, `pt`, `noah`, `noah_noca`) and the LSTM models (`hybrid`,
-`hybrid_dt`, and `lstm` without physics); `multifamily/` holds the CalSim3 runs dPL-26, dPL-95
+`hybrid_dt`, and `lstm` without physics); `multifamily/` holds the CalSim3 runs dPL-26
 and dPL-CalSim (their folder names are in [Runs](docs/runs.md)). `evaluate` takes a run's
 checkpoint, the CalSim3 tools any of its folders; scores and figures go to the run's folder
 under `artifacts/results/dpl/`.

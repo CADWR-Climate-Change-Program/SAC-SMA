@@ -40,7 +40,7 @@ checks that `sacsma dpl calsim product apply` reproduces every tracked series.
 One parameter network trained on several families of flow record. Mean KGE of each family's
 entities over their training years (the run's `metrics.csv`), and the two checks against
 CalSim3: the mean over the 20 tier-1 locations and the median over the 196 arcs of tier 2. The
-first five runs are checked over WY1950–84, dPL-CalSim over its held-out WY1976–85.
+first four runs are checked over WY1950–84, dPL-CalSim over its held-out WY1976–85.
 
 | Name | Folder | Entities | usgs | cdec | uf | arcs | Tier 1 mean | Tier 2 median |
 |---|---|---|---|---|---|---|---|---|
@@ -48,12 +48,12 @@ first five runs are checked over WY1950–84, dPL-CalSim over its held-out WY197
 | – | `noah_cdec_uf_usgs_areaw` (local) | 95 | 0.592 | 0.791 | 0.879 | – | 0.825 | 0.599 |
 | – | `noah_cdec_uf` (local) | 26 | – | 0.790 | 0.893 | – | 0.794 | 0.576 |
 | dPL-26 | `noah_cdec_uf_sacx_carry_px_aef` | 26 | – | 0.874 | 0.934 | – | 0.859 | 0.628 |
-| dPL-95 | `noah_cdec_uf_usgs_areaw_all_kref05_sacx_carry_px_aef` | 95 | 0.687 | 0.880 | 0.935 | – | 0.857 | 0.657 |
 | **dPL-CalSim** | `noah_cdec_uf_usgs_cs64_ho7685_ufx_areaw_all_kref05_sacx_carry_px_aef` | 159 | 0.691 | 0.872 | 0.929 | 0.715 | 0.908 | 0.690 |
 
 The first three are the first recipe; they are kept locally, not tracked. dPL-26 was the base
-from 2026-09-28, dPL-95 from 2026-09-29; dPL-CalSim starts from dPL-95's recipe. The parts of
-a folder name are explained in the [Glossary](glossary.md#run-folder-names).
+from 2026-09-28. dPL-CalSim adds the 69 USGS gauges, family weights by footprint area with a
+fixed loss scale per family, the 64 CalSim3 arcs and the unimpaired-flow records back to WY1950,
+and holds WY1976–85 out of every family. The parts of a folder name are explained in the [Glossary](glossary.md#run-folder-names).
 
 ## Runs on the 15 CDEC watersheds
 
@@ -100,13 +100,13 @@ sacsma dpl calsim atlas <run>
 
 ## Known costs
 
-- **NHG.** Daily KGE 0.827 in dPL-CalSim (dPL-95 0.873, dPL-26 0.924).
+- **NHG.** Daily KGE 0.827 in dPL-CalSim (dPL-26 0.924).
 - **Unimpaired-flow subbasins, WY1986–2014.** 0.896 against a bar of 0.926, after their targets
   were extended back to WY1950.
 - **ORO in dPL-26.** 0.838 against 0.896 before the learned rain/snow threshold (a run that is
-  kept locally, not tracked); dPL-95 is at 0.888.
-- **Single seed.** No run has a second seed. dPL-95 was adopted without its paired run without
-  the family loss scale, dPL-CalSim without its control without the arcs
+  kept locally, not tracked); dPL-CalSim is at 0.889.
+- **Single seed.** No run has a second seed. dPL-CalSim was adopted without its control without
+  the arcs
   (`provenance/DEVIATIONS.txt` of its model folder).
 - **`hybrid`.** Its volume bias moves between calibration and validation at MRC (+1.7 % to
   −8.5 %) and NML (−2.2 % to −7.3 %). For the earlier generation (`hybrid_noca`) the physics
@@ -180,6 +180,9 @@ of commit `f4140c0` (`git show f4140c0:artifacts/dpl/RUNS.md`).
 - **Family shares divided by the entities present in a chunk.** The USGS family then carried
   about 0.57 of the loss against a share of 0.22, because its records start earlier. `all` and
   the fixed family scale (`kref05`) correct that.
+- **95 entities without a holdout** (the USGS gauges and the fixed family loss scale on
+  dPL-26's recipe). Its USGS gauges train on the years the CalSim3 checks score, so it has no
+  clean held-out reading. dPL-CalSim holds WY1976–85 out of every family instead.
 - **Family shares by observed volume or by footprint area** (the first two rows of the table):
   not resolved on one seed.
 
