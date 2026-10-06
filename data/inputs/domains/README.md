@@ -53,7 +53,7 @@ sidecars. Products, units, encodings and the sampling conventions are in
 - Sidecars. `15cdec`: 7,891 of 7,891 rows finite; 35 HRUs are POLARIS gap-filled and 239 LAI gap-filled.
 - `basin_tminmax_livneh.csv`: the watershed mean of Tmin and Tmax reproduces the stored `tavg` forcing to
   0.37 °C.
-- `15cdec_grid`: the learned-parameter run on it (`hamon`) scores validation KGE 0.836, against 0.840 for
+- `15cdec_grid`: the learned-parameter run on it (`hamon`) scores validation KGE 0.829, against 0.838 for
   the same model on the original HRUs, so the coarse grid keeps almost all of the skill
   ([Runs](../../../docs/runs.md)).
 

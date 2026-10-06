@@ -19,7 +19,8 @@ grid cells that drain to it. Entities come in four *families*:
 | `calsim_monthly` | 64 CalSim3 arcs with a record of their own (of 196 in the table) | monthly | monthly volume |
 
 The training domain is `--domain multifamily`. Each entity is scored over its own record inside
-WY1950–2018. Family weights follow the area the families cover, and a fixed scale per family
+WY1950–2018; the unimpaired-flow subbasins over WY1985–2014, which dPL-CalSim extends back to
+WY1950. Family weights follow the area the families cover, and a fixed scale per family
 keeps one family's loss units from dominating the others.
 
 Two runs are the steps to the current model. Each is named for what it trains on.

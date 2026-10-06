@@ -140,8 +140,9 @@ of commit `f4140c0` (`git show f4140c0:artifacts/dpl/RUNS.md`).
   north-state volume. Dropped, also because it could not be scored through the reference
   model.
 - **A shortened spinup for trained parameters.** Trained fields hold more than ten years of
-  state: one checkpoint scored 0.655 from a 1978 start and 0.759 from the full record. Scoring
-  uses the cycle spinup.
+  state: one checkpoint scored 0.655 from a 1978 start and 0.759 from the full record. The
+  15-CDEC scores run from a cold start at the beginning of the record; the multi-family checks
+  use the cycle spinup.
 
 **LSTM hybrids on the 15 CDEC watersheds**
 
@@ -167,8 +168,9 @@ of commit `f4140c0` (`git show f4140c0:artifacts/dpl/RUNS.md`).
   the exchange terms (`sacx`) the cause.
 - **A second seed of the first recipe** landed in the same state and moved the tier-1 mean by
   0.024. That is the spread the later readings use.
-- **State carry between year chunks** (`carry`) lifted the selection score from 0.845 to
-  0.877. The variant that also holds the drainage flux fixed damped the Sierra flood peaks
+- **Relative state carry** (`carry`): the state was always carried between year chunks;
+  `carry` also holds each store's relative saturation in the gradient. It lifted the selection
+  score from 0.845 to 0.877. The variant that also holds the drainage flux fixed damped the Sierra flood peaks
   (99.9th-percentile flow −25 % against −6 %).
 - **All 64 embedding coordinates** instead of 16 components: higher in training, lower at ORO
   (0.859 against 0.896) and on arcs outside the trained cells.

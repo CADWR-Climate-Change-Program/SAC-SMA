@@ -9,8 +9,8 @@ Two runs, left to right in the figure:
     perturbation only the FORCING changes.
   * ``noah`` (column "Noah (climate-adaptive)") — the ``physical_climate``
     inputs: the same 23 physiographic features PLUS the 4 climate indices
-    p_mean / aridity / snow_frac / seasonality.  Frozen cal/val 0.779/0.804
-    against 0.767/0.799, so the added indices cost no present-climate skill.
+    p_mean / aridity / snow_frac / seasonality.  Frozen cal/val 0.771/0.801
+    against 0.759/0.792, so the added indices cost no present-climate skill.
     Under a perturbation its parameters are RECOMPUTED from the perturbed
     climate indices (a space-for-time response) — so BOTH its forcing and its
     parameters co-vary with the climate.
