@@ -115,37 +115,6 @@ unscreened scores and the difference are in `anchor_metrics_full.csv` and
 More figures: [`artifacts/results/calsim3/figures/`](../artifacts/results/calsim3/figures/); the file tables are in
 [`artifacts/results/README.md`](../artifacts/results/README.md).
 
-## SAC-SMA, VIC and BCM on one climate
-
-`sacsma calsim --sacsma-vic-bcm` puts SAC-SMA, VIC and the USGS Basin Characterization Model
-(BCM v8) on the same climate and the same 19 watersheds, WY1989–2018, against the same CalSim3
-reference: the CalSim3 Weather Generator's historical-parallel sequence, `wgen_product_a` for
-SAC-SMA and VIC and its Scenario 1 for BCM. WY1989–2018 is the most recent 30 water years all
-three cover (BCM ends in September 2018). Observed11 and Unimpaired9 are pooled into one set of
-19: BLB and Stony Creek are the same watershed on the same three arcs, so the Observed11 copy is
-dropped. Median KGE is 0.87, 0.77 and 0.66, and SAC-SMA is highest at all 19. That order is
-expected, because only SAC-SMA is calibrated to these watersheds
-(`artifacts/results/vic_bcm/sacsma_vic_bcm_summary.csv`). The content is in the residuals. All three run high
-in volume (+4.8, +8.5 and +4.5 %), so the target is low against every independent model of it.
-The uncalibrated models lose on the small foothill creeks (BCM +32 to +71 %, VIC +26 to +90 % on
-Cache, Calaveras, Chowchilla, Cosumnes and Fresno). BCM's summer flow collapses toward zero in
-the snow watersheds, the signature of a water-balance model without baseflow routing, so its
-month-to-month timing is to be read more loosely than that of the two routed models.
-
-**How BCM joins the watersheds.** BCM enters on the CalSim3 catchments themselves (`run + rch`
-of `bcm_<scenario>_catchments_monthly.csv`, area-weighted over the catchments each watershed
-owns), so all three models sit on the same watershed and area and only the depth is each
-model's own. BCM was aggregated to the `CalSim3_And_GooseLake` layer (386 polygons); the
-watershed areas use `CalSim3_Merged` (200), its dissolve. The two do not join on `Connect_No`:
-the merged layer renames each dissolved catchment for its CalSim INFLOW arc (`MCD021` to
-`MCD128` become `MCLRE`, the Tuolumne and Putah pieces take their arc's name, the Bend Bridge
-valley polygons become `SRBB_VAL`), and a join on the name silently drops four watersheds. So
-each BCM polygon goes to the merged polygon that contains its representative point; the
-largest overlap would route through boundary slivers and put the 14,452 mi² Tulare Lake Basin
-inside Millerton. The Goose Lake block is its own polygon inside no rim catchment, so it needs
-no screening. The areas are checked against the watershed areas, so a GIS or crosswalk change
-that broke the correspondence stops the comparison.
-
 ## Sensitivity to the forcing
 
 **Temperature detrending.** `wgen_product_a` has the same precipitation and a warmed early
@@ -193,7 +162,6 @@ sacsma run ALL --domain 11obs --forcing wgen_product_a
 sacsma plots --domain 15cdec                 # -> artifacts/results/15cdec/
 sacsma plots --domain 11obs                  # -> artifacts/results/callite/11obs/
 sacsma calsim                                # the comparison with CalSim3 -> artifacts/results/calsim3/, footprints/
-sacsma calsim --sacsma-vic-bcm               # -> artifacts/results/vic_bcm/
 sacsma calsim --forcing-compare              # -> artifacts/results/forcing/
 sacsma product callite                       # -> artifacts/product/callite/<forcing>/
 sacsma product 15cdec                        # -> artifacts/product/15cdec/historical_livneh_unsplit/

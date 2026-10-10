@@ -1,6 +1,6 @@
 # Guide
 
-Ten short pages. Read the first four in order for the whole picture; the rest are reference.
+Eleven short pages. Read the first four in order for the whole picture; the rest are reference.
 
 | Page | What it answers |
 |---|---|
@@ -8,6 +8,7 @@ Ten short pages. Read the first four in order for the whole picture; the rest ar
 | [Calibrated SAC-SMA](calibrated_sacsma.md) | The four genetic-algorithm calibration sets, their skill, and their comparison with CalSim3. |
 | [Learned parameters](learned_parameters.md) | How a neural network replaces the calibration, and what that showed on the 15 CDEC watersheds. |
 | [CalSim3 rim inflows](calsim3_rim_inflows.md) | The current model (dPL-CalSim), how it is checked, and the monthly inflow product on the 196 rim arcs. |
+| [Benchmark](benchmark.md) | Three models (dPL-CalSim, BCM with its monthly routing, the CalSim3 VIC) against observed CDEC full natural flow at 12 watersheds. |
 | [Runs](runs.md) | Every learned-parameter run: what is current, what each scores, what was tried and not adopted, what is open. |
 | [Reproduce](reproduce.md) | Environments, data, and the commands from a clone to the product. What a clone cannot rebuild. |
 | [Conventions](conventions.md) | The rules a change must respect: the frozen model, verification, scoring against CalSim3, data. |
@@ -36,6 +37,8 @@ Beside the guide:
 
 - The reference model and the four calibrated sets are complete and unchanged.
 - The comparison of the calibrated sets with CalSim3 and VIC is complete.
+- The benchmark of three models against observed CDEC full natural flow is in place; what to
+  keep in mind when reading it is in [Benchmark](benchmark.md).
 - dPL-CalSim is the current learned-parameter model and its rim-inflow product is adopted. Its
   known costs and open items are in [CalSim3 rim inflows](calsim3_rim_inflows.md) and
   [Runs](runs.md).

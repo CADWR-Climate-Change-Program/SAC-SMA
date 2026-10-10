@@ -214,4 +214,6 @@ attributes are complete: the grid tables cover all 4,410 cells.
 `sacsma.io.load_hru_table` (domain `multifamily`: cells, weights, flow lengths, with `dem_elev` from the
 grid attributes), `sacsma.dpl.data`, `sacsma.dpl.multi_timescale` (the observation loaders),
 `sacsma.dpl.train`, `sacsma.dpl.evaluate_multi_timescale`, `sacsma.dpl.calsim.tier1`, `tier2` and `atlas`,
-and `data/targets/calsim3/build_calsim_arcs.py`.
+and `data/targets/calsim3/build_calsim_arcs.py`. `sacsma benchmark` reads the `cdec_daily` rows of
+`entities.csv` (`sacsma.benchmark.flows`: observation store, area, arcs) and their cells in
+`entity_cells.csv` (`sacsma.benchmark.gridded`: the footprints of BCM).

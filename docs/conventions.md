@@ -36,6 +36,7 @@ sacsma verify --quick    # the checks that need no model run
 | `cli` | every command builds its help |
 | `links` | every relative link in the tracked markdown resolves |
 | `artifacts` | the output tree keeps its layout: tracked files only in `product/`, `models/` and `results/`, each with its README; no untracked file in them; a model and a results folder for every run |
+| `bcm` | the port of the BCM routing workbook reproduces the cached flow of its 11 calibration sheets within 1e-9 relative, and their r2, NSE and percent bias |
 | `parity` | one watershed per domain matches the MATLAB simulation: KGE above 0.9999 and a largest daily difference below 0.1 mm/day |
 | `learned` | the learned step of the CPU engine (`sacsma/sma_learned.py`) matches the torch step it copies, for one tracked run of each physics, within 1e-9 mm/day |
 | `product` | `sacsma dpl calsim product apply` reproduces every tracked series of the rim-inflow product from the tier-2 pass kept beside it, to 1 part in 100,000 |
@@ -54,6 +55,8 @@ sub-steps the learned-parameter runs train with) and compares it with the refere
 - `sacsma.calsim` may import `sacsma.cdec15`. Never the reverse.
 - Both depend on the core (`model`, `io`, the physics). The core imports neither.
 - `sacsma.dpl` depends on the core. The core does not import `sacsma.dpl`.
+- `sacsma.benchmark` may import all of them (core, `cdec15`, `calsim`, `dpl`). Only the command
+  line and `sacsma verify` import `sacsma.benchmark`.
 
 ## Scoring against CalSim3
 

@@ -1973,7 +1973,7 @@ def _anchor_set_taf(domain, data_dir, nodes, forcing=None, *, footprint=None, vi
     ``vic_product`` selects the matching alternate VIC routed table (e.g.
     ``wgen_product_a``); the default ``None`` keeps the historical baseline run, so the
     official anchor is unchanged.  Pass it whenever ``forcing`` is an alternate product
-    and the VIC column has to be on the *same* climate (:mod:`~sacsma.calsim.sacsma_vic_bcm`).
+    and the VIC column has to be on the *same* climate.
     """
     from ..io import load_hru_table, mmday_to_cfs
     from ..model import area_weights, run_basins
@@ -2049,7 +2049,7 @@ def build_anchor_long(data_dir: str | Path = "data", sets=DEFAULT_CALSETS,
     (:mod:`~sacsma.calsim.forcing_compare` uses this for the forcing-effect skill).
     ``vic_product`` additionally moves the VIC column onto that product's routed table,
     which is what you want when comparing models *on one climate* rather than measuring
-    a forcing effect (:mod:`~sacsma.calsim.sacsma_vic_bcm`)."""
+    a forcing effect."""
     from ..model import load_domain_forcing
 
     parts = []

@@ -48,6 +48,7 @@ dataprep = [
     "requests>=2.31",
     "pypdf>=4.0",
     "zstandard>=0.22",
+    "openpyxl>=3.1",     # data/reference/bcm/bcm_routing_params.py: the BCM routing workbook
 ]
 dev = [
     "ruff>=0.4",

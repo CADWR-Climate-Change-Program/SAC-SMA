@@ -63,6 +63,7 @@ sacsma run ALL --domain 11obs --forcing wgen_product_a_s12 --start 1990-10-01
 sacsma plots --domain 15cdec      # skill and hydrographs vs the gauges -> artifacts/results/15cdec/
 sacsma plots --domain 11obs       # a CalLite set -> artifacts/results/callite/11obs/
 sacsma calsim                     # 15cdec, 9unimp, 11obs vs CalSim3 and VIC -> artifacts/results/calsim3/
+sacsma benchmark                  # three models vs CDEC FNF at 12 watersheds -> artifacts/results/benchmark/
 
 # products
 sacsma product callite            # the CalLite inflow files -> artifacts/product/callite/
@@ -105,7 +106,7 @@ Training: `sacsma dpl train --help` and [Learned parameters](docs/learned_parame
 ### Check
 
 ```bash
-sacsma verify --quick             # imports, commands, links, layout; no model run
+sacsma verify --quick             # imports, commands, links, layout, BCM routing; no model run
 sacsma verify                     # adds parity with the MATLAB runs, the learned step, the products
 ```
 
@@ -113,7 +114,7 @@ sacsma verify                     # adds parity with the MATLAB runs, the learne
 
 | Folder | Holds |
 |---|---|
-| `sacsma/` | The package: the model and its engine, the calibrated applications (`cdec15`, `calsim`), the learned-parameter code (`dpl`). |
+| `sacsma/` | The package: the model and its engine, the calibrated applications (`cdec15`, `calsim`), the learned-parameter code (`dpl`), the benchmark of three models at the CDEC watersheds (`benchmark`). |
 | `data/` | Inputs, targets, references and the scripts that build them ([`data/README.md`](data/README.md)). |
 | `artifacts/` | The products, the models and the results ([`artifacts/README.md`](artifacts/README.md)). |
 | `docs/` | The guide ([`docs/README.md`](docs/README.md)). |

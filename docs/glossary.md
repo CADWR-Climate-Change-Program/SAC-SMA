@@ -66,6 +66,7 @@ one thing.
 | `hamon`, `pt`, `noah` | Learned-parameter runs on the 15 CDEC watersheds, named for their PET or ET scheme. |
 | `hybrid`, `hybrid_dt`, `lstm` | An LSTM on top of `noah`; the same trained to keep the physics' response to climate; an LSTM without the physics. |
 | **dPL-26, dPL-CalSim** | The two tracked multi-family runs, named for what they train on: 26 entities, and 95 entities plus 64 CalSim3 arcs with WY1976–85 held out, fine-tuned with the gradient carried through two water years. dPL-CalSim is the current model. |
+| **dPL-CalSim, BCM, VIC-CalSim3** | The three models of the [Benchmark](benchmark.md): the current learned model; the USGS Basin Characterization Model routed by its monthly post-processing, fitted per site on WY1991–2018; the VIC of the CalSim3 stochastic-input pipeline. |
 | **Product** | The CalSim3 rim-inflow product: dPL-CalSim's monthly flow on the 196 rim arcs with the share model on the share arcs, WY1916–2018, one series per forcing (`artifacts/product/calsim3/`). The calibrated models deliver two more, named by their application: the CalLite files (`product/callite/`) and the daily flow of the 15 CDEC watersheds (`product/15cdec/`). |
 
 ## Run folder names

@@ -44,7 +44,7 @@ section 7; it is not needed to reproduce results.
 ## 3. Check the installation
 
 ```bash
-sacsma verify --quick    # imports, commands, links: no model run
+sacsma verify --quick    # imports, commands, links, layout, the BCM routing port: no model run
 sacsma verify            # adds parity, the learned step and the products
 ```
 
@@ -62,11 +62,15 @@ sacsma run ALL --domain 11obs          # likewise 9unimp, 12rim
 sacsma plots --domain 15cdec           # calibration and validation diagnostics -> artifacts/results/15cdec/
 sacsma plots --domain 11obs            # -> artifacts/results/callite/11obs/
 sacsma calsim                          # comparison with CalSim3 and VIC -> artifacts/results/calsim3/
+sacsma benchmark                       # three models vs CDEC FNF -> artifacts/results/benchmark/
 sacsma product callite                 # the CalLite inflow files, three forcings -> artifacts/product/callite/
 sacsma product 15cdec                  # the daily flow of the 15 watersheds -> artifacts/product/15cdec/
 ```
 
-All of it runs on CPU in minutes. [`artifacts/results/README.md`](../artifacts/results/README.md) lists every file
+All of it runs on CPU in minutes. `sacsma benchmark` also runs dPL-CalSim (section 6) on the
+CPU, so it needs PyTorch. It caches both of its runs under `artifacts/_local/cache/benchmark/`,
+keyed by the parameters and the engine's code but not by the forcing: clear that folder after a
+forcing store changes. [`artifacts/results/README.md`](../artifacts/results/README.md) lists every file
 these commands write. Regenerated tables can differ from the tracked ones in the last digits,
 and the row order of `monthly_calsets.csv` is not fixed; compare before committing.
 
@@ -202,5 +206,6 @@ on disk; they are not tracked.
 | The tracked `historical_livneh_unsplit.nc`, bit for bit | It was built, then patched in place when that table grew. A rebuild from the raw source should give the same values, but the tracked file is the one every result was made with. |
 | The hand-kept tables | They are the source: the crosswalk, the tier-1 sets, the arc derivation table, the unimpaired-flow pour points, the daily mask. |
 | Forcing, grid attributes, embeddings, ET and SWE products, BCM, USGS flows, DWR unimpaired flows | Rebuildable only with their external source: a release folder, the raw rasters, an Earth Engine project, a report PDF, or a sibling repository. |
+| The BCM routing tables (`bcm_routing_params.csv`, `bcm_routing_check.csv`) | Extracted from the USGS workbook `CalBasins_v8_DWR_FNF_PRISM19.xlsx`, kept beside them but not tracked. `bcm_routing_params.py --check` checks them without it. |
 | The exact tracked checkpoints | Retraining gives a different run in the last digits (section 6). |
 | The runs that were not adopted | Kept locally under `artifacts/_local/runs/`, not tracked. [Runs](runs.md#tried-and-not-adopted) says what they showed. |

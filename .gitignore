@@ -23,7 +23,7 @@ data/inputs/grid/raw_gis/
 # that the tracked data/inputs/grid/{soilveg_continuous,lai_climatology}.csv fully contain
 data/inputs/grid/soilveg_continuous_raster.csv
 data/inputs/grid/lai_climatology_raster.csv
-# the workbook delivered with the BCM release (local; no code reads it)
+# the workbook delivered with the BCM release (local; read only by data/reference/bcm/bcm_routing_params.py)
 data/reference/bcm/CalBasins_v8_DWR_FNF_PRISM19.xlsx
 # this machine's paths for the build scripts (data/local_paths.example.toml)
 data/local_paths.toml

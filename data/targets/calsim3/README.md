@@ -119,6 +119,7 @@ WY1950.
   it `sacsma.dpl.multi_timescale` and `sacsma.dpl.evaluate_multi_timescale` (the `cs_<ARC>`
   entities; the registry's `obs_store` column points at the depth table).
 - `arc_hierarchy.csv`: `sacsma.dpl.calsim.arcs`, `sacsma.dpl.calsim.product`,
-  `sacsma.dpl.train`; `data/inputs/domains/multifamily/build_entities.py --calsim-arcs`.
+  `sacsma.dpl.train`; `data/inputs/domains/multifamily/build_entities.py --calsim-arcs`;
+  `sacsma.benchmark.flows` (`sq_mi`: the VIC catchment area of CLE, CSN and YRS).
 - `calsim3_arc_derivation.csv`: `sacsma.dpl.calsim.arcs`, `sacsma.dpl.calsim.atlas`.
 - Both raw series: `data/targets/dwr_unimpaired/check_uf_locations.py`.

@@ -189,8 +189,8 @@ def gage_15cdec(data_dir="data") -> Path:
 
 
 def cdec_fnf(data_dir="data", name: str = "fnf_daily_mm.csv") -> Path:
-    """A file of the CDEC daily full-natural-flow store: ``stations.csv``,
-    ``fnf_daily.csv`` (cfs), ``fnf_daily_mm.csv``, ``fnf_daily_mask.csv``."""
+    """A file of the CDEC full-natural-flow store: ``stations.csv``, ``fnf_daily.csv`` (cfs),
+    ``fnf_daily_mm.csv``, ``fnf_daily_mask.csv``, ``fnf_monthly.csv`` (acre-feet)."""
     return _root(data_dir) / T_CDEC / name
 
 
@@ -267,8 +267,8 @@ def dwr_swat(data_dir="data", name: str = "swat_monthly.csv") -> Path:
 # * ``models/``   every model: the archived calibrations (``callite/<set>``, ``15cdec``,
 #   ``15cdec_grid``) and what training made (``dpl/``), with the parameter tables;
 # * ``results/``  what a command redraws: the calibrated sets (``callite/<set>``, ``15cdec``)
-#   and their comparisons (``calsim3``, ``vic_bcm``, ``footprints``, ``forcing``), and the
-#   learned runs (``dpl/``);
+#   and their comparisons (``calsim3``, ``footprints``, ``forcing``), the benchmark of five
+#   models at the CDEC sites (``benchmark``), and the learned runs (``dpl/``);
 # * ``_local/``   not tracked: caches, scratch, the large outputs of a run, runs not adopted.
 #
 # A learned-parameter run has one folder per role (:func:`run_roles`), each under the same
@@ -280,8 +280,8 @@ def dwr_swat(data_dir="data", name: str = "swat_monthly.csv") -> Path:
 
 #: the folder that groups the three CalLite calibration sets in models/, results/, product/
 CALLITE_DIR = "callite"
-#: the calibrated model's result folders: one per set, then the comparisons
-CALIBRATED = (CDEC15, *CALLITE, "calsim3", "vic_bcm", "footprints", "forcing")
+#: the result folders outside ``dpl/``: one per calibrated set, then the comparisons
+CALIBRATED = (CDEC15, *CALLITE, "calsim3", "benchmark", "footprints", "forcing")
 #: the delivered products, one folder each under product/
 PRODUCTS = ("calsim3", CALLITE_DIR, CDEC15)
 #: the ``sacsma dpl study`` result folders
@@ -327,10 +327,10 @@ def ga_optimum(artifacts_dir="artifacts", domain: str = CDEC15) -> Path:
 
 
 def calibrated(artifacts_dir="artifacts", name: str = CDEC15) -> Path:
-    """Results of the calibrated model: one set's diagnostics (``results/15cdec``,
-    ``results/callite/<set>``), the comparison with CalSim3 (``calsim3``), with VIC and BCM
-    (``vic_bcm``), the footprint and HRU-attribute maps (``footprints``), the forcing
-    comparison (``forcing``)."""
+    """A result folder outside ``dpl/``: one calibrated set's diagnostics (``results/15cdec``,
+    ``results/callite/<set>``), the comparison with CalSim3 (``calsim3``), the benchmark of five
+    models against observed CDEC full natural flow (``benchmark``), the footprint and
+    HRU-attribute maps (``footprints``), the forcing comparison (``forcing``)."""
     if name not in CALIBRATED:
         raise ValueError(f"unknown result folder {name!r} (expected one of {CALIBRATED})")
     return _art(artifacts_dir) / "results" / _app(name)

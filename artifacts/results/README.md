@@ -9,7 +9,7 @@ same path under `artifacts/_local/`.
 |---|---|---|
 | `15cdec/`, `callite/9unimp/`, `callite/11obs/`, `callite/12rim/` | Each calibrated set against its own target: daily CDEC gauge for `15cdec`, monthly full natural flow for the others | `sacsma plots --domain <set>` (`--fnf-check` adds the CalSim3 scoring of `15cdec`) |
 | `calsim3/` | Every calibrated set and VIC against CalSim3: watershed (anchor) and arc scores, maps, rolling skill, the per-arc quantile mapping | `sacsma calsim` |
-| `vic_bcm/` | SAC-SMA, VIC and BCM v8 on one climate against one target, WY1989–2018 | `sacsma calsim --sacsma-vic-bcm` |
+| `benchmark/` | Three models (dPL-CalSim, BCM routed, VIC-CalSim3) against observed CDEC full natural flow at 12 CDEC watersheds, monthly, WY1991–2018: see [benchmark](benchmark/README.md) | `sacsma benchmark` |
 | `footprints/` | How each watershed's units sit on its CalSim3 catchment, and the HRU attribute maps | `sacsma calsim` |
 | `forcing/` | The effect of the forcing product on both SAC-SMA and VIC, and the daily runs it compares | `sacsma calsim --forcing-compare` |
 | `dpl/15cdec/` | The learned-parameter runs and LSTM ensembles on the 15 CDEC watersheds, the benchmark of the differentiable model, and the four studies: see [dpl](dpl/README.md) | `sacsma dpl ...` |
@@ -17,8 +17,8 @@ same path under `artifacts/_local/`.
 
 ## The calibrated SAC-SMA
 
-Everything outside `dpl/` comes from the archived GA calibrations run through the reference
-model (`sacsma.model.run_basin`) and redraws on CPU in minutes. Method and scores:
+Everything outside `dpl/` and `benchmark/` comes from the archived GA calibrations run through
+the reference model (`sacsma.model.run_basins`) and redraws on CPU in minutes. Method and scores:
 [Calibrated SAC-SMA](../../docs/calibrated_sacsma.md); the scoring rules:
 [Conventions](../../docs/conventions.md).
 
@@ -46,12 +46,6 @@ model (`sacsma.model.run_basin`) and redraws on CPU in minutes. Method and score
 | `target_vs_calsim3.csv` | How far each set's calibration target sits from CalSim3 |
 | `basin_map_metrics.csv`, `vic_full_metrics.csv` | The values behind the maps; VIC on every arc |
 | `figures/` | Anchor dumbbells (`anchor_skill_*`, also by period), hydrographs and regimes, skill maps of SAC-SMA, VIC and their difference, coverage maps, rolling skill |
-
-### `vic_bcm/`
-
-`sacsma_vic_bcm_monthly.csv` (all years, so the window can be re-cut), `sacsma_vic_bcm_metrics.csv`
-(per watershed and model, on identical months), `sacsma_vic_bcm_summary.csv` (pooled), and the
-skill, regime and summary figures.
 
 ### `footprints/`
 

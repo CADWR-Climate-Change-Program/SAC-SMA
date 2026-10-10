@@ -29,14 +29,14 @@ it. The README is the provenance record of that folder.
 | [`inputs/domains/`](inputs/domains/README.md) | The five calibration domains (`15cdec`, `15cdec_grid`, `9unimp`, `11obs`, `12rim`): HRU tables, areas. Their calibrated parameters are in [`artifacts/models/`](../artifacts/models/README.md). | Wi and Steinschneider study archive | delivered | 33 MB |
 | [`inputs/domains/multifamily/`](inputs/domains/multifamily/README.md) | The training-entity registry of the learned-parameter models: entities, their cells and weights, flow lengths. | built here | `build_entities.py`, `build_entity_cells.py`, `build_flowlens.py` | 1 MB |
 | [`inputs/calsim3/`](inputs/calsim3/README.md) | CalSim3 catchment polygons, the crosswalk between watersheds and CalSim3 arcs, the canonical areas, the screened footprints, the tier-1 location sets. | DWR polygons; the rest built here or kept by hand | `sacsma.calsim.catchments` (the two generated tables) | 2 MB |
-| [`targets/cdec/`](targets/cdec/README.md) | CDEC daily full natural flow: the 15 watersheds of the original study, and the later pulls. | CDEC | `cdec_fnf.py`, `build_fnf_depth.py` | 7 MB |
+| [`targets/cdec/`](targets/cdec/README.md) | CDEC full natural flow: daily for the 15 watersheds of the original study and the later pulls; monthly for the 17 `cdec_daily` sites of the registry. | CDEC | `cdec_fnf.py`, `build_fnf_depth.py` | 7 MB |
 | [`targets/callite/`](targets/callite/README.md) | Monthly full-natural-flow targets of the `9unimp`, `11obs` and `12rim` sets. | study archive | delivered | 3 MB |
 | [`targets/dwr_unimpaired/`](targets/dwr_unimpaired/README.md) | DWR's published unimpaired flows, 24 Central Valley subbasins, water years 1922 to 2014. | DWR (2016) report | `dwr_unimpaired.py`, `build_uf_depth.py`, `check_uf_locations.py` (its checks in `verification/`) | 3 MB |
 | [`targets/usgs/`](targets/usgs/README.md) | Daily flow at 69 USGS gauges inside the CalSim3 domain. | USGS, through the neuralhyd-ca cleaned set | `usgs_flows.py` | 6 MB |
 | [`targets/calsim3/`](targets/calsim3/README.md) | CalSim3 monthly inflows on the rim arcs, the unimpaired series of the rim systems, and the tables that say which arc-months are an arc's own record. | CalSim3; DWR hydrology report | `build_calsim_arcs.py` | 20 MB |
 | [`reference/matlab/`](reference/matlab/README.md) | The archived MATLAB simulations: the parity baseline. | study archive | delivered | 49 MB |
 | [`reference/vic/`](reference/vic/README.md) | VIC routed monthly flows under three climates, and the VIC routing grids. | CalSim3 stochastic-input pipeline | delivered | 31 MB |
-| [`reference/bcm/`](reference/bcm/README.md) | Basin Characterization Model v8, two weather-generator scenarios. | USGS | `bcm_region.py` | 202 MB |
+| [`reference/bcm/`](reference/bcm/README.md) | Basin Characterization Model v8, two weather-generator scenarios, and the parameters of its monthly routing to 11 CDEC gauges. | USGS | `bcm_region.py`, `bcm_routing_params.py` | 202 MB |
 | [`reference/et/`](reference/et/README.md) | Nine evapotranspiration products on the grid. | Earth Engine, GLEAM, FLUXCOM, Reitz et al. (2023) | `gee_obs_region.py`, `local_obs_region.py`, `reitz_et.py` | 39 MB |
 | [`reference/swe/`](reference/swe/README.md) | Four snow-water-equivalent products on the grid. | Earth Engine | `../et/gee_obs_region.py` | 8 MB |
 | [`reference/dwr_swat/`](reference/dwr_swat/README.md) | DWR's SWAT simulation of the rim watersheds and the valley and Delta totals. | DWR (2016) report | `../../targets/dwr_unimpaired/dwr_unimpaired.py` | 1 MB |
@@ -55,7 +55,7 @@ it. The README is the provenance record of that folder.
   on); names for `9unimp` (CacheCreek, StonyCreek, and so on); codes of its own for `12rim`
   (SHAST, OROVI, and so on). The same river can carry different codes in different domains.
 - **Formats.** Tables are plain CSV. Gridded stores are NetCDF or npz, tracked with git-LFS
-  (`.gitattributes`); so are four large CSV tables.
+  (`.gitattributes`); so are five large CSV tables.
 
 ## Files kept by hand
 
