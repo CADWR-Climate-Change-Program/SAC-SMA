@@ -51,6 +51,9 @@ below. The GridInfo tables are verbatim copies with headers added.
 - `sacsma.calsim.load_vic_monthly` (path from `sacsma.paths.vic_routed`): `sacsma calsim`
   (`sacsma.calsim.compare`, the baseline table), `sacsma calsim --forcing-compare`
   (`sacsma.calsim.forcing_compare`, the baseline against each alternate table) and
-  `sacsma calsim --sacsma-vic-bcm` (`sacsma.calsim.sacsma_vic_bcm`, the `wgen_product_a` table).
+  `sacsma benchmark` (`sacsma.benchmark.flows`, the `wgen_product_a` table: the VIC-CalSim3
+  column of the CDEC benchmark, at the nodes of the 15-CDEC track of `sacsma calsim`, except
+  YRS, which sums the 16 arc series above Smartsville (`8RI_SMART` includes Deer Creek below
+  the gauge), plus `I_TRNTY` for CLE and the four Cosumnes arcs for CSN).
 - `sacsma.calsim.load_vic_gridinfo` (path from `sacsma.paths.vic_gridinfo`): the footprint maps
   of `sacsma.calsim.compare` (`make_shasta_footprint_maps`, `make_basin_footprint_maps`).

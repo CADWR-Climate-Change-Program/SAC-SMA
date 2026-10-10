@@ -1,10 +1,11 @@
-"""Command-line interface: ``sacsma run | plots | calsim | product | verify | dpl``.
+"""Command-line interface: ``sacsma run | plots | calsim | benchmark | product | verify | dpl``.
 
 ``run`` forward-simulates a watershed from its archived GA optimum; ``plots``
 writes the per-watershed calibration/validation diagnostics for a domain;
-``calsim`` runs the CalSim3-vs-VIC-vs-SAC-SMA cross-compare; ``product`` writes the
-products of the calibrated models; ``verify`` checks the installation.  The ``dpl``
-commands (differentiable parameter learning) are defined in :mod:`sacsma.dpl.cli`.
+``calsim`` runs the CalSim3-vs-VIC-vs-SAC-SMA cross-compare; ``benchmark`` scores three models
+against observed CDEC full natural flow; ``product`` writes the products of the calibrated
+models; ``verify`` checks the installation.  The ``dpl`` commands (differentiable parameter
+learning) are defined in :mod:`sacsma.dpl.cli`.
 """
 
 from __future__ import annotations
@@ -70,10 +71,6 @@ def _plots(args: argparse.Namespace) -> int:
 def _calsim(args: argparse.Namespace) -> int:
     from .calsim.compare import DEFAULT_CALSETS, make_all
 
-    if getattr(args, "sacsma_vic_bcm", False):
-        from .calsim.sacsma_vic_bcm import make_all as svb_all
-        svb_all(args.data_dir, args.artifacts_dir)
-        return 0
     if getattr(args, "forcing_compare", False):
         from .calsim.forcing_compare import make_all as fc_all
         fc_all(data_dir=args.data_dir, artifacts_dir=args.artifacts_dir)
@@ -81,6 +78,13 @@ def _calsim(args: argparse.Namespace) -> int:
     sets = tuple(args.sets) if args.sets else DEFAULT_CALSETS
     make_all(args.data_dir, args.artifacts_dir, sets,
              covered_frac=getattr(args, "covered_frac", None))
+    return 0
+
+
+def _benchmark(args: argparse.Namespace) -> int:
+    from .benchmark.report import make_all
+
+    make_all(args.data_dir, args.artifacts_dir)
     return 0
 
 
@@ -150,14 +154,20 @@ def build_parser() -> argparse.ArgumentParser:
     cs.add_argument("--covered-frac", type=float, default=None,
                     help="informational 'covered'/'partial' status label only "
                          "(default: catchments.COVERED_FRAC); inclusion is crosswalk-driven")
-    cs.add_argument("--sacsma-vic-bcm", action="store_true",
-                    help="instead of the standard cross-compare, build the SAC-SMA vs VIC "
-                         "vs BCM comparison on WGEN Product A over WY1989-2018, "
-                         "9unimp+11obs pooled -> artifacts/results/vic_bcm/")
     cs.add_argument("--forcing-compare", action="store_true",
                     help="instead of the standard cross-compare, draw the forcing-product "
                          "volume and regime figures -> artifacts/results/forcing/")
     cs.set_defaults(func=_calsim)
+
+    bm = sub.add_parser(
+        "benchmark",
+        help="dPL-CalSim, BCM and VIC-CalSim3 against observed CDEC full natural flow at "
+             "12 CDEC sites, monthly, WY1991-2018, on WGEN Product A scenario 1 "
+             "-> artifacts/results/benchmark/",
+    )
+    bm.add_argument("--data-dir", default="data", help="organized data/ store")
+    bm.add_argument("--artifacts-dir", default="artifacts", help="output root")
+    bm.set_defaults(func=_benchmark)
 
     pr = sub.add_parser(
         "product",
@@ -177,14 +187,15 @@ def build_parser() -> argparse.ArgumentParser:
     vf = sub.add_parser(
         "verify",
         help="check the installation: imports, commands, document links, the layout of "
-             "artifacts/, parity with the MATLAB reference, the learned step against torch, "
-             "and the tracked products",
+             "artifacts/, the BCM routing port, parity with the MATLAB reference, the learned "
+             "step against torch, and the tracked products",
     )
     vf.add_argument("checks", nargs="*", metavar="CHECK",
-                    help="subset of: imports cli links artifacts parity learned product "
+                    help="subset of: imports cli links artifacts bcm parity learned product "
                          "(default: all)")
     vf.add_argument("--quick", action="store_true",
-                    help="only the checks that need no model run (imports, cli, links, artifacts)")
+                    help="only the checks that need no model run (imports, cli, links, "
+                         "artifacts, bcm)")
     vf.add_argument("--data-dir", default="data", help="organized data/ store")
     vf.set_defaults(func=_verify)
 

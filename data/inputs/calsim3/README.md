@@ -94,7 +94,8 @@ reaches the location).
   the entity registry, the USGS gauges, the BCM reference and `check_uf_locations.py`.
 - `calsim_crosswalk.csv`: `catchments.load_crosswalk` and `derive_basin_nodes`,
   `sacsma.calsim.compare.load_name_map`, `data/inputs/domains/multifamily/build_entities.py`.
-- `basin_area_<set>_calsim.csv`: `catchments.basin_areas`, for the anchor volumes of `sacsma calsim`.
+- `basin_area_<set>_calsim.csv`: `catchments.basin_areas`, for the anchor volumes of `sacsma calsim`
+  and the VIC-CalSim3 catchment areas of `sacsma benchmark` (`sacsma.benchmark.flows`).
 - `screened_footprint_<domain>.csv`: written by `catchments.screened_footprint`, whose result
   `sacsma.calsim.compare` uses as the anchor basis.
 - `tier1_sets.csv`: `sacsma.dpl.calsim.tier1`, `tier2`, `atlas`, `windows`, `compare`, and

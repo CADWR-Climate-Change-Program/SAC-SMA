@@ -22,6 +22,11 @@ precipitation. Both are the hydrology child of the release.
 | `bcm_s01_catchments_monthly.csv`, `bcm_s13_catchments_monthly.csv` | The same aggregation onto the 386 polygons of layer `CalSim3_And_GooseLake` of `data/inputs/calsim3/calsim3.gpkg` (median 1506 cells each; 2,111,973 in total), long by `cid` and `month` (`yyyymm`). 25 MB each, LFS | `bcm_region.py` |
 | `bcm_catchments.csv` | The static catchment identity `[cid, node, ct_name, type, sq_mi, n_bcm_cells]`; `cid` is the row order of the layer | `bcm_region.py` |
 | `bcm_region.py` | The build script | |
+| `CalBasins_v8_DWR_FNF_PRISM19.xlsx` | The USGS routing workbook: sheet `Cal_outfile` (BCM v8 forced with PRISM, 24 basins, WY2000–2010) and one calibration sheet per routed basin. Local only, not tracked | Delivered with the BCM release |
+| `bcm_routing_params.csv` | One row per calibration sheet (11, `source` `workbook`) and per refit (1, `source` `refit`): its basin, the CDEC record its measured flow is (`measured_station`), the site it is applied at (`cdec_site`), the fitted area, the seven parameters, the antecedent storage, the two lags, the windows, and the r2, NSE and PBIAS of the fit. 2 KB | `bcm_routing_params.py` |
+| `bcm_cal_outfile.csv` | The BCM input of every basin of the workbook's `Cal_outfile`: `basin_no, month, rch_mm, run_mm, area_m2`, 24 basins × 132 months (WY2000–2010, BCM v8 forced with PRISM). The refit reads it. 99 KB | `bcm_routing_params.py` |
+| `bcm_routing_check.csv` | Each sheet's 132 months: `rch_mm`, `run_mm`, `area_m2`, the measured flow and the sheet's cached `P` and `Q` (m3). The port of the sheets is checked against it. 118 KB | `bcm_routing_params.py` |
+| `bcm_routing_params.py` | Extracts the three tables from the workbook, makes the refit and checks the port | |
 
 The six variables are `aet` (actual evapotranspiration), `cwd` (climatic water deficit), `pck`
 (snowpack, as snow water equivalent), `rch` (recharge), `run` (runoff) and `str` (soil moisture
@@ -106,11 +111,141 @@ Snowpack collapses, and deficit and soil drying rise. Runoff rises slightly beca
 once fell as snow runs off in winter instead of infiltrating as spring melt. Total discharge
 (`run` + `rch`) rises 2.5 %.
 
+## Monthly routing
+
+BCM has no channel routing: `run` and `rch` are water generated in a month. The USGS turns them
+into a monthly flow at a gauge with three reservoirs fitted per basin, delivered as the workbook
+`CalBasins_v8_DWR_FNF_PRISM19.xlsx` (kept here, not tracked). Its sheet `Cal_outfile` holds BCM
+v8 forced with PRISM, WY2000–2010, for 24 basins numbered 2–24 and 26 (26 is the whole region).
+Eleven basins have a calibration sheet, each fitted to CDEC full natural flow over the same
+eleven years. `sacsma.benchmark.bcm_routing` is an exact port of the sheets' formulas. The
+parameters are used as delivered, except at the Kings, whose sheet is mis-wired and is replaced
+by a refit (below).
+
+Each month, in m3, with H and I the recharge and runoff times the area and A the antecedent
+storage:
+
+| Term | Formula |
+|---|---|
+| Surface store J | J[t−1] + I[t] − K[t], or 0 when J[t−1] + I[t] ≤ 0 |
+| Surface release K | SurfaceScale · J[t−1]^SurfaceExp, 0 when J[t−1] ≤ 0 |
+| Shallow store L | L[t−1] + H[t] − M[t] − O[t] |
+| Shallow release M | ShallowScale · L[t−1]^ShallowExp, 0 when L[t−1] < 0 |
+| Deep store N | A + min(L[t], 0) |
+| Deep flow O | DeepScale · N[t−1]^DeepExp |
+| Flow Q | AquiferRch · (K[t + peak lag] + M[t + recession lag] + O[t]) |
+
+The first month reads A as the previous surface and shallow store and has no deep flow. Every
+scale parameter is 1; the exponents and `AquiferRch` carry the fit.
+
+| Sheet | Fitted to | Site | Area (mi²) | Site area (mi²) | SurfaceExp | ShallowExp | DeepExp | AquiferRch | Antecedent (10⁶ m3) | Lags (peak, recession) | r2 | NSE | PBIAS (%) |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| `6-pit` | SIS | SHA | 6,749 | 6,665 | 0.99 | 0.85 | 0.9 | 1.1 | 2,000 | 1, 2 | 0.748 | 0.746 | +0.49 |
+| `8-Feather` | FTO | ORO | 3,496 | 3,607 | 0.99 | 0.95 | 0.91 | 1 | 400 | 1, 2 | 0.841 | 0.807 | −0.27 |
+| `9-Yuba` | YRS | YRS | 1,226 | 1,108 | 0.999 | 0.97 | 0.89 | 0.84 | 150 | 1, 1 | 0.866 | 0.866 | −0.33 |
+| `11-American` | AMF | FOL | 1,824 | 1,885 | 0.999 | 0.98 | 0.6 | 0.94 | 50 | 1, 1 | 0.856 | 0.857 | +0.56 |
+| `13-Cosumnes` | CSN | CSN | 681 | 539 | 0.98 | 0.97 | 0.95 | 0.6 | 3 | 1, 1 | 0.826 | 0.824 | −0.61 |
+| `14-Mokelumne` | MKM | MKM | 526 | 544 | 0.99 | 0.97 | 0.9 | 1.07 | 4 | 1, 1 | 0.826 | 0.809 | +0.86 |
+| `16-Stanislaus` | SNS | NML | 953 | 900 | 0.999 | 0.999 | 0.88 | 0.955 | 150 | 1, 1 | 0.870 | 0.870 | +0.45 |
+| `17-Tuolumne` | TLG | TLG | 1,562 | 1,538 | 0.999 | 0.99 | 0.5 | 1.06 | 10 | 1, 1 | 0.866 | 0.867 | −0.06 |
+| `18-Merced` | MRC | MRC | 997 | 1,061 | 0.99 | 0.99 | 0.9 | 1.04 | 15 | 1, 1 | 0.859 | 0.860 | −0.36 |
+| `21-SanJoaquin` | SBF | MIL | 1,613 | 1,675 | 0.9999 | 0.99 | 0.91 | 1.17 | 40 | 1, 1 | 0.891 | 0.889 | −1.13 |
+| `23-Kings` | KGF | PNF | 816 | 1,545 | 0.9999 | 0.96 | 0.9 | 4.65 | 5 | 0, 1 | 0.622 | 0.625 | −0.89 |
+| `22-Kings (refit)` | KGF | PNF | 1,523 | 1,545 | 0.9795 | 0.9999 | 0.517 | 1.18 | 78.7 | 1, 1 | 0.859 | 0.859 | +1.00 |
+
+The refit. Sheet 23 routes basin 23 against the Kings flow (below). Basin 22 is the Kings at
+Pine Flat. `sacsma.benchmark.bcm_routing.fit` fits the sheet's equations to basin 22's
+`Cal_outfile` input against sheet 23's measured column, over the sheet's window (1999-10 to
+2010-09), the way the sheets were fitted: it maximises the sheet's NSE with |PBIAS| held within
+1 % (the sheets reach 1.13 %), the scales at 1, and the boundary rules of the workbook. The
+bounds sit around the range of the ten well-wired sheets (SurfaceExp 0.97–0.99999, ShallowExp
+0.80–0.9999, DeepExp 0.5–0.95, AquiferRch 0.5–1.5, antecedent storage 10⁶ to 10^9.5 m3), and
+only the causal lags are tried (peak 0 or 1, recession 1). Differential evolution with a fixed
+seed; a rerun gives the same row. ShallowExp ends on its upper bound and DeepExp near its lower
+one: the shallow store empties within the month and the deep flow is about zero, as on the
+American and Tuolumne sheets. Raising the ShallowExp bound to 0.99999 changes the NSE by 0.0002.
+The fit's NSE (0.859) is within the range of the ten well-wired sheets (0.746–0.889). The
+`params_for` prefers a refit over a sheet. The benchmark does not cover the Kings.
+
+How the three tables are built (the workbook and `openpyxl`, in the `sacsma` environment):
+
+```bash
+python data/reference/bcm/bcm_routing_params.py           # extract, refit, write, check (needs the workbook)
+python data/reference/bcm/bcm_routing_params.py --refit   # refit only, from the tracked tables (about 15 s)
+python data/reference/bcm/bcm_routing_params.py --check   # check only, from the tracked tables
+```
+
+The script refuses to write unless:
+
+- every formula of columns F to T, rows 14 to 145, of every sheet matches one template in
+  relative form;
+- each sheet reads the `Cal_outfile` block of its own basin number, 132 months from 1999-10,
+  with one area;
+- no formula reads a `Cal_outfile` column other than `rch_mm`, `run_mm` and `Basin_area_m^2`
+  (`rchrunscaler` enters nothing).
+
+Checks:
+
+- The port reproduces the cached flow of all 11 sheets, 132 months each, within 4.3e-14
+  relative, and each sheet's r2, NSE and PBIAS within 4e-15. `sacsma verify bcm` runs this
+  check.
+- Each sheet's measured column is a CDEC full-natural-flow record: monthly r 0.995 to 1.000
+  against the record in "Fitted to".
+- The mm columns of `Cal_outfile` are its acre-foot columns rounded to 0.1 mm. The rounding
+  changes no sheet's input volume by more than 0.03 %.
+- A rerun writes byte-identical tables, and `--refit` from the tracked tables gives the same
+  parameter table as the full extraction.
+
+Know before using the routing:
+
+- Caution: the Kings sheet is mis-wired. It routes basin 23, 816 mi², against Kings at Pine
+  Flat flow (r 1.0000 with KGF), and `AquiferRch` 4.65 makes up the volume: basin 23 yields 0.22
+  of it. Basin 23 is warm and dry (12.9 °C, 688 mm/yr, about 900 m mean elevation), between the
+  Kaweah and the Tule. Basin 22 (1,523 mi², 7.0 °C) is the Kings and has no sheet. Applied to
+  Scenario 1 at PNF, the sheet gives 2.4 times the observed volume, a month late. The refit
+  (above) scores KGE 0.82 and +14 % there.
+- `6-pit` is the whole Shasta Lake inflow (6,749 mi²; r 0.9999 with SIS), not the Pit alone.
+- `16-Stanislaus` was fitted to the Stanislaus at Goodwin (SNS). New Melones (NML) full natural
+  flow is about 12 % lower over WY2000–2010.
+- Sheets 6 and 8 have a recession lag of 2, so their shallow release reads the next month's
+  recharge: a one-month lead. Sheet 23's peak lag of 0 delays its surface release by a month.
+- The workbook's last month (two for sheets 6 and 8) lacks its surface and shallow terms,
+  because `OFFSET` reads blank rows as 0. The port computes every release the final state
+  determines and leaves NaN only where an input past the end is needed: the last month of
+  sheets 6 and 8 (2018-09 on Scenario 1).
+- The parameters act on volumes. Route the depth times the workbook area, the volume the fit
+  used; `AquiferRch` already maps it to the gauge. The result scales with the area: a 5 %
+  larger area gives 4.4 to 5.0 % more flow and changes the depth by under 0.6 %. With the
+  workbook area the Cosumnes runs 23 % high on Scenario 1 (basin 13 is 681 mi² against CSN's
+  539).
+- The deep store never fills. While the shallow store is not negative, the deep flow is a
+  constant `A^DeepExp` drawn from it, the same volume whatever the area. On Scenario 1,
+  WY1991–2018, it is 39 % of the Pit sheet's flow, 14 % of Feather's, 11 % of Stanislaus's and
+  0 to 7 % elsewhere. Over WY1916–2018 the shallow store is overdrawn in up to 537 of 1,236
+  months (Stanislaus), and the deep flow then declines.
+- `AquiferRch` above 1 adds water (six sheets). The `impairment` term (1 − AquiferRch)·P is then
+  negative.
+- The sheets' NSE divides by the sample variance. Their PBIAS is in percent, positive when the
+  model is low. Sheet 6 scores from 1999-11, the others from 1999-10.
+- The parameters were fitted on PRISM-forced BCM. Scenario 1 yields a different volume on the
+  same basins: over WY2000–2010 its `run + rch` is 19 % higher at the Kings (basin 22), 16 % at
+  the San Joaquin, 14 % at the Tuolumne and 8 % at the Pit sheet's basin, and 3 % lower at the
+  Feather and the American. `AquiferRch` carries the fit's volume scale over unchanged, so the
+  routed Scenario 1 runs high where Scenario 1 is wetter. The benchmark therefore fits its own
+  routing on Scenario 1.
+- 10 of the 12 sites of the benchmark have a sheet; BND and CLE have none. The benchmark's
+  own fit covers all 12.
+- The `Cal_outfile` basin numbers follow the DWR unimpaired-flow list from 2 to 16 (UF 2 Putah
+  to UF 16 Stanislaus). From 17 they run one lower, the valley floor (UF 17) having no basin:
+  17 Tuolumne, 18 Merced, 19 Chowchilla, 20 Fresno, 21 San Joaquin.
+
 ## Know before using
 
-- BCM is a comparison series only. It is scored beside SAC-SMA and VIC against CalSim3 by
-  `sacsma calsim --sacsma-vic-bcm`. No model here is trained on it, selected with it, or
-  corrected toward it.
+- BCM is a comparison series only. It is one of the three models of `sacsma benchmark`, routed
+  by the equations above with parameters the benchmark fits itself on Scenario 1, at 12 sites
+  ([benchmark](../../../artifacts/results/benchmark/README.md)); the sheets as delivered are
+  kept beside it for comparison. No model here is trained on it, selected with it, or
+  corrected toward it. Every fit here fits only the routing, to CDEC flow.
 - Caution: Goose Lake is a hole. BCM masks open water, so five grid cells (41.84–42.03 N,
   −120.41 to −120.47 W) are NaN in every month, ringed by partially masked neighbours. 3673 of
   4410 cells are fully valid; the rest clip a lake or reservoir. Weight by `n_bcm_cells`, or
@@ -123,13 +258,18 @@ once fell as snow runs off in winter instead of infiltrating as spring melt. Tot
 - Scenario 1 is the same climate sequence as the `wgen_product_a` forcing. Scenario 13 pairs
   with WGEN scenario 13 (see the [forcing stores](../../inputs/forcing/README.md)).
 - BCM is a water-balance model with no channel routing. `run` + `rch` is water generated in a
-  month, not water arriving at an outlet, so read its month-to-month timing loosely.
+  month, not water arriving at an outlet. Use the routing above for a flow at a gauge.
 - The catchment tables are on layer `CalSim3_And_GooseLake` (386 polygons), not on
-  `CalSim3_Merged`. The two layers do not join on the node name; `sacsma.calsim.sacsma_vic_bcm`
-  assigns each polygon by its representative point.
+  `CalSim3_Merged`, its dissolve. The two layers do not join on the node name: the merged layer
+  renames each dissolved catchment for its INFLOW arc. Assign a polygon by its representative
+  point; the largest overlap goes through boundary slivers.
 
 ## Read by
 
-`sacsma.calsim.sacsma_vic_bcm` (`sacsma calsim --sacsma-vic-bcm`) reads
-`bcm_s01_catchments_monthly.csv` (`run` + `rch`; path from `sacsma.paths.bcm`). No module of
-the package reads the two `.nc` files, the `s13` tables or `bcm_catchments.csv`.
+`sacsma.benchmark.gridded` (`sacsma benchmark`) reads `run` and `rch` of `bcm_s01_monthly.nc`
+on the footprints of the CDEC sites, fits the routing on them (`bcm_fit`) and routes them by
+the sheets for comparison (`bcm_workbook`); `sacsma.benchmark.bcm_routing` reads
+`bcm_routing_params.csv` and `bcm_routing_check.csv` (`sacsma verify bcm`). Only
+`bcm_routing_params.py` reads `bcm_cal_outfile.csv`. Paths come from
+`sacsma.paths.bcm`. No module of the package reads the catchment tables, the `s13` store or
+`bcm_catchments.csv`.

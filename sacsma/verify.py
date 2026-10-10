@@ -15,6 +15,10 @@ The repository has no test suite; the model is verified by running it.  The chec
     ``product/``, ``models/`` or ``results/``, each of which has its README; nothing under
     ``_local/`` is tracked; no file a command wrote sits untracked in a tracked folder; every
     learned-parameter run has its model folder and its results folder
+``bcm``
+    the port of the BCM routing workbook (:mod:`sacsma.benchmark.bcm_routing`) reproduces the
+    cached flow of each of its 11 calibration sheets (``bcm_routing_check.csv``) within
+    :data:`BCM_RTOL`, and the sheet's r2, NSE and percent bias
 ``parity``
     the Python model against the archived MATLAB simulation, one watershed per domain
     (:data:`PARITY_BASINS`): KGE > 0.9999 and max daily difference < 0.1 mm/day
@@ -29,7 +33,7 @@ The repository has no test suite; the model is verified by running it.  The chec
     (``artifacts/product/{callite,15cdec}/<forcing>/``, :mod:`sacsma.product`) are written again
     and match the tracked files to one unit in the last printed digit
 
-``--quick`` runs the first four, which need no model run.  The exit code is the number of
+``--quick`` runs the first five, which need no model run.  The exit code is the number of
 failed checks.
 """
 
@@ -58,9 +62,13 @@ LEARNED_RUNS = (("multifamily",
 LEARNED_MAX_MM = 1e-9
 #: relative tolerance of the product check (the fit and ``apply`` agree to about 3e-7)
 PRODUCT_RTOL = 1e-5
+#: relative tolerance of the BCM routing port against the workbook's cached flow (it agrees to
+#: about 4e-14); the sheet statistics are held to :data:`BCM_STAT_TOL`
+BCM_RTOL = 1e-9
+BCM_STAT_TOL = 1e-9
 
-CHECKS = ("imports", "cli", "links", "artifacts", "parity", "learned", "product")
-QUICK = ("imports", "cli", "links", "artifacts")
+CHECKS = ("imports", "cli", "links", "artifacts", "bcm", "parity", "learned", "product")
+QUICK = ("imports", "cli", "links", "artifacts", "bcm")
 #: the tracked parts of the output tree; ``_local/`` is ignored
 ARTIFACT_PARTS = ("product", "models", "results")
 
@@ -240,6 +248,19 @@ def check_artifacts(root: str | Path = ".", **_) -> tuple[bool | None, str]:
                      "a model and a results folder" + "".join(rows))
 
 
+# ----------------------------------------------------------------------------------- bcm
+def check_bcm(data_dir: str = "data", **_) -> tuple[bool, str]:
+    from .benchmark.bcm_routing import check
+
+    c = check(data_dir)
+    stat = max(float((c[k] - c[f"{k}_sheet"]).abs().max()) for k in ("r2", "nse", "pbias"))
+    q = float(c["max_rel_err_q"].max())
+    ok = q <= BCM_RTOL and stat <= BCM_STAT_TOL
+    return ok, (f"{len(c)} routing sheets, {int(c['months'].sum())} months: largest relative "
+                f"difference in flow {q:.1e}, in the sheet statistics {stat:.1e}"
+                + ("" if ok else "   FAIL"))
+
+
 # -------------------------------------------------------------------------------- parity
 def check_parity(data_dir: str = "data", **_) -> tuple[bool, str]:
     import numpy as np
@@ -397,12 +418,12 @@ def check_product(data_dir: str = "data", artifacts_dir: str = "artifacts",
 
 
 _FUNCS = {"imports": check_imports, "cli": check_cli, "links": check_links,
-          "artifacts": check_artifacts, "parity": check_parity, "learned": check_learned,
-          "product": check_product}
+          "artifacts": check_artifacts, "bcm": check_bcm, "parity": check_parity,
+          "learned": check_learned, "product": check_product}
 
 
 def run_checks(checks=None, *, data_dir: str = "data", quick: bool = False) -> int:
-    """Run the named checks (default: all, or the three quick ones); print one line each;
+    """Run the named checks (default: all, or the quick ones); print one line each;
     return the number that failed."""
     names = tuple(checks) if checks else (QUICK if quick else CHECKS)
     unknown = [c for c in names if c not in _FUNCS]

@@ -29,6 +29,7 @@ dependencies:
   - pyproj>=3.6
   - scipy>=1.10       # Voronoi spacing + gamma-tail QMAP
   - pypdf>=4.0        # data/targets/dwr_unimpaired/dwr_unimpaired.py: DWR Appendix B table transcription
+  - openpyxl>=3.1     # data/reference/bcm/bcm_routing_params.py: the BCM routing workbook
   - requests>=2.31    # build-script downloads: cdec_fnf, download_gis, aorc_region, bcm_region
   - zstandard>=0.22   # data/inputs/forcing/aorc_region.py: the AORC zarr chunks
   - pillow>=10        # sacsma dpl calsim atlas: figures embedded in the HTML
