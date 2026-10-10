@@ -1,4 +1,4 @@
-"""Analysis scripts of the 15-CDEC dPL study: the regime ablation figures, the (dp, dT)
-response surfaces, the climate-adaptive physics surfaces, the hybrid-family figures and the
-forcing-sensitivity figures.  Each writes figures and tables into its own folder under
-``artifacts/results/dpl/15cdec/studies/`` (:func:`sacsma.paths.dpl_study`)."""
+"""Analysis scripts of the 15-CDEC dPL study: the per-step climatology figures, the hybrid
+family's (dp, dT) response surfaces and the forcing-sensitivity figures.  Each writes figures
+and tables into its own folder under ``artifacts/results/dpl/studies/``
+(:func:`sacsma.paths.dpl_study`)."""

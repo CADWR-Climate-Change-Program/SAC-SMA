@@ -12,7 +12,6 @@ __pycache__/
 *.egg-info/
 .ruff_cache/
 *.log
-docs/_build/
 
 # --- data/ ------------------------------------------------------------------------------
 # Everything under data/ is tracked (data/README.md; the large stores through git-LFS,

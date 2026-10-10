@@ -19,7 +19,7 @@ Each of these also emits a **CalSim3-basis** variant (``*_calsim3`` figures +
 GIS-**corrected footprint** for the
 CalLite domains — scored against **CalSim3's own unimpaired FNF** (TAF/month) instead of the
 observed-FNF calibration target, split on the same calibration windows.  Non-destructive: the
-fnf-target diagnostics are untouched.  See ``tmp/CALSIM3_FNF_FOOTPRINT.md``.
+fnf-target diagnostics are untouched.
 
 Usage::
 
@@ -30,7 +30,6 @@ Usage::
 
 from __future__ import annotations
 
-import argparse
 from pathlib import Path
 
 import pandas as pd
@@ -208,11 +207,6 @@ def make_cdec15_fnf_check(
     rim counterpart (:data:`CDEC15_FNF_MATCH` keys) are scoreable; PNF/TRM/SCC/ISB (Tulare
     Basin, no CalSim3 rim arc) are skipped.  Writes ``metrics_calsim3.csv`` +
     ``*_diagnostics_calsim3.png`` + ``skill_summary_calsim3.png``.
-
-    (The earlier fnf-basis variant — the same model scored against the 11obs/9unimp
-    ``fnf_<domain>_monthly`` tables — was retired 2026-07-07: those targets are a different
-    historical-FNF product whose per-basin offsets vs CalSim3 (see ``target_vs_calsim3.csv``,
-    e.g. CalaverasRiver +4.8%) leaked into the 15cdec scores as spurious bias.)
     """
     art = paths.calibrated(artifacts_dir, cdec15.DOMAIN)
     figdir = art / "figures"
@@ -297,21 +291,3 @@ def make_all(
                 met_c3.round(4).to_csv(art / "metrics_calsim3.csv", index=False)
                 print(f"wrote {art / 'metrics_calsim3.csv'} and {len(met_c3)} _calsim3 figures")
     return metrics
-
-
-def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(prog="sacsma.calsim.plots",
-                                 description="CalLite-domain per-watershed diagnostic figures")
-    ap.add_argument("--domain", required=True, choices=list(DOMAINS),
-                    help="CalLite calibration set")
-    ap.add_argument("--basins", nargs="*", default=None, help="subset of watershed codes (default: all)")
-    ap.add_argument("--data-dir", default="data", help="data store")
-    ap.add_argument("--artifacts-dir", default="artifacts", help="output root")
-    args = ap.parse_args(argv)
-    make_all(domain=args.domain, basins=args.basins, data_dir=args.data_dir,
-             artifacts_dir=args.artifacts_dir)
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

@@ -9,8 +9,8 @@ one thing.
 |---|---|
 | **Domain** | What `--domain` selects: a group of watersheds with their modeling units. `15cdec`, `15cdec_grid`, `9unimp`, `11obs`, `12rim`, `multifamily`. |
 | **Calibration set** | One of the four GA calibrations: CDEC15 (`15cdec`), Rim12 (`12rim`), Observed11 (`11obs`), Unimpaired9 (`9unimp`). |
-| `15cdec_grid` | The 15 CDEC watersheds on 1/16° grid cells in place of the original HRUs. Used by the learned-parameter runs. |
-| `multifamily` | The training domain of the current learned-parameter runs: every entity of every family. |
+| `15cdec_grid` | The 15 CDEC watersheds on 1/16° grid cells in place of the original HRUs. Its GA calibration is the starting field of every learned-parameter run; its forcing feeds the LSTM hybrids. |
+| `multifamily` | The grid cells and CalSim3 catchment outlines the learned-parameter runs train on: every entity of every family for dPL-CalSim, the 15 CDEC records for rungs 2 to 6 of the ladder. |
 | **Entity** | One flow record together with the grid cells that drain to it. |
 | **Family** | The entities of one data source: `usgs_daily`, `cdec_daily`, `uf_monthly`, `calsim_monthly`. |
 | **HRU** | Hydrologic response unit: a grid cell intersected with a soil class, the original modeling unit. |
@@ -63,33 +63,11 @@ one thing.
 | **GA parameters** | The archived genetic-algorithm calibrations of Wi and Steinschneider (`artifacts/models/`, `ga_optimum.csv`). |
 | **Reference model** | The NumPy/Numba implementation that reproduces the MATLAB simulations. Called the "frozen" model in the code. |
 | **dPL** | Differentiable parameter learning: the network-trained parameters. |
-| `hamon`, `pt`, `noah` | Learned-parameter runs on the 15 CDEC watersheds, named for their PET or ET scheme. |
-| `hybrid`, `hybrid_dt`, `lstm` | An LSTM on top of `noah`; the same trained to keep the physics' response to climate; an LSTM without the physics. |
-| **dPL-26, dPL-CalSim** | The two tracked multi-family runs, named for what they train on: 26 entities, and 95 entities plus 64 CalSim3 arcs with WY1976–85 held out, fine-tuned with the gradient carried through two water years. dPL-CalSim is the current model. |
+| **The ladder** | The learned-parameter runs, trained from scratch on one recipe with one change per rung, named for their rung: `1_hru`, `2_grid`, `3_pt`, `4_noah`, `5_px`, `6_aef`, `7_calsim` ([Runs](runs.md#the-ladder)). |
+| **dPL-CalSim** | The current learned model, the ladder's last rung (run folder `multifamily/7_calsim`): 159 entities of every family, 64 CalSim3 arcs among them, with WY1976–85 held out. |
+| `hybrid`, `hybrid_dt`, `lstm` | An LSTM on `5_px`'s daily flow; the same fine-tuned to keep `5_px`'s response to climate; an LSTM without it. |
 | **dPL-CalSim, BCM, VIC-CalSim3** | The three models of the [Benchmark](benchmark.md): the current learned model; the USGS Basin Characterization Model routed by its monthly post-processing, fitted per site on WY1991–2018; the VIC of the CalSim3 stochastic-input pipeline. |
 | **Product** | The CalSim3 rim-inflow product: dPL-CalSim's monthly flow on the 196 rim arcs with the share model on the share arcs, WY1916–2018, one series per forcing (`artifacts/product/calsim3/`). The calibrated models deliver two more, named by their application: the CalLite files (`product/callite/`) and the daily flow of the 15 CDEC watersheds (`product/15cdec/`). |
-
-## Run folder names
-
-A multi-family run folder (`artifacts/models/dpl/multifamily/<run>/`, the same name under
-`results/` and `_local/runs/`) spells its recipe: the ET scheme,
-the families, then the options.
-
-| Part | Meaning |
-|---|---|
-| `noah` | soil-moisture-limited ET on Priestley–Taylor PET |
-| `cdec`, `uf`, `usgs` | the families trained on |
-| `cs64` | 64 CalSim3 arcs as a trained family |
-| `ho7685` | WY1976–85 held out of every family |
-| `ufx` | unimpaired-flow targets extended back to WY1950 |
-| `areaw` | family weights by the area the families cover |
-| `all` | each chunk's loss divided by the weight of every entity of the run |
-| `kref05` | the fixed per-family loss scale |
-| `sacx` | the SAC-SMA exchange terms kept around the Noah-type ET |
-| `carry` | state carried between chunks with its relative saturation held in the gradient |
-| `px` | learned rain/snow threshold, with the confirmed bad observation days masked |
-| `w2ft15r10` | fine-tuned with the gradient carried through two water years: 15 epochs from the base run, then 10 more, each keeping its final network |
-| `aef` | AlphaEarth inputs |
 
 ## Other terms
 
@@ -98,6 +76,6 @@ the families, then the options.
 | **KGE** | Kling–Gupta efficiency ([Model equations](equations.md#5-evaluation-metrics)). 1 is perfect. |
 | **Seasonal mismatch** | The share of annual volume placed in the wrong month. |
 | **Footprint screening** | Keeping only the modeling units inside the CalSim3 catchment for four watersheds whose calibrated outline over-reaches it ([Conventions](conventions.md)). |
-| **Holdout** | Years withheld from every fit. For dPL-CalSim: WY1976–85. |
+| **Holdout** | Years withheld from every fit. For dPL-CalSim: WY1976–85. Rungs 1 to 6 train on WY1989–2003 only. |
 | **Cycle spinup** | The starting state used in scoring: the first ten water years looped 20 times from a cold start. |
 | **Local-only** | On this machine and ignored by git: `tmp/` and `artifacts/_local/`. |

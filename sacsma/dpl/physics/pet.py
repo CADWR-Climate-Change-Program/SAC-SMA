@@ -40,16 +40,6 @@ def hamon_raw_pet(
     return 29.8 * daylight * (esat / (tavg + 273.2))
 
 
-def hamon_pet(
-    tavg: torch.Tensor,
-    doy: torch.Tensor,
-    lat_rad: torch.Tensor,
-    kpet: torch.Tensor,       # (N,)
-) -> torch.Tensor:
-    """Daily Hamon PET (mm/day), (N, T)."""
-    return kpet.unsqueeze(-1) * hamon_raw_pet(tavg, doy, lat_rad)
-
-
 def hamon_raw_pet_numpy(
     tavg: np.ndarray,         # (N, T) degC
     doy: np.ndarray,          # (T,) or (N, T)

@@ -55,7 +55,7 @@ it. The README is the provenance record of that folder.
   on); names for `9unimp` (CacheCreek, StonyCreek, and so on); codes of its own for `12rim`
   (SHAST, OROVI, and so on). The same river can carry different codes in different domains.
 - **Formats.** Tables are plain CSV. Gridded stores are NetCDF or npz, tracked with git-LFS
-  (`.gitattributes`); so are five large CSV tables.
+  (`.gitattributes`); so are the largest CSV tables, which `.gitattributes` names.
 
 ## Files kept by hand
 
@@ -64,7 +64,7 @@ These are sources of truth. No script overwrites them.
 | File | What |
 |---|---|
 | `inputs/calsim3/calsim_crosswalk.csv` | Which CalSim3 arc belongs to which watershed and rim system. |
-| `inputs/calsim3/tier1_sets.csv` | The 20 tier-1 locations. Only its two window columns are written by a tool (`sacsma dpl calsim windows --write`). |
+| `inputs/calsim3/tier1_sets.csv` | The 20 tier-1 locations. |
 | `targets/calsim3/calsim3_arc_derivation.csv` | How CalSim3 built each rim inflow series, transcribed from the DWR hydrology report. |
 | `targets/dwr_unimpaired/uf_gauges.csv` | Pour point and report area of each unimpaired-flow subbasin. |
 | `targets/cdec/fnf_daily_mask.csv` | Daily target values confirmed to be wrong, masked in training. |
@@ -74,7 +74,8 @@ Three more files need care.
 - `targets/dwr_unimpaired/uf_locations.csv` is written by the ingest script and then corrected
   by hand in a few cells. A rerun of the ingest loses the corrections (see that README).
 - `inputs/forcing/prcp_x10_artifacts.csv` is a frozen result. The scan that produced most of it
-  can no longer run, and would drop the rows that were found later. Do not regenerate it.
+  reads per-domain stores that are not in the tree, and cannot find the other 92 rows. Do not
+  regenerate it.
 - `inputs/forcing/historical_livneh_unsplit.nc` was patched in place for the last 92 rows of
   that table. It is the store every tracked result was made with. Do not overwrite it.
 

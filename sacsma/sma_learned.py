@@ -20,9 +20,8 @@ from it in three ways:
 
 ``et_noah`` selects the evapotranspiration: False is the reference cascade E1-E5 (in the torch
 forms); True is the Noah-lite external ET (bare soil + canopy on the observed green fraction,
-one learned exponent ``soil_chi``), withdrawn ahead of the water balance, with
-``sac_exchanges`` keeping the upper-zone rebalance, the lower-zone resupply and the ADIMP ET(5)
-after it.
+one learned exponent ``soil_chi``), withdrawn ahead of the water balance, with the upper-zone
+rebalance, the lower-zone resupply and the ADIMP ET(5) of the reference after it.
 
 The runoff PARTS (``parts``, shape ``(6, T)``, or ``(0, 0)`` for none) are the net ``surf`` and
 ``base`` of each day apportioned in proportion to their pre-deduction parts, in the order of
@@ -74,8 +73,8 @@ def _split2(total, a, b):
 
 
 @njit
-def sac_learned(pet, pr_eff, par, state, et_noah, veg_frac, lai, soil_chi, sac_exchanges,
-                n_inc, fracp_floor, parts):
+def sac_learned(pet, pr_eff, par, state, et_noah, veg_frac, lai, soil_chi, n_inc, fracp_floor,
+                parts):
     """One HRU over a window.  ``pet`` and ``pr_eff`` (T,) mm/day; ``par`` the 16 SAC-SMA
     parameters; ``state`` the 6-vector; ``lai`` (T,) the observed LAI of each day (Noah-lite);
     ``veg_frac`` and ``soil_chi`` scalars.  Returns ``(surf, base, tet, new_state)`` in mm/day
@@ -104,7 +103,6 @@ def sac_learned(pet, pr_eff, par, state, et_noah, veg_frac, lai, soil_chi, sac_e
     for i in range(n):
         edmnd = pet[i]
         pr = pr_eff[i]
-        et5 = 0.0
         if et_noah:
             # ---- Noah-lite ET (et_noah.noah_lite_et), withdrawn ahead of the balance
             sig = _mn(veg_frac, 1.0 - np.exp(-_BEER_K * lai[i]))
@@ -126,31 +124,30 @@ def sac_learned(pet, pr_eff, par, state, et_noah, veg_frac, lai, soil_chi, sac_e
             w_lo = _mn(et_lo, lztwc)
             lztwc = lztwc - w_lo
             eused = w_upt + w_upf + w_lo
-            if sac_exchanges:
-                # the withdrawal stands in for E1-E3; the reference block from the UZ
-                # rebalance on, ET1 = the UZ tension withdrawal
-                et1 = uztwc_pre - uztwc
-                if not (uztwc <= 0.0):
-                    if uztwc / uztwm < uzfwc / uzfwm:
-                        uzrat = (uztwc + uzfwc) / (uztwm + uzfwm)
-                        uztwc = uztwm * uzrat
-                        uzfwc = uzfwm * uzrat
-                    if uztwc < _THRES:
-                        uztwc = 0.0
-                    if uzfwc < _THRES:
-                        uzfwc = 0.0
-                ratlzt = lztwc / lztwm
-                ratlz = (lztwc + lzfpc + lzfsc - saved) / (lztwm + lzfpm + lzfsm - saved)
-                dele = (ratlz - ratlzt) * lztwm if ratlzt < ratlz else 0.0
-                lztwc = lztwc + dele
-                lzfsc_raw = lzfsc - dele
-                lzfpc = lzfpc + _mn(lzfsc_raw, 0.0)
-                lzfsc = _mx(lzfsc_raw, 0.0)
-                if lztwc < _THRES:
-                    lztwc = 0.0
-                et5 = _mn(et1 + (edmnd - et1) * (adimc - et1 - uztwc) / (uztwm + lztwm), adimc)
-                adimc = adimc - et5
-                et5 = et5 * adimp
+            # the withdrawal stands in for E1-E3; the reference block from the UZ
+            # rebalance on, ET1 = the UZ tension withdrawal
+            et1 = uztwc_pre - uztwc
+            if not (uztwc <= 0.0):
+                if uztwc / uztwm < uzfwc / uzfwm:
+                    uzrat = (uztwc + uzfwc) / (uztwm + uzfwm)
+                    uztwc = uztwm * uzrat
+                    uzfwc = uzfwm * uzrat
+                if uztwc < _THRES:
+                    uztwc = 0.0
+                if uzfwc < _THRES:
+                    uzfwc = 0.0
+            ratlzt = lztwc / lztwm
+            ratlz = (lztwc + lzfpc + lzfsc - saved) / (lztwm + lzfpm + lzfsm - saved)
+            dele = (ratlz - ratlzt) * lztwm if ratlzt < ratlz else 0.0
+            lztwc = lztwc + dele
+            lzfsc_raw = lzfsc - dele
+            lzfpc = lzfpc + _mn(lzfsc_raw, 0.0)
+            lzfsc = _mx(lzfsc_raw, 0.0)
+            if lztwc < _THRES:
+                lztwc = 0.0
+            et5 = _mn(et1 + (edmnd - et1) * (adimc - et1 - uztwc) / (uztwm + lztwm), adimc)
+            adimc = adimc - et5
+            et5 = et5 * adimp
         else:
             # ---- the reference cascade E1-E5
             et1 = _mn(edmnd * uztwc / uztwm, uztwc)

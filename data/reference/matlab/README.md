@@ -15,8 +15,7 @@ reproduce them, and that agreement is the regression baseline for every change.
 ## How it is built
 
 Delivered; cannot be rebuilt from a clone. The files were converted once from the archived
-MATLAB study materials. The one-time ingest scripts are in git history (commit `ad89558` and
-earlier).
+MATLAB study materials; no script in the repository writes them.
 
 ## Checks
 

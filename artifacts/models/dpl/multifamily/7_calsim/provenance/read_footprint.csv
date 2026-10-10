@@ -1,0 +1,292 @@
+entity_id,family,site_id,name,share,where
+uf_02,uf_monthly,UF 2,Putah Creek near Winters,0.0,outside
+uf_03,uf_monthly,UF 3,Cache Creek above Rumsey,0.0,outside
+uf_04,uf_monthly,UF 4,Stony Creek at Black Butte,0.0,outside
+uf_06,uf_monthly,UF 6,Sacramento River near Red Bluff,0.9870128663430476,inside
+uf_07,uf_monthly,UF 7,Sacramento Valley East Side Minor Streams,0.19794501791352634,partial
+uf_10,uf_monthly,UF 10,Bear River near Wheatland,0.27354938406128243,partial
+uf_13,uf_monthly,UF 13,Cosumnes River at Michigan Bar,0.313573100183859,partial
+uf_20,uf_monthly,UF 20,Chowchilla River at Buchanan Reservoir,0.1610444408945246,partial
+uf_21,uf_monthly,UF 21,Fresno River near Daulton,0.210562139260122,partial
+usgs_11196400,usgs_daily,11196400,CALIENTE C AB TEHACHAPI C NR CALIENTE CA,0.04989962108265381,outside
+usgs_11197250,usgs_daily,11197250,AVENAL C NR AVENAL CA,0.0,outside
+usgs_11199500,usgs_daily,11199500,WHITE R NR DUCOR CA,0.04614032800969451,outside
+usgs_11203580,usgs_daily,11203580,SF TULE R NR CHOLOLLO CAMPGROUND NR PORTERVILLE CA,1.0,inside
+usgs_11204100,usgs_daily,11204100,SF TULE R NR RESERVATION BNDRY NR PORTERVILLE CA,1.0,inside
+usgs_11208000,usgs_daily,11208000,MARBLE F KAWEAH R (R ONLY) A POTWISHA CAMP CA,1.0,inside
+usgs_11208500,usgs_daily,11208500,MF KAWEAH TRIB NR HAMMOND CA,1.0,inside
+usgs_11209900,usgs_daily,11209900,KAWEAH R A THREE RIVERS CA,1.0,inside
+usgs_11213500,usgs_daily,11213500,KINGS R AB NF NR TRIMMER CA,1.0,inside
+usgs_11214000,usgs_daily,11214000,NF KINGS R BL MEADOWBROOK CA,1.0,inside
+usgs_11218500,usgs_daily,11218500,KINGS R BL NF NR TRIMMER CA,1.0,inside
+usgs_11220000,usgs_daily,11220000,BIG C AB PINE FLAT RES NR TRIMMER CA,1.0,inside
+usgs_11220500,usgs_daily,11220500,SYCAMORE C AB PINE FLAT RES NR TRIMMER CA,1.0,inside
+usgs_11224500,usgs_daily,11224500,LOS GATOS C AB NUNEZ CYN NR COALINGA CA,0.0,outside
+usgs_11226500,usgs_daily,11226500,SAN JOAQUIN R A MILLER CROSSING CA,1.0,inside
+usgs_11230500,usgs_daily,11230500,BEAR C NR LAKE THOMAS A EDISON CA,1.0,inside
+usgs_11237500,usgs_daily,11237500,PITMAN C BL TAMARACK C CA,1.0,inside
+usgs_11253310,usgs_daily,11253310,CANTUA C NR CANTUA CREEK CA,0.0,outside
+usgs_11257500,usgs_daily,11257500,FRESNO R NR KNOWLES CA,0.33233864669094954,partial
+usgs_11258000,usgs_daily,11258000,FRESNO R BL HIDDEN DAM NR DAULTON CA,0.2809861440937751,partial
+usgs_11259000,usgs_daily,11259000,CHOWCHILLA R BL BUCHANAN DAM NR RAYMOND CA,0.15895401301138246,partial
+usgs_11264500,usgs_daily,11264500,MERCED R A HAPPY ISLES BRIDGE NR YOSEMITE CA,1.0,inside
+usgs_11266500,usgs_daily,11266500,MERCED R A POHONO BRIDGE NR YOSEMITE CA,1.0,inside
+usgs_11268000,usgs_daily,11268000,SF MERCED R NR EL PORTAL CA,1.0,inside
+usgs_11269300,usgs_daily,11269300,MAXWELL C A COULTERVILLE CA,1.0,inside
+usgs_11274500,usgs_daily,11274500,ORESTIMBA C NR NEWMAN CA,0.0,outside
+usgs_11274630,usgs_daily,11274630,DEL PUERTO C NR PATTERSON CA,0.0,outside
+usgs_11275000,usgs_daily,11275000,FALLS C NR HETCH HETCHY CA,1.0,inside
+usgs_11281000,usgs_daily,11281000,SF TUOLUMNE R NR OAKLAND RECREATION CAMP CA,1.0,inside
+usgs_11282000,usgs_daily,11282000,M TUOLUMNE R A OAKLAND RECREATION CAMP CA,1.0,inside
+usgs_11283500,usgs_daily,11283500,CLAVEY R NR BUCK MEADOWS CA,1.0,inside
+usgs_11284400,usgs_daily,11284400,BIG C AB WHITES GULCH NR GROVELAND CA,1.0,inside
+usgs_11292500,usgs_daily,11292500,CLARK FORK STANISLAUS R NR DARDANELLE CA,1.0,inside
+usgs_11294000,usgs_daily,11294000,HIGHLAND C BL SPICER MEADOWS RES CA,1.0,inside
+usgs_11294500,usgs_daily,11294500,NF STANISLAUS R NR AVERY CA,1.0,inside
+usgs_11299600,usgs_daily,11299600,BLACK C NR COPPEROPOLIS CA,0.9439323387197025,inside
+usgs_11315000,usgs_daily,11315000,COLE C NR SALT SPRINGS DAM CA,1.0,inside
+usgs_11316800,usgs_daily,11316800,FOREST C NR WILSEYVILLE CA,1.0,inside
+usgs_11318500,usgs_daily,11318500,SF MOKELUMNE R NR WEST POINT CA,1.0,inside
+usgs_11334300,usgs_daily,11334300,SF COSUMNES R NR RIVER PINES CA,0.26811151099417446,partial
+usgs_11337500,usgs_daily,11337500,MARSH C NR BYRON CA,0.0,outside
+usgs_11341400,usgs_daily,11341400,SACRAMENTO R NR MT SHASTA CA,1.0,inside
+usgs_11371000,usgs_daily,11371000,CLEAR C A FRENCH GULCH CA,1.0,inside
+usgs_11372000,usgs_daily,11372000,CLEAR C NR IGO CA,1.0,inside
+usgs_11374000,usgs_daily,11374000,COW C NR MILLVILLE CA,1.0,inside
+usgs_11375700,usgs_daily,11375700,NF COTTONWOOD C NR IGO CA,1.0,inside
+usgs_11379000,usgs_daily,11379000,ANTELOPE C NR RED BLUFF CA,0.09084893233801603,outside
+usgs_11390672,usgs_daily,11390672,STONE CORRAL C NR SITES CA,0.0,outside
+usgs_11394500,usgs_daily,11394500,MF FEATHER R NR MERRIMAC CA,0.9996068442515491,inside
+usgs_11396400,usgs_daily,11396400,SUCKER RUN NR FORBESTOWN CA,1.0,inside
+usgs_11408850,usgs_daily,11408850,M YUBA R NR CAMPTONVILLE CA,1.0,inside
+usgs_11409300,usgs_daily,11409300,OREGON C A CAMPTONVILLE CA,1.0,inside
+usgs_11409500,usgs_daily,11409500,OREGON C NR NORTH SAN JUAN CA,1.0,inside
+usgs_11413100,usgs_daily,11413100,N YUBA R AB SLATE C NR STRAWBERRY CA,1.0,inside
+usgs_11413320,usgs_daily,11413320,DEADWOOD C NR STRAWBERRY VALLEY CA,1.0,inside
+usgs_11413323,usgs_daily,11413323,OWL GULCH NR STRAWBERRY VALLEY CA,1.0,inside
+usgs_11414000,usgs_daily,11414000,S YUBA R NR CISCO CA,1.0,inside
+usgs_11418000,usgs_daily,11418000,YUBA R BL ENGLEBRIGHT DAM NR SMARTSVILLE CA,0.9999682983716774,inside
+usgs_11426150,usgs_daily,11426150,ONION C NR SODA SPRINGS CA,1.0,inside
+usgs_11427700,usgs_daily,11427700,DUNCAN CYN C NR FRENCH MEADOWS CA,1.0,inside
+usgs_11433260,usgs_daily,11433260,NF OF MF AMERICAN R NR FORESTHILL CA,1.0,inside
+usgs_11433300,usgs_daily,11433300,MF AMERICAN R NR FORESTHILL CA,1.0,inside
+usgs_11433500,usgs_daily,11433500,MF AMERICAN R NR AUBURN CA,1.0,inside
+usgs_11445500,usgs_daily,11445500,SF AMERICAN R NR LOTUS CA,0.9999938308377505,inside
+usgs_11449500,usgs_daily,11449500,KELSEY C NR KELSEYVILLE CA,0.0,outside
+usgs_11451100,usgs_daily,11451100,NF CACHE C A HOUGH SPRING NR CLEARLAKE OAKS CA,0.0,outside
+usgs_11451715,usgs_daily,11451715,BEAR C AB HOLSTEN CHIMNEY CYN NR RUMSEY CA,0.0,outside
+usgs_11523200,usgs_daily,11523200,TRINITY R AB COFFEE C NR TRINITY CENTER CA,0.12202927084742164,partial
+usgs_11525500,usgs_daily,11525500,TRINITY R A LEWISTON CA,0.16274363533802025,partial
+cdec_BND,cdec_daily,BND,CDEC SBB full natural flow,0.9870128663430476,inside
+cdec_CLE,cdec_daily,CLE,TRINITY LAKE,0.15156713066897073,partial
+cdec_CSN,cdec_daily,CSN,COSUMNES R AT MICHIGAN BAR,0.313573100183859,partial
+cdec_FOL,cdec_daily,FOL,CDEC AMF full natural flow,0.9999992492592616,inside
+cdec_ISB,cdec_daily,ISB,CDEC KRI full natural flow,0.999980446439611,inside
+cdec_MIL,cdec_daily,MIL,CDEC SBF full natural flow,1.0,inside
+cdec_MKM,cdec_daily,MKM,CDEC MKM full natural flow,1.0,inside
+cdec_MRC,cdec_daily,MRC,CDEC MRC full natural flow,1.0,inside
+cdec_NHG,cdec_daily,NHG,CDEC NHG full natural flow,0.9593147754386633,inside
+cdec_NML,cdec_daily,NML,CDEC NML full natural flow,1.0,inside
+cdec_ORO,cdec_daily,ORO,CDEC FTO full natural flow,0.9998780578706453,inside
+cdec_PNF,cdec_daily,PNF,CDEC KGF full natural flow,1.0,inside
+cdec_SCC,cdec_daily,SCC,CDEC SCC full natural flow,1.0,inside
+cdec_SHA,cdec_daily,SHA,CDEC SIS full natural flow,0.9822859696030144,inside
+cdec_TLG,cdec_daily,TLG,CDEC TLG full natural flow,1.0,inside
+cdec_TRM,cdec_daily,TRM,CDEC KWT full natural flow,0.9845375472602834,inside
+cdec_YRS,cdec_daily,YRS,CDEC YRS full natural flow,0.995408375042386,inside
+cs_I_ALD002,calsim_monthly,I_ALD002,Alder Creek accretion: dam site to Diversion Dam,1.0,inside
+cs_I_ALD004,calsim_monthly,I_ALD004,Alder Creek at proposed Alder Reservoir dam site,1.0,inside
+cs_I_ALMNR,calsim_monthly,I_ALMNR,Lake Almanor local inflow,1.0,inside
+cs_I_ALOHA,calsim_monthly,I_ALOHA,Aloha Lake inflow,1.0,inside
+cs_I_AMADR,calsim_monthly,I_AMADR,Amador Reservoir inflow,0.3268234898094173,partial
+cs_I_ANG017,calsim_monthly,I_ANG017,Angels Creek above Diversion Dam,1.0,inside
+cs_I_ANT011,calsim_monthly,I_ANT011,Antelope Creek near Red Bluff,0.09048939159634903,outside
+cs_I_ANTLP,calsim_monthly,I_ANTLP,Antelope Lake inflow,1.0,inside
+cs_I_BANOS,calsim_monthly,I_BANOS,Los Banos Creek,0.0,outside
+cs_I_BCC014,calsim_monthly,I_BCC014,Big Chico Creek near Chico,0.00036432898369656894,outside
+cs_I_BCK040,calsim_monthly,I_BCK040,Bear Creek below Bear Reservoir,0.3844880208360778,partial
+cs_I_BCN010,calsim_monthly,I_BCN010,Bear Creek (North) near Millville,1.0,inside
+cs_I_BEARD,calsim_monthly,I_BEARD,Beardsley Lake local inflow,1.0,inside
+cs_I_BLKBT,calsim_monthly,I_BLKBT,Black Butte Lake local inflow,0.0,outside
+cs_I_BOWMN,calsim_monthly,I_BOWMN,Bowman Lake inflow,1.0,inside
+cs_I_BRC003,calsim_monthly,I_BRC003,"Bear Creek above Holsten Chimney, tributary to Cache Creek",0.0,outside
+cs_I_BRR023,calsim_monthly,I_BRR023,Bear River accretion: Combie Dam to Garden Bar,0.005391698860620003,outside
+cs_I_BSH003,calsim_monthly,I_BSH003,Brush Creek Reservoir inflow,1.0,inside
+cs_I_BTC048,calsim_monthly,I_BTC048,Butte Creek near Chico,0.5267830539931531,partial
+cs_I_BTL006,calsim_monthly,I_BTL006,Battle Creek near Cottonwood / below Coleman Fish Hatchery,1.0,inside
+cs_I_BTVLY,calsim_monthly,I_BTVLY,Butt Valley Reservoir inflow,1.0,inside
+cs_I_BUCKS,calsim_monthly,I_BUCKS,Bucks Creek Reservoir inflow,1.0,inside
+cs_I_BUR005,calsim_monthly,I_BUR005,Burns Creek below Burns Reservoir,0.4983207940275285,partial
+cs_I_BVC007,calsim_monthly,I_BVC007,Beaver Creek above Diversion Dam,1.0,inside
+cs_I_CAP000,calsim_monthly,I_CAP000,Capita Canyon Group,0.0,outside
+cs_I_CAPLS,calsim_monthly,I_CAPLS,Caples Lake inflow,1.0,inside
+cs_I_CCH053,calsim_monthly,I_CCH053,Cache Creek accretion: Clear Lake Dam to Rumsey,0.0,outside
+cs_I_CFS001,calsim_monthly,I_CFS001,Clark Fork inflow to Middle Stanislaus,1.0,inside
+cs_I_CHC000,calsim_monthly,I_CHC000,Corral Hollow and Minor Creeks,0.0,outside
+cs_I_CHW031,calsim_monthly,I_CHW031,Chowchilla River below Buchanan Dam local inflow,0.0,outside
+cs_I_CLR011,calsim_monthly,I_CLR011,Clear Creek local inflow downstream of Whiskeytown Lake,1.0,inside
+cs_I_CLRLK,calsim_monthly,I_CLRLK,Clear Lake inflow,0.0,outside
+cs_I_CLV026,calsim_monthly,I_CLV026,Calaveras River below New Hogan Dam local inflow,0.23565444031210808,partial
+cs_I_CMBIE,calsim_monthly,I_CMBIE,Combie Reservoir local inflow,0.5038398767595527,partial
+cs_I_CMCHE,calsim_monthly,I_CMCHE,Camanche Reservoir local inflow,0.0,outside
+cs_I_CMP001,calsim_monthly,I_CMP001,Camp Creek near Somerset local inflow,0.31929399252309554,partial
+cs_I_CMP014,calsim_monthly,I_CMP014,Camp Creek at Diversion Dam,0.7398302085705872,partial
+cs_I_CMPFW,calsim_monthly,I_CMPFW,Camp Far West Reservoir local inflow,0.0,outside
+cs_I_COL003,calsim_monthly,I_COL003,Cole Creek,1.0,inside
+cs_I_COT033,calsim_monthly,I_COT033,Cottonwood Creek - tributary to Eastside Bypass,0.0,outside
+cs_I_COW014,calsim_monthly,I_COW014,Cow Creek (at river mile 14),1.0,inside
+cs_I_CSM035,calsim_monthly,I_CSM035,Cosumnes River at Michigan Bar local inflow,0.2751194853986195,partial
+cs_I_CWD018,calsim_monthly,I_CWD018,Cottonwood Creek near Olinda,1.0,inside
+cs_I_CYN009,calsim_monthly,I_CYN009,Canyon Creek at Towle Canal Diversion Dam,1.0,inside
+cs_I_DAVIS,calsim_monthly,I_DAVIS,Davis Lake inflow,1.0,inside
+cs_I_DBC024,calsim_monthly,I_DBC024,Dry Creek and Berenda Creek,0.0,outside
+cs_I_DCC010,calsim_monthly,I_DCC010,Duncan Canyon Creek above Diversion Dam,1.0,inside
+cs_I_DCM027,calsim_monthly,I_DCM027,"Dry Creek, tributary to Merced River",0.5149897374398342,partial
+cs_I_DCT050,calsim_monthly,I_DCT050,"Dry Creek, tributary to Tuolumne River",0.42781046299420483,partial
+cs_I_DED044,calsim_monthly,I_DED044,Deadman Creek and Dutchman Creek,0.0,outside
+cs_I_DEE023,calsim_monthly,I_DEE023,Deer Creek,0.43329046888493716,partial
+cs_I_DER001,calsim_monthly,I_DER001,Deer Creek accretion: Keystone to Smartville gage,0.31055735262102724,partial
+cs_I_DER004,calsim_monthly,I_DER004,Deer Creek accretion: Scott Flat Dam to Keystone,0.6031304660384507,partial
+cs_I_DHC021,calsim_monthly,I_DHC021,Dry Creek and Hutchinson Creek,0.002439462280484308,outside
+cs_I_DONLL,calsim_monthly,I_DONLL,Donnell Lake local inflow,1.0,inside
+cs_I_DPC008,calsim_monthly,I_DPC008,Del Puerto Creek,0.0,outside
+cs_I_DRC012,calsim_monthly,I_DRC012,Deer Creek near Vina,0.26940985642246934,partial
+cs_I_DSC035,calsim_monthly,I_DSC035,Dry and Sutter Creek,0.14623599603881904,partial
+cs_I_EBF001,calsim_monthly,I_EBF001,East Branch Feather River accretion,1.0,inside
+cs_I_ECHOL,calsim_monthly,I_ECHOL,I_ECHOL (CalSim3 rim inflow),1.0,inside
+cs_I_ELD027,calsim_monthly,I_ELD027,Elder Creek inflow near Paskenta,0.07296431443503197,outside
+cs_I_ELENR,calsim_monthly,I_ELENR,Lake Eleanor inflow,1.0,inside
+cs_I_ENGLB,calsim_monthly,I_ENGLB,Englebright Reservoir local inflow,0.9998128623006378,inside
+cs_I_EPARK,calsim_monthly,I_EPARK,East Park Reservoir inflow,0.0,outside
+cs_I_ESTMN,calsim_monthly,I_ESTMN,Eastman Lake inflow,0.1610444408945246,partial
+cs_I_FOLSM,calsim_monthly,I_FOLSM,Folsom Lake local inflow,1.0,inside
+cs_I_FRDYC,calsim_monthly,I_FRDYC,Fordyce Reservoir inflow,1.0,inside
+cs_I_FRMAN,calsim_monthly,I_FRMAN,Frenchman Lake inflow,0.9997141547926288,inside
+cs_I_FRMDW,calsim_monthly,I_FRMDW,French Meadows Reservoir inflow,1.0,inside
+cs_I_FRNCH,calsim_monthly,I_FRNCH,French Lake inflow,1.0,inside
+cs_I_FRS046,calsim_monthly,I_FRS046,Fresno River below Hidden Dam local inflow,0.0,outside
+cs_I_GERLE,calsim_monthly,I_GERLE,Gerle Reservoir local inflow,1.0,inside
+cs_I_GRZ012,calsim_monthly,I_GRZ012,Garzas Creek,0.0,outside
+cs_I_GZL009,calsim_monthly,I_GZL009,Grizzly Creek above Diversion Dam,1.0,inside
+cs_I_HHOLE,calsim_monthly,I_HHOLE,Hell Hole Reservoir local inflow,1.0,inside
+cs_I_HNSLY,calsim_monthly,I_HNSLY,Hensley Lake inflow,0.3069731206695583,partial
+cs_I_HON021,calsim_monthly,I_HON021,South Fork Honcut Creek,0.28052327535639343,partial
+cs_I_HTCHY,calsim_monthly,I_HTCHY,Hetch Hetchy Reservoir inflow,1.0,inside
+cs_I_ICEHS,calsim_monthly,I_ICEHS,Ice House Reservoir inflow,1.0,inside
+cs_I_INDVL,calsim_monthly,I_INDVL,Indian Valley Reservoir inflow,0.0,outside
+cs_I_ING008,calsim_monthly,I_ING008,Ingram Creek and Hospital Creek,0.0,outside
+cs_I_JKSMD,calsim_monthly,I_JKSMD,Jackson Meadows inflow,1.0,inside
+cs_I_JNKSN,calsim_monthly,I_JNKSN,Jenkinson Lake inflow,0.6376787015023376,partial
+cs_I_LCBRF,calsim_monthly,I_LCBRF,"Texas, Fall and Rucker Creeks",1.0,inside
+cs_I_LCC038,calsim_monthly,I_LCC038,Little Chico Creek near Chico,0.0,outside
+cs_I_LDC029,calsim_monthly,I_LDC029,Little Dry Creek,0.49360446729740093,partial
+cs_I_LGRSV,calsim_monthly,I_LGRSV,Little Grass Valley Reservoir inflow,1.0,inside
+cs_I_LJC022,calsim_monthly,I_LJC022,Littlejohn and Rock Creek above Farmington,0.044629193952497336,outside
+cs_I_LKVLY,calsim_monthly,I_LKVLY,Lake Valley Reservoir inflow,1.0,inside
+cs_I_LLOYD,calsim_monthly,I_LLOYD,Lake Lloyd/Cherry Lake inflow,1.0,inside
+cs_I_LNG012,calsim_monthly,I_LNG012,Long Canyon Creek near French Meadows accretion,1.0,inside
+cs_I_LOONL,calsim_monthly,I_LOONL,Loon Lake inflow,1.0,inside
+cs_I_LOSVQ,calsim_monthly,I_LOSVQ,Los Vaqueros Reservoir inflow,0.0,outside
+cs_I_LPC007,calsim_monthly,I_LPC007,Little Panoche Creek,0.0,outside
+cs_I_LRB004,calsim_monthly,I_LRB004,Buck Island Lake inflow,1.0,inside
+cs_I_LWSTN,calsim_monthly,I_LWSTN,Lewiston Lake local inflow,0.4474245402900728,partial
+cs_I_LYONS,calsim_monthly,I_LYONS,Lyons Reservoir local inflow,1.0,inside
+cs_I_MCD055,calsim_monthly,I_MCD055,Merced River below Lake McClure local inflow,1.0,inside
+cs_I_MCLRE,calsim_monthly,I_MCLRE,Lake McClure inflow,1.0,inside
+cs_I_MERLC,calsim_monthly,I_MERLC,Merle Collins Reservoir inflow,0.6010953845250581,partial
+cs_I_MFA001,calsim_monthly,I_MFA001,Middle Fork American River accretions: Foresthill to Auburn,1.0,inside
+cs_I_MFA023,calsim_monthly,I_MFA023,Middle Fork American River near Foresthill accretion,1.0,inside
+cs_I_MFA025,calsim_monthly,I_MFA025,Middle Fork American River accretion: Interbay Dam to Ralston Afterbay,1.0,inside
+cs_I_MFA036,calsim_monthly,I_MFA036,Middle Fork American River accretion: French Meadows Dam to Interbay Dam,1.0,inside
+cs_I_MFF019,calsim_monthly,I_MFF019,Middle Fork Feather River accretion: Portola to Merrimac,1.0,inside
+cs_I_MFF087,calsim_monthly,I_MFF087,Middle Fork Feather River near Portola accretion,0.9992632702615273,inside
+cs_I_MFM008,calsim_monthly,I_MFM008,Middle Fork Mokelumne River near West Point,1.0,inside
+cs_I_MFS013,calsim_monthly,I_MFS013,MF Stanislaus at Sand Bar Diversion Dam local inflow,1.0,inside
+cs_I_MFS022,calsim_monthly,I_MFS022,MF Stanislaus at Hells Half Acre Bridge local inflow,1.0,inside
+cs_I_MFS047,calsim_monthly,I_MFS047,MF Stanislaus at Kennedy local inflow,1.0,inside
+cs_I_MFY013,calsim_monthly,I_MFY013,Middle Fork Yuba River accretion: Milton Dam to Our House Diversion Dam,1.0,inside
+cs_I_MIL003,calsim_monthly,I_MIL003,Mill Creek above Hunters Reservoir,1.0,inside
+cs_I_MLC006,calsim_monthly,I_MLC006,Mill Creek near Los Molinos,0.30789349009578393,partial
+cs_I_MLRTN,calsim_monthly,I_MLRTN,Millerton Lake impaired inflow [2],1.0,inside
+cs_I_MNS000,calsim_monthly,I_MNS000,Minor northeast streams,0.009039338221783719,outside
+cs_I_MOK079,calsim_monthly,I_MOK079,Mokelumne River near Mokelumne Hill [3],1.0,inside
+cs_I_MPS038,calsim_monthly,I_MPS038,Mariposa Creek below Mariposa Reservoir,0.14254276507865757,partial
+cs_I_MSH015,calsim_monthly,I_MSH015,Marsh Creek,0.0,outside
+cs_I_MTMDW,calsim_monthly,I_MTMDW,Mountain Meadows Reservoir inflow,1.0,inside
+cs_I_NBLDB,calsim_monthly,I_NBLDB,New Bullards Bar Reservoir local inflow,1.0,inside
+cs_I_NFA016,calsim_monthly,I_NFA016,North Fork American River at Auburn Tunnel Pump Station Diversion,1.0,inside
+cs_I_NFA022,calsim_monthly,I_NFA022,North Fork American River accretion: North Fork confluence to North Fork Dam,1.0,inside
+cs_I_NFA054,calsim_monthly,I_NFA054,North Fork American River above North Fork confluence,1.0,inside
+cs_I_NFF029,calsim_monthly,I_NFF029,North Fork Feather River accretion: Rock Creek Forebay to Poe Forebay,1.0,inside
+cs_I_NFM010,calsim_monthly,I_NFM010,North Fork Mokelumne below Tiger Creek Reservoir,1.0,inside
+cs_I_NFS005,calsim_monthly,I_NFS005,NF Stanislaus below McKays Point Dam local inflow,1.0,inside
+cs_I_NFS009,calsim_monthly,I_NFS009,North Fork Stanislaus near Avery local inflow,1.0,inside
+cs_I_NFS033,calsim_monthly,I_NFS033,North Fork Stanislaus at Diversion Dam,1.0,inside
+cs_I_NFY029,calsim_monthly,I_NFY029,North Fork Yuba River below Goodyears Bar,1.0,inside
+cs_I_NHGAN,calsim_monthly,I_NHGAN,New Hogan Reservoir inflow,0.9593147754386633,inside
+cs_I_NLC003,calsim_monthly,I_NLC003,North Long Canyon Creek above Middle Fork Tunnel Diversion,1.0,inside
+cs_I_NMA003,calsim_monthly,I_NMA003,North Fork of Middle Fork American River near Foresthill,1.0,inside
+cs_I_NNA013,calsim_monthly,I_NNA013,North Fork of North Fork American River,1.0,inside
+cs_I_OGN005,calsim_monthly,I_OGN005,Oregon Creek above Log Cabin Diversion Dam,1.0,inside
+cs_I_ORG000,calsim_monthly,I_ORG000,Ortigalita Creek,0.0,outside
+cs_I_OROVL,calsim_monthly,I_OROVL,Lake Oroville local inflow,0.9997536733354885,inside
+cs_I_ORT014,calsim_monthly,I_ORT014,Orestimba Creek,0.0,outside
+cs_I_OWN040,calsim_monthly,I_OWN040,Owen Creek below Owens Reservoir,0.0,outside
+cs_I_PARDE,calsim_monthly,I_PARDE,Pardee Reservoir local inflow,0.29244706546013466,partial
+cs_I_PCRST,calsim_monthly,I_PCRST,Pine Crest Reservoir inflow,1.0,inside
+cs_I_PEDRO,calsim_monthly,I_PEDRO,New Don Pedro local inflow,1.0,inside
+cs_I_PLC007,calsim_monthly,I_PLC007,Pilot Creek accretion: Stumpy Meadows Dam to Diversion Dam,1.0,inside
+cs_I_PLM001,calsim_monthly,I_PLM001,Plum Creek near Riverton,1.0,inside
+cs_I_PTH070,calsim_monthly,I_PTH070,Lake Berryessa inflow,0.0,outside
+cs_I_PYN001,calsim_monthly,I_PYN001,Paynes Creek near Red Bluff + Sevenmile Creek,0.6243229655769578,partial
+cs_I_PYR001,calsim_monthly,I_PYR001,Pyramid Creek accretion: Aloha Dam to Twin Bridges,1.0,inside
+cs_I_QNT005,calsim_monthly,I_QNT005,Quinto Creek Group,0.0,outside
+cs_I_RCK001,calsim_monthly,I_RCK001,Rock Creek near Placerville,1.0,inside
+cs_I_RLIEF,calsim_monthly,I_RLIEF,Relief Reservoir inflow,1.0,inside
+cs_I_RLLNS,calsim_monthly,I_RLLNS,Rollins Reservoir inflow,0.5832408316414678,partial
+cs_I_RUB047,calsim_monthly,I_RUB047,Rubicon Reservoir inflow,1.0,inside
+cs_I_RVPHB,calsim_monthly,I_RVPHB,Round Valley and Philbrook reservoirs combined inflow,1.0,inside
+cs_I_SCOTF,calsim_monthly,I_SCOTF,Scott Flat Reservoir local inflow,0.819110257431702,partial
+cs_I_SCW008,calsim_monthly,I_SCW008,South Fork Cottonwood Creek near Olinda,0.9999955924536463,inside
+cs_I_SFA030,calsim_monthly,I_SFA030,South Fork American River near Placerville accretion,1.0,inside
+cs_I_SFA040,calsim_monthly,I_SFA040,South Fork American River at Slab Creek accretion,0.9999881409407182,inside
+cs_I_SFA066,calsim_monthly,I_SFA066,South Fork American River near Kyburz accretion,1.0,inside
+cs_I_SFA076,calsim_monthly,I_SFA076,South Fork American River at proposed Forni Diversion Dam site,1.0,inside
+cs_I_SFD003,calsim_monthly,I_SFD003,South Fork Deer Creek below Deer Creek Powerhouse,0.5558180683219971,partial
+cs_I_SFF008,calsim_monthly,I_SFF008,Local inflow to South Fork Feather River at Enterprise,1.0,inside
+cs_I_SFF011,calsim_monthly,I_SFF011,Local inflow to South Fork Feather River at Ponderosa Dam,1.0,inside
+cs_I_SFM005,calsim_monthly,I_SFM005,South Fork Mokelumne River near West Point,1.0,inside
+cs_I_SFR006,calsim_monthly,I_SFR006,South Fork Rubicon River above Diversion Dam,1.0,inside
+cs_I_SFS030,calsim_monthly,I_SFS030,SF Stanislaus near Strawberry at Diversion Dam,1.0,inside
+cs_I_SFS033,calsim_monthly,I_SFS033,SF Stanislaus at Strawberry local inflow,1.0,inside
+cs_I_SFY007,calsim_monthly,I_SFY007,South Yuba River accretion: Spaulding Dam to Jones Bar,1.0,inside
+cs_I_SFY048,calsim_monthly,I_SFY048,South Yuba River near Cisco,1.0,inside
+cs_I_SGRGE,calsim_monthly,I_SGRGE,Stony Gorge Reservoir local inflow,0.0,outside
+cs_I_SHSTA,calsim_monthly,I_SHSTA,Shasta Lake inflow,0.9822859696030144,inside
+cs_I_SILVR,calsim_monthly,I_SILVR,Silver Lake inflow,1.0,inside
+cs_I_SLC003,calsim_monthly,I_SLC003,South Long Canyon Creek above Diversion Dam,1.0,inside
+cs_I_SLF009,calsim_monthly,I_SLF009,Silver Fork American River accretion: Silver Lake Dam to proposed Diversion Dam,1.0,inside
+cs_I_SLO007,calsim_monthly,I_SLO007,Salado Creek Group,0.0,outside
+cs_I_SLT009,calsim_monthly,I_SLT009,Slate Creek above Slate Creek Diversion Dam,1.0,inside
+cs_I_SLTSP,calsim_monthly,I_SLTSP,Salt Springs Reservoir inflow,1.0,inside
+cs_I_SLUIS,calsim_monthly,I_SLUIS,San Luis Reservoir inflow,0.0,outside
+cs_I_SLV006,calsim_monthly,I_SLV006,Silver Creek accretion: Junction Dam to Camino Dam,1.0,inside
+cs_I_SLV015,calsim_monthly,I_SLV015,Silver Creek accretion: Union Valley Dam to Junction Dam,1.0,inside
+cs_I_SLYCK,calsim_monthly,I_SLYCK,Sly Creek Reservoir inflow,1.0,inside
+cs_I_SPICE,calsim_monthly,I_SPICE,Highland Creek inflow to Spicer Meadows Reservoir,1.0,inside
+cs_I_SPLDG,calsim_monthly,I_SPLDG,Spaulding Reservoir local inflow,1.0,inside
+cs_I_STMPY,calsim_monthly,I_STMPY,Stumpy Meadows Reservoir inflow,1.0,inside
+cs_I_STS059,calsim_monthly,I_STS059,Stanislaus River below Tulloch Reservoir local inflow,0.0,outside
+cs_I_STS072,calsim_monthly,I_STS072,New Melones local inflow,1.0,inside
+cs_I_TGC003,calsim_monthly,I_TGC003,Tiger Creek above Regulation Reservoir,1.0,inside
+cs_I_THM028,calsim_monthly,I_THM028,Thomes Creek at Paskenta,0.12714856031455476,partial
+cs_I_TRNTY,calsim_monthly,I_TRNTY,Trinity Lake inflow,0.15156713066897073,partial
+cs_I_TULOC,calsim_monthly,I_TULOC,Tulloch Reservoir local inflow,0.6438561239652248,partial
+cs_I_UBEAR,calsim_monthly,I_UBEAR,Upper Bear Reservoir inflow,1.0,inside
+cs_I_UNVLY,calsim_monthly,I_UNVLY,Union Valley Reservoir inflow,1.0,inside
+cs_I_WBF006,calsim_monthly,I_WBF006,West Branch Feather River accretion: Miocene Diversion Dam to Yankee Hill,1.0,inside
+cs_I_WBF015,calsim_monthly,I_WBF015,West Branch Feather River accretion: Hendricks to Miocene Diversion Dam,1.0,inside
+cs_I_WBF030,calsim_monthly,I_WBF030,West Branch Feather River accretion: Round Valley to Hendricks Diversion Dam,1.0,inside
+cs_I_WBR001,calsim_monthly,I_WBR001,Weber Creek near Salmon Falls,0.9999977472166557,inside
+cs_I_WKYTN,calsim_monthly,I_WKYTN,Whiskeytown Lake inflow,1.0,inside
+cs_I_WLF013,calsim_monthly,I_WLF013,Wolf Creek at Tarr Ditch Diversion Dam,0.0,outside

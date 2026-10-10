@@ -1,48 +1,26 @@
-"""Per-HRU features for the parameter network: physical statics + climate indices.
+"""Per-HRU features for the parameter network, and the climate indices of the hybrids.
 
-Two variants (the study's ablation):
+Two variants:
 
-* ``static`` — physical statics only: elev, lat, lon, flowlen (z-scored; the
-  flow length is optional, ``DplConfig.flowlen_feature``) plus one-hot
-  ``soil_class`` / ``veg_class`` (the same information class the GA's soil/veg
-  zonal regionalization used);
-* ``climate`` — statics PLUS forcing-derived climatology, computed per HRU
-  from its grid cell over a configurable ``(product, window)``.
-
-Two embedding variants replace EVERY other input (statics, climate indices,
-soil/veg, the one-hots), so their parameter field is climate-frozen:
-
-* ``aef`` — AlphaEarth Foundations satellite embeddings (Google/DeepMind,
+* ``physical`` — the continuous statics elev, lat, lon and the flow length to the
+  basin outlet (:data:`CONTINUOUS_STATICS`) plus the continuous soil, vegetation,
+  terrain and LAI features :data:`PHYSICAL_FEATURES`, sampled per HRU from the CA
+  raster stack (see ``sacsma.io.soilveg_path``), every column z-scored;
+* ``aef_u`` — AlphaEarth Foundations satellite embeddings (Google/DeepMind,
   ``GOOGLE/SATELLITE_EMBEDDING/V1/ANNUAL``, CC-BY 4.0; the 2017-2025 mean 64-d
-  vector per region cell, ``data/inputs/grid/aef_cell_mean.npz``): the first
-  :data:`AEF_PCS` principal components of the unit DIRECTIONS plus the mean
-  vector's LENGTH (how consistent the land surface is across the cell and the
-  years).  The PCA is fit once on all 4410 region cells — no training data
-  involved — and stored in the :class:`FeatureSet`, so an evaluation projects
-  exactly as the training did;
-* ``aef64`` — the same store without the PCA: all :data:`AEF_DIMS` coordinates
-  of the unit direction plus the length, each z-scored on its own, so the
-  embedding keeps its own geometry (the ``aef`` PCs are z-scored one by one,
-  which gives a PC holding <1 % of the variance the input scale of PC1);
-* ``aef_random`` — its control: :data:`AEF_PCS` + 1 standard-normal values per
-  cell, seeded by the cell key.  They carry the cell's identity and nothing
-  about its land surface, so a gain the ``aef`` arm shares with this control is
-  cell identity, not embedding content.
+  vector per region cell, ``data/inputs/grid/aef_cell_mean.npz``) in place of every
+  other input, so the parameter field is climate-frozen: the first :data:`AEF_PCS`
+  principal components of the unit DIRECTIONS plus the mean vector's LENGTH (how
+  consistent the land surface is across the cell and the years).  The PCA is fit
+  once on all 4410 region cells — no training data involved — and stored in the
+  :class:`FeatureSet`, so an evaluation projects exactly as the training did.  The
+  PCs are NOT z-scored one by one: PCk keeps ``(sd_k / sd_1) ** AEF_PC_POWER`` of
+  PC1's spread (1 = the PCA's own geometry), so the low-variance PCs, the least
+  stable from one embedding year to the next, do not get PC1's input scale; the
+  length is z-scored.
 
-Optional spatial Fourier terms (net-v2, ``fourier_k > 0``): sin/cos of
-``2*pi*f*(lat, lon)`` normalized to the training-domain extent, ``f = 1..k`` —
-low-frequency coordinate features that let the net express smooth regional
-parameter fields (the role of the GA's hand-drawn SMA zones) which raw lat/lon
-through a small MLP cannot bend into.  The extent is stored in the
-:class:`FeatureSet` so checkpoint evaluation reproduces them exactly.
-
-Non-stationarity: the climate indices are FUNCTIONS OF THE FORCING WINDOW and
-are recomputable under any future climate product — under warming,
-``snow_frac`` falls and ``aridity`` rises, so a climate-variant parameter
-field ADAPTS when the indices are recomputed (snow/ET-controlled parameters
-move), whereas the statics-only field is climate-frozen.  The window/product
-used at training time is stored with the normalization stats so an evaluation
-under a new climate is an explicit, documented choice.
+The climate indices (:func:`climate_indices`) are no network input; the hybrids take
+them as statics (:mod:`sacsma.dpl.hybrid`).
 
 Indices (per HRU):
     p_mean       mean annual precipitation (mm/yr)
@@ -56,8 +34,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-import zlib
-
 import numpy as np
 import pandas as pd
 
@@ -68,8 +44,7 @@ CONTINUOUS_STATICS = ("elev", "lat", "lon", "flowlen")
 CLIMATE_INDICES = ("p_mean", "aridity", "snow_frac", "seasonality")
 
 # -- physical variant: continuous soil/veg/terrain/LAI, sampled per HRU from the
-#    CA raster stack (data/inputs/grid/raw_gis; see sacsma.io.soilveg_path).  These REPLACE
-#    the opaque one-hot soil_class/veg_class of the static/climate variants. --
+#    CA raster stack (data/inputs/grid/raw_gis; see sacsma.io.soilveg_path). --
 #: POLARIS depth zones aggregated to SAC-SMA storage layers (depth weights, cm).
 _POLARIS_PROPS = ("sand", "clay", "ksat", "theta_s")
 _SURF_ZONE = {"0_5": 5.0, "5_15": 10.0, "15_30": 15.0}          # ~ upper zone
@@ -84,39 +59,23 @@ PHYSICAL_FEATURES = (
 
 #: the AlphaEarth store under the data directory (data/inputs/grid/gee_aef_region.py)
 AEF_PCS = 16                       # principal components of the unit directions
-AEF_DIMS = 64                      # the embedding width (aef64 feeds all of it)
-AEF_VARIANTS = ("aef", "aef64", "aef_random")
-#: the variants that read the AlphaEarth store (callers pass ``aef_path``)
-AEF_STORE_VARIANTS = ("aef", "aef64")
-VARIANTS = ("static", "climate", "physical", "physical_climate") + AEF_VARIANTS
+AEF_PC_POWER = 1.0                 # aef_u: PCk spread = (sd_k / sd_1) ** this; PC1's = 1
+VARIANTS = ("physical", "aef_u")
 
 
 @dataclass
 class FeatureSet:
     """Feature matrix + everything needed to rebuild it identically."""
 
-    x: np.ndarray                  # (N, F) float32, z-scored continuous cols
+    x: np.ndarray                  # (N, F) float32, z-scored
     names: list[str]
-    mean: np.ndarray               # (F,) normalization stats (0/1 for one-hots)
+    mean: np.ndarray               # (F,) normalization stats
     std: np.ndarray
-    soil_categories: list[int]
-    veg_categories: list[int]
     variant: str                   # one of VARIANTS
-    climate_window: tuple[str, str] | None
-    climate_product: str | None
-    fourier_k: int = 0             # spatial Fourier order (0 = off)
-    #: (lat_min, lat_max, lon_min, lon_max) normalization extent for the
-    #: Fourier terms (None when fourier_k == 0)
-    coord_bounds: tuple[float, float, float, float] | None = None
-    #: the continuous statics the matrix opens with (a checkpoint without the
-    #: field, from before ``flowlen_feature``, carries the full tuple)
-    statics: tuple[str, ...] = CONTINUOUS_STATICS
-    #: ``aef``: the region-cell PCA of the unit embedding directions — mean
-    #: (64,) and components (AEF_PCS, 64); ``aef64``: zeros and the identity
+    #: ``aef_u``: the region-cell PCA of the unit embedding directions — mean (64,) and
+    #: components (AEF_PCS, 64)
     aef_mean: np.ndarray | None = None
     aef_basis: np.ndarray | None = None
-    #: ``aef_random``: the seed of the per-cell random vectors
-    aef_seed: int = 0
 
 
 def climate_indices(
@@ -222,11 +181,18 @@ def aef_pca(path: str | Path) -> tuple[np.ndarray, np.ndarray]:
     return mean, basis
 
 
+def aef_u_std(std: np.ndarray) -> np.ndarray:
+    """``aef_u``'s input scales from the columns' standard deviations ``std``: PCk keeps
+    ``(sd_k / sd_1) ** AEF_PC_POWER`` of PC1's spread; the length keeps its own."""
+    s = np.array(std, dtype=np.float64)
+    s[:AEF_PCS] = s[:AEF_PCS] ** (1.0 - AEF_PC_POWER) * s[0] ** AEF_PC_POWER
+    return s
+
+
 def aef_features(hrus: pd.DataFrame, path: str | Path, mean: np.ndarray,
-                 basis: np.ndarray, prefix: str = "aef_pc") -> pd.DataFrame:
+                 basis: np.ndarray) -> pd.DataFrame:
     """Per HRU row: the cell's unit embedding direction projected on ``basis``
-    (``aef_pc01``.., or ``<prefix>01``..) and the length of its mean vector
-    (``aef_len``)."""
+    (``aef_pc01``..) and the length of its mean vector (``aef_len``)."""
     z = np.load(path, allow_pickle=True)
     pos = {k: i for i, k in enumerate(z["keys"].astype(str))}
     keys = hrus["key"].astype(str).to_numpy()
@@ -237,65 +203,31 @@ def aef_features(hrus: pd.DataFrame, path: str | Path, mean: np.ndarray,
     e = z["emb"].astype(np.float64)[[pos[k] for k in keys]]
     n = np.linalg.norm(e, axis=1)
     pcs = (e / n[:, None] - mean) @ basis.T
-    out = {f"{prefix}{i + 1:02d}": pcs[:, i] for i in range(basis.shape[0])}
+    out = {f"aef_pc{i + 1:02d}": pcs[:, i] for i in range(basis.shape[0])}
     out["aef_len"] = n
     return pd.DataFrame(out, index=hrus.index)
-
-
-def random_features(hrus: pd.DataFrame, seed: int, dims: int) -> pd.DataFrame:
-    """The ``aef_random`` control: ``dims`` standard-normal values per HRU row,
-    drawn from a generator seeded by ``(seed, crc32(key))`` — the same cell gets
-    the same vector in every domain and caller, whatever the row order."""
-    keys = hrus["key"].astype(str).to_numpy()
-    per_key = {k: np.random.default_rng([seed, zlib.crc32(k.encode())]).standard_normal(dims)
-               for k in dict.fromkeys(keys)}
-    v = np.stack([per_key[k] for k in keys])
-    return pd.DataFrame(v, columns=[f"rand{i + 1:02d}" for i in range(dims)],
-                        index=hrus.index)
 
 
 def build_features(
     hrus: pd.DataFrame,
     *,
-    variant: str = "static",
-    forcing=None,
-    climate_window: tuple[str, str] | None = None,
-    climate_product: str | None = None,
-    fourier_k: int = 0,
+    variant: str,
     physical_path: str | Path | None = None,
     stats: FeatureSet | None = None,
-    statics: tuple[str, ...] | None = None,
     aef_path: str | Path | None = None,
-    aef_seed: int = 0,
 ) -> FeatureSet:
     """Assemble the (N, F) matrix.  Pass a previous :class:`FeatureSet` as
-    ``stats`` to reuse its categories, z-scoring, Fourier extent, statics and
-    embedding projection (checkpoint evaluation).  ``statics`` (default
-    :data:`CONTINUOUS_STATICS`) picks the continuous statics of a new set, e.g.
-    without ``flowlen``; the embedding variants take none."""
+    ``stats`` to reuse its z-scoring and embedding projection (checkpoint
+    evaluation)."""
     if variant not in VARIANTS:
         raise ValueError(f"variant {variant!r}")
-    embed = variant in AEF_VARIANTS
 
-    if stats is not None:
-        st = tuple(getattr(stats, "statics", CONTINUOUS_STATICS))
-    else:
-        st = tuple(statics) if statics is not None else CONTINUOUS_STATICS
-    if embed:
-        st = ()                                   # the embeddings replace everything
     cols: list[np.ndarray] = []
     names: list[str] = []
-    for c in st:
-        cols.append(hrus[c].to_numpy(np.float64))
-        names.append(c)
-    if variant in ("climate", "physical_climate"):
-        if forcing is None:
-            raise ValueError(f"{variant} variant needs the DomainForcing")
-        ci = climate_indices(hrus, forcing, window=climate_window)
-        for c in CLIMATE_INDICES:
-            cols.append(ci[c].to_numpy(np.float64))
+    if variant == "physical":
+        for c in CONTINUOUS_STATICS:
+            cols.append(hrus[c].to_numpy(np.float64))
             names.append(c)
-    if variant in ("physical", "physical_climate"):
         if physical_path is None:
             raise ValueError(f"{variant} variant needs physical_path "
                              "(sacsma.io.soilveg_path)")
@@ -304,78 +236,27 @@ def build_features(
             cols.append(phys[c].to_numpy(np.float64))
             names.append(c)
     a_mean = a_basis = None
-    a_seed = stats.aef_seed if stats is not None else aef_seed
-    if variant in AEF_STORE_VARIANTS:
+    if variant == "aef_u":
         if aef_path is None:
             raise ValueError(f"{variant} variant needs aef_path (features.aef_store)")
         if stats is not None:
             a_mean, a_basis = np.asarray(stats.aef_mean), np.asarray(stats.aef_basis)
-        elif variant == "aef":
+        else:
             a_mean, a_basis = aef_pca(aef_path)
-        else:                                     # aef64: the raw unit directions
-            a_mean, a_basis = np.zeros(AEF_DIMS), np.eye(AEF_DIMS)
-        emb = aef_features(hrus, aef_path, a_mean, a_basis,
-                           prefix="aef_pc" if variant == "aef" else "aef_d")
-    elif variant == "aef_random":
-        emb = random_features(hrus, a_seed, AEF_PCS + 1)
-    if embed:
+        emb = aef_features(hrus, aef_path, a_mean, a_basis)
         for c in emb.columns:
             cols.append(emb[c].to_numpy(np.float64))
             names.append(c)
-    n_cont = len(names)                       # z-scored columns end here
-
-    fk = stats.fourier_k if stats is not None else fourier_k
-    bounds = None
-    if fk > 0:
-        lat = hrus["lat"].to_numpy(np.float64)
-        lon = hrus["lon"].to_numpy(np.float64)
-        if stats is not None and stats.coord_bounds is not None:
-            bounds = stats.coord_bounds
-        else:
-            bounds = (float(lat.min()), float(lat.max()),
-                      float(lon.min()), float(lon.max()))
-        u = (lat - bounds[0]) / max(bounds[1] - bounds[0], 1e-9)
-        v = (lon - bounds[2]) / max(bounds[3] - bounds[2], 1e-9)
-        for f in range(1, fk + 1):
-            for tag, w in (("lat", u), ("lon", v)):
-                cols.append(np.sin(2.0 * np.pi * f * w))
-                names.append(f"sin{f}_{tag}")
-                cols.append(np.cos(2.0 * np.pi * f * w))
-                names.append(f"cos{f}_{tag}")
-
-    # one-hot soil/veg — the static/climate zonal encoding; the physical variants
-    # REPLACE these with continuous soil/veg/terrain columns (added above), the
-    # embedding variants with the embeddings.
-    if variant in ("physical", "physical_climate") or embed:
-        soil_cats: list[int] = []
-        veg_cats: list[int] = []
-    else:
-        soil_cats = (stats.soil_categories if stats is not None
-                     else sorted(hrus["soil_class"].unique().tolist()))
-        veg_cats = (stats.veg_categories if stats is not None
-                    else sorted(hrus["veg_class"].unique().tolist()))
-        for cat in soil_cats:
-            cols.append((hrus["soil_class"] == cat).to_numpy(np.float64))
-            names.append(f"soil_{cat}")
-        for cat in veg_cats:
-            cols.append((hrus["veg_class"] == cat).to_numpy(np.float64))
-            names.append(f"veg_{cat}")
 
     x = np.stack(cols, axis=1)
     if stats is not None:
         mean, std = stats.mean, stats.std
     else:
-        # only the physical/climate columns are z-scored; Fourier terms are
-        # already in [-1, 1] and one-hots are left as 0/1
-        mean = np.zeros(x.shape[1])
-        std = np.ones(x.shape[1])
-        mean[:n_cont] = x[:, :n_cont].mean(axis=0)
-        std[:n_cont] = x[:, :n_cont].std(axis=0).clip(min=1e-9)
+        mean = x.mean(axis=0)
+        std = x.std(axis=0).clip(min=1e-9)
+        if variant == "aef_u":
+            std = aef_u_std(std)          # in std, so evaluation repeats it
     x = (x - mean) / std
 
     return FeatureSet(x=x.astype(np.float32), names=names, mean=mean, std=std,
-                      soil_categories=soil_cats, veg_categories=veg_cats,
-                      variant=variant, climate_window=climate_window,
-                      climate_product=climate_product,
-                      fourier_k=fk, coord_bounds=bounds, statics=st,
-                      aef_mean=a_mean, aef_basis=a_basis, aef_seed=a_seed)
+                      variant=variant, aef_mean=a_mean, aef_basis=a_basis)

@@ -1,5 +1,5 @@
 {
- "run": "noah_cdec_uf_usgs_cs64_ho7685_ufx_areaw_all_kref05_sacx_carry_px_w2ft15r10_aef",
+ "run": "7_calsim",
  "forcing": "historical_livneh_unsplit",
  "mu": 0.03,
  "epochs": 300,
@@ -8,6 +8,11 @@
   1976,
   1985
  ],
+ "protected_wy": [
+  1976,
+  1985
+ ],
+ "scored_holdout": true,
  "fit_wy": [
   1950,
   2015
@@ -103,61 +108,61 @@
  "kge_dpl_holdout": {
   "non-anchor": {
    "n": 50,
-   "median": 0.6165,
-   "mean": 0.4856,
-   "p10": -0.0217,
-   "below_0": 6
+   "median": 0.5624,
+   "mean": 0.5034,
+   "p10": 0.0535,
+   "below_0": 4
   },
   "share": {
    "n": 139,
-   "median": 0.7043,
-   "mean": 0.6165,
-   "p10": 0.2323,
+   "median": 0.7117,
+   "mean": 0.623,
+   "p10": 0.2169,
    "below_0": 8
   },
   "single-arc system": {
    "n": 7,
-   "median": 0.8852,
-   "mean": 0.8981,
-   "p10": 0.8649,
+   "median": 0.8958,
+   "mean": 0.8804,
+   "p10": 0.8232,
    "below_0": 0
   },
   "all rim arcs": {
    "n": 196,
-   "median": 0.692,
-   "mean": 0.5932,
-   "p10": 0.1433,
-   "below_0": 14
+   "median": 0.6879,
+   "mean": 0.6017,
+   "p10": 0.1724,
+   "below_0": 12
   }
  },
  "kge_product_holdout": {
   "non-anchor": {
    "n": 50,
-   "median": 0.6165,
-   "mean": 0.4856,
-   "p10": -0.0217,
-   "below_0": 6
+   "median": 0.5624,
+   "mean": 0.5034,
+   "p10": 0.0535,
+   "below_0": 4
   },
   "share": {
    "n": 139,
-   "median": 0.8406,
-   "mean": 0.7998,
-   "p10": 0.6474,
-   "below_0": 2
+   "median": 0.847,
+   "mean": 0.8112,
+   "p10": 0.6588,
+   "below_0": 1
   },
   "single-arc system": {
    "n": 7,
-   "median": 0.8852,
-   "mean": 0.8981,
-   "p10": 0.8649,
+   "median": 0.8958,
+   "mean": 0.8804,
+   "p10": 0.8232,
    "below_0": 0
   },
   "all rim arcs": {
    "n": 196,
-   "median": 0.8086,
-   "mean": 0.7231,
-   "p10": 0.4475,
-   "below_0": 8
+   "median": 0.817,
+   "mean": 0.7352,
+   "p10": 0.4506,
+   "below_0": 5
   }
  },
  "validation_full_gate": true

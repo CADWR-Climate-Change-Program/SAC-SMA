@@ -12,8 +12,9 @@ same path under `artifacts/_local/`.
 | `benchmark/` | Three models (dPL-CalSim, BCM routed, VIC-CalSim3) against observed CDEC full natural flow at 12 CDEC watersheds, monthly, WY1991–2018: see [benchmark](benchmark/README.md) | `sacsma benchmark` |
 | `footprints/` | How each watershed's units sit on its CalSim3 catchment, and the HRU attribute maps | `sacsma calsim` |
 | `forcing/` | The effect of the forcing product on both SAC-SMA and VIC, and the daily runs it compares | `sacsma calsim --forcing-compare` |
-| `dpl/15cdec/` | The learned-parameter runs and LSTM ensembles on the 15 CDEC watersheds, the benchmark of the differentiable model, and the four studies: see [dpl](dpl/README.md) | `sacsma dpl ...` |
-| `dpl/multifamily/` | The multi-family runs: scores per entity, the daily flow, tier 1, tier 2, the atlas: see [dpl](dpl/README.md) | `sacsma dpl ...` |
+| `dpl/15cdec/` | The runs fitted to the 15 CDEC watersheds: the ladder's rungs `1_hru` to `6_aef` and the LSTM ensembles: see [dpl](dpl/README.md) | `sacsma dpl ...` |
+| `dpl/multifamily/` | dPL-CalSim (`7_calsim`): scores per entity, the daily flow, tier 1, tier 2, the atlas: see [dpl](dpl/README.md) | `sacsma dpl ...` |
+| `dpl/fidelity/`, `dpl/studies/` | The fidelity check of the differentiable model, and the three studies (climatology, hybrids, forcing): see [dpl](dpl/README.md) | `sacsma dpl fidelity`, `sacsma dpl study <name>` |
 
 ## The calibrated SAC-SMA
 

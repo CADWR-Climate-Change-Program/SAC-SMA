@@ -340,7 +340,7 @@ def main(argv=None) -> int:
         ap.error(f"unknown layer(s) {sorted(unknown)}; valid: {', '.join(LAYERS)}")
 
     session = requests.Session()
-    session.headers["User-Agent"] = "sacsma-dataprep/1.0"
+    session.headers["User-Agent"] = "sacsma/1.0"
     builders = {
         "polaris": lambda: plan_polaris(args.root),
         "landfire": lambda: plan_landfire(args.root),

@@ -188,7 +188,7 @@ the percentage of annual volume placed in the wrong month. It is reported as a p
 
 ## 6. Parameter table
 
-The table lists the 31-parameter structure with the GA feasible ranges ([Wi & Steinschneider, 2023](references.md#wimemo)). The parameter network of the [learned-parameter model](learned_parameters.md) emits the same 28 free parameters into the same box (with the two noted widenings); `side` and `SCF` are fixed in both systems, and `PXTEMP` in both except the multi-family runs, which learn it between −1 and 3 °C.
+The table lists the 31-parameter structure with the GA feasible ranges ([Wi & Steinschneider, 2023](references.md#wimemo)). The parameter network of the [learned-parameter model](learned_parameters.md) emits the same 28 free parameters into the same box (with the two noted widenings); `side` and `SCF` are fixed in both systems, and `PXTEMP` in both except `5_px`, `6_aef` and `7_calsim` (dPL-CalSim), which learn it between −1 and 3 °C.
 
 | Process | Parameter | Description | Units | Lower | Upper |
 |---|---|---|---|---|---|
@@ -226,4 +226,4 @@ The table lists the 31-parameter structure with the GA feasible ranges ([Wi & St
 
 Parameters marked "fixed" are not calibrated.
 
-For the learned-parameter search, the `rexp` upper bound is widened to 15 and the `lzsk` lower bound to 0.003. The Noah-lite ET variant adds one learned parameter, $\chi \in [0.5, 2.5]$ (soil-moisture limitation exponent), and pins vegetation fraction and seasonal LAI to observations.
+For the learned-parameter search, the `rexp` upper bound is widened to 15 and the `lzsk` lower bound to 0.001 (every learned-parameter run sets it with `--param-bounds lzsk=0.001:0.5`). The network maps `lzsk`, `lzpk`, `MFMAX` and `MFMIN` in log space, as it does the five storage capacities and `zperc`. The Noah-lite ET variant adds one learned parameter, $\chi \in [0.5, 2.5]$ (soil-moisture limitation exponent), and pins vegetation fraction and seasonal LAI to observations.

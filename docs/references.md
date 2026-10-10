@@ -30,8 +30,6 @@ The sources the guide cites, in alphabetical order. Each entry has an anchor (`r
 
 <a id="hochreiter1997"></a>Hochreiter, S., and Schmidhuber, J. (1997). Long short-term memory. *Neural Computation*, 9, 1735–1780.
 
-<a id="immerzeel2014"></a>Immerzeel, W. W., Petersen, L., Ragettli, S., and Pellicciotti, F. (2014). The importance of observed gradients of air temperature and precipitation for modeling runoff from a glacierized watershed in the Nepalese Himalayas. *Water Resources Research*, 50, 2212–2226.
-
 <a id="jarvis2008"></a>Jarvis, A., Reuter, H. I., Nelson, A., and Guevara, E. (2008). Hole-filled SRTM for the globe, Version 4. CGIAR-CSI SRTM 90m Database.
 
 <a id="koren2010"></a>Koren, V., Smith, M., Cui, Z., Cosgrove, B., Werner, K., and Zamora, R. (2010). Modification of Sacramento Soil Moisture Accounting Heat Transfer Component (SAC-HT) for enhanced evapotranspiration. *NOAA Technical Report NWS 53*. National Weather Service, Silver Spring, MD.

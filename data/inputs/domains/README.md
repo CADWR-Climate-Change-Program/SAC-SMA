@@ -32,8 +32,8 @@ grid (see [the grid README](../grid/README.md)).
 ## How it is built
 
 `hruinfo.csv`, `basin_area.csv`, `basin_tminmax_livneh.csv` and the geojson: delivered; cannot be rebuilt
-from a clone. The one-time ingest scripts were retired and are in git history (commit `ad89558` and
-earlier). The `12rim` area table was transcribed from the study's MATLAB CalLite wrapper.
+from a clone, and no script in the repository writes them. The `12rim` area table was transcribed from the
+study's MATLAB CalLite wrapper.
 
 The attribute sidecars of `15cdec`, `9unimp`, `11obs` and `12rim` are rebuilt by the raster sampler
 (environment `sacsma-gis`; raw rasters in the folder named by `raw_gis` in `data/local_paths.toml`):
@@ -53,9 +53,6 @@ sidecars. Products, units, encodings and the sampling conventions are in
 - Sidecars. `15cdec`: 7,891 of 7,891 rows finite; 35 HRUs are POLARIS gap-filled and 239 LAI gap-filled.
 - `basin_tminmax_livneh.csv`: the watershed mean of Tmin and Tmax reproduces the stored `tavg` forcing to
   0.37 °C.
-- `15cdec_grid`: the learned-parameter run on it (`hamon`) scores validation KGE 0.829, against 0.838 for
-  the same model on the original HRUs, so the coarse grid keeps almost all of the skill
-  ([Runs](../../../docs/runs.md)).
 
 ## Know before using
 
@@ -75,13 +72,14 @@ sidecars. Products, units, encodings and the sampling conventions are in
   and Noah ET options need a grid domain. `15cdec_grid` is on the grid: it reads the shared stores, and
   its sidecars supply the observed canopy (cover fraction, LAI) of the Noah ET path.
 - caution: the `15cdec_grid` footprints over-reach the true catchments by 9 to 66 % in 11 of the 15
-  watersheds. The dPL runs re-foot those to the CalSim3 catchments. What the coarse grid loses against
-  `15cdec` is the orographic downscaling of HRU meteorology, an upstream CADWR product that is not in the
-  repository.
+  watersheds. The learned-parameter runs from `2_grid` on train on the cells of the `multifamily`
+  registry instead (CalSim3 catchment outlines); the hybrids' precipitation input is a mean over the
+  `15cdec_grid` footprints. What the coarse grid loses against `15cdec` is the orographic downscaling of
+  HRU meteorology, an upstream CADWR product that is not in the repository.
 - The `15cdec_grid` sidecars are means over the cell footprint (the convention the dPL parameter network
   was trained on). All other sidecars are point samples at the HRU point.
-- The sidecars replace the one-hot `soil_class` and `veg_class` in the `physical` feature variant of
-  `sacsma.dpl.features`.
+- The sidecars are the soil, vegetation, terrain and LAI inputs of the `physical` feature variant of
+  `sacsma.dpl.features`, in place of the `soil_class` and `veg_class` codes.
 - `SACSMA_15CDEC.geojson`: the four Tulare watersheds (ISB, PNF, SCC, TRM) have no CalSim3 polygons, so
   their footprints in the entity registry come from this file.
 - caution: the HRU footprints of SHA and BND in `11obs` carry the endorheic Goose Lake block, and SNS and
@@ -94,8 +92,12 @@ sidecars. Products, units, encodings and the sampling conventions are in
   (and `load_params`, which reads the GA optimum from `artifacts/models/`). Through them
   every model run (`sacsma run`, `sacsma plots`, `sacsma calsim`, `sacsma product`, `sacsma dpl ...`).
 - `12rim/basin_area.csv`: `sacsma.product` (the CalLite file of the 12 rim inflows).
-- `basin_tminmax_livneh.csv`: `sacsma.dpl.hybrid.data` (inputs of the hybrid and LSTM models, which add the
-  diurnal range that `tavg` alone discards) and `sacsma.dpl.studies.forcing_sensitivity`.
+- `basin_tminmax_livneh.csv`: `sacsma.dpl.hybrid.data` (the watershed Tmin and Tmax inputs of the hybrid
+  and LSTM models).
+- `15cdec_grid`: `sacsma.dpl.train` (the starting field of every learned-parameter run is the
+  area-weighted median of its GA optimum over these rows), `sacsma.dpl.hybrid.data` (the hybrids'
+  forcing) and `sacsma.dpl.studies.forcing_sensitivity` (the cells the temperature-detrending field is
+  computed on).
 - Build scripts: `data/inputs/grid/build_region_grid.py` and `build_region_statics.py` (cells and
   sidecars of the grid domains), `data/inputs/domains/multifamily/build_entities.py` (`15cdec` areas),
   `build_entity_cells.py` (the geojson), `build_flowlens.py` (the `15cdec_grid` flow lengths, as a check).

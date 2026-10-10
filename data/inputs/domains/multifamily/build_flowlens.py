@@ -83,7 +83,7 @@ SQMI_PER_KM2 = 0.386102
 MAX_STEPS = 4_000_000
 
 
-_UA = {"User-Agent": "sacsma-dataprep/1.0"}
+_UA = {"User-Agent": "sacsma/1.0"}
 _SIZES: dict[str, int] = {}
 
 

@@ -81,59 +81,20 @@ LOG_SPACE_PARAMS: frozenset[str] = frozenset(
     {"uztwm", "uzfwm", "lztwm", "lzfpm", "lzfsm", "zperc"}
 )
 
-#: Physics groups for the optional grouped output heads (net-v2): insertion
-#: order concatenates EXACTLY to FREE_PARAMS (asserted below).
-PARAM_GROUPS: dict[str, tuple[str, ...]] = {
-    "pet": ("Kpet",),
-    "sma": tuple(p for p in _SMA_COLS if p not in ("side",)),
-    "snow": tuple(p for p in _SNOW_COLS if p not in ("SCF", "PXTEMP")),
-    "routing": tuple(_ROUT_COLS),
-}
-assert tuple(p for ps in PARAM_GROUPS.values() for p in ps) == FREE_PARAMS
-
 #: Bounds of the Noah-lite moisture exponent ``soil_chi`` (Ek et al. 2003 chi), the one
 #: parameter of the Noah-lite ET the network learns; the green fraction and the LAI are
 #: observed.  Never part of PARAM_ORDER or a ga_optimum export.
 SOIL_CHI_BOUNDS: tuple[float, float] = (0.5, 2.5)
 
 
-#: DplConfig fields retired from the schema, with the inert value each had.  A checkpoint that
-#: records one at this value loads without comment; any other value is named when the field is
-#: dropped (:func:`config_from_checkpoint`).
-RETIRED_CFG_DEFAULTS: dict[str, object] = {
-    "smooth_eps": 0.0,
-    # the ET/SWE observation losses
-    "et_loss_lambda": 0.0, "et_level_lambda": 0.0, "swe_loss_lambda": 0.0,
-    "et_loss_sigma_floor": 0.2,
-    "shape_sigma_floor": 0.1, "et_anchor_band": 0.0, "et_products": (),
-    # settings of the retired seasonal and dynamic heads, inert without them
-    "seasonal_amp": 0.18, "seasonal_amp_frac": 0.10, "dynamic_amp": 0.5, "dynamic_window": 365,
-}
-#: retired physics options, with the value a checkpoint must record to run: any other value
-#: is a physics this version does not have, and the checkpoint is refused.  The canopy flags
-#: follow et_mode ("noah" is Noah-lite, its head on the shared trunk).
-RETIRED_PHYSICS: dict[str, object] = {
-    "ninc_mode": "fixed", "perc_mode": "reference", "init_mode": "reference",
-    "seasonal_params": (), "dynamic_params": (),
-}
-
-
 def config_from_checkpoint(ck: dict) -> DplConfig:
-    """The training configuration of the checkpoint ``ck``: its recorded fields, a retired
-    training field dropped (named unless inert), a retired physics option refused."""
+    """The training configuration of the checkpoint ``ck``, from its recorded fields (a field
+    this configuration does not have is refused)."""
     rec = {k: tuple(v) if isinstance(v, list) else v for k, v in ck["cfg"].items()}
-    noah = rec.get("et_mode") == "noah"
-    physics = {**RETIRED_PHYSICS, "canopy": noah, "canopy_lite": noah}
-    bad = sorted(k for k, v in physics.items() if k in rec and rec[k] != v)
-    if bad:
-        raise ValueError(f"the checkpoint was trained with retired physics options: "
-                         f"{', '.join(f'{k}={rec[k]!r}' for k in bad)}")
-    known = {f.name for f in fields(DplConfig)}
-    dropped = sorted(k for k in set(rec) - known - set(physics) - {"canopy_separate_trunk"}
-                     if k not in RETIRED_CFG_DEFAULTS or rec[k] != RETIRED_CFG_DEFAULTS[k])
-    if dropped:
-        print(f"note: dropping retired cfg keys from checkpoint: {dropped}", flush=True)
-    return DplConfig(**{k: v for k, v in rec.items() if k in known})
+    unknown = sorted(set(rec) - {f.name for f in fields(DplConfig)})
+    if unknown:
+        raise ValueError(f"the checkpoint records fields DplConfig does not have: {unknown}")
+    return DplConfig(**rec)
 
 
 # ---------------------------------------------------------------------------
@@ -159,58 +120,30 @@ class DplConfig:
     device: str = "cuda"
 
     # -- training -----------------------------------------------------------
-    loss: str = "nnse"          # "nnse" (variance-normalized MSE) | "mse"
+    #: the chunk loss (loss.masked_basin_loss): the variance-normalized squared error
+    #: (NNSE), the low-flow log term (log_loss_lambda, log_loss_eps) and the variance
+    #: term, every entity-chunk term weighted by its valid days / 365 (monthly: valid
+    #: months / 12), so a partial chunk (the 92-day Oct-Dec 2018 envelope tail) counts
+    #: by its length
     log_loss_lambda: float = 0.15
     log_loss_eps: float = 0.01  # mm/day
-    #: per-chunk variance-matching penalty on alpha = std-ratio: (alpha - 1)^2 up
-    #: to |alpha - 1| = var_huber_cap, linear beyond, skipped for a basin-chunk
-    #: under var_gate_frac of the basin's record variance — counters the
-    #: squared-error variance damping (alpha -> r); NOT chunked KGE.
+    #: per-chunk variance-matching penalty: the std difference over the basin's RECORD
+    #: std (the NNSE's normalizer, so a year weighs by its share of the record
+    #: variance), on basin-chunks with at least shape_min_days valid days — counters
+    #: the squared-error variance damping (alpha -> r); NOT chunked KGE.
     var_loss_lambda: float = 1.0
-    #: the gate: a chunk's observed variance must exceed this share of the basin's
-    #: full-record variance (an absolute floor of 1e-8 stays fixed in loss.py) for
-    #: the term to apply.  0.0 = no gate beyond the floor.
-    var_gate_frac: float = 1e-3
-    #: the Huber cap on |alpha - 1|: quadratic up to it, linear beyond; <= 0 keeps
-    #: (alpha - 1)^2 throughout.  Together, 0.0 and 0.0 are the loss the runs
-    #: before 2026-09 (the 15cdec canonical set) trained with.
+    #: the Huber cap of the variance term: quadratic up to it, linear beyond; <= 0
+    #: keeps the square throughout.
     var_huber_cap: float = 1.0
-    #: per-chunk BIAS penalty (mean-ratio beta - 1)^2 — the KGE beta term the
-    #: MSE/NNSE loss lacks (it penalizes correlation + variance but NOT volume
-    #: bias, so the optimizer can trade wet-basin over-evaporation for dry-basin
-    #: gains invisibly).  0.0 disables (default = byte-identical baseline); a
-    #: chunk mean over ~366 days is a stable statistic, like the std-ratio above.
-    bias_loss_lambda: float = 0.0
-    #: per-chunk summer-RECESSION timing penalty: over 1 Jul - 30 Sep, the mean
-    #: squared difference of the normalized cumulative flow (share of the window's
-    #: volume passed by each day), sim vs obs — the recession shape, blind to volume,
-    #: with no pull on winter or the flood peaks (a whole-year curve pulled winter
-    #: volume against the other terms at most Sierra basins).  Daily entities only
-    #: (monthly rows have no daily obs).  0.0 disables (default = byte-identical
-    #: baseline).
-    timing_loss_lambda: float = 0.0
-    #: per-chunk FLOOD-PEAK penalty: the mean of the chunk's top peak_loss_frac
-    #: valid days, sim vs obs (each sorted on its own — the flow-duration curve's
-    #: high segment), their difference over the basin's RECORD mean of the yearly
-    #: observed top mean, Huber-capped at 1 — flood years carry it, drought years
-    #: weigh little.  Daily entities only.  0.0 disables (default = byte-identical
-    #: baseline).
-    peak_loss_lambda: float = 0.0
-    #: the share of a chunk's valid days the peak term averages (0.02: 7 days a year)
-    peak_loss_frac: float = 0.02
-    #: the timing and peak terms score a basin-chunk only with at least this many
-    #: valid observed days (whole water years; the short envelope tail and sparse
-    #: years drop out); their record constants come from the same years
+    #: the variance term scores a basin-chunk only with at least this many valid
+    #: observed days (whole water years; the short envelope tail and sparse years
+    #: drop out)
     shape_min_days: int = 300
-    #: the timing term skips a basin-chunk whose observed Jul-Sep mean flow is under
-    #: this share of the basin's record mean flow (a dry summer has no recession to
-    #: match); it also needs 60 valid Jul-Sep days
-    timing_vol_gate: float = 0.05
     #: daily-target observations MASKED out of training and scoring, as
     #: ``"entity_id|YYYY-MM-DD"`` strings (the CLI reads them from a hand-edited
     #: CSV such as data/targets/cdec/fnf_daily_mask.csv; the checkpoint carries the
-    #: list, so evaluation masks the identical days).  Multi-timescale domain
-    #: only.  Empty = the stores as-is (default).
+    #: list, so evaluation masks the identical days).  Empty = the stores as-is
+    #: (default).
     obs_mask: tuple[str, ...] = ()
     #: water years held out of EVERY family, as an inclusive ``(first, last)`` pair,
     #: e.g. (1976, 1985) (calsim.arcs.HOLDOUT_WY): their targets are NaN after the
@@ -227,6 +160,13 @@ class DplConfig:
     #: months are counted separately and must all be observed.  Multi-timescale
     #: domain only.  "" = off (default: the registry windows).
     uf_train_start: str = ""
+    #: the training window, ``(first day, last day)`` of whole calendar months, e.g.
+    #: ("1988-10-01", "2003-09-30") = the 15cdec domains' WY1989-2003: every target
+    #: outside it is NaN (after the n_obs audit, the obs_mask, the holdout and the uf
+    #: back-extension; counted per entity as ``n_out``) and the training chunks start at it
+    #: (the spinup runs ahead of it).  Multi-timescale domain only.  () = the envelope
+    #: (default).
+    train_window: tuple[str, ...] = ()
     #: the CalSim3 rim-arc family (calsim_monthly) in the run: "train_default"
     #: appends the train_default arcs of data/targets/calsim3/arc_hierarchy.csv (tier A, own
     #: gauge record), in file order, as cs_<ARC> entities after the run's other
@@ -234,43 +174,20 @@ class DplConfig:
     #: "none" (default) = only the entities named or the 95 base entities.
     calsim_arcs: str = "none"
 
-    # -- regularizers (opt-in; ALL default-off => byte-identical baseline) ----
-    #: attribute-weighted geographic smoothness of the per-HRU parameter FIELD
-    #: (Feng 2023 "stable spatial patterns"): penalize squared differences of
-    #: the net's NORMALIZED params across within-basin k-NN edges, edge-weighted
-    #: by exp(-attr_scale * attr_dist) so only geographically-near AND
-    #: attribute-similar HRUs are tied.  A small-sample complexity brake that
-    #: does NOT anchor the field to the GA optimum.  0.0 disables (default).
-    spatial_reg_lambda: float = 0.0
-    spatial_reg_k: int = 8               # geographic neighbours per HRU
-    spatial_reg_attr_scale: float = 1.0  # attr-distance decay (units: median dist)
-    #: adaptive per-basin loss weights (Rahman-ALF): every selection eval,
-    #: reweight the pooled loss ∝ (1 - cal_KGE)^beta toward the worst-fitting
-    #: basins (SCC/ISB), momentum-blended and renormalized to unit mean.
-    adaptive_loss: bool = False
-    adaptive_loss_beta: float = 1.0
-    adaptive_loss_momentum: float = 0.5
-    adaptive_loss_floor: float = 0.05    # min (1 - KGE) so strong basins keep weight
-    adaptive_loss_clip: float = 5.0      # per-basin weight clamp [1/clip, clip]
     #: multi-timescale family weighting (multifamily domain only): "none" =
     #: every valid daily entity weighs equally in the chunk mean and the
-    #: monthly term adds with coefficient 1 (the baseline); "equal" = shares
-    #: 1:1:1 over the families the run trains (three families: thirds, the
-    #: daily term x 2/3 and the monthly x 1/3; a subset without a family
-    #: renormalizes over the rest).  Numeric shares, e.g.
+    #: monthly term adds with coefficient 1 (the baseline).  Numeric shares, e.g.
     #: "usgs=0.27,cdec=0.54,uf=0.19": each family's share of the loss
     #: (renormalized over the families present, entities equal within a
     #: family); the daily term is scaled by the daily families' shares and
     #: the monthly term by the monthly family's, and checkpoint selection is
-    #: the same share-weighted mean of the family means ("equal": the plain
-    #: mean of the family means).  The CalSim3 arcs (calsim_monthly, key
-    #: "calsim") are a second monthly family with their own monthly term,
-    #: denominator and frozen scale.  Guards against combining with
-    #: adaptive_loss (both drive the same per-basin weight vector).  Ignored
-    #: outside the multi-timescale domain.
+    #: the same share-weighted mean of the family means.  The CalSim3 arcs
+    #: (calsim_monthly, key "calsim") are a second monthly family with their own
+    #: monthly term, denominator and frozen scale.  Ignored outside the
+    #: multi-timescale domain.
     mt_family_weight: str = "none"
     #: how a chunk's loss normalizes the family-weighted entities (only with
-    #: mt_family_weight shares or "equal"): "present" (default) divides by the
+    #: mt_family_weight shares): "present" (default) divides by the
     #: weight of the entities scored in THAT chunk, so a chunk holding one
     #: family gives it the whole daily term — on the 95-entity set the USGS
     #: creeks train WY1950-84 and CDEC/uf from WY1985, and nominal shares
@@ -309,46 +226,23 @@ class DplConfig:
     #: (no default: p = 1 and p = 0.5 differ by 2x in the monthly weight), None
     #: without it
     mt_loss_ref_power: float | None = None
-    #: warm-start checkpoint path: the net's weights are loaded strict=False
-    #: BEFORE training (heads absent from the donor — e.g. a fresh PXTEMP
-    #: head — keep their zero-init, so the run starts EXACTLY at the donor's
-    #: parameter field).  The donor's feature standardization is reused, so
-    #: the start is exact even when this run trains a different entity subset
-    #: (--basins) than the donor.  Optimizer/scheduler start fresh; combine
-    #: with a low lr for the fine-tune regime.  "" = off.
-    init_from: str = ""
-    #: ep0-donor gate action when the epoch-0 selection does not reproduce
-    #: the donor's sel cal KGE (|d| > 1e-3): "warn" prints and continues;
-    #: "abort" raises, for unattended warm starts.  The gate compares the
-    #: selection scalar directly when the donor trained the same entity set
-    #: under the same statistic, and otherwise recomputes the donor's own
-    #: statistic over its entities from this run's per-entity KGE.
-    init_gate: str = "warn"
 
-    # -- parameter net (net-v2 knobs; defaults = the v1 architecture) --------
+    # -- parameter net ---------------------------------------------------------
     hidden: int = 64
     embed: int = 32
-    dropout: float = 0.1
-    grouped_heads: bool = False     # per-physics-group output heads
-    fourier_k: int = 0              # spatial Fourier feature order (0 = off)
-    #: whether the cell's flow length to its basin outlet is one of the net's
-    #: continuous static inputs (features.CONTINUOUS_STATICS).  On a domain of
-    #: nested entities (multifamily) the same cell then gets a different
-    #: parameter set in every entity it belongs to, so False keeps the
-    #: parameter field per cell; the routing reads flowlen from the HRU table
-    #: either way.  True = the 15cdec canonical checkpoints' feature set.
-    flowlen_feature: bool = True
-    #: per-parameter override of the head's bounds box, ``{name: (lo, hi)}`` in
-    #: physical units, inside ``BOUNDS``; ``lo == hi`` pins the parameter (its
-    #: sigmoid is scaled by zero, so the value is exact and its head gets no
-    #: gradient).  Applied to the net's ``_lo``/``_hi`` buffers after every load,
-    #: so a checkpoint carries it and evaluation needs nothing further.
-    param_box: dict = field(default_factory=dict)
-    #: learned spatial smoother (net-v2): ONE weighted-mean message-passing
-    #: round over within-basin geographic k-NN neighborhoods, zero-init mixing
-    #: (exact v1 at init).  0 = off.  The learned counterpart of spatial_reg.
-    gnn_k: int = 0
-    gnn_attr_scale: float = 1.0     # attr-distance decay of the neighbor weights
+    dropout: float = 0.0
+    #: the head's mapping, per run: ``log_space_params`` are mapped in log space besides
+    #: ``LOG_SPACE_PARAMS``, and ``param_bounds`` (``{name: (lo, hi)}``, physical units)
+    #: replaces a parameter's ``BOUNDS`` box and may WIDEN it.  Both are written into the
+    #: net's ``_lo``/``_hi``/``_is_log`` buffers, so a checkpoint carries them.  () / {} =
+    #: the mapping of BOUNDS and LOG_SPACE_PARAMS (default).
+    log_space_params: tuple[str, ...] = ()
+    param_bounds: dict = field(default_factory=dict)
+    #: weight of the soft penalty on the head pre-activations beyond |6|
+    #: (``parameter_net.logit_penalty``: the mean of (|z| - 6)^2 over the rows and outputs),
+    #: added to each live chunk's loss (not to the logged loss).  It keeps the outputs off the
+    #: sigmoid tails, where a cell's gradient vanishes.  0.0 = off (default).
+    logit_penalty: float = 0.0
     #: LEARN the Snow-17 rain/snow threshold PXTEMP per cell (otherwise the GA
     #: constant 0 degC of FIXED_PARAMS).  A separate zero-init head emits PXTEMP
     #: inside ``pxtemp_box`` (exactly 0 at init, so the untrained forward is the
@@ -358,43 +252,25 @@ class DplConfig:
     pxtemp_learn: bool = False
     pxtemp_box: tuple[float, float] = (-1.0, 3.0)
     pxtemp_tau: float = 1.0
-    #: re-foot the basin aggregation (``dom.W``) onto the CalSim3 catchment
-    #: geometry: each cell is area-weighted by its overlap fraction with the
-    #: basin's CalSim3 catchment, so out-of-catchment cells drop and boundary
-    #: cells down-weight.  Corrects the coarse 1/16-deg grid's systematic
-    #: footprint over-reach (+9..+66% vs the true catchment).  Only basins with a
-    #: CalSim3 catchment are re-footed (the 4 Tulare/Kern basins keep their full
-    #: footprint).  Opt-in; default False => the exact area_weight aggregation.
-    calsim_footprint: bool = False
     #: ET: "sac" = the SAC-SMA ET cascade E1-E5; "noah" = the Noah-lite ET
     #: (physics.et_noah.noah_lite_et: bare soil + canopy on the observed green fraction, one
-    #: learned exponent soil_chi), which needs the observed veg_frac and LAI
+    #: learned exponent soil_chi), which needs the observed veg_frac and LAI.  Noah-lite
+    #: replaces only the reference E1-E3 withdrawals: the rest of the reference ET block
+    #: runs after them as in ``sma._sacsma_core`` (the upper free -> tension rebalance, the
+    #: lower free -> tension resupply ``rserv`` and the ADIMP ET(5)), with Noah's
+    #: upper-tension withdrawal as ET1.
     et_mode: str = "sac"
     #: the PET of the Noah-lite ET: "hamon" or "priestley_taylor"
     noah_pet: str = "hamon"
     #: the PET of the SAC-SMA ET: "hamon" or "priestley_taylor" (the energy-based PET of
     #: physics.et_noah.potential_et_priestley_taylor; needs per-cell tmin/tmax)
     sac_pet: str = "hamon"
-    #: Priestley-Taylor refinements (0 = off): ``pt_snow_albedo`` raises the albedo toward
-    #: this value over the model's own Snow-17 snowpack (a bright-snow value is ~0.5-0.7);
-    #: ``pt_dewpoint_depression`` lowers the dewpoint up to this many degC below Tmin in arid
-    #: air (scaled by the diurnal range), so the net longwave loss is not under-counted in dry
-    #: basins (FAO-56 arid Tdew).  Neither is absorbable by the per-HRU Kpet.
-    pt_snow_albedo: float = 0.0
-    pt_dewpoint_depression: float = 0.0
-    #: Noah-lite replaces only the reference E1-E3 withdrawals; with this set the rest of the
-    #: reference ET block runs after them as in ``sma._sacsma_core``: the upper free ->
-    #: tension rebalance, the lower free -> tension resupply (``rserv``) and the ADIMP ET(5),
-    #: with Noah's upper-tension withdrawal as ET1.  Off, those three are skipped, which leaves
-    #: the riparian ``riva`` channel ET as the only sink for lower free water.
-    noah_sac_exchanges: bool = False
     lr: float = 1e-3
     lr_min: float = 1e-5        # cosine-annealed floor
-    lr_warmup_epochs: int = 3   # linear warmup protects the GA-prior init
+    lr_warmup_epochs: int = 4   # linear warmup protects the GA-prior init
     weight_decay: float = 1e-5
-    grad_clip: float = 1.0
-    n_epochs: int = 60
-    spinup_refresh_every: int = 1   # no-grad spinup every k epochs
+    grad_clip: float = 12.0
+    n_epochs: int = 120
     cal_start: str = "1988-10-01"   # WY1989 start (cal end = cdec15.CAL_END)
     #: No-grad spinup cold start.  Ten water years ahead of the cal window is
     #: enough because the window spans the record-wet WY1982-83, which clamps
@@ -407,88 +283,31 @@ class DplConfig:
     #: clear the parity bar (KGE >= 0.999975, max|dQ| <= 3e-3 mm/day); a 5-yr
     #: window FAILS it (MIL 0.99933, d(lztwc) 363 mm).  Clamped to the record
     #: start — set <= "1915-01-01" for the exact frozen full-prefix convention.
+    #: The trainer always spins up this way (the multifamily domain: the ten water
+    #: years before its envelope), so it needs forcing before the window.
     spinup_start: str = "1978-10-01"
-    #: how the trainer's no-grad spinup reaches the state at the cal-window start
-    #: (:mod:`sacsma.dpl.spinup`).  "window": stream from ``spinup_start`` (the
-    #: multifamily domain: the ten water years before its envelope) — needs forcing
-    #: before the window.  "cycle": timing-independent — loop the window's own first
-    #: ``spinup_years`` years from the cold start ``spinup_passes`` times (the
-    #: trainer's first spinup; each later one continues from the previous state for
-    #: at least ``spinup_warm_passes`` passes and until a pass moves no basin's
-    #: annual flow by more than ``spinup_warm_tol``, at most ``spinup_passes``).  The
-    #: multifamily evaluators score with "cycle" whatever the training mode.
-    spinup_mode: str = "window"
+    #: the evaluators' cycle spinup (:mod:`sacsma.dpl.spinup`, ``sacsma.engine.simulate``):
+    #: the window's own first ``spinup_years`` years looped ``spinup_passes`` times from
+    #: the cold start
     spinup_years: int = 10
     spinup_passes: int = 20
-    spinup_warm_passes: int = 2
-    spinup_warm_tol: float = 1e-3
-    train_chunk_days: int = 366     # TBPTT chunk (fixed length; last chunk's
-                                    # post-CAL_END days are NaN-masked in the loss)
-    #: how the TBPTT chunks tile the calibration window.  "fixed": train_chunk_days
-    #: each from the window start, so the boundary drifts ~0.75 day/yr and cuts a
-    #: calendar month almost every year — a month split between chunks never
-    #: reaches the monthly-flow term (29 of the 360 DWR months on the multifamily
-    #: domain).  "water_year": one chunk per water year, 1 Oct to 1 Oct (365 or
-    #: 366 days; the last runs to the record end), every chunk holding twelve
-    #: complete months.  The segmented graphs capture the 365-day length and a
-    #: leap year's last day continues eagerly from the graphed state; the
-    #: whole-chunk graph path captures each length.  Needs train_chunk_days ==
-    #: 366 and a window that starts on 1 Oct.
-    chunk_grid: str = "fixed"
-    #: how the gradient sees the state carried into a TBPTT chunk.  "absolute": the
-    #: detached SAC contents (the gradient treats them as constants, so a larger
-    #: capacity looks like free deficit at every chunk start — the 1-water-year
-    #: truncation overweights the tension capacities' pull 5-170x against the full
-    #: sequence).  "relative": each incoming SAC content c is carried as
-    #: c * (cap / cap.detach()) — the same value (x/x == 1 exactly), but the backward
-    #: holds the relative saturation fixed, dc/dcap = c/cap (ADIMC against
-    #: uztwm + lztwm).  Snow and the routing history pass unchanged.
-    #: "flux": "relative" plus lzfsc * lzsk.detach()/lzsk and lzfpc * lzpk.detach()/lzpk
-    #: — the backward also holds each lower-zone free store's carried drainage flux
-    #: k*S fixed, dS/dk = -S/k: a faster store carries less water into the next water
-    #: year, which the 1-water-year truncation otherwise never sees (it flips the sign
-    #: of d loss / d lzsk at slow spring-fed basins such as Shasta).
-    #: Segmented-graph and eager chunk paths only.
-    tbptt_carry: str = "absolute"
-    #: TBPTT window in water years (``chunk_grid = "water_year"`` only; 1-3).  1: each
-    #: chunk backpropagates within its own water year.  2: overlapping windows — a
-    #: live chunk runs the PREVIOUS water year and its own with autograd through
-    #: both and the loss on its own year only (the previous year is a gradient-
-    #: carrying burn-in), so the gradient sees how a parameter shapes the water
-    #: carried into the scored year, which a 1-year chunk detaches.  The carried
-    #: state still advances one water year per step; dead chunks advance it
-    #: forward-only, and the first chunk and the short envelope tail keep 1-year
-    #: windows.  About twice the compute and activation memory per live chunk
-    #: (3: the previous two water years as the burn-in, about three times).  Needs
-    #: ``dead_chunk_nograd`` on a domain with dead chunks.  On a domain whose FIRST
-    #: chunk is live, the first n - 1 chunks run their 1-year windows eagerly beside
-    #: the n-year graph (slower, and peak memory about n + 1 years).
-    #: Segmented-graph and eager chunk paths only.
-    tbptt_window_years: int = 1
     #: > 0: CUDA-graph ACTIVATION RECOMPUTE — ONE captured graph of this many days
     #: (fwd + bwd) replayed over every training window (graphs.RecomputeTrainWindow):
     #: the forward keeps only the segment-boundary states and the backward re-runs
     #: each segment from its stored state, so graph memory is one segment's whatever
-    #: the window length (a multi-year ``tbptt_window_years`` window included), for
-    #: about one extra forward per segment.  Replaces the segmented / whole-chunk
-    #: train graphs (days past the last whole segment run eagerly); 73 divides 365,
-    #: 730 and 1095.  0 = off (the captures above).
-    graph_recompute_days: int = 0
+    #: the window length, for about one extra forward per segment (days past the
+    #: last whole segment run eagerly); 73 divides 365 and 730.  0 = no train graph
+    #: (the training windows run eagerly).
+    graph_recompute_days: int = 73
     eval_every: int = 2            # full-cal no-grad KGE selection cadence
     patience: int = 10              # early stop after this many stale selections
-    #: early stopping is armed from this epoch on: a stale streak that ends
-    #: before it never stops the run (0 = armed from the start)
-    min_stop_epoch: int = 0
-    #: multi-timescale chunks with no scoreable observation (a 26-entity run's
-    #: WY1950-84) run their forward without autograd — no backward, and no
-    #: optimizer step either way.  The train-mode net(x) is still drawn once per
-    #: chunk (same dropout stream) and the segmented graphs replay the same
-    #: forward, so the carried state and every later chunk are unchanged.
-    #: Segmented/eager chunk path only (the whole-chunk graph keeps its backward).
-    dead_chunk_nograd: bool = False
+    #: the selection scored EVERY epoch on the CPU engine by a separate process
+    #: (:mod:`sacsma.dpl.select_cpu`) while the GPU trains, in place of the GPU selection
+    #: pass: ``patience`` then counts stale epochs, and the decisions trail the training
+    #: by the scoring time.  False = the GPU pass every ``eval_every`` epochs (default).
+    select_cpu: bool = False
     #: numerics-neutral training diagnostics: chunk_log.csv (per chunk: entities
-    #: and loss by family — the family split on the segmented/eager chunk path
-    #: only — and the pre-clip gradient norm), eval_terms.csv (selection epochs:
+    #: and loss by family and the pre-clip gradient norm), eval_terms.csv (selection epochs:
     #: the eval-mode chunk loss by family and term) and per-epoch net snapshots
     #: with an EMA shadow (``ema_decay`` per optimizer step; restarted from the
     #: net on a resume) under checkpoints/snapshots/.
@@ -497,26 +316,8 @@ class DplConfig:
     #: CUDA-graph capture of the day-stepped pipeline (eager is dispatch-bound:
     #: ~300 tiny kernels/day).  Falls back to eager on CPU or capture failure.
     use_cuda_graphs: bool = True
-    nograd_window: int = 512        # replay window for spinup/selection streaming
-    #: >1 splits the train-chunk capture into this many consecutive segment
-    #: graphs (forward + backward each, autograd across them) -- for drivers
-    #: that fault on very large graphs; 1 = the single whole-chunk graph.
-    train_graph_segments: int = 1
-    #: CELL-DEDUPLICATED forward (data.with_cell_dedup): on a domain whose HRU rows
-    #: repeat grid cells (multifamily: one row per (entity, cell), 5,849 rows on
-    #: 2,652 cells for the 95 entities) the parameter net, PET, Snow-17, Noah ET and
-    #: SAC-SMA — with their states and the learned PXTEMP — run once per DISTINCT
-    #: cell; each cell's surface/base runoff is gathered to its rows for the per-row
-    #: routing (flow length, unit hydrograph, routing history) and the aggregation W.
-    #: Refused unless every row of a cell carries identical net features and statics
-    #: (a flowlen_feature=True net has per-row parameters) and with gnn_k > 0.  The
-    #: eval-mode forward and its gradients equal the per-row forward's to float
-    #: round-off; in training with dropout > 0 a shared cell draws ONE dropout mask
-    #: per chunk instead of one per row, so the training noise (and RNG stream)
-    #: differ.  False (default) = one physics column per row, byte-identical.
-    dedup_cells: bool = False
+    nograd_window: int = 256        # replay window for spinup/selection streaming
     seed: int = 0
-    extras: dict = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.n_inc < 1:
@@ -527,17 +328,15 @@ class DplConfig:
             raise ValueError(f"noah_pet {self.noah_pet!r}")
         if self.sac_pet not in ("hamon", "priestley_taylor"):
             raise ValueError(f"sac_pet {self.sac_pet!r}")
-        if self.init_gate not in ("warn", "abort"):
-            raise ValueError(f"init_gate {self.init_gate!r}")
-        if self.mt_family_weight not in ("none", "equal"):
+        if self.mt_family_weight != "none":
             family_shares(self.mt_family_weight)   # raises on a bad spec
         if self.mt_share_norm not in ("present", "all"):
             raise ValueError(f"mt_share_norm {self.mt_share_norm!r}: 'present' or 'all'")
         if self.mt_share_norm == "all" and self.mt_family_weight == "none":
             raise ValueError("mt_share_norm='all' normalizes family SHARES — it needs "
-                             "mt_family_weight shares or 'equal'")
+                             "numeric mt_family_weight shares")
         if self.mt_select_weight:
-            if self.mt_family_weight in ("none", "equal"):
+            if self.mt_family_weight == "none":
                 raise ValueError("mt_select_weight sets the SELECTION shares of a numeric "
                                  "mt_family_weight run — it needs numeric shares")
             if self.mt_select_weight != "area":
@@ -558,77 +357,41 @@ class DplConfig:
                 raise ValueError(f"mt_loss_ref_power {self.mt_loss_ref_power} outside (0, 1]")
         elif self.mt_loss_ref_power is not None:
             raise ValueError("mt_loss_ref_power has no effect without mt_loss_ref")
-        if self.train_graph_segments < 1:
-            raise ValueError(f"train_graph_segments {self.train_graph_segments} < 1")
-        if self.dedup_cells and self.gnn_k > 0:
-            raise ValueError("dedup_cells needs a per-cell parameter net (gnn_k == 0)")
         if self.nograd_window < 1:
             raise ValueError(f"nograd_window {self.nograd_window} < 1")
-        if not 30 <= self.train_chunk_days <= 366:
-            # > 366 days can hold a 14th complete calendar month, overflowing
-            # the fixed 13-slot monthly buckets (CHUNK_MAXM) — months past the
-            # 13th would be dropped from the monthly-flow targets SILENTLY
-            # (month_chunk_target caps at maxm without error)
-            raise ValueError(f"train_chunk_days {self.train_chunk_days} "
-                             "outside [30, 366]")
-        if self.chunk_grid not in ("fixed", "water_year"):
-            raise ValueError(f"chunk_grid {self.chunk_grid!r}")
-        if self.tbptt_carry not in ("absolute", "relative", "flux"):
-            raise ValueError(f"tbptt_carry {self.tbptt_carry!r}")
         if not 0 <= self.graph_recompute_days <= 366:
             raise ValueError(f"graph_recompute_days {self.graph_recompute_days} "
                              "outside [0, 366]")
-        if self.tbptt_window_years not in (1, 2, 3):
-            raise ValueError(f"tbptt_window_years {self.tbptt_window_years!r}: 1, 2 or 3")
-        if self.tbptt_window_years > 1 and self.chunk_grid != "water_year":
-            raise ValueError(f"tbptt_window_years {self.tbptt_window_years} needs chunk_grid "
-                             "'water_year' (the burn-in is the previous water-year chunks)")
-        if self.chunk_grid == "water_year" and self.train_chunk_days != 366:
-            # the water-year grid sets its own lengths; a different value would be
-            # ignored silently
-            raise ValueError("chunk_grid 'water_year' takes whole water years: leave "
-                             f"train_chunk_days at 366 (got {self.train_chunk_days})")
-        if not (math.isfinite(self.var_gate_frac) and self.var_gate_frac >= 0.0):
-            raise ValueError(f"var_gate_frac {self.var_gate_frac} must be finite and >= 0")
         if not math.isfinite(self.var_huber_cap):
             raise ValueError(f"var_huber_cap {self.var_huber_cap} must be finite (<= 0 = uncapped)")
-        if not (math.isfinite(self.timing_loss_lambda) and self.timing_loss_lambda >= 0.0
-                and math.isfinite(self.peak_loss_lambda) and self.peak_loss_lambda >= 0.0):
-            raise ValueError("timing_loss_lambda and peak_loss_lambda must be finite and >= 0")
-        if not 0.0 < self.peak_loss_frac <= 0.5:
-            raise ValueError(f"peak_loss_frac {self.peak_loss_frac} outside (0, 0.5]")
+        if not self.grad_clip > 0.0:
+            raise ValueError(f"grad_clip {self.grad_clip} must be > 0")
         if not 90 <= self.shape_min_days <= 366:
             raise ValueError(f"shape_min_days {self.shape_min_days} outside [90, 366]")
-        if not 0.0 <= self.timing_vol_gate < 1.0:
-            raise ValueError(f"timing_vol_gate {self.timing_vol_gate} outside [0, 1)")
-        if ((self.timing_loss_lambda > 0.0 or self.peak_loss_lambda > 0.0)
-                and self.chunk_grid != "water_year"):
-            # the terms and their record constants are defined per water year; the
-            # fixed grid drifts off it by a day a year
-            raise ValueError("timing_loss_lambda / peak_loss_lambda need chunk_grid "
-                             "'water_year' (they score whole water years)")
-        if self.spinup_mode not in ("window", "cycle"):
-            raise ValueError(f"spinup_mode {self.spinup_mode!r}")
-        if (self.spinup_years < 1 or not 2 <= self.spinup_warm_passes <= self.spinup_passes
-                or not self.spinup_warm_tol > 0.0):
-            raise ValueError("spinup_years >= 1, 2 <= spinup_warm_passes <= spinup_passes "
-                             "and spinup_warm_tol > 0 are required")
-        if self.min_stop_epoch < 0:
-            raise ValueError(f"min_stop_epoch {self.min_stop_epoch} < 0")
+        if self.spinup_years < 1 or self.spinup_passes < 1:
+            raise ValueError("spinup_years and spinup_passes must be >= 1")
         if not 0.0 < self.ema_decay < 1.0:
             raise ValueError(f"ema_decay {self.ema_decay} outside (0, 1)")
-        box = {}
-        for name, lohi in dict(self.param_box).items():
-            if name not in FREE_PARAMS:
-                raise ValueError(f"param_box: {name!r} is not a learned parameter "
-                                 f"({', '.join(FREE_PARAMS)})")
+        self.log_space_params = tuple(self.log_space_params)
+        bad = [p for p in self.log_space_params if p not in FREE_PARAMS]
+        if bad or len(set(self.log_space_params)) != len(self.log_space_params):
+            raise ValueError(f"log_space_params {self.log_space_params}: learned parameters, "
+                             f"each once ({', '.join(FREE_PARAMS)})")
+        bounds = {}
+        for name, lohi in dict(self.param_bounds).items():
             lo, hi = (float(v) for v in lohi)
-            blo, bhi = BOUNDS[name]
-            if not blo <= lo <= hi <= bhi:
-                raise ValueError(f"param_box: {name} ({lo}, {hi}) must satisfy "
-                                 f"{blo} <= lo <= hi <= {bhi}")
-            box[name] = (lo, hi)
-        self.param_box = box
+            if name not in FREE_PARAMS or not (math.isfinite(lo) and math.isfinite(hi)
+                                               and lo < hi):
+                raise ValueError(f"param_bounds: {name} ({lo}, {hi}) must be a learned "
+                                 "parameter with finite lo < hi")
+            bounds[name] = (lo, hi)
+        self.param_bounds = bounds
+        for p in (*self.log_space_params, *bounds):
+            if ((p in LOG_SPACE_PARAMS or p in self.log_space_params)
+                    and {**BOUNDS, **bounds}[p][0] <= 0.0):
+                raise ValueError(f"{p}: a log-space parameter needs a positive floor")
+        if not (math.isfinite(self.logit_penalty) and self.logit_penalty >= 0.0):
+            raise ValueError(f"logit_penalty {self.logit_penalty} must be finite and >= 0")
         plo, phi = (float(v) for v in self.pxtemp_box)
         if not (math.isfinite(plo) and math.isfinite(phi) and plo <= 0.0 <= phi
                 and plo < phi):
@@ -643,6 +406,7 @@ class DplConfig:
             self.obs_mask = tuple(s for s in self.obs_mask.split(",") if s)
         self.obs_mask = tuple(str(s) for s in self.obs_mask)
         from datetime import date as _date
+        from datetime import timedelta as _timedelta
         for s in self.obs_mask:
             eid, sep, day = s.partition("|")
             try:
@@ -666,6 +430,17 @@ class DplConfig:
                 raise ValueError(f"uf_train_start {self.uf_train_start!r}: a first of the "
                                  "month on or after 1949-10-01 (the envelope start)")
             self.uf_train_start = d.isoformat()
+        if self.train_window:
+            a, b = (_date.fromisoformat(v) for v in self.train_window)
+            if not (len(self.train_window) == 2 and a.day == 1
+                    and (b + _timedelta(days=1)).day == 1
+                    and _date(1949, 10, 1) <= a < b <= _date(2018, 12, 31)):
+                raise ValueError(f"train_window {self.train_window}: (first, last) days of "
+                                 "whole calendar months inside 1949-10-01..2018-12-31")
+            self.train_window = (a.isoformat(), b.isoformat())
+            if self.uf_train_start:
+                raise ValueError("uf_train_start extends the uf targets that train_window "
+                                 "cuts: use one or the other")
         if self.calsim_arcs not in ("none", "train_default"):
             raise ValueError(f"calsim_arcs {self.calsim_arcs!r}: 'none' or 'train_default'")
         from datetime import date
@@ -674,17 +449,6 @@ class DplConfig:
             raise ValueError(
                 f"spinup_start {self.spinup_start!r} must be before "
                 f"cal_start {self.cal_start!r}")
-        if not 0.0 <= self.pt_snow_albedo < 1.0:
-            raise ValueError("pt_snow_albedo must be in [0, 1)")
-        if self.pt_dewpoint_depression < 0.0:
-            raise ValueError("pt_dewpoint_depression must be >= 0")
-        if ((self.pt_snow_albedo > 0.0 or self.pt_dewpoint_depression > 0.0)
-                and self.physics().pet != "priestley_taylor"):
-            raise ValueError(
-                "pt_snow_albedo / pt_dewpoint_depression apply only to a "
-                "Priestley-Taylor PET (sac_pet or noah_pet = 'priestley_taylor')")
-        if self.noah_sac_exchanges and self.et_mode != "noah":
-            raise ValueError("noah_sac_exchanges needs the Noah-lite ET (et_mode='noah')")
 
     def physics(self):
         """The run's physics as a :class:`sacsma.engine.Physics` (the learned step)."""
@@ -692,11 +456,8 @@ class DplConfig:
 
         noah = self.et_mode == "noah"
         return Physics(et="noah_lite" if noah else "sac",
-                       pet=self.noah_pet if noah else self.sac_pet,
-                       pt_snow_albedo=self.pt_snow_albedo,
-                       pt_dewpoint_depression=self.pt_dewpoint_depression, learned=True,
-                       n_inc=self.n_inc, fracp_floor=self.fracp_floor,
-                       sac_exchanges=noah and self.noah_sac_exchanges)
+                       pet=self.noah_pet if noah else self.sac_pet, learned=True,
+                       n_inc=self.n_inc, fracp_floor=self.fracp_floor)
 
 
 def _ensure_conda_dlls_on_path() -> None:
@@ -745,23 +506,20 @@ FAMILY_KEYS = {"usgs": "usgs_daily", "cdec": "cdec_daily", "uf": "uf_monthly",
 #: the monthly families: each is its own monthly NNSE term (own rows, share, denominator
 #: and frozen scale) — the rest are daily
 MONTHLY_FAMILIES = ("uf_monthly", "calsim_monthly")
-#: what ``mt_family_weight="equal"`` resolves to: shares 1:1:1, renormalized by the
-#: trainer over the families the run holds (the trainer's numeric-shares path)
-EQUAL_FAMILY_SHARES = {f: 1.0 for f in FAMILY_KEYS.values()}
 
 
 def family_shares(spec: str) -> dict[str, float] | None:
     """Parse a numeric ``mt_family_weight`` spec ("usgs=0.27,cdec=0.54,uf=0.19")
     into ``{family_id: share}`` summing to 1 over the families named; ``None``
-    for the keyword modes ("none", "equal").  Family keys may be the short
-    names or the registry family ids; every share must be positive."""
-    if spec in ("none", "equal"):
+    for "none".  Family keys may be the short names or the registry family ids;
+    every share must be positive."""
+    if spec == "none":
         return None
     shares: dict[str, float] = {}
     for item in spec.split(","):
         if "=" not in item:
             raise ValueError(f"mt_family_weight {spec!r}: expected "
-                             "family=share items or 'none'/'equal'")
+                             "family=share items or 'none'")
         key, val = (t.strip() for t in item.split("=", 1))
         fam = FAMILY_KEYS.get(key, key)
         if fam not in FAMILY_KEYS.values():
@@ -781,10 +539,10 @@ def family_shares(spec: str) -> dict[str, float] | None:
 
 
 def family_loss_refs(spec: str) -> dict[str, float]:
-    """Parse an ``mt_loss_ref`` spec ("usgs=0.7368,cdec=0.4202,uf=0.0980") into
+    """Parse an ``mt_loss_ref`` spec ("usgs=a,cdec=b,uf=c,calsim=d") into
     ``{family_id: L_ref}`` — each family's per-entity chunk loss per unit
     coefficient at the reference state (unnormalized; only the ratios reach the
-    loss, through ``kappa_f = Lbar / L_ref_f``)."""
+    loss, through ``kappa_f = Lbar / L_ref_f^p``)."""
     refs: dict[str, float] = {}
     for item in spec.split(","):
         if "=" not in item:

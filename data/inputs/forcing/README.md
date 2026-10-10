@@ -118,13 +118,8 @@ python data/inputs/forcing/aorc_region.py --assemble               # partials ->
   150 mm. 419 cell-days of 50 to 150 mm on the same 15 days are 3 to 9.7 times their largest corrected
   neighbour. They are identical in Livneh and scenario 1, so they are in the parity baseline and in every
   WGEN scenario. They are flagged, not corrected (no referee in the repository). `--cut` warns about them.
-- caution: runs made before 2026-09-29 read the raw values of the 92 later pairs (82 at
-  CalSim3-footprint-only cells, 10 at `15cdec_grid` cells, none at `9unimp`/`11obs`/`12rim` cells). Every
-  multifamily run except dPL-CalSim (dPL-26 among them) has `cdec_PNF` 1992-07-12 at +1.32 mm
-  watershed mean (one day, in the loss window); the three 95-entity runs also have `usgs_11218500` that day
-  (+1.52 mm). The `15cdec_grid` dPL runs have 10 pairs, only PNF 1992-07-12 inside WY1989-2003. dPL-CalSim,
-  the only run that trains arcs, used the corrected store, so the largest exposure (`cs_I_HON021`
-  1974-07-08, +151.7 mm) reached no run. The calibrated runs, parity and the cross-compare never saw them.
+- Every tracked learned-parameter run was trained on stores with every pair of
+  `prcp_x10_artifacts.csv` corrected.
 - A scenario file stores only the change against `wgen_product_a.nc`. `tmin` and `tmax` are scenario 1 plus
   `dT_hundredths`, exactly. Precipitation is, per cell and calendar month, a table of the scenario value at
   each distinct scenario-1 wet value, a residual per scenario-1 wet day and exact overrides (none for

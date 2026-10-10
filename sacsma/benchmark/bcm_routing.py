@@ -70,9 +70,6 @@ from .. import paths
 PARAMS_FILE = "bcm_routing_params.csv"
 CHECK_FILE = "bcm_routing_check.csv"
 
-#: the seven calibrated parameters, in the sheet's order (``K2``..``K8``)
-PARAMETERS = ("surface_scale", "surface_exp", "shallow_scale", "shallow_exp",
-              "deep_scale", "deep_exp", "aquifer_rch")
 #: the output columns of :func:`route`
 COLUMNS = ("surface_store", "shallow_store", "deep_store",
            "surface", "shallow", "deep", "rchrun", "bcm_flow", "impairment")
@@ -82,7 +79,9 @@ def load_params(data_dir: str | Path = "data") -> pd.DataFrame:
     """The routing parameters of the 11 calibrated sheets, indexed by ``sheet``.
 
     Columns: ``basin_no, name, station_id, measured_station, cdec_site, area_m2``, the seven
-    :data:`PARAMETERS`, ``antecedent_m3, peak_lag, recession_lag, cal_start, cal_end,
+    calibrated parameters in the sheet's order (``K2``..``K8``: ``surface_scale, surface_exp,
+    shallow_scale, shallow_exp, deep_scale, deep_exp, aquifer_rch``),
+    ``antecedent_m3, peak_lag, recession_lag, cal_start, cal_end,
     stat_start, stat_end`` and the sheet's own ``r2, nse, pbias``."""
     return pd.read_csv(paths.bcm(data_dir, name=PARAMS_FILE), index_col="sheet")
 

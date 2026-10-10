@@ -89,8 +89,7 @@ def _calset_monthly_taf(domain: str, data_dir: str | Path = "data", *, covered_f
     Trinity) — those are whole-basin nodes scored only in the basin-level anchor view, not
     per local catchment.  Also carries the series-less valley-accretion nodes (``I_<SYS>_VAL``)
     for the sub-arc QMAP.  Returns ``(node_monthly, scored)``: ``node_monthly`` is monthly
-    TAF per node (**raw**, true-area runoff — the coverage-map nudge is applied downstream in
-    :func:`make_all`); ``scored`` carries ``[set, cid, node, arc, basin, kind, cov_frac]`` for
+    TAF per node (raw, true-area runoff); ``scored`` carries ``[set, cid, node, arc, basin, kind, cov_frac]`` for
     the maps.  ``covered_frac`` only affects the internal :func:`run_calsim` weighting.
     """
     from .catchments import COVERED_FRAC, MERGED_LAYER, is_valley_arc, run_calsim, series_arc
@@ -127,70 +126,15 @@ def _calset_monthly_taf(domain: str, data_dir: str | Path = "data", *, covered_f
             scored[["set", "cid", "node", "arc", "basin", "kind", "cov_frac", "n_hru"]])
 
 
-#: the 6 distributed rim systems that have a FLOW-UNIMPAIRED disaggregation anchor in
-#: RimInflowAnchor (cumulative single-node systems SHAS/TRIN/ME/SJ need no sub-arc split).
-_DISTRIB_RIM = ("FOLS", "OROV", "SRBB", "YUBA", "ST", "TU")
-
-
-def _apply_anchor_mass_balance(long, data_dir, sets, anchor_long):
-    """Proportional sub-arc (anchor mass-balance) adjustment — CalSim's rim-inflow
-    `enforce_anchor_mass_balance` (`_2_qmap_historical_validation.py`).
-
-    Within each distributed rim system, rescale **every estimate's** sub-arc flows so they
-    sum to that system's anchor total, in proportion to each sub-arc's own value
-    (``trib_adj = trib * anchor / sum_tribs``).  The anchor is the estimate's OWN basin
-    aggregate — SAC-SMA: the area-nudged ``run_basins`` total (from ``anchor_long``); VIC:
-    the 8-River index series — matching the reference's use of each estimate's own anchor.
-    CalSim3 (the actual) and non-distributed arcs pass through unchanged."""
-    from .catchments import BASIN_RIM_SYSTEM, load_crosswalk
-
-    distrib = set(_DISTRIB_RIM)
-    arc2sys = {str(a): s for a, s in zip(*[load_crosswalk(data_dir)[c] for c in ("arc", "system")])
-               if s in distrib}
-
-    def mend(s):
-        return pd.to_datetime(s).dt.to_period("M").dt.to_timestamp("M")
-
-    anchors: dict[tuple, float] = {}
-    if anchor_long is not None and len(anchor_long):
-        al = anchor_long.assign(date=mend(anchor_long["date"]))
-        for st in sets:
-            inv = {b: sy for b, sy in BASIN_RIM_SYSTEM.get(st, {}).items() if sy in distrib}
-            a = al[(al["set"] == st) & (al["source"] == st) & (al["basin"].isin(inv))]
-            for b, d, v in zip(a["basin"], a["date"], a["flow_taf"]):
-                anchors[(st, inv[b], d)] = v
-    vic = load_vic_monthly(data_dir).assign(date=lambda d: mend(d["date"]))
-    for sy in distrib:
-        s = vic[vic["vic_name"] == UNIMP_MAP[sy]["vic"][0]]   # the system's 8-River series
-        for d, v in zip(s["date"], s["flow_taf"]):
-            anchors[("vic", sy, d)] = v
-
-    out = long.copy()
-    out["_sys"] = out["arc"].map(arc2sys)
-    est = out[(out["source"] != "calsim3") & out["_sys"].notna()].copy()
-    if len(est):
-        est["_m"] = mend(est["date"])
-        est["_sum"] = est.groupby(["source", "_sys", "_m"])["flow_taf"].transform("sum")
-        anc = np.array([anchors.get((src, sy, d), np.nan)
-                        for src, sy, d in zip(est["source"], est["_sys"], est["_m"])], float)
-        f = np.where((est["_sum"].to_numpy() > 0) & np.isfinite(anc),
-                     anc / est["_sum"].to_numpy(), 1.0)
-        out.loc[est.index, "flow_taf"] = est["flow_taf"].to_numpy() * f
-    return out.drop(columns="_sys")
-
-
 def build_calsets_long(
-    data_dir: str | Path = "data", sets=DEFAULT_CALSETS, *, covered_frac=None,
-    anchor_long=None, mass_balance=False
+    data_dir: str | Path = "data", sets=DEFAULT_CALSETS, *, covered_frac=None
 ) -> tuple[pd.DataFrame, list[str], pd.DataFrame]:
     """Long [date, arc, node, source, flow_taf] for each calibration set + CalSim3 + VIC.
 
     ``source`` is the calibration set name, ``calsim3`` (the actual), or ``vic``.
     Restricted to the common period across all present sources.  Also returns the
     stacked per-set coverage table.  ``covered_frac`` overrides the "covered"
-    threshold (None -> ``calsim.COVERED_FRAC``).  When ``anchor_long`` is provided, the
-    **proportional sub-arc (anchor mass-balance) adjustment** is applied to every estimate
-    (SAC sets + VIC) within the distributed rim systems (:func:`_apply_anchor_mass_balance`).
+    threshold (None -> ``calsim.COVERED_FRAC``).
     """
     per = [_calset_monthly_taf(d, data_dir, covered_frac=covered_frac) for d in sets]
     sac = pd.concat([p[0] for p in per], ignore_index=True)
@@ -222,18 +166,15 @@ def build_calsets_long(
     bounds = long.groupby("source")["date"].agg(["min", "max"])
     start, end = bounds["min"].max(), bounds["max"].min()
     long = long[(long["date"] >= start) & (long["date"] <= end)].reset_index(drop=True)
-    if mass_balance and anchor_long is not None:
-        long = _apply_anchor_mass_balance(long, data_dir, sets, anchor_long)
     matched = sorted(set(c3["arc"]) & sac_arcs)
     return long, matched, coverage
 
 
-def subarc_validation_metrics(
+def _subarc_validate(
     data_dir: str | Path = "data", sets=DEFAULT_CALSETS, *,
     anchor_long=None, raw_long=None,
     train=("1921-10-01", "1971-09-30"), test=("1971-10-01", "2018-12-31"),
-    ratio_clip=(0.1, 10.0), method="qmap",
-) -> pd.DataFrame:
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Per-sub-arc bias-correction **validation** (train/test split), applied to **every
     multi-arc basin** (≥2 in_calsim3 sub-arcs) in the crosswalk — the 6 distributed rim
     systems *and* the multi-arc secondary basins (15cdec MKM, 11obs BLB, the 9unimp creeks
@@ -242,21 +183,23 @@ def subarc_validation_metrics(
     Two faithful-to-CalSim steps, learned on the ``train`` water years and scored on the
     held-out ``test`` years:
 
-    1. **Quantile mapping** (``method="qmap"``, default) — each sub-arc is mapped, per
+    1. **Quantile mapping** — each sub-arc is mapped, per
        calendar month, from its own distribution onto its CalSim3 ``INFLOW`` distribution
        (empirical CDF within range, gamma tail beyond; :func:`sacsma._qmap.qmap_series`, a
        port of CalSim's ``utils/quantile_mapping.qmap_single``).
     2. **Mass-balance to the SAC-SMA simulated basin total** — the QMAPped sub-arcs are
        proportionally rescaled so each basin sums to **that estimate's own simulated
-       unimpaired total**: the **un-nudged** ``run_basins`` series for a SAC set, the basin's
+       unimpaired total**: the ``run_basins`` series for a SAC set, the basin's
        VIC total for VIC (both from ``anchor_long``).  QMAP fixes the per-catchment *shape*
        while the estimate keeps its own basin *volume*.  This target is **not** the CalSim
        base (FLOW-UNIMPAIRED) and **not** the estimate's raw sub-arc sum.
 
-    ``method="ratio"`` reproduces the previous release exactly (a multiplicative monthly
-    mean-ratio renormalized to the group's own raw sub-arc sum).  VIC is corrected once per
-    arc (deduplicated across sets).  Returns per (set, arc) raw-vs-corrected KGE/NSE/pbias on
-    the **test** period only, plus the ``anchor_kind`` used (``sac_sim``/``vic_sim``/``own_sum``).
+    VIC is corrected once per arc (deduplicated across sets).  Returns ``(met, series)``:
+    ``met`` per (set, arc) raw-vs-corrected KGE/NSE/pbias on the **test** period only, plus the
+    ``anchor_kind`` used (``sac_sim``/``vic_sim``/``own_sum``); ``series`` the **full-period**
+    raw + corrected sub-arc long frame ``[date, set, arc, node, basin, anchor_kind,
+    flow_taf_raw, flow_taf_qmap]`` for every SAC set + VIC (the QMAP deliverable, written per
+    set as ``subarc_qmap_<set>.csv`` by :func:`make_subarc_validation`).
     A **nested cumulative inflow** is included in each basin that lists it — e.g. ``I_SHSTA`` is
     both its own SHA basin *and* a Bend Bridge sub-arc (``BASIN_NESTS``) — so a cumulative basin's
     sub-arcs (local tributaries + the upstream rim inflow) reconstruct its ``run_basins`` total.
@@ -264,23 +207,7 @@ def subarc_validation_metrics(
     basin, ``I_SHSTA`` is passed through **raw** (not QMAPped) and its volume is subtracted from the
     Bend Bridge anchor, so step 2's mass balance only redistributes the *remaining* basin volume
     across Bend Bridge's other (local) sub-arcs.
-    The full-period corrected sub-arc **series** are emitted per-set (``subarc_qmap_<set>.csv``)
-    by :func:`make_subarc_validation`; :func:`_subarc_validate` returns both.
     """
-    return _subarc_validate(data_dir, sets, anchor_long=anchor_long, raw_long=raw_long,
-                            train=train, test=test, ratio_clip=ratio_clip, method=method)[0]
-
-
-def _subarc_validate(
-    data_dir: str | Path = "data", sets=DEFAULT_CALSETS, *,
-    anchor_long=None, raw_long=None,
-    train=("1921-10-01", "1971-09-30"), test=("1971-10-01", "2018-12-31"),
-    ratio_clip=(0.1, 10.0), method="qmap",
-) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Engine for :func:`subarc_validation_metrics`.  Returns ``(met, series)``: the
-    test-period raw-vs-corrected metrics frame, and the **full-period** raw + corrected
-    sub-arc long frame ``[date, set, arc, node, basin, anchor_kind, flow_taf_raw,
-    flow_taf_qmap]`` for every SAC set + VIC (the QMAP deliverable)."""
     from .catchments import (
         BASIN_NESTS,
         BASIN_RIM_SYSTEM,
@@ -292,44 +219,24 @@ def _subarc_validate(
     L = raw_long if raw_long is not None else build_calsets_long(data_dir, sets)[0]
     tr0, tr1 = pd.Timestamp(train[0]), pd.Timestamp(train[1])
     te0, te1 = pd.Timestamp(test[0]), pd.Timestamp(test[1])
-    lo, hi = ratio_clip
 
     c3 = L[L["source"] == "calsim3"].pivot_table(index="date", columns="arc", values="flow_taf")
     Evic = L[L["source"] == "vic"].pivot_table(index="date", columns="arc", values="flow_taf")
 
     # QMAP mass-balance target: each estimate's own simulated basin total -> {(source, basin):
-    # Series-by-month}.  Per the user's choice the area nudge enters HERE, on the anchor basin
-    # total (the run_basins series carries it; VIC uses its own 8RI total) — and ONLY here; the
-    # sub-arc INPUTS above are the un-nudged true-area per-catchment runoff.
+    # Series-by-month}: the run_basins series of a SAC set, VIC's own 8RI total; the sub-arc
+    # inputs above are the true-area per-catchment runoff.
     sac_tot: dict[tuple[str, str], pd.Series] = {}
-    if method == "qmap":
-        al = (anchor_long if anchor_long is not None
-              else build_anchor_long(data_dir, sets, footprint=_screened_fp(data_dir, sets)))
-        for (st_, basin_, src_), g in al.groupby(["set", "basin", "source"]):
-            if src_ == "calsim3":                    # the CalSim base is NOT the target
-                continue
-            per = pd.PeriodIndex(pd.to_datetime(g["date"]), freq="M")
-            s = pd.Series(g["flow_taf"].to_numpy(float), index=per).groupby(level=0).sum()
-            sac_tot[("vic" if src_ == "vic" else str(st_), str(basin_))] = s
+    al = (anchor_long if anchor_long is not None
+          else build_anchor_long(data_dir, sets, footprint=_screened_fp(data_dir, sets)))
+    for (st_, basin_, src_), g in al.groupby(["set", "basin", "source"]):
+        if src_ == "calsim3":                    # the CalSim base is NOT the target
+            continue
+        per = pd.PeriodIndex(pd.to_datetime(g["date"]), freq="M")
+        s = pd.Series(g["flow_taf"].to_numpy(float), index=per).groupby(level=0).sum()
+        sac_tot[("vic" if src_ == "vic" else str(st_), str(basin_))] = s
 
-    def correct_ratio(E, arcs):
-        """Legacy: per-sub-arc monthly mean-ratio correction renormalized to the group's OWN
-        raw sub-arc total each month (the prior release's behaviour)."""
-        corr = pd.DataFrame(index=E.index)
-        tr = (E.index >= tr0) & (E.index <= tr1)
-        for a in arcs:
-            e, r = E[a], c3[a]
-            d = pd.DataFrame({"e": e, "r": r, "m": e.index.month})
-            dd = d[tr & d["e"].notna() & d["r"].notna()]
-            gm = dd.groupby("m").agg(em=("e", "mean"), rm=("r", "mean"))
-            ratio = (gm["rm"] / gm["em"]).clip(lo, hi).where(gm["em"] > 0, 1.0)
-            corr[a] = e * d["m"].map(ratio).fillna(1.0)
-        raw_sum = E[arcs].sum(axis=1)               # preserve the group's own basin total
-        csum = corr.sum(axis=1)
-        factor = (raw_sum / csum).where(csum > 0, 1.0)
-        return corr.mul(factor, axis=0), "own_sum"
-
-    def correct_qmap(E, arcs, set_label, basin, held=frozenset()):
+    def correct(E, arcs, set_label, basin, held=frozenset()):
         """QMAP each sub-arc toward its CalSim3 INFLOW (learned on the train years), then
         rescale so the basin sums to the estimate's SAC-SMA simulated total (``sac_tot``).
 
@@ -365,11 +272,6 @@ def _subarc_validate(
         factor = (remaining / csum).where((csum > 0) & anchor.notna() & (remaining > 0), 1.0)
         corr[free] = corr[free].mul(factor, axis=0)
         return corr[arcs], kind
-
-    def correct(E, arcs, set_label, basin, held=frozenset()):
-        if method == "ratio":
-            return correct_ratio(E, arcs)
-        return correct_qmap(E, arcs, set_label, basin, held)
 
     def score_rows(E, Ec, arcs, set_label, basin, anchor_kind):
         te = (E.index >= te0) & (E.index <= te1)
@@ -434,7 +336,7 @@ def _subarc_validate(
             # well-modeled cumulative inflow like Shasta passes through raw (no QMAP, no
             # rescale) and only the local sub-arcs absorb the basin mass balance.  The modeled
             # valley-accretion node is held the same way (a real SAC inflow over the ungauged
-            # area), so the real tributaries no longer absorb the valley runoff.
+            # area), so the real tributaries do not absorb the valley runoff.
             nested = BASIN_NESTS.get(str(basin), [])
             held = set(nodes.loc[nodes["basin"].isin(nested), "arc"].astype(str)) & set(arcs)
             if basin in valley_of:
@@ -458,23 +360,20 @@ def _subarc_validate(
 
 def make_subarc_validation(data_dir: str | Path = "data", artifacts_dir: str | Path = "artifacts",
                            sets=DEFAULT_CALSETS, *,
-                           anchor_long=None, raw_long=None, met=None, series=None,
-                           method="qmap") -> Path:
-    """Write the per-sub-arc bias-correction validation (train/test) to the ``calsim3`` folder:
-    ``subarc_validation_metrics.csv`` (the scorecard),
-    and — for ``method="qmap"`` — the **per-set QMAP-corrected sub-arc series**
-    ``subarc_qmap_<set>.csv`` (the deliverable, one file per SAC set and VIC, distinct from the
-    legacy monthly-ratio approach).  ``method`` selects the correction (``qmap`` default,
-    ``ratio`` legacy — see :func:`subarc_validation_metrics`).  ``met``/``series`` may be passed
-    in (already computed by :func:`make_all`) to avoid recompute."""
+                           anchor_long=None, raw_long=None, met=None, series=None) -> Path:
+    """Write the per-sub-arc bias-correction validation (train/test, :func:`_subarc_validate`)
+    to the ``calsim3`` folder: ``subarc_validation_metrics.csv`` (the scorecard) and the
+    **per-set QMAP-corrected sub-arc series** ``subarc_qmap_<set>.csv`` (the deliverable, one
+    file per SAC set and VIC).  ``met``/``series`` may be passed in (already computed by
+    :func:`make_all`) to avoid recompute."""
     out = paths.calibrated(artifacts_dir, "calsim3")
     (out / "figures").mkdir(parents=True, exist_ok=True)
     if met is None:
         met, series = _subarc_validate(data_dir, sets, anchor_long=anchor_long,
-                                       raw_long=raw_long, method=method)
+                                       raw_long=raw_long)
     met.to_csv(out / "subarc_validation_metrics.csv", index=False)
-    # per-set QMAP-corrected sub-arc series — the deliverable, distinct from the ratio approach
-    if method == "qmap" and series is not None and len(series):
+    # per-set QMAP-corrected sub-arc series — the deliverable
+    if series is not None and len(series):
         for s in series["set"].unique():
             series[series["set"] == s].to_csv(out / f"subarc_qmap_{s}.csv", index=False)
     for s in list(sets) + ["vic"]:
@@ -985,15 +884,8 @@ def make_all(
     artifacts_dir: str | Path = "artifacts",
     sets=DEFAULT_CALSETS,
     covered_frac=None,
-    mass_balance=False,
 ) -> Path:
-    """Cross-compare each calibration set + VIC vs CalSim3; best-of set per node.
-
-    ``mass_balance`` (default off) applies CalSim's proportional sub-arc (anchor
-    mass-balance) adjustment to every estimate's per-catchment series before scoring
-    (:func:`_apply_anchor_mass_balance`).  It is off by default because it does NOT improve
-    per-catchment skill — our per-catchment error is the spatial split among a system's
-    sub-arcs, which a single per-system rescale cannot correct."""
+    """Cross-compare each calibration set + VIC vs CalSim3; best-of set per node."""
     out = paths.calibrated(artifacts_dir, "calsim3")
     (out / "figures").mkdir(parents=True, exist_ok=True)
 
@@ -1006,8 +898,7 @@ def make_all(
     # (basin_area_<set>_calsim.csv, consistent with the sub-arcs + reference) carries the
     # volume reconciliation, leaving honest depth biases (e.g. BND +4.8%, Fresno +29%) visible.
     anchor_long = build_anchor_long(data_dir, sets, footprint=_screened_fp(data_dir, sets))
-    long, matched, coverage = build_calsets_long(data_dir, sets, covered_frac=covered_frac,
-                                                 anchor_long=anchor_long, mass_balance=mass_balance)
+    long, matched, coverage = build_calsets_long(data_dir, sets, covered_frac=covered_frac)
     # Clip BOTH views to one shared scoring period — the intersection of every source feeding
     # either the anchor (FLOW-UNIMPAIRED / 8RI-VIC) or the per-catchment (INFLOW / per-node VIC)
     # view — so they score identical months.  The references' native spans differ (FLOW-UNIMPAIRED
@@ -1018,9 +909,8 @@ def make_all(
     print(f"compare: shared scoring period {start.date()} .. {end.date()}")
     candidates = list(sets) + ["vic"]
     # The per-catchment series already sit on the CalSim catchment area (run_calsim uses each
-    # catchment's SQ_MI).  With the area nudge retired, the coverage maps score these raw series
-    # directly — no per-(set,basin) rescale — so they are consistent with the basin anchor (now
-    # also on the summed CalSim area) and the sub-arc QMAP.
+    # catchment's SQ_MI): the coverage maps score these raw series directly, consistent with the
+    # basin anchor (also on the summed CalSim area) and the sub-arc QMAP.
     met = calset_metrics(long, matched, candidates)
     # attach each set's honest HRU coverage of the node, so a low-coverage (extrapolated)
     # per-node score is visible in the metrics CSV (NaN for vic — not HRU-based).
@@ -1055,7 +945,7 @@ def make_all(
     make_anchor_skill_periods(data_dir, artifacts_dir)
     # parallel full-footprint view + the screened-vs-full delta (with the VIC benchmark), plus
     # the calibration-target-vs-CalSim3 table; the fnf_* calibration basis is untouched
-    # (see tmp/CALSIM3_FNF_FOOTPRINT.md).
+    # (docs/calibrated_sacsma.md, "Skill against CalSim3").
     make_anchor_full(data_dir, artifacts_dir, sets, anchor_long=anchor_long,
                      period=(start, end))
     target_vs_calsim3(data_dir, sets=tuple(s for s in sets if s in ANCHOR_SETS)).to_csv(
@@ -1064,17 +954,16 @@ def make_all(
     # ONLY the adjustment sets (9unimp + 11obs) are sub-arc-adjusted — 15cdec is scored raw
     # (per-catchment) and never enters the adjustment/composite (see ADJUST_SETS).
     adj_sets = tuple(s for s in ADJUST_SETS if s in sets)
-    subarc_met, subarc_series = _subarc_validate(
-        data_dir, adj_sets, anchor_long=anchor_long,
-        raw_long=(None if mass_balance else long))
+    subarc_met, subarc_series = _subarc_validate(data_dir, adj_sets, anchor_long=anchor_long,
+                                                 raw_long=long)
     make_subarc_validation(data_dir, artifacts_dir, adj_sets, met=subarc_met,
                            series=subarc_series)
 
     # CalSim<->SAC-SMA basin maps (9unimp + 11obs partition): basin-level NSE/KGE/pbias for
     # the SAC composite and VIC, plus SAC−VIC difference maps — all coloured per main basin.
     make_basin_maps(data_dir, out, anchor_met, sets=adj_sets)
-    # footprint-screening methods maps (single-basin illustrations of
-    # tmp/CALSIM3_FNF_FOOTPRINT.md: the VIC grid + the SAC HRU sets on the catchment)
+    # footprint-screening methods maps (single-basin illustrations of the footprint screening:
+    # the VIC grid + the SAC HRU sets on the catchment)
     fp = paths.calibrated(artifacts_dir, "footprints")
     make_shasta_footprint_maps(data_dir, fp)
     for title, set_name, basin, vic_node, cdec_basin, stem in FOOTPRINT_MAP_BASINS:
@@ -1308,8 +1197,8 @@ def make_shasta_footprint_maps(data_dir: str | Path = "data",
     Every panel shares one extent and carries the black SHSTA outline as the common
     reference; red marks the Goose Lake over-reach (terrain outside the catchment /
     dropped by screening).  Unlike every other compare map this one is
-    **single-basin** (SHA/SHSTA) — a methods illustration of
-    ``tmp/CALSIM3_FNF_FOOTPRINT.md``, not a basin-level skill map.  The other
+    **single-basin** (SHA/SHSTA) — a methods illustration of the footprint screening
+    (``docs/calibrated_sacsma.md``), not a basin-level skill map.  The other
     single-basin counterparts render via :func:`make_basin_footprint_maps`
     (:data:`FOOTPRINT_MAP_BASINS`).
     """
@@ -2276,8 +2165,7 @@ def make_anchor_full(data_dir: str | Path = "data", artifacts_dir: str | Path = 
     **VIC benchmark** (``pbias_vic``/``kge_vic``/``mean_vic_taf``; purple diamond) on the same
     months and reference.  Screening removes out-of-catchment dilution (SHA -8.9 -> +0.1,
     SNS -7.8 -> -0.8, Chowchilla -14.3 -> -4.3); for BND and Fresno R it removes a
-    *compensating* dilution to expose an honest over-prediction (see
-    ``tmp/CALSIM3_FNF_FOOTPRINT.md``).  ``anchor_long`` is the OFFICIAL (screened) long from
+    *compensating* dilution to expose an honest over-prediction.  ``anchor_long`` is the OFFICIAL (screened) long from
     :func:`make_all` (rebuilt here if omitted); ``period`` (a ``(start, end)`` pair) clips both
     views to identical months for a fair delta.  The ``fnf_<domain>_monthly.csv`` calibration
     basis and the fnf-target diagnostics are unaffected by the anchor basis."""
@@ -2749,32 +2637,3 @@ UNIMP_MAP = {
 def load_unimpaired_monthly(data_dir: str | Path = "data") -> pd.DataFrame:
     """CalSim FLOW-UNIMPAIRED monthly TAF for the 11 rim systems [date, system, flow_taf]."""
     return read_table(paths.calsim3_targets(data_dir, "calsim_unimpaired_monthly.csv"))
-
-
-def main(argv: list[str] | None = None) -> int:
-    import argparse
-
-    p = argparse.ArgumentParser(
-        prog="sacsma.calsim.compare",
-        description="Cross-compare CalSim3 (actual) vs VIC vs multi-set SAC-SMA at the CalSim nodes",
-    )
-    p.add_argument("--data-dir", default="data")
-    p.add_argument("--artifacts-dir", default="artifacts", help="output root")
-    p.add_argument("--sets", nargs="+", default=None,
-                   help="SAC-SMA calibration sets to score separately vs CalSim3 "
-                        f"(default: {', '.join(DEFAULT_CALSETS)})")
-    p.add_argument("--covered-frac", type=float, default=None,
-                   help="informational 'covered'/'partial' status label only "
-                        "(default: calsim.COVERED_FRAC); node inclusion is crosswalk-driven")
-    p.add_argument("--mass-balance", action="store_true",
-                   help="apply CalSim's proportional sub-arc (anchor mass-balance) adjustment "
-                        "to the per-catchment estimates (does not improve per-catchment skill)")
-    args = p.parse_args(argv)
-    sets = tuple(args.sets) if args.sets else DEFAULT_CALSETS
-    make_all(args.data_dir, args.artifacts_dir, sets, covered_frac=args.covered_frac,
-             mass_balance=args.mass_balance)
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

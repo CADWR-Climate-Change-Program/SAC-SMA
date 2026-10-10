@@ -59,7 +59,6 @@ Usage::
 
 from __future__ import annotations
 
-import argparse
 from pathlib import Path
 
 import pandas as pd
@@ -568,17 +567,3 @@ def make_all(data_dir: str | Path = "data", artifacts_dir: str | Path = "artifac
     # unlike the figures above, this does not read committed run tables)
     make_split_unsplit_skill(data_dir, artifacts_dir)
     return figdir
-
-
-def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(prog="sacsma.calsim.forcing_compare",
-                                 description="Forcing-product volume/regime comparison figures")
-    ap.add_argument("--data-dir", default="data", help="data store")
-    ap.add_argument("--artifacts-dir", default="artifacts", help="output root")
-    args = ap.parse_args(argv)
-    make_all(data_dir=args.data_dir, artifacts_dir=args.artifacts_dir)
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

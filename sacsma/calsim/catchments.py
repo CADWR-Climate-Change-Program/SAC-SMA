@@ -641,49 +641,6 @@ def basin_footprints(data_dir: str | Path = "data", domain: str = DEFAULT_DOMAIN
     return out
 
 
-def calsim_basin_polygons(data_dir: str | Path = "data", domain: str = DEFAULT_DOMAIN):
-    """Per-basin **CalSim3 catchment delineation** (lon/lat): the union of the merged-layer
-    polygons the basin owns (crosswalk nodes + the valley-accretion node where the system
-    has one) — the catchment geometry itself, NOT an HRU footprint.
-
-    For building external eval sets directly on the CalSim3 delineations — the
-    neuralhyd-ca LSTM comparison basis (2026-07-08): the LSTM has no HRU legacy, so it
-    runs on the true catchment and its volume is depth x the canonical CalSim area
-    (``basin_area_<domain>_calsim.csv``), matching the anchor convention exactly.  Node
-    selection mirrors :func:`screened_footprint`; basins with no usable catchment (e.g.
-    Tulare/Kern) fall back to their full HRU footprint (:func:`basin_footprints`).
-    Hairline sliver rings between adjacent catchments are filled so each basin is a
-    clean outer boundary.
-    """
-    from shapely.geometry import MultiPolygon, Polygon
-    from shapely.ops import unary_union
-
-    full = basin_footprints(data_dir, domain)                # fallback only
-    catch = load_catchments(data_dir, layer=MERGED_LAYER, rim_only=True)
-    nodes = derive_basin_nodes(data_dir, domain)
-    sysmap = BASIN_RIM_SYSTEM.get(domain, {})
-    out = {}
-    for basin, geom in full.items():
-        own = set(nodes.loc[nodes["basin"] == basin, "node"].astype(str))
-        sysn = sysmap.get(basin)
-        if sysn in VALLEY_SYSTEMS:
-            own.add(valley_arc_for_system(sysn)[2:])
-        catch_b = catch[catch["node"].astype(str).isin(own)]
-        if not own or catch_b.empty:
-            out[basin] = geom                                # no catchment -> HRU footprint
-            continue
-        u = unary_union(list(catch_b.geometry.values))
-        polys = list(u.geoms) if isinstance(u, MultiPolygon) else [u]
-        out[basin] = MultiPolygon([Polygon(p.exterior) for p in polys if p.area > 1e-6])
-    return out
-
-
-# --------------------------------------------------------------------------
-# Special CalSim flowlens (for optional channel routing to the CalSim node)
-# --------------------------------------------------------------------------
-_EARTH_R_M = 6_371_000.0
-
-
 # --------------------------------------------------------------------------
 # Run
 # --------------------------------------------------------------------------

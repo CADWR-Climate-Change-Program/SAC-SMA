@@ -11,7 +11,7 @@ series themselves are a target ([`data/targets/calsim3/`](../../targets/calsim3/
 |---|---|---|
 | `calsim3.gpkg` (1.6 MB) | The CalSim3 inflow catchments, EPSG:4326, two layers (below). | DWR's calsim-view `watersheds.geojson`, normalized; the merged layer is derived from it |
 | `calsim_crosswalk.csv` | The master crosswalk `[arc, system, unimp_anchor, vic_basin, basin_15cdec, basin_11obs, basin_9unimp, in_calsim3]`: the single source of truth for the watershed-to-node mapping, rim-system membership and VIC names. | Bootstrapped geographically once, curated by hand since. Hand-edited, never auto-overwritten |
-| `tier1_sets.csv` | The 20 tier-1 validation locations of a multifamily dPL run: `[set_id, name, entity_id, ref_kind, system, arcs, area_mi2, volume_scored, val_start_wy, val_end_wy, note]`. | Hand-curated from the registry arc lists and the crosswalk, except `val_start_wy` and `val_end_wy`, which `sacsma dpl calsim windows --write` derives |
+| `tier1_sets.csv` | The 20 tier-1 validation locations of a multifamily dPL run: `[set_id, name, entity_id, ref_kind, system, arcs, area_mi2, volume_scored, note]`. | Hand-curated from the registry arc lists and the crosswalk. Hand-edited, never auto-overwritten |
 | `basin_area_<set>_calsim.csv` (`15cdec`, `9unimp`, `11obs`) | Canonical CalSim catchment areas `[basin, area_mi2, source]`: the sum of the watershed's merged-layer catchment `SQ_MI` (crosswalk nodes, nests, valley node). `source` is `calsim`, or `authoritative` for a watershed with no CalSim catchment (the four Tulare and Kern watersheds of `15cdec`), which keeps its published area. | `sacsma.calsim.catchments.calsim_basin_areas` |
 | `screened_footprint_<domain>.csv` (`9unimp`, `11obs`) | The screened footprint `[basin, key, overlap_area_mi2]` of the four watersheds of `catchments.SCREENED_BASINS`: SHA, BND, SNS (`11obs`) and ChowchillaRiver (`9unimp`). The HRUs inside the CalSim catchment (merged-layer polygons plus the valley node), weighted by overlap area. | `sacsma.calsim.catchments.screened_footprint` |
 
@@ -33,20 +33,13 @@ Layers of `calsim3.gpkg`:
 set per watershed. The USGS creeks and the four Tulare watersheds have none; `cdec_BND` and `cdec_CSN`
 share the UF6 and UF13 sets. `ref_kind` is `anchor` (the rim system's `FLOW-UNIMPAIRED` series, 10 sets) or
 `arcsum` (the sum of the member `INFLOW` arcs, 10 sets). `area_mi2` is the sum of the members'
-`CalSim3_Merged` `SQ_MI`. `val_start_wy` and `val_end_wy` are the first and last water year of the
-location's trimmed validation window: the run of at least 20 water years inside WY1950-84 in which the
-registry's USGS creek gauges covered the least of it (1950 and 1984 = the full window, kept where no creek
-reaches the location).
+`CalSim3_Merged` `SQ_MI`.
 
 ## How it is built
 
 - `calsim3.gpkg`: delivered; cannot be rebuilt from a clone.
 - `calsim_crosswalk.csv`: edited by hand only. Nothing in the repository writes it.
-- `tier1_sets.csv`: edited by hand, the two window columns apart:
-
-      sacsma dpl calsim windows            # derive the windows, compare with the table (exit 1 on a difference)
-      sacsma dpl calsim windows --write    # store the derived values in the table
-
+- `tier1_sets.csv`: edited by hand only. Nothing in the repository writes it.
 - The two generated families (environment `sacsma`, from the repository root). They are deterministic
   from `calsim3.gpkg`, `calsim_crosswalk.csv` and the domain tables in `data/inputs/domains/`:
 
@@ -55,8 +48,6 @@ reaches the location).
 
 ## Checks
 
-- `sacsma dpl calsim windows` checks the two window columns of `tier1_sets.csv` against the rule and exits
-  with status 1 on a difference.
 - 119/120 rim polygons of the original layer match a CalSim node.
 - The screened footprints reuse the cell-overlap mapping of the per-sub-arc comparison. Nothing in them is
   hand-tuned.
@@ -89,14 +80,14 @@ reaches the location).
 
 ## Read by
 
-- `calsim3.gpkg`: `sacsma.calsim.catchments.load_catchments` (the cross-compare, its maps, the footprint
-  re-foot of `sacsma.dpl.data`), `sacsma.dpl.calsim.tier1` and `tier2`, and the build scripts of the grid,
-  the entity registry, the USGS gauges, the BCM reference and `check_uf_locations.py`.
+- `calsim3.gpkg`: `sacsma.calsim.catchments.load_catchments` (the cross-compare and its maps),
+  `sacsma.dpl.calsim.tier1`, `tier2` and `atlas`, and the build scripts of the grid, the entity registry,
+  the USGS gauges, the BCM reference and `check_uf_locations.py`.
 - `calsim_crosswalk.csv`: `catchments.load_crosswalk` and `derive_basin_nodes`,
   `sacsma.calsim.compare.load_name_map`, `data/inputs/domains/multifamily/build_entities.py`.
 - `basin_area_<set>_calsim.csv`: `catchments.basin_areas`, for the anchor volumes of `sacsma calsim`
   and the VIC-CalSim3 catchment areas of `sacsma benchmark` (`sacsma.benchmark.flows`).
 - `screened_footprint_<domain>.csv`: written by `catchments.screened_footprint`, whose result
   `sacsma.calsim.compare` uses as the anchor basis.
-- `tier1_sets.csv`: `sacsma.dpl.calsim.tier1`, `tier2`, `atlas`, `windows`, `compare`, and
+- `tier1_sets.csv`: `sacsma.dpl.calsim.tier1` (and through it `tier2` and `atlas`), and
   `data/targets/calsim3/build_calsim_arcs.py`.

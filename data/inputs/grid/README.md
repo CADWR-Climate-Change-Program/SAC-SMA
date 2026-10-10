@@ -18,10 +18,10 @@ in this repository from public rasters (POLARIS, LANDFIRE, 3DEP, MODIS) and from
 ## The raw rasters
 
 Continuous soil, vegetation and terrain rasters, California and CONUS products in preference to global
-ones. They replace the one-hot `soil_class` and `veg_class` of the HRU tables with physical quantities for
-the dPL parameter network. Staged for lat 32 to 42 N, lon -125 to -114 W (110 one-degree tiles), plus one
-tile at 42 to 43 N / -121 to -120 W, where the grid reaches 42.4 N at the Goose Lake extension of BND (50
-cells, all in `11obs` and `12rim`). 6,288 files: POLARIS 2,304 tiles / 55.1 GB, LANDFIRE 222 / 5.7 GB,
+ones. They give the dPL parameter network physical quantities in place of the `soil_class` and
+`veg_class` codes of the HRU tables. Staged for lat 32 to 42 N, lon -125 to -114 W (110 one-degree
+tiles), plus one tile at 42 to 43 N / -121 to -120 W, where the grid reaches 42.4 N at the Goose Lake
+extension of BND (50 cells, all in `11obs` and `12rim`). 6,288 files: POLARIS 2,304 tiles / 55.1 GB, LANDFIRE 222 / 5.7 GB,
 3DEP 90 / 3.8 GB, MODIS LAI 3,672 granules / 24.9 GB. POLARIS and 3DEP are CONUS-land products, so ocean
 tiles return 404 and are skipped (95 and 89 land tiles in the original extent). LANDFIRE renders all 110.
 
@@ -141,9 +141,9 @@ python data/inputs/grid/gee_aef_region.py --assemble                 # -> aef_ce
 
 ## Read by
 
-- `grid_cells.csv`: every build script that works on the grid (forcing, ET, SWE and BCM references, the
-  entity cells), and `sacsma.dpl.calsim.tier2`.
+- `grid_cells.csv`: every build script that works on the grid (forcing, statics, the AlphaEarth pull, the
+  ET, SWE and BCM references, the entity cells), and `sacsma.dpl.calsim.tier2`.
 - `soilveg_continuous.csv`, `lai_climatology.csv`: `sacsma.io.soilveg_path` and `lai_climatology_path` for
   the `multifamily` domain, through them `sacsma.dpl.features` (attributes), `sacsma.io.load_hru_table`
   (`dem_elev` as cell elevation) and the canopy inputs of the Noah ET path (`EVC_cover_pct`, LAI).
-- `aef_cell_mean.npz`: `sacsma.dpl.features` (feature variants `aef` and `aef64` of `sacsma dpl train`).
+- `aef_cell_mean.npz`: `sacsma.dpl.features`, for the `aef_u` inputs only (`6_aef` and `7_calsim`).

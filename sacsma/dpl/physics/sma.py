@@ -113,7 +113,6 @@ def sacsma_step(
     n_inc: int,
     fracp_floor: float,
     eused_ext: torch.Tensor | None = None,
-    sac_exchanges: bool = False,
     uztwc_pre: torch.Tensor | None = None,
     return_parts: bool = False,
 ) -> tuple[SacState, torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -128,10 +127,9 @@ def sacsma_step(
 
     Without ``eused_ext`` the reference ET cascade E1-E5 runs.  With it the ET was withdrawn
     upstream (Noah-lite, :func:`run_sacsma`): ``eused_ext`` is the soil ET taken, which feeds
-    the riparian ``et4`` only; with ``sac_exchanges`` the rest of the reference ET block runs
-    after the withdrawal -- the upper free -> tension rebalance, the lower free -> tension
-    resupply and the ADIMP ET(5), whose ET1 is the upper-tension withdrawal ``uztwc_pre -
-    uztwc``.
+    the riparian ``et4``, and the rest of the reference ET block runs after the withdrawal --
+    the upper free -> tension rebalance, the lower free -> tension resupply and the ADIMP
+    ET(5), whose ET1 is the upper-tension withdrawal ``uztwc_pre - uztwc``.
     """
     uztwm, uzfwm, lztwm = p["uztwm"], p["uzfwm"], p["lztwm"]
     lzfpm, lzfsm = p["lzfpm"], p["lzfsm"]
@@ -149,43 +147,41 @@ def sacsma_step(
     edmnd = pet_t
 
     if eused_ext is not None:
-        # ET applied upstream; no withdrawal here.  eused feeds et4 only.
-        et1 = et2 = et3 = et5 = zero
+        # ET applied upstream; no withdrawal here.  eused feeds et4.
         eused = eused_ext
-        if sac_exchanges:
-            if uztwc_pre is None:
-                raise ValueError("sac_exchanges needs uztwc_pre (the UZ tension "
-                                 "content before the external withdrawal)")
-            # the external withdrawal stands in for E1-E3; the reference branch
-            # below from the UZ rebalance on, with et1 = the UZ tension withdrawal
-            # and red + et2 = edmnd - et1 (true on both reference branches)
-            et1_ext = uztwc_pre - uztwc
-            exhausted = (uztwc <= 0.0).to(dtype)
-            do_rb = (1.0 - exhausted) * (uztwc / uztwm < uzfwc / uzfwm).to(dtype)
-            uzrat = (uztwc + uzfwc) / (uztwm + uzfwm)
-            uztwc = do_rb * (uztwm * uzrat) + (1.0 - do_rb) * uztwc
-            uzfwc = do_rb * (uzfwm * uzrat) + (1.0 - do_rb) * uzfwc
-            not_ex = 1.0 - exhausted
-            uztwc = torch.where((uztwc < _THRES) & (not_ex > 0), zero, uztwc)
-            uzfwc = torch.where((uzfwc < _THRES) & (not_ex > 0), zero, uzfwc)
+        if uztwc_pre is None:
+            raise ValueError("eused_ext needs uztwc_pre (the UZ tension content "
+                             "before the external withdrawal)")
+        # the external withdrawal stands in for E1-E3; the reference branch
+        # below from the UZ rebalance on, with et1 = the UZ tension withdrawal
+        # and red + et2 = edmnd - et1 (true on both reference branches)
+        et1_ext = uztwc_pre - uztwc
+        exhausted = (uztwc <= 0.0).to(dtype)
+        do_rb = (1.0 - exhausted) * (uztwc / uztwm < uzfwc / uzfwm).to(dtype)
+        uzrat = (uztwc + uzfwc) / (uztwm + uzfwm)
+        uztwc = do_rb * (uztwm * uzrat) + (1.0 - do_rb) * uztwc
+        uzfwc = do_rb * (uzfwm * uzrat) + (1.0 - do_rb) * uzfwc
+        not_ex = 1.0 - exhausted
+        uztwc = torch.where((uztwc < _THRES) & (not_ex > 0), zero, uztwc)
+        uzfwc = torch.where((uzfwc < _THRES) & (not_ex > 0), zero, uzfwc)
 
-            # ---- resupply lower free -> lower tension (reference block) ----
-            saved = rserv * (lzfpm + lzfsm)
-            ratlzt = lztwc / lztwm
-            ratlz = (lztwc + lzfpc + lzfsc - saved) / (lztwm + lzfpm + lzfsm - saved)
-            resup = (ratlzt < ratlz).to(dtype)
-            dele = resup * (ratlz - ratlzt) * lztwm
-            lztwc = lztwc + dele
-            lzfsc_raw = lzfsc - dele
-            lzfpc = lzfpc + torch.minimum(lzfsc_raw, zero)
-            lzfsc = lzfsc_raw.clamp_min(0.0)
-            lztwc = _snap(lztwc)
+        # ---- resupply lower free -> lower tension (reference block) ----
+        saved = rserv * (lzfpm + lzfsm)
+        ratlzt = lztwc / lztwm
+        ratlz = (lztwc + lzfpc + lzfsc - saved) / (lztwm + lzfpm + lzfsm - saved)
+        resup = (ratlzt < ratlz).to(dtype)
+        dele = resup * (ratlz - ratlzt) * lztwm
+        lztwc = lztwc + dele
+        lzfsc_raw = lzfsc - dele
+        lzfpc = lzfpc + torch.minimum(lzfsc_raw, zero)
+        lzfsc = lzfsc_raw.clamp_min(0.0)
+        lztwc = _snap(lztwc)
 
-            # ---- ET(5): ADIMP area (reference form, no lower clamp) ----
-            et5_raw = et1_ext + (edmnd - et1_ext) * (adimc - et1_ext - uztwc) / (uztwm + lztwm)
-            et5 = torch.minimum(et5_raw, adimc)
-            adimc = adimc - et5
-            et5 = et5 * adimp
+        # ---- ET(5): ADIMP area (reference form, no lower clamp) ----
+        et5_raw = et1_ext + (edmnd - et1_ext) * (adimc - et1_ext - uztwc) / (uztwm + lztwm)
+        et5 = torch.minimum(et5_raw, adimc)
+        adimc = adimc - et5
+        et5 = et5 * adimp
     else:
         # ---- ET(1): upper-zone tension (min == reference subtract-then-correct) ----
         et1 = torch.minimum(edmnd * uztwc / uztwm, uztwc)
@@ -389,7 +385,8 @@ def run_sacsma(
     tensors in :data:`PART_NAMES` order.
 
     ``physics.et == "noah_lite"`` withdraws the Noah-lite ET (:func:`.et_noah.noah_lite_et`,
-    exponent ``params["soil_chi"]``) ahead of each day's water balance.
+    exponent ``params["soil_chi"]``) ahead of each day's water balance and keeps the reference
+    exchanges after it (:func:`sacsma_step` with ``eused_ext``).
     """
     t_len = pet.shape[1]
     noah = physics.et == "noah_lite"
@@ -417,10 +414,9 @@ def run_sacsma(
             state = SacState(uztwc=uztwc, uzfwc=uzfwc, lztwc=lztwc, lzfsc=state.lzfsc,
                              lzfpc=state.lzfpc, adimc=state.adimc)
             # the Noah ET is the step's eused, so its eused*parea term reports it (no double
-            # count): te = tet_noah*parea + et4 [+ et5 with sac_exchanges]
+            # count): te = tet_noah*parea + et4 + et5
             step = sacsma_step(state, pr_eff[:, t], pet[:, t], params, eused_ext=et_soil,
-                               sac_exchanges=physics.sac_exchanges, uztwc_pre=uztwc_pre,
-                               **step_kw)
+                               uztwc_pre=uztwc_pre, **step_kw)
         else:
             step = sacsma_step(state, pr_eff[:, t], pet[:, t], params, **step_kw)
         state, sf, bs, te = step[:4]

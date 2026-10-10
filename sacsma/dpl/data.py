@@ -4,7 +4,7 @@ Wraps the loaders (``model.load_domain_forcing``, ``io.load_hru_table``, ``cdec1
 into a :class:`DomainTensors` bundle: per-HRU static tensors, the basin aggregation matrix
 ``W`` (normalized ``area_weight`` per basin, the ``model.py`` convention) and the forcing by
 window (:class:`Window`).  The forcing arrays stay CPU float32 NumPy (from ``DomainForcing``);
-a window is gathered to the physics rows and moved to the device on demand.
+a window is gathered to the HRU rows and moved to the device on demand.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ from ..model import DomainForcing, load_domain_forcing
 
 @dataclass
 class Window:
-    """One window of the forcing on the physics rows: ``(rows, days)`` tensors and the calendar
+    """One window of the forcing on the HRU rows: ``(rows, days)`` tensors and the calendar
     of the days, with the daily ``tmin`` / ``tmax`` where the domain has them (the
     Priestley-Taylor PET) and the observed ``lai`` where it has the canopy tables (Noah-lite)."""
 
@@ -57,28 +57,6 @@ class Window:
 
 
 @dataclass
-class CellDedup:
-    """The distinct-cell physics basis of a :class:`DomainTensors` whose HRU rows
-    repeat grid cells (``DplConfig.dedup_cells``; built by :func:`with_cell_dedup`).
-
-    On the multi-timescale domain one row is an (entity, cell) pair, so a cell that
-    several nested entities share appears once per entity, with identical forcing,
-    statics and parameter-net inputs.  With a ``CellDedup`` attached, the per-cell
-    physics — parameter net, PET, Snow-17, Noah ET, SAC-SMA and their states — runs
-    once per DISTINCT cell (``U`` of them); only the routing (per-row flow length,
-    unit hydrograph and routing-inflow history) and the aggregation ``W`` stay per
-    row, fed by gathering each cell's surface/base runoff to its rows (``row_cell``).
-    """
-
-    row_cell: torch.Tensor     # (N,) int64 on device: each HRU row's distinct-cell index
-    first_row: torch.Tensor    # (U,) int64 on device: the first HRU row of each cell
-    cell_idx: np.ndarray       # (U,) int rows into the forcing arrays
-    lat_rad: torch.Tensor      # (U,)
-    elev: torch.Tensor         # (U,)
-    veg_frac: torch.Tensor | None = None   # (U,) (Noah ET domains)
-
-
-@dataclass
 class DomainTensors:
     dates: pd.DatetimeIndex
     doy: torch.Tensor          # (T,) float, on device
@@ -105,9 +83,6 @@ class DomainTensors:
     #: LAI sidecars.
     veg_frac: torch.Tensor | None = None
     lai_lut: np.ndarray | None = None
-    #: distinct-cell physics basis (``DplConfig.dedup_cells``, :func:`with_cell_dedup`);
-    #: None = the per-row physics (every HRU row runs its own column — the default)
-    dedup: CellDedup | None = None
 
     @property
     def n_hru(self) -> int:
@@ -117,54 +92,17 @@ class DomainTensors:
     def n_time(self) -> int:
         return len(self.dates)
 
-    # -- the physics rows: the HRU rows, or the distinct cells under cell dedup.
-    # The forcing windows, the state vectors and the parameter net run on these;
-    # routing, the routing history, flowlen and W stay per HRU row.
-    @property
-    def n_phys(self) -> int:
-        """Rows of the per-cell physics: ``n_hru``, or the distinct cells (dedup)."""
-        return self.n_hru if self.dedup is None else len(self.dedup.cell_idx)
-
-    @property
-    def phys_idx(self) -> np.ndarray:
-        """Forcing-array rows of the physics rows."""
-        return self.cell_idx if self.dedup is None else self.dedup.cell_idx
-
-    @property
-    def phys_lat_rad(self) -> torch.Tensor:
-        return self.lat_rad if self.dedup is None else self.dedup.lat_rad
-
-    @property
-    def phys_elev(self) -> torch.Tensor:
-        return self.elev if self.dedup is None else self.dedup.elev
-
-    @property
-    def phys_veg_frac(self) -> torch.Tensor | None:
-        return self.veg_frac if self.dedup is None else self.dedup.veg_frac
-
-    @property
-    def row_cell(self) -> torch.Tensor | None:
-        """(N,) physics row of each HRU row under cell dedup, else None (the
-        ``row_cell`` argument of ``forward.run_window`` / ``routing_uh``)."""
-        return None if self.dedup is None else self.dedup.row_cell
-
-    def phys_x(self, x: torch.Tensor) -> torch.Tensor:
-        """The parameter-net input of the physics rows: ``x`` itself, or its first
-        row per distinct cell under cell dedup (rows of a cell are identical —
-        :func:`with_cell_dedup` asserts it)."""
-        return x if self.dedup is None else x.index_select(0, self.dedup.first_row)
-
     def _rows(self, a: np.ndarray, t0: int, t1: int) -> torch.Tensor:
-        return torch.as_tensor(np.ascontiguousarray(a[self.phys_idx, t0:t1])).to(
+        return torch.as_tensor(np.ascontiguousarray(a[self.cell_idx, t0:t1])).to(
             self.device, self.dtype)
 
     def window(self, t0: int, t1: int) -> Window:
-        """The forcing of days [t0, t1) on the physics rows."""
+        """The forcing of days [t0, t1) on the HRU rows."""
         lai = None
         if self.lai_lut is not None:
             doy_idx = self.forcing.doy[t0:t1].astype(np.int64) - 1   # 0..365
             lai = torch.as_tensor(np.ascontiguousarray(
-                self.lai_lut[self.phys_idx][:, doy_idx])).to(self.device, self.dtype)
+                self.lai_lut[self.cell_idx][:, doy_idx])).to(self.device, self.dtype)
         tmm = self.tmin is not None and self.tmax is not None
         return Window(self._rows(self.forcing.prcp, t0, t1), self._rows(self.forcing.tavg, t0, t1),
                       self.doy[t0:t1], self.is_leap[t0:t1],
@@ -174,82 +112,12 @@ class DomainTensors:
     def window_buffers(self, length: int, physics) -> Window:
         """Zero buffers of a ``length``-day window for the inputs ``physics``
         (:class:`sacsma.engine.Physics`) reads -- the static inputs of a captured graph."""
-        z = lambda: torch.zeros(self.n_phys, length, device=self.device, dtype=self.dtype)  # noqa: E731
+        z = lambda: torch.zeros(self.n_hru, length, device=self.device, dtype=self.dtype)  # noqa: E731
         pt = physics.pet == "priestley_taylor"
         return Window(z(), z(), torch.zeros(length, device=self.device, dtype=self.doy.dtype),
                       torch.zeros(length, device=self.device, dtype=torch.bool),
                       z() if pt else None, z() if pt else None,
                       z() if physics.et == "noah_lite" else None)
-
-
-def _rows_differing(a: np.ndarray, rep: np.ndarray) -> np.ndarray:
-    """(N,) bool: rows of ``a`` not bitwise-equal to ``rep`` (NaN == NaN)."""
-    a = np.asarray(a).reshape(len(a), -1)
-    rep = np.asarray(rep).reshape(len(rep), -1)
-    ne = a != rep
-    if np.issubdtype(a.dtype, np.floating):
-        ne &= ~(np.isnan(a) & np.isnan(rep))
-    return ne.any(axis=1)
-
-
-def with_cell_dedup(dom: DomainTensors, x=None, *, verbose: bool = True) -> DomainTensors:
-    """A copy of ``dom`` whose per-cell physics runs once per DISTINCT grid cell
-    (``DplConfig.dedup_cells``; see :class:`CellDedup`).  The row-level fields —
-    ``hrus``, ``cell_idx``, ``lat_rad``/``elev``/``veg_frac``, ``flowlen``, ``W`` —
-    are unchanged; the physics accessors (``n_phys``, ``phys_*``, ``window``,
-    ``phys_x``, ``row_cell``) switch to the distinct cells, in first-appearance order.
-
-    Refuses (``ValueError``) when rows that share a cell do not carry identical
-    physics inputs: the parameter-net features ``x`` (``(N, F)`` array or tensor —
-    pass it: e.g. a net with the flow length as a feature gives every (entity,
-    cell) row its own parameters), the latitude, elevation and observed veg
-    fraction.  Forcing and LAI are per cell by construction (gathered through
-    ``cell_idx``)."""
-    if dom.dedup is not None:
-        return dom
-    ci = np.asarray(dom.cell_idx)
-    _, first, inv = np.unique(ci, return_index=True, return_inverse=True)
-    order = np.argsort(first, kind="stable")          # distinct cells, first-appearance order
-    rank = np.empty_like(order)
-    rank[order] = np.arange(len(order))
-    first_row = first[order]                          # (U,) first HRU row of each cell
-    row_cell = rank[inv.reshape(-1)]                  # (N,) cell of each HRU row
-    rep = first_row[row_cell]                         # (N,) the representative row
-
-    def _t(v):
-        return v.detach().cpu().numpy() if isinstance(v, torch.Tensor) else np.asarray(v)
-
-    checks = {"lat_rad": dom.lat_rad, "elev": dom.elev, "veg_frac": dom.veg_frac,
-              "parameter-net features x": x}
-    for name, v in checks.items():
-        if v is None:
-            continue
-        a = _t(v)
-        if len(a) != len(ci):
-            raise ValueError(f"cell dedup: {name} has {len(a)} rows, the domain {len(ci)}")
-        bad = np.flatnonzero(_rows_differing(a, a[rep]))
-        if len(bad):
-            ex = ", ".join(f"{dom.hrus['basin'].iat[i]}/{dom.hrus['key'].iat[i]}"
-                           for i in bad[:5])
-            raise ValueError(
-                f"cell dedup refused: {len(bad)} HRU row(s) differ in {name} from the "
-                f"other rows of their grid cell (e.g. {ex}) — the per-cell physics would "
-                "not be shared; run without dedup_cells (a flow-length feature, "
-                "flowlen_feature=True, gives every (entity, cell) row its own parameters)")
-    dev = dom.device
-    fr_t = torch.as_tensor(first_row, dtype=torch.int64, device=dev)
-    dd = CellDedup(
-        row_cell=torch.as_tensor(row_cell, dtype=torch.int64, device=dev),
-        first_row=fr_t,
-        cell_idx=ci[first_row],
-        lat_rad=dom.lat_rad.index_select(0, fr_t),
-        elev=dom.elev.index_select(0, fr_t),
-        veg_frac=None if dom.veg_frac is None else dom.veg_frac.index_select(0, fr_t))
-    if verbose:
-        print(f"cell dedup: {len(ci)} HRU rows -> {len(first_row)} distinct cells "
-              f"({len(ci) / max(len(first_row), 1):.2f} rows per cell): per-cell physics "
-              "once per cell, routing + aggregation per row", flush=True)
-    return dataclasses.replace(dom, dedup=dd)
 
 
 @dataclass
@@ -275,7 +143,12 @@ def load_cal_obs(
     *,
     cal_start: str = "1988-10-01",
     cal_end: str = CAL_END,
+    obs_mask: tuple[str, ...] = (),
 ) -> CalObs:
+    """The basins' gage flow over the cal window.  ``obs_mask`` (``DplConfig.obs_mask``,
+    ``"cdec_<BASIN>|YYYY-MM-DD"``, the registry ids of the 15 CDEC basins) drops those days
+    before the normalizers; an entry for another entity or a day outside the window is
+    skipped, an in-window day that is not observed raises (a stale entry)."""
     t0 = int(dom.dates.searchsorted(pd.Timestamp(cal_start)))
     t1 = int(dom.dates.searchsorted(pd.Timestamp(cal_end))) + 1
     if dom.dates[t1 - 1] != pd.Timestamp(cal_end):
@@ -287,6 +160,16 @@ def load_cal_obs(
     for b_i, b in enumerate(dom.basins):
         g = gage[gage["basin"] == b].set_index("date")["flow"]
         arr[b_i] = g.reindex(window).to_numpy(np.float64)
+    for m in obs_mask:
+        eid, _, day = m.partition("|")
+        b = eid.removeprefix("cdec_")
+        k = int(window.searchsorted(pd.Timestamp(day)))
+        if b not in dom.basins or k >= len(window) or window[k] != pd.Timestamp(day):
+            continue                             # another entity, or outside the window
+        b_i = list(dom.basins).index(b)
+        if not np.isfinite(arr[b_i, k]):
+            raise ValueError(f"obs_mask {m!r}: not an observed in-window day")
+        arr[b_i, k] = np.nan
     var = np.nanvar(arr, axis=1)                 # population var over finite days
     return CalObs(
         t0=t0, t1=t1,
@@ -295,25 +178,22 @@ def load_cal_obs(
     )
 
 
-#: max complete calendar months a fixed-length TBPTT chunk can hold (<=12 for a
-#: 366-day chunk; 13 for headroom).  The per-chunk monthly target is padded to this.
+#: max complete calendar months a TBPTT chunk can hold (12 for a water-year chunk;
+#: 13 for headroom).  The per-chunk monthly target is padded to this.
 CHUNK_MAXM = 13
 
 
 def month_chunk_target(dates: pd.DatetimeIndex, c0: int, length: int,
                        cal_t0: int, cal_t1: int, maxm: int = CHUNK_MAXM):
     """Monthly-bucket target for a TBPTT chunk [c0, c0+length): a (length, maxm)
-    day->month-slot sum matrix and the 0-based calendar month of each slot, for
-    the calendar months lying COMPLETELY inside both the chunk and the cal window
-    [cal_t0, cal_t1).  Split/partial months (chunk boundaries, post-CAL_END) get
-    no slot (mask 0) — a partial-month sum isn't comparable to a full-month
-    target.  Returns (bucket, cal_month0 (maxm,), mask (maxm,))."""
+    day->month-slot sum matrix for the calendar months lying COMPLETELY inside both
+    the chunk and the cal window [cal_t0, cal_t1).  Split/partial months (chunk
+    boundaries, post-CAL_END) get no slot (mask 0) — a partial-month sum isn't
+    comparable to a full-month target.  Returns (bucket, mask (maxm,))."""
     c1 = c0 + length
     all_codes = (dates.year * 12 + dates.month).to_numpy()
     codes = all_codes[c0:c1]
-    d_month = dates.month.to_numpy()[c0:c1]
     bucket = np.zeros((length, maxm), np.float64)
-    cal_month0 = np.zeros(maxm, np.int64)
     mask = np.zeros(maxm, np.float64)
     slot = 0
     for code in pd.unique(codes):
@@ -323,65 +203,9 @@ def month_chunk_target(dates: pd.DatetimeIndex, c0: int, length: int,
         if len(g) and g.min() >= c0 and g.max() < c1 and len(local) == len(g) \
                 and slot < maxm:
             bucket[local, slot] = 1.0
-            cal_month0[slot] = d_month[local[0]] - 1
             mask[slot] = 1.0
             slot += 1
-    return bucket, cal_month0, mask
-
-
-def _calsim_footprint_weights(hrus: pd.DataFrame, basins: tuple[str, ...],
-                              base_w: np.ndarray, data_dir: str) -> tuple[np.ndarray, list[str]]:
-    """Re-weight ``base_w`` rows by each cell's overlap fraction with the basin's
-    CalSim3 catchment (out-of-catchment cells -> 0, boundary cells down-weighted).
-
-    Only basins with a real CalSim3 catchment (rim + geographically-resolved
-    secondary nodes in the crosswalk) are re-footed; basins without one
-    (Tulare/Kern: PNF/TRM/SCC/ISB) keep their full ``area_weight`` row.  Geometry
-    comes from the CalSim3 ``15cdec`` catchment polygons (crosswalk column
-    ``basin_15cdec``); the coarse cells are 1/16-deg squares overlapped in the
-    equal-area CRS.  Heavy geo deps are imported lazily (only when opted in)."""
-    import geopandas as gpd
-    from shapely import box
-
-    from ..calsim.catchments import (
-        _EQ_CRS,
-        _M2_PER_MI2,
-        calsim_basin_polygons,
-        derive_basin_nodes,
-    )
-
-    polys = calsim_basin_polygons(data_dir, "15cdec")            # basin -> catchment geom
-    have_catchment = set(derive_basin_nodes(data_dir, "15cdec")["basin"].astype(str))
-    step_h = (1.0 / 16.0) / 2.0
-    w = base_w.copy()
-    refooted: list[str] = []
-    for bi, b in enumerate(basins):
-        if b not in have_catchment or polys.get(b) is None:
-            continue                                             # no catchment -> full footprint
-        m = (hrus["basin"] == b).to_numpy()
-        sub = hrus.loc[m, ["key", "lat", "lon"]].drop_duplicates("key")
-        sq = gpd.GeoDataFrame(
-            {"key": sub["key"].to_numpy()},
-            geometry=[box(x - step_h, y - step_h, x + step_h, y + step_h)
-                      for x, y in zip(sub["lon"].astype(float),
-                                      sub["lat"].astype(float), strict=True)],
-            crs="EPSG:4326").to_crs(_EQ_CRS)
-        cell_mi2 = sq.geometry.area.to_numpy() / _M2_PER_MI2
-        poly = gpd.GeoDataFrame(geometry=[polys[b]], crs="EPSG:4326").to_crs(_EQ_CRS)
-        ov = gpd.overlay(sq[["key", "geometry"]], poly, how="intersection", keep_geom_type=True)
-        if ov.empty:
-            continue
-        ov_mi2 = ov.geometry.area.to_numpy() / _M2_PER_MI2
-        ov_by_key = pd.Series(ov_mi2, index=ov["key"].to_numpy()).groupby(level=0).sum()
-        frac = (ov_by_key.reindex(sub["key"]).fillna(0.0).to_numpy() / cell_mi2).clip(0, 1)
-        fmap = dict(zip(sub["key"].to_numpy(), frac, strict=True))
-        fh = np.where(m, hrus["key"].map(fmap).fillna(0.0).to_numpy(), 0.0)
-        wb = base_w[bi] * fh
-        if wb.sum() <= 0:
-            continue
-        w[bi] = wb / wb.sum()
-        refooted.append(b)
-    return w, refooted
+    return bucket, mask
 
 
 def load_domain_tensors(
@@ -391,7 +215,6 @@ def load_domain_tensors(
     device: torch.device | str = "cuda",
     dtype: torch.dtype = torch.float32,
     basins: tuple[str, ...] | None = None,
-    calsim_footprint: bool = False,
     product: str = DEFAULT_FORCING,
 ) -> DomainTensors:
     device = torch.device(device)
@@ -424,11 +247,6 @@ def load_domain_tensors(
         rows = np.flatnonzero((hrus["basin"] == b).to_numpy())
         wt = hrus.loc[rows, "area_weight"].to_numpy(np.float64)
         w_np[b_i, rows] = wt / wt.sum()
-    if calsim_footprint:
-        w_np, refooted = _calsim_footprint_weights(hrus, basins, w_np, data_dir)
-        print(f"load_domain_tensors: CalSim3 footprint re-foot applied to "
-              f"{len(refooted)}/{len(basins)} basins {refooted} (others keep full "
-              f"footprint)", flush=True)
     w = torch.as_tensor(w_np, dtype=dtype)
 
     dates = forcing.dates
