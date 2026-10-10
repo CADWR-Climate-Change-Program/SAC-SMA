@@ -17,7 +17,7 @@ The helpers here are torch-free: the builder, the ``calsim_monthly`` loader
 
 Volume basis.  A model arc or system depth becomes a volume with the CalSim3 catchment
 area (``SQ_MI``; a system = the sum of its members), never with a footprint-overlap sum,
-so model and CalSim3 volumes compare on one area convention (:func:`depth_to_taf`).
+so model and CalSim3 volumes compare on one area convention (:func:`mm_to_taf`).
 
 Water-year closure (:func:`close_water_years`), the rule adopted 2026-09-28: per
 closure group and water year, the mismatch between the anchor (CalSim3
@@ -182,17 +182,6 @@ def closure_members(hier: pd.DataFrame) -> dict[str, list[str]]:
     """closure group -> its member arcs that carry a series (hierarchy order)."""
     h = hier[hier["closure_group"].notna() & hier["has_series"]]
     return {g: list(s["arc"]) for g, s in h.groupby("closure_group", sort=True)}
-
-
-def depth_to_taf(depth_mm: pd.DataFrame, area_mi2) -> pd.DataFrame:
-    """Monthly model depths (mm/month; columns = arcs or systems) -> TAF/month with each
-    column's CalSim3 area (a Series/dict keyed by column, or one scalar)."""
-    if np.isscalar(area_mi2):
-        a = np.full(depth_mm.shape[1], float(area_mi2))
-    else:
-        a = np.array([float(area_mi2[c]) for c in depth_mm.columns])
-    return pd.DataFrame(mm_to_taf(depth_mm.to_numpy(np.float64), a[None, :]),
-                        index=depth_mm.index, columns=depth_mm.columns)
 
 
 def monthly_depth_from_daily(daily_mm: pd.DataFrame) -> pd.DataFrame:

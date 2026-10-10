@@ -53,12 +53,9 @@ OUTPUTS = ("flow", "fast", "slow", "quick", "interflow", "supplemental", "primar
 class Physics:
     et: str = "sac"                      # "sac" | "noah_lite"
     pet: str = "hamon"                   # "hamon" | "priestley_taylor"
-    pt_snow_albedo: float = 0.0
-    pt_dewpoint_depression: float = 0.0
     learned: bool = False                # sma_learned instead of the reference sma
     n_inc: int = 10                      # learned: substeps a day
     fracp_floor: float = 1e-3            # learned
-    sac_exchanges: bool = False          # learned Noah-lite
 
 
 @dataclass
@@ -116,7 +113,7 @@ def year_index(dates: pd.DatetimeIndex, t0: int, t1: int) -> np.ndarray:
 
 @njit(parallel=True, cache=False)
 def _units(prcp, tavg, tmin, tmax, doy_f, doy_i, leap, cell, lat_rad, elev, kpet, snow, sma,
-           veg, chi, lai, et_noah, pt, alb, dd, learned, n_inc, floor, sac_ex,
+           veg, chi, lai, et_noah, pt, learned, n_inc, floor,
            a, t0, te, passes, yidx, tfield, pscale, out, annual):
     """Units ``0..len(cell)``: the cycle spin-up over ``[t0, te)`` (``passes`` times), then the
     run over ``[a, t1)``.  ``out`` (U, S, N_HIST + t1 - t0): surf, base [, the four parts],
@@ -149,11 +146,11 @@ def _units(prcp, tavg, tmin, tmax, doy_f, doy_i, leap, cell, lat_rad, elev, kpet
         for k in range(passes + 1):
             s0 = t0 - a if k < passes else 0
             s1 = te - a if k < passes else n
-            eff, _m, swe, snow_st, _i = _snow17_core(pr[s0:s1], ta[s0:s1], doy_i[a + s0:a + s1],
-                                                    leap[a + s0:a + s1], elev[u], snow[u], snow_st)
+            eff, _m, _w, snow_st, _i = _snow17_core(pr[s0:s1], ta[s0:s1], doy_i[a + s0:a + s1],
+                                                   leap[a + s0:a + s1], elev[u], snow[u], snow_st)
             if pt:
                 pet = kpet[u] * _pt_core(ta[s0:s1], tn[s0:s1], tx[s0:s1], doy_f[a + s0:a + s1],
-                                         lat_rad[u], elev[u], swe, alb, dd)
+                                         lat_rad[u], elev[u])
             elif learned:
                 pet = kpet[u] * _hamon_core(ta[s0:s1], doy_f[a + s0:a + s1], lat_rad[u], 1.0)
             else:
@@ -164,7 +161,7 @@ def _units(prcp, tavg, tmin, tmax, doy_f, doy_i, leap, cell, lat_rad, elev, kpet
                 for t in range(s1 - s0):
                     lai_d[t] = lai[u, doy_i[a + s0 + t] - 1] if et_noah else 0.0
                 surf, base, _t, sac_st = sac_learned(pet, eff, sma[u], sac_st, et_noah, veg[u],
-                                                     lai_d, chi[u], sac_ex, n_inc, floor, parts)
+                                                     lai_d, chi[u], n_inc, floor, parts)
             else:
                 surf, base, _t, sac_st = _sacsma_core(pet, eff, sma[u], sac_st)
             if k < passes:
@@ -305,9 +302,8 @@ def simulate(field: Field, forcing, start, end, weights: np.ndarray, *, spinup: 
         _units(forcing.prcp, forcing.tavg, tmin, tmax, doy_i.astype(np.float64), doy_i,
                np.asarray(forcing.is_leap, np.int64), field.cell[sl], field.lat_rad[sl],
                field.elev[sl], field.kpet[sl], field.snow[sl], field.sma[sl], field.veg[sl],
-               field.chi[sl], field.lai[sl], ph.et == "noah_lite", pt, ph.pt_snow_albedo,
-               ph.pt_dewpoint_depression, ph.learned, ph.n_inc, ph.fracp_floor, ph.sac_exchanges,
-               a, t0, te, P, yidx, tfield, float(precip_scale), out, annual[sl])
+               field.chi[sl], field.lai[sl], ph.et == "noah_lite", pt, ph.learned, ph.n_inc,
+               ph.fracp_floor, a, t0, te, P, yidx, tfield, float(precip_scale), out, annual[sl])
         rows = rows_of[bounds[u0]:bounds[u1]]
         loc = field.unit[rows] - u0
         if runoff is not None:

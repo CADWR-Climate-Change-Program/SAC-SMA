@@ -20,8 +20,6 @@ from . import paths
 
 #: Default modeling domain (the 15 CDEC reservoir watersheds).
 DEFAULT_DOMAIN = "15cdec"
-#: the 15-CDEC application's domain.
-CDEC15_DOMAIN = "15cdec"
 #: the coarse 1/16-deg grid-aligned parallel of 15cdec — one unit per native
 #: Livneh cell (vs the ~3.8x-denser off-grid HRU cloud); see data/inputs/domains/15cdec_grid
 #: and data/README.md.
@@ -238,7 +236,6 @@ def fill_missing_days(ds):
 
 def load_forcing(
     data_dir: str | Path,
-    name: str | None = None,
     domain: str = DEFAULT_DOMAIN,
     product: str = DEFAULT_FORCING,
 ):
@@ -246,14 +243,14 @@ def load_forcing(
 
     Grid cells indexed by ``key`` (``lat_lon``), shared across HRUs/basins;
     HRU-level attributes (elev, flowlen, area_weight, …) live in the HRU
-    table, not here.  ``name`` overrides the resolved filename entirely.
+    table, not here.
 
     Grid-based domains (:data:`REGION_DOMAINS`) are served from the UNIFIED
     region store: the domain's cells are selected (via its HRU table) and
     relabelled to the domain's native key strings, and ``tavg`` is derived as
     ``(tmax+tmin)/2`` (the committed stores' exact convention) — so the
-    returned dataset looks exactly like the retired per-domain files
-    (``prcp``/``tavg``), plus ``tmin``/``tmax``.  Gaps in the region store are
+    returned dataset holds ``prcp``/``tavg`` like the dense store, plus
+    ``tmin``/``tmax``.  Gaps in the region store are
     persistence-filled at load — see :func:`fill_missing_days`.
 
     A WGEN climate-scenario product ``wgen_product_a_sNN`` is decoded exactly
@@ -264,8 +261,6 @@ def load_forcing(
 
     from . import wgen_scenarios
 
-    if name:
-        return xr.open_dataset(paths.forcing(data_dir, domain, product).with_name(name))
     path = forcing_path(data_dir, domain, product)
     scen = wgen_scenarios.scenario_of(product) is not None
     if scen and domain not in REGION_DOMAINS:

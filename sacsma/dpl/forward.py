@@ -17,11 +17,7 @@ from typing import TYPE_CHECKING
 
 import torch
 
-from .physics.et_noah import (
-    dewpoint_depression_field,
-    potential_et_priestley_taylor,
-    snow_cover_albedo,
-)
+from .physics.et_noah import potential_et_priestley_taylor
 from .physics.pet import hamon_raw_pet
 from .physics.routing import N_TAPS, build_uh, route
 from .physics.sma import SacState, run_sacsma
@@ -34,8 +30,6 @@ if TYPE_CHECKING:
 
 @dataclass
 class PipelineState:
-    # snow / sac: per physics row; hist_*: per routed row -- the same N except under
-    # cell dedup (distinct cells vs (entity, cell) rows)
     snow: Snow17State
     sac: SacState
     hist_surf: torch.Tensor   # (N, N_TAPS-1) unrouted direct-inflow history
@@ -50,21 +44,16 @@ class PipelineState:
                              None if self.hist_parts is None else self.hist_parts.detach())
 
 
-def initial_state(n: int, device, dtype, *, n_rows: int | None = None) -> PipelineState:
-    """The cold start: Snow-17 zeros, SAC-SMA [0, 0, 100, 100, 100, 0], no inflow history.
-
-    ``n`` sizes the per-cell physics states; ``n_rows`` (default ``n``) the routing
-    histories -- they differ under cell dedup (``DomainTensors.n_phys`` distinct
-    cells vs ``n_hru`` routed rows)."""
-    hist = torch.zeros(n if n_rows is None else n_rows, N_TAPS - 1,
-                       device=device, dtype=dtype)
+def initial_state(n: int, device, dtype) -> PipelineState:
+    """The cold start: Snow-17 zeros, SAC-SMA [0, 0, 100, 100, 100, 0], no inflow history."""
+    hist = torch.zeros(n, N_TAPS - 1, device=device, dtype=dtype)
     return PipelineState(snow=Snow17State.zeros(n, device, dtype),
                          sac=SacState.reference_init(n, device, dtype),
                          hist_surf=hist, hist_base=hist.clone())
 
 
 def run_window(
-    w: Window,                # the forcing of the window on the physics rows
+    w: Window,                # the forcing of the window on the HRU rows
     lat_rad: torch.Tensor,    # (N,)
     elev: torch.Tensor,       # (N,)
     params: dict[str, torch.Tensor],       # (N,) per ga_optimum name (+ soil_chi, PXTEMP_tau)
@@ -75,8 +64,6 @@ def run_window(
     veg_frac: torch.Tensor | None = None,  # (N,) observed green fraction (Noah-lite)
     return_components: bool = False,       # also return the routed (fast, slow) pair
     return_parts: bool = False,            # also return the 4 routed runoff parts
-    row_cell: torch.Tensor | None = None,  # (R,) cell dedup: the physics row of each
-                                           # routed row (DomainTensors.row_cell)
 ) -> tuple[torch.Tensor, PipelineState]:   # (+ components, parts, when requested)
     """One window through the full pipeline; returns (routed flow (N, T), state), with the
     routed runoff components ``(fast, slow)`` appended when ``return_components`` and the
@@ -97,32 +84,16 @@ def run_window(
     only with an empty routing history (a cold start), so a parts run streams its spin-up
     with ``return_parts`` too.
 
-    ``row_cell`` (cell dedup, ``DplConfig.dedup_cells``): the forcing, statics, ``params``
-    and the snow/SAC states are per DISTINCT cell, while ``uh`` and the routing histories
-    are per routed row; each cell's surface and base runoff is gathered to its rows before
-    the routing, so the flow comes back per routed row.
-
     The Priestley-Taylor PET needs the window's ``tmin``/``tmax`` and Noah-lite the observed
     ``veg_frac`` and the window's ``lai``; either raises without them.
     """
     pt = physics.pet == "priestley_taylor"
-    # Snow-17 first: its SWE drives the snow-cover albedo of the Priestley-Taylor PET
-    albedo_swe = pt and physics.pt_snow_albedo > 0.0
-    snow_out = run_snow17(w.pr, w.ta, w.doy, w.leap, elev, params,
-                          state=state.snow, return_swe=albedo_swe)
-    eff_p, snow_state = snow_out[0], snow_out[1]
+    eff_p, snow_state = run_snow17(w.pr, w.ta, w.doy, w.leap, elev, params, state=state.snow)
 
     if pt:
         if w.tmin is None or w.tmax is None:
             raise ValueError("the Priestley-Taylor PET needs per-cell tmin/tmax")
-        pt_kwargs = {}
-        if albedo_swe:   # blend the albedo toward snow where a pack is present
-            pt_kwargs["albedo"] = snow_cover_albedo(snow_out[2], physics.pt_snow_albedo)
-        if physics.pt_dewpoint_depression > 0.0:   # lower Tdew below Tmin in arid air
-            pt_kwargs["dewpoint_depression"] = dewpoint_depression_field(
-                w.tmin, w.tmax, physics.pt_dewpoint_depression)
-        raw_pet = potential_et_priestley_taylor(w.ta, w.tmin, w.tmax, w.doy, lat_rad, elev,
-                                                **pt_kwargs)
+        raw_pet = potential_et_priestley_taylor(w.ta, w.tmin, w.tmax, w.doy, lat_rad, elev)
     else:
         raw_pet = hamon_raw_pet(w.ta, w.doy, lat_rad)
     pet = params["Kpet"].unsqueeze(-1) * raw_pet
@@ -132,15 +103,6 @@ def run_window(
     sac_out = run_sacsma(pet, eff_p, params, state.sac, physics, veg_frac=veg_frac,
                          lai=w.lai, return_parts=return_parts)
     surf, base, _tet, sac_state = sac_out[:4]
-    if row_cell is not None:
-        # cell dedup: every (entity, cell) row routes its cell's runoff through its
-        # own flow length (the backward sums the rows' gradients onto the cell)
-        surf = surf.index_select(0, row_cell)
-        base = base.index_select(0, row_cell)
-        if return_parts:
-            # the six runoff parts go to the rows the same way (per cell they sum to
-            # surf / base, so per row they still do; hist_parts is per routed row)
-            sac_out = (*sac_out[:4], tuple(p.index_select(0, row_cell) for p in sac_out[4]))
     uh_direct, uh_base = uh
     if return_components or return_parts:
         # the same two routed terms and the same sum as the default expression
@@ -181,12 +143,6 @@ def run_window(
     return tuple(out)
 
 
-def routing_uh(params: dict[str, torch.Tensor], flowlen: torch.Tensor,
-               row_cell: torch.Tensor | None = None):
-    """Build the per-HRU UH pair once per parameter set (reuse across chunks).
-
-    ``row_cell`` (cell dedup): ``params`` are per distinct cell and ``flowlen`` per
-    routed row; the hillslope UH is built per cell and gathered, the channel UH
-    per row from the cell's Velo/Diff and the row's flow length."""
-    return build_uh(params["Nres"], params["Kres"], params["Velo"], params["Diff"],
-                    flowlen, row_cell=row_cell)
+def routing_uh(params: dict[str, torch.Tensor], flowlen: torch.Tensor):
+    """Build the per-HRU UH pair once per parameter set (reuse across chunks)."""
+    return build_uh(params["Nres"], params["Kres"], params["Velo"], params["Diff"], flowlen)

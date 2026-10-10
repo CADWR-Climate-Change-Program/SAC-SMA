@@ -1,8 +1,9 @@
 # `artifacts/product/calsim3/`: the CalSim3 rim-inflow product
 
 Monthly flow, in TAF, on the 196 CalSim3 rim arcs: the points where runoff from a mountain
-watershed enters the CalSim3 network. It is the flow of the current model, dPL-CalSim, with the
-share model dividing each multi-arc system's flow among its arcs. Method and scores:
+watershed enters the CalSim3 network. It is the flow of the current model, dPL-CalSim (the run
+`7_calsim`, `artifacts/models/dpl/multifamily/7_calsim/`), with the share model dividing each
+multi-arc system's flow among its arcs. Method and scores:
 [CalSim3 rim inflows](../../../docs/calsim3_rim_inflows.md); state of the runs:
 [Runs](../../../docs/runs.md).
 
@@ -31,15 +32,17 @@ The forcings are described in [`data/inputs/forcing/`](../../../data/inputs/forc
 ```bash
 # the fit, on the run's passes on the training forcing (WY1950-2018 envelope): the base tier 2
 # with runoff parts, and the same at the 11 training and 5 validation climate points
-# (sacsma.dpl.calsim.product.scenario_spec() lists them; one pass each, about a minute)
-sacsma dpl calsim tier2 <run> --components parts --trace-python <python of sacsma-gis>
+# (sacsma.dpl.calsim.product.scenario_spec() lists them; one pass each, about a minute);
+# <run> is any folder of 7_calsim, e.g. artifacts/models/dpl/multifamily/7_calsim
+sacsma dpl calsim tier2 <run> --components parts --score-holdout --trace-python <python of sacsma-gis>
 sacsma dpl calsim tier2 <run> --components parts --scenarios t1=1:1,t3=3:1,...
-sacsma dpl calsim product fit <run>                # CPU, about 30 min; --mu 0.03 skips the selection
+sacsma dpl calsim product fit <run> --score-holdout   # CPU, about 30 min; --mu 0.03 skips the selection
 
 # the series of one forcing: the tier-2 pass over the whole record (into
-# artifacts/_local/product/calsim3/<forcing>/tier2, a minute or two), then the share model
-sacsma dpl calsim product apply --forcing <forcing>
-sacsma verify product                              # each tracked series repeats
+# artifacts/_local/product/calsim3/<forcing>/tier2, a minute or two), then the share model;
+# --score-holdout writes the held-out scores of product_metrics.csv (historical forcing only)
+sacsma dpl calsim product apply --forcing <forcing> --score-holdout
+sacsma verify product                                 # each tracked series repeats
 ```
 
 After a refit, `apply` remakes the series of every forcing.

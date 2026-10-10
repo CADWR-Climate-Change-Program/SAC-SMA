@@ -6,10 +6,10 @@ state at its start from the timing-independent cycle spinup of
 :mod:`sacsma.dpl.spinup`, whatever spinup the run trained with), then
 score every entity over its OWN registry window at its NATIVE timescale —
 daily entities on days, monthly entities on calendar-month sums of the same
-simulated flow.  There is no held-out flow validation in this domain by
-design (validation happens against CalSim elsewhere), so all metrics are
-calibration-window skill — except for a run with ``holdout_wy``, whose
-held-out water years are scored apart (``metrics_holdout.csv``).
+simulated flow.  The metrics are training-window skill, except for a run with
+``holdout_wy``, whose held-out water years are scored apart (``metrics_holdout.csv``) when
+asked (``score_holdout``).  A run on a ``train_window`` (the 15-CDEC rungs) is scored at the
+15 outlets instead (``sacsma dpl evaluate`` sends it to :func:`sacsma.dpl.evaluate.score_basins`).
 
 Outputs (the parameter table in the run's model folder, the scores and the daily depth in its
 results folder, the figures in its local folder; :func:`sacsma.paths.run_roles`):
@@ -20,9 +20,10 @@ results folder, the figures in its local folder; :func:`sacsma.paths.run_roles`)
   registry ``n_obs``).  A run with ``holdout_wy`` / ``uf_train_start`` adds
   ``n_holdout`` / ``n_ext`` and the registry-window scores ``n_reg`` /
   ``kge_reg`` / ``nse_reg`` / ``pbias_reg`` (holdout and back-extension out).
-* ``metrics_holdout.csv`` — only for a run with ``holdout_wy``: the held-out water
-  years scored apart (:func:`holdout_metrics`: USGS daily, uf monthly, the calsim arcs on
-  their own gauge-record months and on all months).
+* ``metrics_holdout.csv`` — only for a run with ``holdout_wy``, when asked
+  (``score_holdout``): the held-out water years scored apart (:func:`holdout_metrics`:
+  USGS daily, uf monthly, the calsim arcs on their own gauge-record months and on all
+  months).
 * ``sim_daily.npz`` — the simulated daily basin depth (entities x days)
   over the envelope, for downstream figures/analyses.
 * ``figures/skill_by_family.png`` — per-entity KGE by family (fixed 0-1 axis).
@@ -186,6 +187,105 @@ def holdout_metrics(sim: np.ndarray, dates: pd.DatetimeIndex, basins, data_dir: 
     return pd.DataFrame(rows)
 
 
+def score_wy(ckpt_path: str | Path, wy: tuple[int, int], data_dir: str = "data", *,
+             entities: tuple[str, ...] | None = None,
+             out_dir: str | Path | None = None) -> pd.DataFrame:
+    """Any checkpoint's network on the multi-timescale domain's ``entities`` (default: every
+    registry entity), whatever cells it trained on (not the 15cdec HRUs): its inputs on those
+    rows scaled with its own training statistics, the field over the envelope on the CPU
+    engine from the cycle spinup, scored over the water years ``wy`` as
+    :func:`holdout_metrics` scores a holdout (with the checkpoint's obs_mask) ->
+    ``metrics_wy<first>-<last>.csv`` in the run's results
+    folder.  One evaluator for runs on different domains: the same outlines, spinup and
+    targets.  Prints counts only."""
+    import torch
+
+    from .config import config_from_checkpoint
+    from .data import load_domain_tensors
+    from .evaluate import checkpoint_features
+    from .parameter_net import ParameterNet
+
+    ck = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+    if ck["domain"] == "15cdec":
+        raise ValueError("a 15cdec (HRU) checkpoint: its inputs on the cells lie outside its "
+                         "training range; score it on its own domain (outlet_scores)")
+    cfg = config_from_checkpoint(ck)
+    if entities is None:
+        entities = tuple(pd.read_csv(paths.entities(data_dir), usecols=["entity_id"])["entity_id"])
+    dom = load_domain_tensors(data_dir, domain=MULTI_TIMESCALE_DOMAIN, device="cpu",
+                              dtype=torch.float64, basins=tuple(entities))
+    x = checkpoint_features(ck, dom, data_dir, domain=MULTI_TIMESCALE_DOMAIN)
+    net = ParameterNet.from_checkpoint(ck, x.shape[1]).to("cpu", torch.float64)
+    print(f"score: {ck['domain']} checkpoint on {len(dom.basins)} entities "
+          f"({dom.n_hru} rows), WY{wy[0]}-{wy[1]} ...", flush=True)
+    sim, t0, t1 = _entity_flow(net, x, dom, cfg)
+    hm = holdout_metrics(sim, dom.dates[t0:t1], dom.basins, data_dir, wy,
+                         obs_mask=tuple(cfg.obs_mask))
+    ckp = Path(ckpt_path).resolve()
+    run = paths.run_roles(out_dir if out_dir is not None else (
+        ckp.parent.parent if ckp.parent.name == "checkpoints" else paths.local(name="eval")))
+    run.results.mkdir(parents=True, exist_ok=True)
+    f = run.results / f"metrics_wy{wy[0]}-{wy[1]}.csv"
+    hm.to_csv(f, index=False)
+    print(f"wrote {f} ({len(hm)} rows, {hm['entity_id'].nunique()} entities)", flush=True)
+    return hm
+
+
+#: cubic metres in an acre-foot, square metres in a square mile
+_M3_PER_AF, _M2_PER_MI2 = 1233.48183754752, 2589988.110336
+
+
+def outlet_scores(daily: pd.DataFrame, wy: tuple[int, int], data_dir: str = "data", *,
+                  monthly: bool = False, obs_mask: tuple[str, ...] | None = None) -> pd.DataFrame:
+    """The 15 CDEC outlets' daily flow ``daily`` (date x basin, mm/day, from the cold start:
+    :func:`sacsma.dpl.evaluate.basin_daily` of a run on any domain, or the GA's) scored over
+    the water years ``wy``, one way for every domain: on days against the gauge record
+    (``obs_mask`` days out), or with ``monthly`` on calendar-month sums against CDEC's monthly
+    full natural flow at the registry's station (``fnf_monthly.csv``), in depth over the
+    registry area the daily depth was made with (NHG and NML have no monthly record of their
+    own and are left out).  ``obs_mask`` ``None`` is the tracked mask
+    (:func:`sacsma.dpl.evaluate.daily_obs_mask`), ``()`` none.  One row per outlet:
+    ``basin, timescale, window`` and the scores."""
+    from ..cdec15 import load_gage
+    from .calsim.tier1 import wy_label
+
+    if obs_mask is None:
+        from .evaluate import daily_obs_mask
+        obs_mask = daily_obs_mask(data_dir)
+    if any("|" not in m for m in obs_mask):
+        raise ValueError("obs_mask: 'cdec_<BASIN>|YYYY-MM-DD' entries (DplConfig.obs_mask)")
+    reg = pd.read_csv(paths.entities(data_dir)).set_index("entity_id")
+    dates = pd.date_range(f"{wy[0] - 1}-10-01", f"{wy[1]}-09-30")
+    gage = load_gage(data_dir)
+    sim = daily.reindex(dates)[list(gage["basin"].unique())]
+    if sim.isna().any().any():
+        raise ValueError(f"the simulated flow does not cover WY{wy[0]}-{wy[1]}")
+    if monthly:
+        fnf = pd.read_csv(paths.cdec_fnf(data_dir, "fnf_monthly.csv"), parse_dates=["date"])
+        fnf = fnf.pivot(index="date", columns="station", values="flow_af")
+        fnf.index = fnf.index.to_period("M")
+        sim = sim.groupby(sim.index.to_period("M")).sum()
+    rows = []
+    for b in sim.columns:
+        r = reg.loc[f"cdec_{b}"]
+        if monthly:
+            station = str(r["outlet_source"]).split(":")[-1]
+            if station not in fnf.columns:
+                continue
+            o = fnf[station].reindex(sim.index) * _M3_PER_AF / (r["area_mi2"] * _M2_PER_MI2) * 1e3
+            sc = _scores(sim[b].to_numpy(), o.to_numpy(np.float64), 12)
+        else:
+            o = gage[gage["basin"] == b].set_index("date")["flow"].reindex(dates)
+            for m in obs_mask:
+                e, _, day = m.partition("|")
+                if e == f"cdec_{b}" and pd.Timestamp(day) in o.index:
+                    o[pd.Timestamp(day)] = np.nan
+            sc = _scores(sim[b].to_numpy(), o.to_numpy(np.float64), 90)
+        rows.append(dict(basin=b, timescale="monthly" if monthly else "daily",
+                         window=wy_label(*wy), **sc))
+    return pd.DataFrame(rows)
+
+
 def _skill_by_family_fig(met: pd.DataFrame, out: Path) -> None:
     """Sorted per-entity cal KGE, one panel per family (fixed 0-1 scale,
     negatives clipped and marked)."""
@@ -229,6 +329,7 @@ def evaluate_checkpoint_mt(
     *,
     hydrographs: str = "review",   # review (cdec+uf) | all | none
     spinup: str = "cycle",         # cycle (timing-independent) | window
+    score_holdout: bool = False,   # a run with holdout_wy: score the held-out years too
 ) -> pd.DataFrame:
     """Score a ``multifamily`` checkpoint per entity; returns the metrics.  ``out_dir`` names
     the run (any of its folders; default: the run of the checkpoint): the parameter tables go
@@ -237,8 +338,8 @@ def evaluate_checkpoint_mt(
     if hydrographs not in ("review", "all", "none"):
         raise ValueError(f"hydrographs {hydrographs!r}")
     net, x, dom, cfg, ck = load_net_from_checkpoint(ckpt_path, data_dir, device="cpu")
-    if ck.get("domain") != MULTI_TIMESCALE_DOMAIN:
-        raise ValueError(f"checkpoint domain {ck.get('domain')!r} is not "
+    if ck["domain"] != MULTI_TIMESCALE_DOMAIN:
+        raise ValueError(f"checkpoint domain {ck['domain']!r} is not "
                          f"{MULTI_TIMESCALE_DOMAIN!r}")
     ckp = Path(ckpt_path).resolve()
     run = paths.run_roles(out_dir if out_dir is not None else (
@@ -252,16 +353,17 @@ def evaluate_checkpoint_mt(
     dpl_df = export_params(net, dom, x)
     dpl_df.to_csv(run.model / "params_dpl.csv", index=False)
     if cfg.et_mode == "noah":
-        export_canopy_params(net, dom, x, cfg).to_csv(
+        export_canopy_params(net, dom, x).to_csv(
             run.model / "params_canopy.csv", index=False)
     print(f"wrote {run.model / 'params_dpl.csv'} ({len(dpl_df)} entity-cell rows, "
-          f"sel cal KGE {ck.get('cal_kge', float('nan')):.4f})", flush=True)
+          f"sel cal KGE {ck['cal_kge']:.4f})", flush=True)
 
     # scored against the run's own training target (its obs_mask, water-year
     # holdout and uf back-extension, if any — all from the checkpoint's cfg)
     eobs: EntityObs = load_entity_obs(dom, data_dir, obs_mask=cfg.obs_mask,
                                       holdout_wy=cfg.holdout_wy or None,
-                                      uf_train_start=cfg.uf_train_start or None)
+                                      uf_train_start=cfg.uf_train_start or None,
+                                      train_window=cfg.train_window or None)
     # the holdout / back-extension counts are columns only for a run that used them
     ho_cols = bool(cfg.holdout_wy or cfg.uf_train_start)
     print(f"eval: the envelope on the engine ({dom.n_hru} HRUs, {len(dom.basins)} entities, "
@@ -334,7 +436,7 @@ def evaluate_checkpoint_mt(
             figs.append((eid, m, unit, ts, pd.Timestamp(r["train_end"])))
 
     met = pd.DataFrame(rows)
-    want = met["n_obs"] - met["n_masked"]
+    want = met["n_obs"] - met["n_masked"] - np.array(eobs.n_out or [0] * len(met))
     if ho_cols:
         want = want - met["n_holdout"] + met["n_ext"]
     bad = met[met["n_scored"] != want]
@@ -354,7 +456,10 @@ def evaluate_checkpoint_mt(
     print(f"wrote {out / 'metrics.csv'} ({len(met)} entities); "
           "family medians:", flush=True)
     print(fam_tbl.to_string(), flush=True)
-    if cfg.holdout_wy:
+    if cfg.holdout_wy and not score_holdout:
+        print(f"the held-out WY{cfg.holdout_wy[0]}-{cfg.holdout_wy[1]} not scored "
+              "(--score-holdout)", flush=True)
+    elif cfg.holdout_wy:
         # the held-out water years, scored apart (never part of the training target above)
         hm = holdout_metrics(sim, dates, dom.basins, data_dir, cfg.holdout_wy,
                              obs_mask=tuple(cfg.obs_mask))

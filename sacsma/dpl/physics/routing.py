@@ -87,20 +87,10 @@ def build_uh(
     nres: torch.Tensor, kres: torch.Tensor,
     velo: torch.Tensor, diff: torch.Tensor,
     flowlen: torch.Tensor,
-    row_cell: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Combined normalized UHs: (uh_direct (N, 107), uh_base (N, 107)).
-
-    ``row_cell`` (cell dedup): the four parameters are per distinct cell and
-    ``flowlen`` per routed row; the hillslope UH (parameters only) is built once
-    per cell and gathered to the rows, the channel UH per row."""
-    if row_cell is not None:
-        hill = hillslope_uh(nres, kres).index_select(0, row_cell)       # (N, 12)
-        riv = river_uh(flowlen, velo.index_select(0, row_cell),
-                       diff.index_select(0, row_cell))                  # (N, 96)
-    else:
-        riv = river_uh(flowlen, velo, diff)                              # (N, 96)
-        hill = hillslope_uh(nres, kres)                                  # (N, 12)
+    """Combined normalized UHs: (uh_direct (N, 107), uh_base (N, 107))."""
+    riv = river_uh(flowlen, velo, diff)                                  # (N, 96)
+    hill = hillslope_uh(nres, kres)                                      # (N, 12)
     n = riv.shape[0]
     # full convolution hill * riv -> 107 taps (conv1d correlates, so flip)
     riv_in = F.pad(riv.unsqueeze(0), (KE - 1, KE - 1))                   # (1, N, 96+22)
@@ -130,5 +120,3 @@ def route(
         x = torch.cat([history, inflow], dim=-1).unsqueeze(0)
     w = uh.flip(-1).unsqueeze(1)                                         # (N, 1, 107)
     return F.conv1d(x, w, groups=n).squeeze(0)[:, -t_len:]
-
-

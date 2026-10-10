@@ -1,0 +1,22 @@
+{
+ "levels": {
+  "usgs": 0.6374249158507121,
+  "cdec": 0.3510638634435758,
+  "uf": 0.11398225299103312,
+  "calsim": 0.35475465110600396
+ },
+ "n": {
+  "usgs": 1884,
+  "cdec": 514,
+  "uf": 495,
+  "calsim": 2128
+ },
+ "old": {
+  "usgs": 0.7388028931833539,
+  "cdec": 0.4201770720058224,
+  "uf": 0.11398225299103312,
+  "calsim": 0.35487369191001944
+ },
+ "gate": true,
+ "reference": "artifacts/_local/runs/dpl/multifamily/noah_cdec_uf_usgs_areaw"
+}

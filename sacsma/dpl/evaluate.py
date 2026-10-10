@@ -44,12 +44,11 @@ def export_params(net: torch.nn.Module, dom: DomainTensors,
     return df
 
 
-def export_canopy_params(net: torch.nn.Module, dom: DomainTensors, x: torch.Tensor,
-                         cfg: DplConfig) -> pd.DataFrame:
+def export_canopy_params(net: torch.nn.Module, dom: DomainTensors,
+                         x: torch.Tensor) -> pd.DataFrame:
     """The learned Noah-lite exponent ``soil_chi`` per HRU keyed by key/basin, with the
-    observed (pinned) veg_frac and annual-mean LAI beside it, and ``sac_exchanges`` = 1 for a
-    run that keeps the reference ET exchanges.  Kept apart from :func:`export_params`: the
-    reference model has no Noah ET."""
+    observed (pinned) veg_frac and annual-mean LAI beside it.  Kept apart from
+    :func:`export_params`: the reference model has no Noah ET."""
     net.eval()
     with torch.no_grad():
         chi = net(x)["soil_chi"]
@@ -59,8 +58,6 @@ def export_canopy_params(net: torch.nn.Module, dom: DomainTensors, x: torch.Tens
         df["veg_frac_obs"] = dom.veg_frac.double().cpu().numpy()
     if dom.lai_lut is not None:
         df["lai_obs_mean"] = dom.lai_lut[dom.cell_idx].mean(axis=1)
-    if cfg.noah_sac_exchanges:
-        df["sac_exchanges"] = 1
     return df
 
 
@@ -74,13 +71,28 @@ def _obs_kge(sim: pd.Series, obs: pd.Series, dates: pd.DatetimeIndex,
     return kge(sim.to_numpy()[m], obs.to_numpy()[m])
 
 
+def daily_obs_mask(data_dir: str = "data") -> tuple[str, ...]:
+    """The confirmed bad CDEC gauge days (``fnf_daily_mask.csv``) as ``"cdec_<B>|YYYY-MM-DD"``,
+    the entries of ``DplConfig.obs_mask``."""
+    from .cli import _obs_mask
+
+    return _obs_mask(str(paths.cdec_fnf(data_dir, "fnf_daily_mask.csv")))
+
+
+#: the 15-CDEC training water years (WY1989-2003) and test years (WY2004-18)
+CAL_WINDOW = ("1988-10-01", CAL_END)
+VAL_WINDOW = ("2003-10-01", "2018-09-30")
+
+
 def score_basins(sim: np.ndarray, basins, dates: pd.DatetimeIndex, out: Path, *,
                  data_dir: str = "data", figures: bool = True,
-                 cal_end: str = CAL_END) -> pd.DataFrame:
+                 cal: tuple[str, str] = CAL_WINDOW, val: tuple[str, str] = VAL_WINDOW,
+                 obs_mask: tuple[str, ...] | None = None) -> pd.DataFrame:
     """Score daily basin flow ``sim`` (B, T mm/day on ``basins`` x ``dates``; NaN days are
-    skipped) against the gauges, calibration up to ``cal_end`` and validation after it, north
-    to south: ``metrics.csv`` in ``out`` (the columns of the calibrated model's), and with
-    ``figures`` the diagnostics under ``out/figures/``."""
+    skipped) against the gauges on the training water years ``cal`` and the test years ``val``,
+    the days of ``obs_mask`` left out (``None``: :func:`daily_obs_mask`), north to south:
+    ``metrics.csv`` in ``out`` (the columns of the calibrated model's), and with ``figures``
+    the diagnostics under ``out/figures/``."""
     from .._figures import (
         _period_stats,
         basin_diagnostics_fig,
@@ -89,11 +101,13 @@ def score_basins(sim: np.ndarray, basins, dates: pd.DatetimeIndex, out: Path, *,
     )
     from ..io import load_basin_area, load_hru_table, mmday_to_cfs
 
-    cal_end_ts = pd.Timestamp(cal_end)
+    cal_end_ts = pd.Timestamp(cal[1])
+    masked = daily_obs_mask(data_dir) if obs_mask is None else obs_mask
     lat = load_hru_table(data_dir, domain="15cdec").groupby("basin")["lat"].mean()
     order = folsom_before_yuba("15cdec", lat.sort_values(ascending=False).index.tolist())
     areas = load_basin_area(data_dir, domain="15cdec").set_index("basin")["area_mi2"].to_dict()
-    is_cal = np.asarray(dates <= cal_end_ts)
+    is_cal = np.asarray((dates >= pd.Timestamp(cal[0])) & (dates <= cal_end_ts))
+    is_val = np.asarray((dates >= pd.Timestamp(val[0])) & (dates <= pd.Timestamp(val[1])))
     figdir = out / "figures"
     if figures:
         figdir.mkdir(parents=True, exist_ok=True)
@@ -101,24 +115,28 @@ def score_basins(sim: np.ndarray, basins, dates: pd.DatetimeIndex, out: Path, *,
     for b in [b for b in order if b in basins]:
         s = sim[list(basins).index(b)]
         obs = load_gage(data_dir, basin=b).set_index("date")["flow"].reindex(dates)
-        cal = _period_stats(s[is_cal], obs.to_numpy()[is_cal])
-        val = _period_stats(s[~is_cal], obs.to_numpy()[~is_cal])
+        for m in masked:
+            e, _, day = m.partition("|")
+            if e.removeprefix("cdec_") == b and pd.Timestamp(day) in obs.index:
+                obs[pd.Timestamp(day)] = np.nan
+        cs = _period_stats(s[is_cal], obs.to_numpy()[is_cal])
+        vs = _period_stats(s[is_val], obs.to_numpy()[is_val])
         if figures:
             m = pd.DataFrame({"date": dates, "flow_sim": s, "flow_obs": obs.to_numpy()})
             m = m[m["date"] >= obs.first_valid_index()].reset_index(drop=True)
-            basin_diagnostics_fig(b, m, cal_end_ts, cal, val, figdir / f"{b}_diagnostics.png")
+            basin_diagnostics_fig(b, m, cal_end_ts, cs, vs, figdir / f"{b}_diagnostics.png")
         area = areas.get(b, np.nan)
         records.append({
             "basin": b, "area_mi2": area,
-            "cal_kge": cal.get("kge"), "cal_nse": cal.get("nse"),
-            "cal_pbias": cal.get("pbias"), "cal_r": cal.get("r"), "cal_n": cal.get("n", 0),
-            "val_kge": val.get("kge"), "val_nse": val.get("nse"),
-            "val_pbias": val.get("pbias"), "val_r": val.get("r"), "val_n": val.get("n", 0),
-            "obs_mean_mmday": cal.get("obs_mean"),
-            "obs_mean_cfs": mmday_to_cfs(cal.get("obs_mean") or np.nan, area),
+            "cal_kge": cs.get("kge"), "cal_nse": cs.get("nse"),
+            "cal_pbias": cs.get("pbias"), "cal_r": cs.get("r"), "cal_n": cs.get("n", 0),
+            "val_kge": vs.get("kge"), "val_nse": vs.get("nse"),
+            "val_pbias": vs.get("pbias"), "val_r": vs.get("r"), "val_n": vs.get("n", 0),
+            "obs_mean_mmday": cs.get("obs_mean"),
+            "obs_mean_cfs": mmday_to_cfs(cs.get("obs_mean") or np.nan, area),
         })
-        print(f"  {b}: CAL KGE={cal.get('kge', float('nan')):.3f} "
-              f"VAL KGE={val.get('kge', float('nan')):.3f}", flush=True)
+        print(f"  {b}: CAL KGE={cs.get('kge', float('nan')):.3f} "
+              f"VAL KGE={vs.get('kge', float('nan')):.3f}", flush=True)
     metrics = pd.DataFrame(records)
     if figures:
         skill_summary_fig(metrics, figdir / "skill_summary.png")
@@ -149,33 +167,27 @@ def load_net_from_checkpoint(
             dev = torch.device("cpu")
     else:
         dev = torch.device(device)
-    dom = load_domain_tensors(data_dir, domain=ck.get("domain", "15cdec"), device=dev,
-                              dtype=torch.float64,
-                              basins=tuple(ck["basins"]) if ck.get("basins") else None,
-                              calsim_footprint=cfg.calsim_footprint, product=product)
+    dom = load_domain_tensors(data_dir, domain=ck["domain"], device=dev, dtype=torch.float64,
+                              basins=tuple(ck["basins"]), product=product)
     x = checkpoint_features(ck, dom, data_dir)
     net = ParameterNet.from_checkpoint(ck, x.shape[1]).to(dev, torch.float64)
     return net, x, dom, cfg, ck
 
 
-def checkpoint_features(ck: dict, dom: DomainTensors, data_dir: str = "data",
-                        forcing=None) -> torch.Tensor:
+def checkpoint_features(ck: dict, dom: DomainTensors, data_dir: str = "data", *,
+                        domain: str | None = None) -> torch.Tensor:
     """The network inputs of the checkpoint's variant on ``dom``'s rows, scaled with its
-    training statistics; a climate variant takes its indices from ``forcing`` (default: the
-    domain's)."""
+    training statistics: the ``physical`` variant its statics from ``domain``'s table
+    (default: the checkpoint's), ``aef_u`` the AlphaEarth store."""
     from ..io import soilveg_path
-    from .features import AEF_STORE_VARIANTS, FeatureSet, aef_store, build_features
+    from .features import FeatureSet, aef_store, build_features
 
     variant = ck["variant"]
     stats = FeatureSet(x=np.empty((0, 0), dtype=np.float32), **ck["features"])
     fs = build_features(dom.hrus, variant=variant,
-                        forcing=((dom.forcing if forcing is None else forcing)
-                                 if variant in ("climate", "physical_climate") else None),
-                        climate_window=stats.climate_window,
-                        climate_product=stats.climate_product,
-                        physical_path=(soilveg_path(data_dir, ck.get("domain", "15cdec"))
-                                       if variant in ("physical", "physical_climate") else None),
-                        aef_path=aef_store(data_dir) if variant in AEF_STORE_VARIANTS else None,
+                        physical_path=(soilveg_path(data_dir, domain or ck["domain"])
+                                       if variant == "physical" else None),
+                        aef_path=aef_store(data_dir) if variant == "aef_u" else None,
                         stats=stats)
     return torch.as_tensor(fs.x).to(dom.device, torch.float64)
 
@@ -249,18 +261,18 @@ def _loaded(ckpt: str, data_dir: str):
 
 def basin_daily(run: str | Path, *, data_dir: str = "data", dp: float = 0.0,
                 dt: float | np.ndarray = 0.0) -> pd.DataFrame:
-    """Daily flow (date x basin, mm/day) of a 15-CDEC run (its name, or a checkpoint path) over
+    """Daily flow (date x basin, mm/day) of a 15-CDEC run (its name, or a checkpoint path; a
+    multi-timescale run's ``cdec_<BASIN>`` entities are named by basin) over
     the whole record from the cold start, on the engine as trained (its numerics, its basin
     weights), in a climate changed by ``dp`` (precipitation x (1 + dp)) and ``dt`` (degC on the
-    temperatures: a number, or a field on the domain's forcing rows and days).  A field with
-    climate inputs follows the changed climate: its parameters are recomputed from it.
+    temperatures: a number, or a field on the domain's forcing rows and days).
 
     Cached under ``artifacts/_local/cache/basin_daily/`` by run, by the content of the
     checkpoint and of the engine's code, and by climate; clear it after a change to the
     forcing."""
     import hashlib
 
-    ckpt = Path(run if str(run).endswith(".pt") else paths.dpl_checkpoint(run=str(run))).resolve()
+    ckpt = paths.dpl_checkpoint(run=str(run)).resolve()
     dp = float(dp) + 0.0                                    # -0.0 -> 0.0
     if np.ndim(dt) == 0:
         dt = float(dt) + 0.0
@@ -274,17 +286,14 @@ def basin_daily(run: str | Path, *, data_dir: str = "data", dp: float = 0.0,
     if cache.exists():
         z = np.load(cache)
         return pd.DataFrame(z["flow"].T, index=pd.DatetimeIndex(z["dates"], name="date"),
-                            columns=z["basins"].tolist())
-    net, x, dom, cfg, ck = _loaded(str(ckpt), str(data_dir))
-    if (dp or np.any(dt)) and ck["variant"] in ("climate", "physical_climate"):
-        f = dom.forcing
-        x = checkpoint_features(ck, dom, data_dir, dataclasses.replace(
-            f, prcp=f.prcp * (1.0 + dp), tavg=f.tavg + dt))
+                            columns=[str(b).removeprefix("cdec_") for b in z["basins"]])
+    net, x, dom, cfg, _ = _loaded(str(ckpt), str(data_dir))
     flow = simulate_field(net, x, dom, cfg, dom.dates[0], dom.dates[-1], dom.W.cpu().numpy(),
                           spinup="cold", precip_scale=1.0 + dp, temp_delta=dt)["flow"]
     cache.parent.mkdir(parents=True, exist_ok=True)
     np.savez(cache, flow=flow, dates=dom.dates.values, basins=np.array(dom.basins))
-    return pd.DataFrame(flow.T, index=dom.dates.rename("date"), columns=list(dom.basins))
+    return pd.DataFrame(flow.T, index=dom.dates.rename("date"),
+                        columns=[str(b).removeprefix("cdec_") for b in dom.basins])
 
 
 def evaluate_checkpoint(ckpt_path: str | Path, data_dir: str = "data",
@@ -300,8 +309,7 @@ def evaluate_checkpoint(ckpt_path: str | Path, data_dir: str = "data",
     net, x, dom, cfg, _ = _loaded(str(ckp), str(data_dir))
     export_params(net, dom, x).to_csv(run.model / "params_dpl.csv", index=False)
     if cfg.et_mode == "noah":
-        export_canopy_params(net, dom, x, cfg).to_csv(run.model / "params_canopy.csv",
-                                                      index=False)
+        export_canopy_params(net, dom, x).to_csv(run.model / "params_canopy.csv", index=False)
     print(f"wrote the parameter tables -> {run.model}", flush=True)
     daily = basin_daily(ckp, data_dir=data_dir)
     return score_basins(daily.to_numpy().T, list(daily.columns), daily.index, run.results,
@@ -323,7 +331,7 @@ def fidelity_benchmark(data_dir: str = "data", out_dir: str | Path | None = None
     from ..engine import Physics
     from ..model import load_domain_forcing
 
-    out = Path(out_dir) if out_dir is not None else paths.dpl_benchmark()
+    out = Path(out_dir) if out_dir is not None else paths.dpl_fidelity()
     (out / "figures").mkdir(parents=True, exist_ok=True)
     forcing = load_domain_forcing(data_dir, domain="15cdec")
     dates = forcing.dates

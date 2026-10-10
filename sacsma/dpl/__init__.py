@@ -2,12 +2,12 @@
 
 A PyTorch re-implementation of the per-HRU pipeline (Hamon PET -> Snow-17 ->
 SAC-SMA -> Lohmann routing) that is differentiable end-to-end, plus a network
-mapping per-HRU static attributes (and optionally climate indices) to the
-physical parameters, trained against the daily observed CDEC gage FNF.
+mapping per-HRU static attributes to the physical parameters, trained against the
+daily observed CDEC gage FNF.
 
 The frozen NumPy/Numba kernels (``sacsma.pet``/``snow17``/``sma``/``routing``) remain the
 parity reference of the GA calibration.  The torch physics deviates from the reference numerics
-(fixed substep count, branch blends; ``sacsma dpl benchmark`` measures the gap), so a trained
+(fixed substep count, branch blends; ``sacsma dpl fidelity`` measures the gap), so a trained
 field is scored as trained: on the CPU engine (:mod:`sacsma.engine`) through
 ``sacsma.sma_learned``, the Numba copy of the torch step.
 

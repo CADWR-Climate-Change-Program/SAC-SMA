@@ -1,35 +1,39 @@
 # Where this machine keeps the inputs the build scripts read from outside the repository.
-# Copy this file to dataprep/local_paths.toml (not tracked) and set the keys you need; a key can
+# Copy this file to data/local_paths.toml (not tracked) and set the keys you need; a key can
 # also be given as the environment variable SACSMA_<KEY>.  Use single quotes so that backslashes
-# in Windows paths are kept as they are.  See dataprep/_paths.py.
+# in Windows paths are kept as they are.  See data/_paths.py.
 
 # The raw GIS raster stage (POLARIS, LANDFIRE, 3DEP, MODIS LAI; about 89 GB).
-# Default: data/raw_gis.  Read by download_gis.py and sample_gis.py.
+# Default: data/inputs/grid/raw_gis.  Read by data/inputs/grid/download_gis.py and sample_gis.py.
 # raw_gis = 'D:\data\raw_gis'
 
 # The local data staging root.  The scripts read these folders under it:
-#   forcing/        the daily forcing master (wgen_forcing.py builds it, build_region_forcing.py reads it)
-#   gleam/, fluxcom/            raw downloads (local_obs_region.py)
+#   forcing/        the daily forcing master (data/inputs/forcing/wgen_forcing.py builds it,
+#                   build_region_forcing.py reads it)
+#   gleam/, fluxcom/            raw downloads (data/reference/et/local_obs_region.py)
 #   et_processed/, swe_processed/   the earlier per-cell stores that --verify compares against
 # staging = 'D:\data'
 
 # The WGEN NonDetrend-Unsplit statewide ASCII folder (one data_<lat>_<lon> file per cell).
-# Read by build_region_grid.py and wgen_forcing.py.
+# Read by data/inputs/grid/build_region_grid.py and data/inputs/forcing/wgen_forcing.py.
 # wgen_ascii = 'C:\data\WGEN_NonDetrend_Unsplit_Statewide'
 
 # The BASE folder of the CalSim3 stochastic-input release; holds WGEN/Product_A/1 and
-# Historical_Climate_LTO/1_Historical.  Read by build_region_forcing.py.
+# Historical_Climate_LTO/1_Historical.  Read by data/inputs/forcing/build_region_forcing.py.
 # climate_release = 'C:\data\calsim3-stochastic-input-generation\data\BASE'
 
 # The WGEN Product A 100-year scenario release (folders 1..30 of meteo_<lat>_<lon> files).
-# Read by wgen_product_a_scenarios.py, read-only.
+# Read by data/inputs/forcing/wgen_product_a_scenarios.py, read-only.
 # wgen_scenarios = 'C:\data\ProductA_100yr'
 
-# data/training of the neuralhyd-ca repository (the cleaned USGS gauge set).  Read by usgs_flows.py.
+# data/training of the neuralhyd-ca repository (the cleaned USGS gauge set).
+# Read by data/targets/usgs/usgs_flows.py.
 # neuralhyd_dir = 'C:\repos\neuralhyd-ca\data\training'
 
-# Staging of the Reitz et al. (2023) ET rasters.  Default: tmp/reitz2023_et.  Read by reitz_et.py.
+# Staging of the Reitz et al. (2023) ET rasters.  Default: tmp/reitz2023_et.
+# Read by data/reference/et/reitz_et.py.
 # reitz_et = 'D:\data\reitz2023_et'
 
-# The Earth Engine cloud project the gee_*.py scripts run under (their --project default).
+# The Earth Engine cloud project the gee_*.py scripts run under (their --project default):
+# data/inputs/grid/gee_aef_region.py and data/reference/et/gee_obs_region.py.
 # gee_project = 'my-ee-project'

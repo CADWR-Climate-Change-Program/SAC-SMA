@@ -1,11 +1,14 @@
 """Temperature-detrending sensitivity (WGEN Product A minus historical Livneh)
-for the dPL hamon, pt and noah physics models plus the canonical Hybrid
-ensembles (mean over seed members, on the noah physics baseline).
+for the ladder's physics rungs 2_grid (Hamon), 3_pt (Priestley-Taylor), 4_noah (Noah-type ET)
+and 5_px (learned rain/snow threshold), and the three LSTM ensembles on 5_px (mean over seed
+members): hybrid, hybrid_dt and lstm.
 
-The physics runs run as trained under the per-cell dT field
-(:func:`sacsma.dpl.evaluate.basin_daily`); the ensembles' sac_sim channel is the
-detrended ``Noah`` series.  Because the WGEN detrending never enters the hybrids' training, the
-Hybrid series here is an INDEPENDENT check of their temperature response.
+The physics runs run as trained under the per-cell dT field on their own domain's rows
+(:func:`sacsma.dpl.evaluate.basin_daily`); the ensembles' physics channel is 5_px's detrended
+series.  The WGEN detrending never enters the hybrids' training, so the ensembles here are an
+INDEPENDENT check of their temperature response.  Their statics stay the present climate's:
+the climate indices are computed over WY1989-2003, near WGEN's 1991-2020 baseline, where the
+detrending is small.
 
 WGEN Product A detrends temperature to a 1991-2020 baseline (the early record is
 warmed).  It is not packaged for the 15cdec application, so the detrending signal
@@ -15,7 +18,7 @@ is reconstructed as a temperature-level shift::
                                                        key-matched to 15cdec_grid;
                                                        0 for uncovered cells)
 
-applied to tavg/tmin/tmax (precip is identical between the products).  Only the
+applied to the temperatures (precip is identical between the products).  Only the
 11 rim basins whose grid cells are covered by the CalSim WGEN stores are shown
 (92-100% cell coverage); the 4 Tulare basins have no WGEN and are dropped.
 
@@ -24,7 +27,7 @@ Two figures on the basin-aggregated flow change dQ = detrended - historical:
     toward zero as the record approaches the 1991-2020 baseline);
   * the monthly dQ regime over the pre-1950 period (largest detrending effect).
 
-Output: ``artifacts/results/dpl/15cdec/studies/forcing/forcing_sensitivity_*.png``.
+Output: ``artifacts/results/dpl/studies/forcing/forcing_sensitivity_*.png``.
 """
 
 from __future__ import annotations
@@ -36,40 +39,35 @@ import numpy as np
 import pandas as pd
 
 from ... import paths
-from ...cdec15 import CAL_END
 from ...io import load_forcing
 from ...model import load_domain_forcing
 from .climatology import _WY, _WY_LABELS, _monthly_taf
 
 DOMAIN = "15cdec_grid"
 _PRE1950 = "1950-01-01"
-#: the physics runs: label -> 15-CDEC learned run.  ``PT`` is the refined PT cascade, ``Noah``
-#: the Noah-lite ET (whose detrended flow is also the ensembles' sac_sim channel).
-RUNS: dict[str, str] = {"Hamon": "hamon", "PT": "pt", "Noah": "noah"}
-#: the canonical Hybrid ENSEMBLES (mean over seed members); both sac_sim
-#: channels are the noah physics, whose detrended torch run is re-fed as the
-#: ensembles' detrended baseline.  ``Hybrid`` (plain: no PET, no dT loss) is
-#: the improvement BASELINE — its near-flat/wrong-signed response against
-#: ``Hybrid DT`` (PT-potential input + temperature-consistency loss) is
-#: the point of this figure.
+#: the physics runs: label -> the ladder run
+RUNS: dict[str, str] = {"2_grid": "2_grid", "3_pt": "3_pt", "4_noah": "4_noah", "5_px": "5_px"}
+#: the LSTM ensembles (mean over seed members); hybrid and hybrid_dt read 5_px's detrended
+#: flow as their physics channel, lstm has none
 ENSEMBLES: dict[str, Path] = {
-    "Hybrid":    paths.dpl_run(run="hybrid"),
-    "Hybrid DT": paths.dpl_run(run="hybrid_dt"),
+    "hybrid":    paths.dpl_run(run="hybrid"),
+    "hybrid_dt": paths.dpl_run(run="hybrid_dt"),
+    "lstm":      paths.dpl_run(run="lstm"),
 }
-#: 2-D encoding so the series separate cleanly: COLOR = physics lineage (blue =
-#: Hamon, red = PT cascade, green = Noah-lite); LINESTYLE = role (solid = pure
-#: physics, dashed/dash-dot = LSTM ensembles).  Read the ET-scheme effect
-#: across colours, physics-vs-LSTM within green.
+#: COLOR = the physics (blue Hamon, red PT, olive Noah-type ET, green the learned threshold;
+#: the ensembles on 5_px green, lstm gray); LINESTYLE = role (solid physics, broken LSTM)
 STYLE: dict[str, dict] = {
-    "Hamon":     dict(color="#1f77b4", lw=2.3, ls="-"),
-    "PT":        dict(color="#d62728", lw=2.3, ls="-"),
-    "Noah":      dict(color="#2ca02c", lw=2.3, ls="-"),
-    "Hybrid":    dict(color="#2ca02c", lw=2.0, ls="--"),
-    "Hybrid DT": dict(color="#2ca02c", lw=2.0, ls="-."),
+    "2_grid":    dict(color="#1f77b4", lw=2.3, ls="-"),
+    "3_pt":      dict(color="#d62728", lw=2.3, ls="-"),
+    "4_noah":    dict(color="#bcbd22", lw=2.3, ls="-"),
+    "5_px":      dict(color="#2ca02c", lw=2.3, ls="-"),
+    "hybrid":    dict(color="#2ca02c", lw=2.0, ls="--"),
+    "hybrid_dt": dict(color="#2ca02c", lw=2.0, ls="-."),
+    "lstm":      dict(color="#7f7f7f", lw=2.0, ls=":"),
 }
 #: marker by role (reinforces the linestyle on the monthly plot only; the rolling
 #: time series stays marker-free).
-_ROLE_MARKER = {"-": "o", "--": "s", "-.": "^"}
+_ROLE_MARKER = {"-": "o", "--": "s", "-.": "^", ":": "D"}
 
 
 def _norm_key(k) -> str:
@@ -100,66 +98,41 @@ def _delta_t(data_dir: str, f_hist) -> np.ndarray:
     return dT
 
 
-def _hybrid_flow(data_dir, dT, dev, sim_detr: pd.DataFrame, ckpt: str):
+def _hybrid_flow(data_dir, dT, dev, sim_detr: pd.DataFrame | None, ckpt: str):
     """(flow_hist, flow_detr) full-record daily hybrid flow (date x basin).
 
-    Detrended features = historical features + dT_basin/sigma on tavg/tmin/tmax
-    (additive under z-score) with the sac_sim channel re-fed by the detrended
-    physics sim (per-basin ÷scale, as load_hybrid_data does).  The trained
-    normalisation is reused exactly.  ``ckpt`` is one trained seed member's
-    checkpoint."""
+    Detrended features = historical features + dT_basin/sigma on the temperature channels
+    (additive under z-score, with the trained normalisation ``h.norm``), and the physics
+    channel, if any, re-fed by the detrended physics flow (per-basin ÷scale, as
+    load_hybrid_data does).  ``dT`` is the field on the rows of the hybrid's forcing domain;
+    ``ckpt`` is one trained seed member's checkpoint."""
     import torch
 
-    from ..hybrid.data import _CAL_START, data_for, feature_names
-    from ..hybrid.model import HybridLSTM
+    from ..hybrid.data import data_for
+    from ..hybrid.evaluate import _build_model
     from ..hybrid.train import predict_days
 
     ck = torch.load(ckpt, map_location="cpu", weights_only=False)
-    cfg = ck["cfg"]
-    use_doy = cfg.get("use_doy", True)
-    use_pet = cfg.get("use_pet", False)
     h = data_for(ck, data_dir, dev)
-    model = HybridLSTM(h.n_feat, h.n_static, hidden=cfg["hidden"],
-                       static_embed=cfg["static_embed"], dropout=cfg["dropout"]).to(dev)
-    model.load_state_dict(ck["model"])
+    model = _build_model(ck, h, dev)
 
-    # basin-level dT and the historical cal-window sigmas used in normalisation
+    # basin-level dT on the hybrid's forcing domain
     from ..data import load_domain_tensors
     dom = load_domain_tensors(data_dir, domain=DOMAIN, device="cpu", dtype=torch.float64)
-    W = dom.W.numpy()
-    dTb = W @ dT[dom.cell_idx].astype(np.float64)                 # (B, T) basin dT
-    lo = int(dom.dates.searchsorted(pd.Timestamp(_CAL_START)))
-    hi = int(dom.dates.searchsorted(pd.Timestamp(CAL_END))) + 1
-    tavg = W @ dom.forcing.tavg[dom.cell_idx].astype(np.float64)
-    tmm = pd.read_csv(paths.basin_tminmax(data_dir),
-                      parse_dates=["date"]).set_index("date")
-    tmin = np.vstack([tmm[f"tmin_{b}"].reindex(dom.dates).to_numpy() for b in dom.basins])
-    tmax = np.vstack([tmm[f"tmax_{b}"].reindex(dom.dates).to_numpy() for b in dom.basins])
-    sd = {"tavg": tavg[:, lo:hi].std() + 1e-8, "tmin": tmin[:, lo:hi].std() + 1e-8,
-          "tmax": tmax[:, lo:hi].std() + 1e-8}
-    names = feature_names(use_doy, use_pet)
-    idx = {n: names.index(n) for n in ("tavg", "tmin", "tmax", "sac_sim")}
-
-    sim_d = np.vstack([sim_detr[b].reindex(dom.dates).to_numpy() for b in dom.basins])
+    dTb = dom.W.numpy() @ dT[dom.cell_idx].astype(np.float64)       # (B, T) basin dT
+    idx = {n: i for i, n in enumerate(h.names)}
     feat_d = h.feat.clone()
     dev_kw = dict(dtype=feat_d.dtype, device=feat_d.device)
     dTb_t = torch.as_tensor(dTb, **dev_kw)
-    sim_d_t = torch.as_tensor(sim_d, **dev_kw)
-    for n in ("tavg", "tmin", "tmax"):
-        feat_d[:, :, idx[n]] += dTb_t / sd[n]
-    if use_pet:
-        # PET is deterministic in T — recompute exactly under the dT field,
-        # normalized with the trained (historical cal-window) stats.
-        from ..hybrid.data import basin_pet_pt
-        pet_h = basin_pet_pt(dom)
-        pet_d = basin_pet_pt(dom, delta_t=dT)
-        mu_p = pet_h[:, lo:hi].mean()
-        sd_p = pet_h[:, lo:hi].std() + 1e-8
-        feat_d[:, :, names.index("pet")] = torch.as_tensor(
-            (pet_d - mu_p) / sd_p, **dev_kw)
-    # per-basin target-matched scaling (as load_hybrid_data does)
-    feat_d[:, :, idx["sac_sim"]] = sim_d_t / h.scale[:, None]
-    h_detr = dc.replace(h, feat=feat_d, sim=sim_d_t)
+    for n in ("tmin", "tmax"):
+        feat_d[:, :, idx[n]] += dTb_t / h.norm[n][1]
+    rep = dict(feat=feat_d)
+    if "sac_sim" in idx:
+        sim_d = np.vstack([sim_detr[b].reindex(dom.dates).to_numpy() for b in dom.basins])
+        sim_d_t = torch.as_tensor(sim_d, **dev_kw)
+        feat_d[:, :, idx["sac_sim"]] = sim_d_t / h.scale[:, None]
+        rep["sim"] = sim_d_t
+    h_detr = dc.replace(h, **rep)
 
     def _full(data):
         bb, tt = data.eval_days("all")
@@ -204,21 +177,29 @@ def assemble(data_dir: str = "data", *, device: str = "cuda") -> dict:
                       ).groupby("basin")["c"].mean()
     basins = [b for b in frac.index if frac[b] >= 0.5]
 
-    # the physics runs over all 15 basins (Tulare has dT = 0); dQ keeps the covered basins
+    # the physics runs over all 15 basins (Tulare has dT = 0); dQ keeps the covered basins.
+    # Each run takes dT on its own domain's forcing rows.
+    import torch
+
+    from ..evaluate import _loaded, basin_daily
+
+    def detrended(run):
+        f = _loaded(str(paths.dpl_checkpoint(run=run).resolve()), str(data_dir))[2].forcing
+        return basin_daily(run, data_dir=data_dir, dt=_delta_t(data_dir, f))
+
     dq: dict[str, pd.DataFrame] = {}
-    from ..evaluate import basin_daily
-
     for label, run in RUNS.items():
-        dq[label] = (basin_daily(run, data_dir=data_dir, dt=dT)
-                     - basin_daily(run, data_dir=data_dir))[basins]
+        dq[label] = (detrended(run) - basin_daily(run, data_dir=data_dir))[basins]
         print(f"  assembled {label}", flush=True)
-    nt_detr = basin_daily("noah", data_dir=data_dir, dt=dT)
 
-    # the canonical Hybrid ENSEMBLES (mean over seed members) on the noah
-    # detrended physics baseline
+    # the LSTM ensembles (mean over seed members); the physics channel's detrended flow is
+    # that of the ensembles' physics run (5_px)
     dev = pick_device(device)
     for label, ens in ENSEMBLES.items():
-        fh, fd = _ensemble_flow(data_dir, dT, dev, nt_detr, ens)
+        first = sorted(Path(ens).glob("seed*/checkpoints/best.pt"))[0]
+        physics = torch.load(first, map_location="cpu", weights_only=False)["cfg"]["physics"]
+        sim_detr = detrended(physics) if physics else None
+        fh, fd = _ensemble_flow(data_dir, dT, dev, sim_detr, ens)
         dq[label] = (fd - fh)[basins]
         print(f"  assembled {label}", flush=True)
 
@@ -301,7 +282,3 @@ def make_forcing_sensitivity(data_dir: str = "data",
     _plot_rolling(data, figdir / "forcing_sensitivity_rolling.png")
     _plot_monthly(data, figdir / "forcing_sensitivity_monthly_pre1950.png")
     return data
-
-
-if __name__ == "__main__":
-    make_forcing_sensitivity()

@@ -101,20 +101,20 @@ def compare_all(out_dir: str | Path | None = None,
                 *, ga_csv: str | Path | None = None,
                 dpl_csv: str | Path | None = None,
                 hybrid_csv: str | Path | None = None,
-                pet_dt_csv: str | Path | None = None,
+                hybrid_dt_csv: str | Path | None = None,
                 ) -> pd.DataFrame:
     """Merge GA / dPL / hybrid-ensemble cal+val KGE into one comparison table, by default
-    from the tracked score tables (the GA set, ``hamon_dense``, ``hybrid``, ``hybrid_dt``)
-    into the ``hybrids`` study folder."""
+    from the tracked score tables (the GA set, ``5_px``, the hybrids' physics, ``hybrid``,
+    ``hybrid_dt``) into the ``hybrids`` study folder."""
     out = Path(out_dir) if out_dir is not None else paths.dpl_study(name="hybrids")
     ga_csv = ga_csv or paths.calibrated(name="15cdec") / "metrics.csv"
-    dpl_csv = dpl_csv or paths.dpl_metrics(run="hamon_dense")
+    dpl_csv = dpl_csv or paths.dpl_metrics(run="5_px")
     hybrid_csv = hybrid_csv or paths.dpl_metrics(run="hybrid")
-    pet_dt_csv = pet_dt_csv or paths.dpl_metrics(run="hybrid_dt")
+    hybrid_dt_csv = hybrid_dt_csv or paths.dpl_metrics(run="hybrid_dt")
     frames = {}
     for name, path in [("GA", ga_csv), ("dPL", dpl_csv),
                        ("hybrid", hybrid_csv),
-                       ("hybrid_dt", pet_dt_csv)]:
+                       ("hybrid_dt", hybrid_dt_csv)]:
         p = Path(path)
         if p.exists():
             d = pd.read_csv(p)[["basin", "cal_kge", "val_kge"]]

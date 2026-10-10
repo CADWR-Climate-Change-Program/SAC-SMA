@@ -55,10 +55,10 @@ PARITY_BASINS = (("15cdec", "BND"), ("9unimp", "CacheCreek"), ("11obs", "SHA"),
 PARITY_KGE = 0.9999
 PARITY_MAX_MM = 0.1
 #: one tracked run per physics of the learned step: Noah-lite with the SAC exchanges and a
-#: learned PXTEMP, Noah-lite, SAC ET with the refined Priestley-Taylor PET, SAC ET with Hamon
-LEARNED_RUNS = (("multifamily",
-                 "noah_cdec_uf_usgs_cs64_ho7685_ufx_areaw_all_kref05_sacx_carry_px_w2ft15r10_aef"),
-                ("15cdec", "noah"), ("15cdec", "pt"), ("15cdec", "hamon_dense"))
+#: learned PXTEMP (dPL-CalSim), Noah-lite with the SAC exchanges, SAC ET with the
+#: Priestley-Taylor PET, SAC ET with Hamon on the HRUs (the ladder's rungs, docs/runs.md)
+LEARNED_RUNS = (("multifamily", "7_calsim"), ("15cdec", "4_noah"), ("15cdec", "3_pt"),
+                ("15cdec", "1_hru"))
 LEARNED_MAX_MM = 1e-9
 #: relative tolerance of the product check (the fit and ``apply`` agree to about 3e-7)
 PRODUCT_RTOL = 1e-5
@@ -237,7 +237,7 @@ def check_artifacts(root: str | Path = ".", **_) -> tuple[bool | None, str]:
     for f in tracked:
         q = Path(f).parts
         if (len(q) > 5 and q[1] in ("models", "results") and q[2] == "dpl"
-                and q[4] not in ("benchmark", "studies")):
+                and q[3] in (paths.CDEC15, paths.MULTIFAMILY)):
             runs.setdefault((q[3], q[4]), set()).add(q[1])
     bad += [f"{g}/{r} has only a {next(iter(roles))} folder"
             for (g, r), roles in sorted(runs.items()) if roles != {"models", "results"}]

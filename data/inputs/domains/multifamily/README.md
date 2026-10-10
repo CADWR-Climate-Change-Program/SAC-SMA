@@ -18,7 +18,9 @@ attributes, LAI and forcing are not duplicated here: the loaders join them by ce
 Every target trains as an independent entity. The registry is the superset: a run chooses its entities
 at launch (`sacsma dpl train --basins`). Without `--basins` a run takes the 95 base entities; the arc
 family loads only when named (`--calsim-arcs train_default` adds the 64 `train_default` arcs, and a run
-with family shares names them `calsim=` in `--mt-family-weight`).
+with family shares names them `calsim=` in `--mt-family-weight`). The ladder's rungs `2_grid` to `6_aef`
+take the 15 `cdec_` entities of the original watersheds; dPL-CalSim (`7_calsim`) takes the 95 base
+entities and the 64 arcs.
 
 ## How it is built
 
@@ -131,9 +133,9 @@ which the loader refuses if selected.
 
 Weights come from square-overlap mapping of the `CalSim3_Merged` polygons (`arcs`), the delineated USGS
 watersheds (`usgs_gpkg`, `data/targets/usgs/usgs_watersheds.gpkg`) or the original SAC-SMA boundary
-polygons (`sacsma_15cdec_gis`, `data/inputs/domains/15cdec/SACSMA_15CDEC.geojson`). The table replaces
-the per-domain `hruinfo` tables as the aggregation basis of entity training. Outlet coordinates are in the
-registry only.
+polygons (`sacsma_15cdec_gis`, `data/inputs/domains/15cdec/SACSMA_15CDEC.geojson`). The table is the
+aggregation basis of entity training, in place of a domain's `hruinfo` table. Outlet coordinates are in
+the registry only.
 
 Cell basis. The dropped monthly twins contribute no cells of their own (their cells are their daily
 twins'; TNL's extra `I_LWSTN` cells are those of `usgs_11525500`). The Tulare polygons reach 8 edge cells
@@ -185,7 +187,8 @@ attributes are complete: the grid tables cover all 4,410 cells.
 - Arc cells. The overlap sum equals the polygon's true area to 1e-9 and departs from `SQ_MI` by -3.1 to
   +1.5 % for single arcs (55 of 196 beyond 0.2 %; the attribute error averages out in multi-arc
   entities). The 7 duplicate arcs reproduce their entity's cells exactly.
-- The Tulare mapping reproduces the `15cdec_grid` weights it replaces at r ≥ 0.99 on the common cells.
+- The Tulare mapping reproduces the `15cdec_grid` weights of the same watersheds at r ≥ 0.99 on the
+  common cells.
 - Flow lengths. The snapped accumulation over the registry area lands at 0.75 to 1.11, median about 1.00.
   The archived CADWR flow lengths of `15cdec_grid` are reproduced at r 0.977 to 0.992 with a median ratio
   of 0.97 to 1.06 in all 15 watersheds except MKM (1.18: its archive was measured to a reference point

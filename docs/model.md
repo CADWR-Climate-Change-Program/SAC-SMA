@@ -93,7 +93,7 @@ day and its own forms of the percolation and storage clamps, which differ from t
 over-full states. Run with the archived GA optimum and ten sub-steps, these numerics keep a
 daily KGE of 0.98 or more against the reference model on all 15 CDEC watersheds and move the
 calibration and validation KGE against the gauges by about 0.01 at most; with 1, 2, 5 or 20
-sub-steps they depart further (`artifacts/results/dpl/15cdec/benchmark/fidelity_benchmark.csv`).
+sub-steps they depart further (`artifacts/results/dpl/fidelity/fidelity_benchmark.csv`).
 It adds
 three options the reference chain does not have: Priestley–Taylor PET, a soil-moisture-limited
 ET on observed vegetation ("Noah-lite"), and a learned rain/snow threshold.

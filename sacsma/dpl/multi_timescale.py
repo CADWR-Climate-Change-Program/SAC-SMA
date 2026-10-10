@@ -33,7 +33,7 @@ Every entity's finite in-window count is asserted against the registry's
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import numpy as np
@@ -93,6 +93,9 @@ class EntityObs:
     #: (``uf_train_start``; 0 without one) — scored = n_obs - n_masked -
     #: n_holdout + n_ext
     n_ext: tuple[int, ...] = ()
+    #: per dom.basins entry: observations outside the training window (``train_window``;
+    #: 0 without one) — scored = n_obs - n_masked - n_holdout + n_ext - n_out
+    n_out: tuple[int, ...] = ()
 
 
 def load_entity_obs(
@@ -104,6 +107,7 @@ def load_entity_obs(
     obs_mask: tuple[str, ...] = (),
     holdout_wy: tuple[int, int] | None = None,
     uf_train_start: str | None = None,
+    train_window: tuple[str, str] | None = None,
 ) -> EntityObs:
     """``obs_mask`` (``DplConfig.obs_mask``, ``"entity_id|YYYY-MM-DD"``) drops those
     daily observations.  An entry for a registry entity outside this run's basins
@@ -118,7 +122,9 @@ def load_entity_obs(
     excludes the holdout: a nonzero count is a stale mask).  ``uf_train_start``
     (``DplConfig.uf_train_start``) adds each uf_monthly entity's months from that
     date to its registry train_start (minus the holdout) from the same store,
-    after the audit; every one must be observed (``n_ext``)."""
+    after the audit; every one must be observed (``n_ext``).  ``train_window``
+    (``DplConfig.train_window``) then blanks every target outside it (``n_out``); the
+    arrays still span the envelope (:func:`cut_entity_obs` cuts them to the window)."""
     reg = pd.read_csv(paths.entities(data_dir), dtype={"site_id": str},
                       parse_dates=["train_start", "train_end"])
     known_ids = set(reg["entity_id"])
@@ -202,6 +208,15 @@ def load_entity_obs(
         obs_d[:, ho_d] = np.nan
         for j, i in enumerate(daily_rows):
             n_holdout[i] = int(cnt[j])
+    # the training window — last, after the holdout and before the normalizers
+    n_out = [0] * len(dom.basins)
+    if train_window:
+        wa, wb = (pd.Timestamp(v) for v in train_window)
+        out_d = np.asarray((window < wa) | (window > wb))
+        cnt = np.isfinite(obs_d[:, out_d]).sum(axis=1)
+        obs_d[:, out_d] = np.nan
+        for j, i in enumerate(daily_rows):
+            n_out[i] = int(cnt[j])
     var_d = np.nanvar(obs_d, axis=1)
 
     # ---- monthly entities over the envelope's calendar months -----------
@@ -212,6 +227,9 @@ def load_entity_obs(
     wy_m = np.asarray(months.year + (months.month >= 10))
     ho_m = ((wy_m >= holdout_wy[0]) & (wy_m <= holdout_wy[1]) if holdout_wy
             else np.zeros(len(months), dtype=bool))
+    out_m = (np.asarray((months.start_time < wa)
+                        | (months.end_time > wb + pd.Timedelta(days=1)))
+             if train_window else np.zeros(len(months), dtype=bool))
     obs_m = np.full((len(monthly_rows), len(months)), np.nan)
     cs_store = None
     for j, i in enumerate(monthly_rows):
@@ -265,12 +283,16 @@ def load_entity_obs(
                                  "in the store")
             vals[ext] = ev
             n_ext[i] = int(ext.sum())
+        n_out[i] = int(np.isfinite(vals[out_m]).sum())
+        vals[out_m] = np.nan
         obs_m[j] = vals
     var_m = (np.nanvar(obs_m, axis=1) if len(monthly_rows)
              else np.zeros(0))
 
     if (np.concatenate([var_d, var_m]) <= 0).any():
         raise ValueError("zero observed variance for at least one entity")
+    if train_window and not np.isfinite(np.concatenate([var_d, var_m])).all():
+        raise ValueError(f"an entity has no target inside train_window {train_window}")
 
     return EntityObs(
         t0=t0, t1=t1, family=tuple(reg["family"]),
@@ -284,7 +306,26 @@ def load_entity_obs(
         n_masked=tuple(n_masked),
         n_holdout=tuple(n_holdout),
         n_ext=tuple(n_ext),
+        n_out=tuple(n_out),
     )
+
+
+def cut_entity_obs(eobs: EntityObs, dates: pd.DatetimeIndex,
+                   train_window: tuple[str, str]) -> EntityObs:
+    """``eobs`` cut to its training window (whole calendar months; the targets outside it
+    are already NaN, so the normalizers are unchanged): the trainer's chunks, spinup and
+    selection then start and end at the window."""
+    wa, wb = (pd.Timestamp(v) for v in train_window)
+    t0, t1 = int(dates.searchsorted(wa)), int(dates.searchsorted(wb)) + 1
+    if not eobs.t0 <= t0 < t1 <= eobs.t1:
+        raise ValueError(f"train_window {train_window} outside the envelope")
+    m = ((eobs.month_code >= wa.year * 12 + wa.month - 1)
+         & (eobs.month_code <= wb.year * 12 + wb.month - 1))
+    return replace(eobs, t0=t0, t1=t1,
+                   obs_daily=eobs.obs_daily[:, t0 - eobs.t0:t1 - eobs.t0],
+                   month_code=eobs.month_code[m],
+                   obs_monthly=eobs.obs_monthly[:, torch.as_tensor(
+                       m, device=eobs.obs_monthly.device)])
 
 
 def monthly_chunk_target(
@@ -296,20 +337,18 @@ def monthly_chunk_target(
 
     Wraps :func:`sacsma.dpl.data.month_chunk_target` — a calendar month gets a
     slot only when it lies completely inside both the chunk and the cal
-    window, so split/partial months never enter the loss (a fixed 366-day grid
-    from 1 Oct 1949 splits one month most years; the water-year grid,
-    ``DplConfig.chunk_grid``, splits none) — and recovers each slot's absolute
-    month, so the simulated monthly sum lands in the right ``obs_monthly``
-    column regardless of where the chunk grid cuts.  Returns numpy ``(bucket
+    window, so partial months never enter the loss (the water-year chunks split
+    none) — and recovers each slot's absolute month, so the simulated monthly sum
+    lands in the right ``obs_monthly`` column.  Returns numpy ``(bucket
     (length, maxm), cols (maxm,), mask (maxm,))``; masked slots have ``cols``
     0 (gate on ``mask`` before comparing).
     """
-    bucket, _, mask = month_chunk_target(dates, c0, length, cal_t0, cal_t1)
+    bucket, mask = month_chunk_target(dates, c0, length, cal_t0, cal_t1)
     if mask.sum() >= bucket.shape[1]:
         # all slots used ⇒ a further complete month may have been dropped
-        # silently (month_chunk_target caps at maxm without error); DplConfig
-        # bounds train_chunk_days <= 366 exactly to keep this unreachable (a
-        # 1-Oct-aligned 365/366-day chunk holds twelve complete months)
+        # silently (month_chunk_target caps at maxm without error); unreachable
+        # for the water-year chunks (a 1-Oct-aligned 365/366-day chunk holds
+        # twelve complete months)
         raise ValueError(f"monthly bucket slots exhausted for a {length}-day "
                          "chunk — shorten the chunk")
     cols = np.zeros(bucket.shape[1], np.int64)
@@ -336,12 +375,14 @@ def monthly_nnse_loss(
     over the chunk's valid month slots, normalized by the FIXED per-entity
     variance (:attr:`EntityObs.var_monthly`, so summed chunk losses keep the
     NSE numerator/denominator structure), averaged over entities with at
-    least ``min_months`` valid slots.  Branch-free (no host sync).
+    least ``min_months`` valid slots, each entity's term scaled by its valid
+    months / 12 (the daily term's valid days / 365).  Branch-free (no host sync).
     ``n_total`` (``mt_share_norm="all"``): divide by this fixed entity count
     instead of the chunk's valid count (``None`` = unchanged)."""
     n = fin.sum(dim=1)
     se = (sim_monthly - tgt) ** 2 * fin
     per = se.sum(dim=1) / n.clamp_min(1.0) / var_monthly.clamp_min(1e-12)
+    per = per * (n / 12.0)
     valid = (n >= min_months).to(per.dtype)
     if n_total is not None:
         return (per * valid).sum() / float(n_total)

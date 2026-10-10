@@ -40,26 +40,21 @@ RESPONSE_ANCHORS = tuple((dp, dt) for dp in (-0.2, -0.1, 0.0, 0.1, 0.2) for dt i
 
 @dataclass
 class HybridConfig:
-    hidden: int = 128
-    static_embed: int = 16
-    dropout: float = 0.15
-    use_statics: bool = False
-    #: feed sin/cos day-of-year to the LSTM.  False removes the only explicit
-    #: calendar input — corrections must then key off forcing/state/sim, which
-    #: blocks the doy-conditioned mean corrections that injected val-period
-    #: volume bias at the basins the physics already had right (NML/MRC/ORO).
-    use_doy: bool = True
-    #: feed the raw PT potential (basin-average, alb 0 / dew 0 — exactly the
-    #: noah energy demand, recomputed from forcing) as an input
-    #: channel: a physics-shaped temperature pathway for the LSTM.
-    use_pet: bool = False
+    """The defaults are the ladder's hybrid recipe (the physics run and ``statics_from`` are
+    named per run)."""
+    hidden: int = 64
+    static_embed: int = 8            # one linear map of the statics; the head is linear
+    dropout: float = 0.35
+    #: a dPL checkpoint of the ``physical`` variant whose inputs and the dPL's four climate
+    #: indices are the statics; see :func:`.data.load_hybrid_data`
+    statics_from: str = "5_px"
     #: feed the frozen-physics ``sac_sim`` channel.  False = a PURE LSTM (no
-    #: physics baseline input) on the meteorology + PET + statics — the
+    #: physics baseline input) on the meteorology + statics — the
     #: no-physics ablation baseline.  Incompatible with the response loss.
     use_sim: bool = True
-    #: the 15-CDEC learned run whose daily flow is the physics channel (e.g. ``noah``)
+    #: the 15-CDEC learned run whose daily flow is the physics channel (a run name or a
+    #: checkpoint path)
     physics: str = ""
-    physics_domain: str = "15cdec"   # the domain of the forcing features (and of the physics)
     #: (Δprecip, ΔT) response anchors of the response-consistency loss, each
     #: {"dp": frac, "dt": degC, "lambda": w}; the physics run supplies the response.
     response_anchors: tuple = ()
@@ -70,13 +65,17 @@ class HybridConfig:
     warmup_epochs: int = 3
     lr_min: float = 1e-5
     batch_size: int = 512
-    input_noise: float = 0.1         # gaussian input jitter (regularizer)
+    input_noise: float = 0.2         # gaussian input jitter (regularizer)
     log_lambda: float = 0.15         # low-flow log-space term
     log_eps: float = 0.01
     eval_every: int = 2
     patience: int = 12
     seed: int = 0
     device: str = "cuda"
+    #: a fine-tune: the hybrid checkpoint to start from (its inputs and network must match)
+    init_from: str = ""
+    #: keep the last epoch (a fixed-length fine-tune) instead of the best cal KGE
+    keep_last: bool = False
 
     def __post_init__(self):
         for a in self.response_anchors:
@@ -96,8 +95,7 @@ def predict_days(model, data, bb, tt, batch: int = 4096):
     for i in range(0, len(bb), batch):
         b = bb[i:i + batch]
         t = tt[i:i + batch]
-        st = data.static[b] if data.static is not None else None
-        out[i:i + batch] = _denorm_flow(model(data.gather_windows(b, t), st),
+        out[i:i + batch] = _denorm_flow(model(data.gather_windows(b, t), data.static[b]),
                                         data, b)
     return out
 
@@ -124,13 +122,19 @@ def train_hybrid(cfg: HybridConfig, *, data_dir: str = "data", out_dir: str | Pa
     out.mkdir(parents=True, exist_ok=True)
     anchors = [dict(a) for a in cfg.response_anchors]
     anchor_lambdas = [float(a["lambda"]) for a in anchors]
-    data = load_hybrid_data(data_dir, physics=cfg.physics, use_statics=cfg.use_statics,
-                            use_doy=cfg.use_doy, use_pet=cfg.use_pet, use_sim=cfg.use_sim,
-                            domain=cfg.physics_domain, response_anchors=tuple(anchors),
-                            device=dev)
+    data = load_hybrid_data(data_dir, physics=cfg.physics, statics_from=cfg.statics_from,
+                            use_sim=cfg.use_sim, response_anchors=tuple(anchors), device=dev)
     model = HybridLSTM(data.n_feat, data.n_static,
                        hidden=cfg.hidden, static_embed=cfg.static_embed,
                        dropout=cfg.dropout).to(dev)
+    if cfg.init_from:
+        base = torch.load(cfg.init_from, map_location="cpu", weights_only=False)
+        keys = ("hidden", "static_embed", "statics_from", "use_sim", "physics")
+        diff = {k: (base["cfg"][k], getattr(cfg, k)) for k in keys
+                if base["cfg"][k] != getattr(cfg, k)}
+        if diff or (base["n_feat"], base["n_static"]) != (data.n_feat, data.n_static):
+            raise ValueError(f"init_from: the inputs or the network differ from the base: {diff}")
+        model.load_state_dict(base["model"])
     opt = torch.optim.AdamW(model.parameters(), lr=cfg.lr,
                             weight_decay=cfg.weight_decay)
     warm = torch.optim.lr_scheduler.LinearLR(
@@ -168,8 +172,7 @@ def train_hybrid(cfg: HybridConfig, *, data_dir: str = "data", out_dir: str | Pa
                      if cfg.input_noise > 0 else None)
             if noise is not None:
                 x = x + noise
-            st = data.static[b] if data.static is not None else None
-            pred = model(x, st)
+            pred = model(x, data.static[b])
             targ = data.obs[b, t] / data.scale[b]
             loss = ((pred - targ) ** 2).mean()
             if cfg.log_lambda > 0:
@@ -183,12 +186,11 @@ def train_hybrid(cfg: HybridConfig, *, data_dir: str = "data", out_dir: str | Pa
                 # second forward on each perturbed copy, SAME noise (so the
                 # delta is not noise-dominated); anchor the hybrid's daily
                 # response to the physics response, per-basin normalized.  The
-                # CLIMATE statics (pmean/snowf) also co-vary with the anchor.
+                # climate indices among the statics also co-vary with the anchor.
                 x_a = data.gather_windows(b, t, feat=fa_t)
                 if noise is not None:
                     x_a = x_a + noise
-                st_a = data.static_anchors[i][b] if data.static_anchors else st
-                pred_a = model(x_a, st_a)
+                pred_a = model(x_a, data.static_anchors[i][b])
                 d_phys = (sa_t[b, t] - data.sim[b, t]) / data.scale[b]
                 loss = loss + lam * (((pred_a - pred) - d_phys) ** 2).mean()
             opt.zero_grad(set_to_none=True)
@@ -214,11 +216,13 @@ def train_hybrid(cfg: HybridConfig, *, data_dir: str = "data", out_dir: str | Pa
         print(f"epoch {ep:3d}/{cfg.n_epochs}  loss {tot / max(nb, 1):.4f}  "
               f"calKGE {cal_kge:.4f}  lr {lr:.2e}  best {best:.4f}  "
               f"{time.time() - tic:.0f}s", flush=True)
-        if stale >= cfg.patience:
+        if stale >= cfg.patience and not cfg.keep_last:
             print(f"early stop at epoch {ep} (best cal KGE {best:.4f})", flush=True)
             break
 
-    if best_state is not None:
+    if cfg.keep_last:                       # the last epoch, whatever its cal KGE
+        best = pooled_kge(model, data, "cal")[0]
+    elif best_state is not None:
         model.load_state_dict(best_state)
     ckpt = {"model": model.state_dict(), "cfg": asdict(cfg), "n_feat": data.n_feat,
             "n_static": data.n_static, "best_cal_kge": best}

@@ -53,7 +53,7 @@ FORCING = "wgen_product_a"
 #: the scoring window, water years (inclusive): the WGEN temperature detrending is small here
 WY = (1991, 2018)
 #: dPL-CalSim, the learned-parameter run of the multifamily domain
-DPL_RUN = "noah_cdec_uf_usgs_cs64_ho7685_ufx_areaw_all_kref05_sacx_carry_px_w2ft15r10_aef"
+DPL_RUN = "7_calsim"
 #: the sites of the 15-CDEC set whose VIC is the sum of the per-node series of their registry
 #: arcs, not the basin-level series of the ``sacsma calsim`` 15-CDEC track: that series reaches
 #: below the gauge (the Yuba's ``8RI_SMART`` holds Deer Creek, ``I_DER001`` and ``I_DER004``)
@@ -239,11 +239,8 @@ def dpl_field(forcing: str = FORCING, data_dir: str | Path = "data",
     absent = sorted(set(ents) - set(ck["basins"]))
     if absent:
         raise ValueError(f"{run} did not train {absent}")
-    if ck.get("net_config", {}).get("gnn_k", 0):
-        raise ValueError(f"{run} mixes neighbouring rows (gnn_k): its field needs all rows")
     dom = load_domain_tensors(data_dir, domain=ck["domain"], device="cpu", dtype=torch.float64,
-                              basins=ents, calsim_footprint=cfg.calsim_footprint,
-                              product=forcing)
+                              basins=ents, product=forcing)
     x = checkpoint_features(ck, dom, data_dir)
     net = ParameterNet.from_checkpoint(ck, x.shape[1]).to("cpu", torch.float64)
     return net, x, dom, cfg

@@ -267,16 +267,18 @@ def dwr_swat(data_dir="data", name: str = "swat_monthly.csv") -> Path:
 # * ``models/``   every model: the archived calibrations (``callite/<set>``, ``15cdec``,
 #   ``15cdec_grid``) and what training made (``dpl/``), with the parameter tables;
 # * ``results/``  what a command redraws: the calibrated sets (``callite/<set>``, ``15cdec``)
-#   and their comparisons (``calsim3``, ``footprints``, ``forcing``), the benchmark of five
+#   and their comparisons (``calsim3``, ``footprints``, ``forcing``), the benchmark of three
 #   models at the CDEC sites (``benchmark``), and the learned runs (``dpl/``);
 # * ``_local/``   not tracked: caches, scratch, the large outputs of a run, runs not adopted.
 #
 # A learned-parameter run has one folder per role (:func:`run_roles`), each under the same
 # name: ``models/dpl/<group>/<run>``, ``results/dpl/<group>/<run>`` and
-# ``_local/runs/dpl/<group>/<run>``, where ``<group>`` is ``15cdec`` (both 15-CDEC domains) or
-# ``multifamily``.  Every function takes the output root (``artifacts_dir``, default
-# ``"artifacts"``) and touches no file, except :func:`run_roles`, which looks for a run's
-# model folder.
+# ``_local/runs/dpl/<group>/<run>``.  A run's group is what it trains on: ``15cdec`` holds the
+# ladder's rungs 1-6 and the hybrids (rungs 2-6 run on the multifamily domain restricted to the
+# 15 CDEC entities), ``multifamily`` holds ``7_calsim``.  Beside the groups, ``results/dpl/``
+# holds ``fidelity`` (:func:`dpl_fidelity`) and ``studies`` (:func:`dpl_study`).  Every
+# function takes the output root (``artifacts_dir``, default ``"artifacts"``) and touches no
+# file, except :func:`run_roles`, which looks for a run's model folder.
 
 #: the folder that groups the three CalLite calibration sets in models/, results/, product/
 CALLITE_DIR = "callite"
@@ -285,7 +287,7 @@ CALIBRATED = (CDEC15, *CALLITE, "calsim3", "benchmark", "footprints", "forcing")
 #: the delivered products, one folder each under product/
 PRODUCTS = ("calsim3", CALLITE_DIR, CDEC15)
 #: the ``sacsma dpl study`` result folders
-DPL_STUDIES = ("climatology", "hybrids", "adaptive", "forcing")
+DPL_STUDIES = ("climatology", "hybrids", "forcing")
 #: the roles of a learned-parameter run
 ROLES = ("models", "results", "local")
 
@@ -328,7 +330,7 @@ def ga_optimum(artifacts_dir="artifacts", domain: str = CDEC15) -> Path:
 
 def calibrated(artifacts_dir="artifacts", name: str = CDEC15) -> Path:
     """A result folder outside ``dpl/``: one calibrated set's diagnostics (``results/15cdec``,
-    ``results/callite/<set>``), the comparison with CalSim3 (``calsim3``), the benchmark of five
+    ``results/callite/<set>``), the comparison with CalSim3 (``calsim3``), the benchmark of three
     models against observed CDEC full natural flow (``benchmark``), the footprint and
     HRU-attribute maps (``footprints``), the forcing comparison (``forcing``)."""
     if name not in CALIBRATED:
@@ -342,7 +344,7 @@ def forcing_run(artifacts_dir="artifacts", product: str = "wgen_product_a") -> P
     return local(artifacts_dir, f"cache/forcing/{product}")
 
 
-def dpl_run(artifacts_dir="artifacts", run: str = "noah", domain: str = CDEC15,
+def dpl_run(artifacts_dir="artifacts", run: str = "5_px", domain: str = CDEC15,
             role: str = "models") -> Path:
     """One role's folder of a learned-parameter run: ``models``, ``results`` or ``local``."""
     if role not in ROLES:
@@ -351,12 +353,27 @@ def dpl_run(artifacts_dir="artifacts", run: str = "noah", domain: str = CDEC15,
     return _art(artifacts_dir) / ("_local/runs" if role == "local" else role) / sub
 
 
-def dpl_checkpoint(artifacts_dir="artifacts", run: str = "noah", domain: str = CDEC15) -> Path:
-    """The selected checkpoint of a learned-parameter run."""
-    return dpl_run(artifacts_dir, run, domain) / "checkpoints" / "best.pt"
+def dpl_checkpoint(artifacts_dir="artifacts", run: str = "5_px", domain: str = CDEC15) -> Path:
+    """The selected checkpoint of a learned-parameter run: a run name (in ``domain``'s group,
+    else in the other: a group holds the runs by what they train on, which a run's domain does
+    not always say), or a checkpoint file or run folder.  A file or folder that no longer
+    exists (a local run tracked since under the same name) is found by its run name."""
+    p = Path(run)
+    if p.suffix != ".pt" and len(p.parts) == 1:
+        ck = dpl_run(artifacts_dir, run, domain) / "checkpoints" / "best.pt"
+        name = run
+    else:
+        ck = p if p.suffix == ".pt" else p / "checkpoints" / "best.pt"
+        name = ck.parents[1].name
+    if not ck.exists():
+        for group in (_group(domain), *(g for g in (CDEC15, MULTIFAMILY) if g != _group(domain))):
+            tracked = dpl_run(artifacts_dir, name, group) / "checkpoints" / ck.name
+            if tracked.exists():
+                return tracked
+    return ck
 
 
-def dpl_metrics(artifacts_dir="artifacts", run: str = "noah", domain: str = CDEC15) -> Path:
+def dpl_metrics(artifacts_dir="artifacts", run: str = "5_px", domain: str = CDEC15) -> Path:
     """The score table of a learned-parameter run."""
     return dpl_run(artifacts_dir, run, domain, role="results") / "metrics.csv"
 
@@ -391,12 +408,12 @@ def dpl_study(artifacts_dir="artifacts", name: str = "climatology") -> Path:
     """Results of one ``sacsma dpl study``."""
     if name not in DPL_STUDIES:
         raise ValueError(f"unknown study {name!r} (expected one of {DPL_STUDIES})")
-    return _art(artifacts_dir) / "results" / "dpl" / CDEC15 / "studies" / name
+    return _art(artifacts_dir) / "results" / "dpl" / "studies" / name
 
 
-def dpl_benchmark(artifacts_dir="artifacts") -> Path:
-    """The differentiable model against the reference model (``sacsma dpl benchmark``)."""
-    return _art(artifacts_dir) / "results" / "dpl" / CDEC15 / "benchmark"
+def dpl_fidelity(artifacts_dir="artifacts") -> Path:
+    """The differentiable model against the reference model (``sacsma dpl fidelity``)."""
+    return _art(artifacts_dir) / "results" / "dpl" / "fidelity"
 
 
 def product(artifacts_dir="artifacts", forcing: str | None = None, app: str = "calsim3") -> Path:

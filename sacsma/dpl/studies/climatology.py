@@ -1,27 +1,29 @@
 """Per-watershed mean-monthly TAF regime for the 11 CalSim3-mapped CDEC basins,
-as a five-step ablation vs the observed CalSim3 monthly FNF.
+one figure per step of the ladder, vs the observed CalSim3 monthly FNF.
 
 Each daily model sim (mm/day) is converted to monthly volume (TAF) with the
 CalSim3-consistent catchment areas (``calsim.catchments.basin_areas``), then
 averaged by calendar month over the **combined out-of-calibration period**
-(WY1950-1987 pre-calibration + WY2004-2018 validation; the WY1989-2003
-calibration window is excluded) into a 12-point water-year regime (Oct->Sep).
+(WY1950-1975 + WY1986-1987 + WY2004-2018: the WY1989-2003 training years and the held-out
+WY1976-85 are excluded) into a 12-point water-year regime (Oct->Sep).
 The observed reference is the CalSim3 full-natural-flow monthly series assembled
 by ``calsim.compare.build_anchor_long`` (rim systems vs FLOW-UNIMPAIRED,
 Mokelumne/Calaveras vs summed CalSim3 inflow arcs).  The 4 Tulare basins
 (PNF/TRM/SCC/ISB) have no CalSim3 counterpart and are dropped.
 
-Five figures, each an 11-basin (north->south) grid contrasting one ablation
-step against CalSim3 FNF:
-  a  GA SAC-SMA      vs  Hamon (dense)   (learned parameters)
-  b  Hamon (dense)   vs  Hamon           (fine HRU -> grid+footprint)
-  c  Hamon           vs  PT              (Hamon -> Priestley-Taylor)
-  d  PT              vs  Noah            (PT cascade -> Noah-lite ET)
-  e  Noah -> Hybrid -> Hybrid DT          (the LSTM step on the noah physics)
+Seven figures, each an 11-basin (north->south) grid contrasting one ladder step against
+CalSim3 FNF:
+  a  GA      vs  1_hru    (the network in place of the GA)
+  b  1_hru   vs  2_grid   (grid cells + CalSim3 outlines)
+  c  2_grid  vs  3_pt     (Priestley-Taylor PET)
+  d  3_pt    vs  4_noah   (Noah-type ET with the SAC exchanges)
+  e  4_noah  vs  5_px     (learned rain/snow threshold)
+  f  5_px    vs  6_aef    (aef_u inputs)
+  g  5_px -> hybrid -> hybrid_dt, and lstm   (the LSTM step on 5_px)
 
-The learned runs are run as trained (:func:`sacsma.dpl.evaluate.basin_daily`); ``Hybrid`` /
-``Hybrid DT`` are the seed ENSEMBLES (mean of member daily flows) on the noah physics.
-Output: ``artifacts/results/dpl/15cdec/studies/climatology/climatology_{a..e}.png``.
+The learned runs are run as trained (:func:`sacsma.dpl.evaluate.basin_daily`); the hybrids
+are the seed ENSEMBLES (mean of member daily flows).
+Output: ``artifacts/results/dpl/studies/climatology/climatology_{a..g}.png``.
 
 A dPL-side artifact (needs torch for the hybrids) that reads the lightweight
 CalSim3-FNF loader from ``calsim.compare``; it never makes calsim depend on torch.
@@ -38,49 +40,51 @@ from ... import paths
 from ...io import load_hru_table, mmday_to_cfs
 
 _AF_PER_CFS_DAY = 1.98347          # cfs-day -> acre-feet; /1000 -> TAF
-#: combined out-of-calibration period (WY1950-1987 + WY2004-2018), cal excluded.
-_PERIOD = [("1949-10-01", "1987-09-30"), ("2003-10-01", "2018-12-31")]
+#: combined out-of-calibration period (WY1950-1975 + WY1986-1987 + WY2004-2018): the
+#: training years and the held-out WY1976-85 excluded (decision 38 of the ladder).
+_PERIOD = [("1949-10-01", "1975-09-30"), ("1985-10-01", "1987-09-30"),
+           ("2003-10-01", "2018-09-30")]
 _WY = [10, 11, 12, 1, 2, 3, 4, 5, 6, 7, 8, 9]
 _WY_LABELS = ["O", "N", "D", "J", "F", "M", "A", "M", "J", "J", "A", "S"]
 
-#: the physics runs: label -> the 15-CDEC learned run (None: the GA calibration).  ``PT`` is
-#: the refined PT (snow albedo 0.6, dewpoint 2.0); ``Noah`` the Noah-lite ET on PT potential.
+#: the physics runs: label -> the ladder run (None: the GA calibration)
 RUNS: dict[str, str | None] = {
-    "GA SAC-SMA": None, "Hamon (dense)": "hamon_dense", "Hamon": "hamon", "PT": "pt",
-    "Noah": "noah",
+    "GA": None, "1_hru": "1_hru", "2_grid": "2_grid", "3_pt": "3_pt", "4_noah": "4_noah",
+    "5_px": "5_px", "6_aef": "6_aef",
 }
-#: hybrid sims: label -> ensemble dir (seed*/checkpoints/best.pt averaged), both on the noah
-#: physics: ``Hybrid`` the skill step, ``Hybrid DT`` with the response-consistency loss.
+#: the LSTM ensembles on 5_px: label -> ensemble dir (seed*/checkpoints/best.pt averaged)
 HYBRID: dict[str, Path] = {
-    "Hybrid": paths.dpl_run(run="hybrid"),
-    "Hybrid DT": paths.dpl_run(run="hybrid_dt"),
+    "hybrid": paths.dpl_run(run="hybrid"),
+    "hybrid_dt": paths.dpl_run(run="hybrid_dt"),
+    "lstm": paths.dpl_run(run="lstm"),
 }
 
 #: per-series line style (identity by hue; CalSim3 FNF emphasized in black).
 STYLE: dict[str, dict] = {
     "CalSim3 FNF":    dict(color="#000000", lw=2.4, ls="--", marker="o", ms=4.5,
                           zorder=10),
-    "GA SAC-SMA":     dict(color="#9e9e9e", lw=1.9),
-    "Hamon (dense)":  dict(color="#8c564b", lw=1.9),
-    "Hamon":          dict(color="#1f77b4", lw=1.9),
-    "PT":             dict(color="#ff7f0e", lw=1.9),
-    "Noah":           dict(color="#bcbd22", lw=2.0),
-    "Hybrid":         dict(color="#9467bd", lw=2.1),
-    "Hybrid DT":      dict(color="#17becf", lw=2.1),
+    "GA":             dict(color="#9e9e9e", lw=1.9),
+    "1_hru":          dict(color="#8c564b", lw=1.9),
+    "2_grid":         dict(color="#1f77b4", lw=1.9),
+    "3_pt":           dict(color="#ff7f0e", lw=1.9),
+    "4_noah":         dict(color="#bcbd22", lw=2.0),
+    "5_px":           dict(color="#2ca02c", lw=2.0),
+    "6_aef":          dict(color="#e377c2", lw=2.0),
+    "hybrid":         dict(color="#9467bd", lw=2.1),
+    "hybrid_dt":      dict(color="#17becf", lw=2.1),
+    "lstm":           dict(color="#7f7f7f", lw=2.1),
 }
 
 #: (tag, subtitle, [model labels]) -- each renders one 11-basin figure.
 COMPARISONS: list[tuple[str, str, list[str]]] = [
-    ("a", "learned parameters: GA SAC-SMA → dPL (same Hamon physics, fine HRUs)",
-        ["GA SAC-SMA", "Hamon (dense)"]),
-    ("b", "resolution + footprint: fine 7891-HRU → 1/16° grid + CalSim3 footprint",
-        ["Hamon (dense)", "Hamon"]),
-    ("c", "energy PET: Hamon → Priestley–Taylor (snow-albedo + dewpoint)",
-        ["Hamon", "PT"]),
-    ("d", "canopy ET: PT cascade → Noah-lite external ET",
-        ["PT", "Noah"]),
-    ("e", "the LSTM step: Noah → Hybrid → Hybrid DT",
-        ["Noah", "Hybrid", "Hybrid DT"]),
+    ("a", "the network in place of the GA (Hamon, SAC ET, fine HRUs)", ["GA", "1_hru"]),
+    ("b", "grid cells + CalSim3 outlines", ["1_hru", "2_grid"]),
+    ("c", "Priestley–Taylor PET", ["2_grid", "3_pt"]),
+    ("d", "Noah-type ET with the SAC exchanges", ["3_pt", "4_noah"]),
+    ("e", "learned rain/snow threshold", ["4_noah", "5_px"]),
+    ("f", "aef_u inputs in place of soil/vegetation/terrain", ["5_px", "6_aef"]),
+    ("g", "the LSTM step on 5_px: hybrid, hybrid_dt and the plain lstm",
+        ["5_px", "hybrid", "hybrid_dt", "lstm"]),
 ]
 
 
@@ -108,23 +112,19 @@ def _daily_ensemble(ens_dir: str, data_dir: str, device, cache: Path) -> pd.Data
     import torch
 
     from ..hybrid.data import data_for
-    from ..hybrid.model import HybridLSTM
+    from ..hybrid.evaluate import _build_model
     from ..hybrid.train import predict_days
 
     ckpts = sorted(Path(ens_dir).glob("seed*/checkpoints/best.pt"))
     if not ckpts:
         raise FileNotFoundError(f"no seed*/checkpoints/best.pt under {ens_dir}")
     ck0 = torch.load(ckpts[0], map_location="cpu", weights_only=False)
-    cfg = ck0["cfg"]
     data = data_for(ck0, data_dir, device)
     bb, tt = data.eval_days("all")
     accum = None
     for cp in ckpts:
-        ck = torch.load(cp, map_location="cpu", weights_only=False)
-        model = HybridLSTM(data.n_feat, data.n_static,
-                           hidden=cfg["hidden"], static_embed=cfg["static_embed"],
-                           dropout=cfg["dropout"]).to(device)
-        model.load_state_dict(ck["model"])
+        model = _build_model(torch.load(cp, map_location="cpu", weights_only=False),
+                             data, device)
         f = predict_days(model, data, bb, tt).clamp_min(0.0).cpu().numpy()
         accum = f if accum is None else accum + f
     flow = accum / len(ckpts)
@@ -332,7 +332,8 @@ def _plot_comparison(data: dict, models: list[str], tag: str, subtitle: str,
                ncol=len(leg), fontsize=10, frameon=False, bbox_to_anchor=(0.5, 0.012))
     fig.suptitle(f"({tag})  {subtitle}", fontsize=13, fontweight="bold", y=0.998)
     fig.text(0.5, 0.966, "mean-monthly flow, TAF/month  •  "
-             "WY1950–1987 + WY2004–2018 (calibration WY1989–2003 excluded)",
+             "WY1950–1975 + WY1986–1987 + WY2004–2018 (training years and WY1976–85 "
+             "excluded)",
              ha="center", fontsize=9.5, color="#555555")
     fig.supylabel("mean-monthly flow (TAF/month)", fontsize=10)
     fig.supxlabel("water-year month (Oct → Sep)", fontsize=10, y=0.052)
@@ -390,7 +391,7 @@ def _plot_metrics_bars(data: dict, path: Path) -> None:
     fig.legend([seen[m] for m in models], models, loc="lower center", ncol=ncol,
                fontsize=9.5, frameon=False, bbox_to_anchor=(0.5, 0.008))
     fig.suptitle("All series vs CalSim3 FNF — monthly skill by basin "
-                 "(WY1950–1987 + WY2004–2018)", fontsize=13.5, fontweight="bold",
+                 "(WY1950–75, WY1986–87, WY2004–18)", fontsize=13.5, fontweight="bold",
                  y=0.998)
     fig.tight_layout(rect=(0, 0.075, 1, 0.985))
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -436,7 +437,7 @@ def _plot_metrics_bars_agg(data: dict, path: Path) -> None:
     axes[-1].set_xticks(range(len(models)))
     axes[-1].set_xticklabels(models, rotation=22, ha="right", fontsize=10)
     fig.suptitle("All series vs CalSim3 FNF — skill aggregated across the 11 basins "
-                 "(mean, min–max)\nmonthly, WY1950–1987 + WY2004–2018",
+                 "(mean, min–max)\nmonthly, WY1950–75, WY1986–87, WY2004–18",
                  fontsize=12.5, fontweight="bold")
     fig.tight_layout(rect=(0, 0, 1, 0.955))
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -448,7 +449,7 @@ def _plot_metrics_bars_agg(data: dict, path: Path) -> None:
 def make_cdec15_climatology(data_dir: str = "data",
                             out_dir: str | Path | None = None,
                             *, device: str = "cuda") -> dict:
-    """Assemble every series and render the five ablation figures + the
+    """Assemble every series and render the seven ladder figures + the
     all-series metric-bar summaries (per-basin and basin-aggregated) into ``out_dir``
     (default: the study's result folder)."""
     data = assemble(data_dir, device=device)
@@ -459,7 +460,3 @@ def make_cdec15_climatology(data_dir: str = "data",
     _plot_metrics_bars(data, figdir / "climatology_summary.png")
     _plot_metrics_bars_agg(data, figdir / "climatology_summary_agg.png")
     return data
-
-
-if __name__ == "__main__":
-    make_cdec15_climatology()
