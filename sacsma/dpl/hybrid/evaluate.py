@@ -44,8 +44,7 @@ def _device() -> torch.device:
 def _build_model(ck: dict, data, dev: torch.device) -> HybridLSTM:
     model = HybridLSTM(data.n_feat, data.n_static,
                        hidden=ck["cfg"]["hidden"],
-                       static_embed=ck["cfg"]["static_embed"],
-                       dropout=ck["cfg"]["dropout"]).to(dev)
+                       static_embed=ck["cfg"]["static_embed"]).to(dev)
     model.load_state_dict(ck["model"])
     return model
 

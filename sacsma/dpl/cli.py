@@ -176,8 +176,8 @@ def _dpl_hybrid(args: argparse.Namespace) -> int:
     else:
         cfg = dict(physics=args.physics, use_sim=bool(args.physics),
                    statics_from=args.statics_from)
-    for k in ("n_epochs", "hidden", "dropout", "lr", "warmup_epochs", "lr_min", "patience",
-              "batch_size", "input_noise", "seed", "device"):
+    for k in ("n_epochs", "hidden", "lr", "warmup_epochs", "lr_min", "patience",
+              "batch_size", "seed", "device"):
         if getattr(args, k) is not None:
             cfg[k] = getattr(args, k)
     if args.response_lambda > 0:
@@ -505,9 +505,6 @@ def register(sub) -> None:
     # unset: the recipe's value (HybridConfig, or the base's with --init-from)
     hy.add_argument("--epochs", dest="n_epochs", type=int, default=None)
     hy.add_argument("--hidden", type=int, default=None, help="LSTM hidden size")
-    hy.add_argument("--dropout", type=float, default=None)
-    hy.add_argument("--input-noise", type=float, default=None,
-                    help="gaussian input-jitter regularizer std (0 disables)")
     hy.add_argument("--lr", type=float, default=None)
     hy.add_argument("--warmup-epochs", type=int, default=None)
     hy.add_argument("--lr-min", type=float, default=None)

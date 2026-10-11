@@ -82,8 +82,9 @@ CalSim3 catchment outlines of the `multifamily` domain, restricted to the 15 CDE
 | `lstm` | the LSTM without `5_px`'s flow (a control), 3 seeds |
 
 Mean KGE over the 15 CDEC watersheds. WY1989–2003 and WY2004–18 are daily, from each run's
-`metrics.csv` (the LSTM runs on the mean flow of their seeds). WY1976–85 is the one read of the
-held-out decade, monthly, at the 13 outlets with a monthly record then.
+`metrics.csv` (the LSTM runs on the mean flow of their seeds). WY1976–85 is the held-out decade,
+monthly, at the 13 outlets with a monthly record then, read once per run: the rungs and
+dPL-CalSim together, the LSTM runs in a second read once their recipe was set.
 
 | Run | WY1989–2003 (training) | WY2004–18 | WY1976–85 |
 |---|---|---|---|
@@ -95,9 +96,9 @@ held-out decade, monthly, at the 13 outlets with a monthly record then.
 | `5_px` | 0.868 | 0.841 | 0.859 |
 | `6_aef` | 0.863 | 0.837 | 0.866 |
 | `7_calsim` | training | training | 0.899 |
-| `hybrid` | 0.888 | 0.871 | 0.876 |
-| `hybrid_dt` | 0.852 | 0.847 | 0.862 |
-| `lstm` | 0.851 | 0.838 | 0.774 |
+| `hybrid` | 0.961 | 0.878 | 0.860 |
+| `hybrid_dt` | 0.942 | 0.873 | 0.880 |
+| `lstm` | 0.948 | 0.855 | 0.782 |
 
 The same read on the regional records outside the 15 watersheds (mean KGE; USGS gauges daily,
 unimpaired-flow subbasins and CalSim3 arcs monthly):
@@ -125,9 +126,9 @@ What the ladder shows (a step counts when the mean moves by 0.01 or more):
   family (USGS +0.18, subbasins +0.15, arcs +0.07). On WY2004–18 they gain at MKM, FOL, PNF and
   ORO and lose at NHG, TRM and NML.
 - **Training on every family** (`7_calsim`) gains at the outlets (+0.03) and in every family.
-- **The hybrid adds skill** over its physics (+0.03 on WY2004–18, +0.02 on WY1976–85) and loses
-  its response to warming (−0.3 % annual runoff at +3 °C against −2.4 % for `5_px`);
-  `hybrid_dt` keeps most of the response and gives most of the skill back
+- **The hybrid adds skill** over its physics on WY2004–18 (+0.04) but not on WY1976–85, and
+  loses its response to warming (0.0 % annual runoff at +3 °C against −2.4 % for `5_px`).
+  `hybrid_dt` keeps most of the skill (+0.03 and +0.02) and about 60 % of the response
   ([Learned parameters](learned_parameters.md#the-lstm-hybrids-and-their-response-to-warming)).
   The LSTM without physics is at the rungs' level on WY2004–18 and far below them on WY1976–85.
 
@@ -164,9 +165,9 @@ sacsma dpl calsim atlas <run> --score-holdout
   of their ratio to observed on WY1989–2003 (`2_grid` against a one-year control). Both
   under-predict them.
 - **Single seed.** No rung has a second seed.
-- **`hybrid` on WY1976–85.** It is below `5_px` at SHA, ORO, YRS, FOL, TLG, MRC and MIL
-  (−0.015), most at MRC (0.801 against 0.937). On WY2004–18
-  `5_px` is ahead of it at BND, MRC, NHG, PNF and SHA.
+- **`hybrid` on WY1976–85.** Level with `5_px` on the mean (0.860 against 0.859) and below it
+  at 7 of the 13 outlets, most at MRC (0.784 against 0.937). On WY2004–18 `5_px` is ahead of
+  it at SHA, BND and MRC.
 
 ## Tried and not adopted
 
@@ -226,6 +227,15 @@ the time.
 - A two-layer static encoder and a two-layer head: 15 distinct static vectors cannot identify them.
 - Fewer response points (1, 5, 8 before the 14 of `hybrid_dt`): the error at ±20 % precipitation
   is larger.
+- Dropout, input noise, weight decay and a log-flow term in the loss: they held the training KGE
+  near 0.89 with no gain on WY2004–18.
+- A wider network or longer training (hidden 128 or 256, 150 epochs): training KGE up to 0.98,
+  WY2004–18 level or lower. A loss term on the variance ratio, a loss on every day of the
+  window, or the statics scaling the last hidden state: no gain.
+- AlphaEarth embeddings in the LSTM (`6_aef`'s flow, embedding statics, the embedding setting
+  the initial state or scaling the inputs, its spread within a watershed, semi-distributed units
+  by elevation band or embedding cluster): no gain on WY2004–18. A one-hot label scores about
+  as well as any statics, so 15 watersheds cannot show what the embeddings add.
 
 **The product** (median monthly KGE on the held-out WY1976–85)
 
