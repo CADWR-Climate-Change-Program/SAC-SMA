@@ -16,13 +16,11 @@ import torch.nn as nn
 
 
 class HybridLSTM(nn.Module):
-    def __init__(self, n_dynamic: int, n_static: int, *,
-                 hidden: int, static_embed: int, dropout: float):
+    def __init__(self, n_dynamic: int, n_static: int, *, hidden: int, static_embed: int):
         """The statics enter through one linear map; the head is linear."""
         super().__init__()
         self.static_encoder = nn.Linear(n_static, static_embed)
         self.lstm = nn.LSTM(n_dynamic + static_embed, hidden, batch_first=True)
-        self.dropout = nn.Dropout(dropout)
         self.head = nn.Sequential(
             nn.Linear(hidden, 1),
             nn.Softplus(),                     # streamflow is non-negative
@@ -32,5 +30,4 @@ class HybridLSTM(nn.Module):
         tw = x_dyn.shape[1]
         e = self.static_encoder(x_static).unsqueeze(1).expand(-1, tw, -1)
         _, (h, _) = self.lstm(torch.cat([x_dyn, e], dim=-1))
-        h = self.dropout(h.squeeze(0))
-        return self.head(h).squeeze(-1)        # (B,) normalized prediction
+        return self.head(h.squeeze(0)).squeeze(-1)   # (B,) normalized prediction

@@ -1,8 +1,9 @@
 """Train the hybrid LSTM: MSE-family loss, cal-KGE selection (no val leakage).
 
 The target is per-basin std-normalized (so basins weigh comparably — the NNSE
-spirit), the loss is plain MSE in that space (+ an optional low-flow log term,
-+ the optional TEMPERATURE-CONSISTENCY term below).  KGE is used ONLY as the
+spirit), the loss is plain MSE in that space (+ the optional response-consistency
+term below).  No dropout, input noise, weight decay or log term: on 15 watersheds they
+held the training KGE down without a gain on the test years.  KGE is used ONLY as the
 no-grad selection metric, pooled over the CAL window (WY1989-2003); validation
 (WY2004-2018) is never read during training or selection.  Denormalization
 back to mm/day happens here.
@@ -44,7 +45,6 @@ class HybridConfig:
     named per run)."""
     hidden: int = 64
     static_embed: int = 8            # one linear map of the statics; the head is linear
-    dropout: float = 0.35
     #: a dPL checkpoint of the ``physical`` variant whose inputs and the dPL's four climate
     #: indices are the statics; see :func:`.data.load_hybrid_data`
     statics_from: str = "5_px"
@@ -58,16 +58,12 @@ class HybridConfig:
     #: (Δprecip, ΔT) response anchors of the response-consistency loss, each
     #: {"dp": frac, "dt": degC, "lambda": w}; the physics run supplies the response.
     response_anchors: tuple = ()
-    lr: float = 4e-4
-    weight_decay: float = 1e-4
+    lr: float = 1e-3
     grad_clip: float = 1.0
     n_epochs: int = 60
     warmup_epochs: int = 3
     lr_min: float = 1e-5
     batch_size: int = 512
-    input_noise: float = 0.2         # gaussian input jitter (regularizer)
-    log_lambda: float = 0.15         # low-flow log-space term
-    log_eps: float = 0.01
     eval_every: int = 2
     patience: int = 12
     seed: int = 0
@@ -125,8 +121,7 @@ def train_hybrid(cfg: HybridConfig, *, data_dir: str = "data", out_dir: str | Pa
     data = load_hybrid_data(data_dir, physics=cfg.physics, statics_from=cfg.statics_from,
                             use_sim=cfg.use_sim, response_anchors=tuple(anchors), device=dev)
     model = HybridLSTM(data.n_feat, data.n_static,
-                       hidden=cfg.hidden, static_embed=cfg.static_embed,
-                       dropout=cfg.dropout).to(dev)
+                       hidden=cfg.hidden, static_embed=cfg.static_embed).to(dev)
     if cfg.init_from:
         base = torch.load(cfg.init_from, map_location="cpu", weights_only=False)
         keys = ("hidden", "static_embed", "statics_from", "use_sim", "physics")
@@ -135,8 +130,7 @@ def train_hybrid(cfg: HybridConfig, *, data_dir: str = "data", out_dir: str | Pa
         if diff or (base["n_feat"], base["n_static"]) != (data.n_feat, data.n_static):
             raise ValueError(f"init_from: the inputs or the network differ from the base: {diff}")
         model.load_state_dict(base["model"])
-    opt = torch.optim.AdamW(model.parameters(), lr=cfg.lr,
-                            weight_decay=cfg.weight_decay)
+    opt = torch.optim.Adam(model.parameters(), lr=cfg.lr)
     warm = torch.optim.lr_scheduler.LinearLR(
         opt, start_factor=0.1, total_iters=max(1, cfg.warmup_epochs))
     cos = torch.optim.lr_scheduler.CosineAnnealingLR(
@@ -167,30 +161,15 @@ def train_hybrid(cfg: HybridConfig, *, data_dir: str = "data", out_dir: str | Pa
             idx = perm[i:i + cfg.batch_size]
             b = bt[idx, 0]
             t = bt[idx, 1]
-            x = data.gather_windows(b, t)
-            noise = (cfg.input_noise * torch.randn_like(x)
-                     if cfg.input_noise > 0 else None)
-            if noise is not None:
-                x = x + noise
-            pred = model(x, data.static[b])
+            pred = model(data.gather_windows(b, t), data.static[b])
             targ = data.obs[b, t] / data.scale[b]
             loss = ((pred - targ) ** 2).mean()
-            if cfg.log_lambda > 0:
-                flow = (pred * data.scale[b]).clamp_min(0.0)
-                o = data.obs[b, t]
-                loss = loss + cfg.log_lambda * (
-                    (torch.log(flow + cfg.log_eps)
-                     - torch.log(o + cfg.log_eps)) ** 2).mean()
             for i, (fa_t, sa_t, lam) in enumerate(
                     zip(data.feat_anchors, data.sim_anchors, anchor_lambdas)):
-                # second forward on each perturbed copy, SAME noise (so the
-                # delta is not noise-dominated); anchor the hybrid's daily
+                # second forward on each perturbed copy: anchor the hybrid's daily
                 # response to the physics response, per-basin normalized.  The
                 # climate indices among the statics also co-vary with the anchor.
-                x_a = data.gather_windows(b, t, feat=fa_t)
-                if noise is not None:
-                    x_a = x_a + noise
-                pred_a = model(x_a, data.static_anchors[i][b])
+                pred_a = model(data.gather_windows(b, t, feat=fa_t), data.static_anchors[i][b])
                 d_phys = (sa_t[b, t] - data.sim[b, t]) / data.scale[b]
                 loss = loss + lam * (((pred_a - pred) - d_phys) ** 2).mean()
             opt.zero_grad(set_to_none=True)

@@ -75,7 +75,8 @@ What these runs show:
 - **AlphaEarth inputs are even at the outlets and transfer better** to the records the run did
   not train on (+0.18 on the USGS gauges in WY1976–85).
 - **An LSTM on the physics adds skill and loses the response to warming** unless it is trained
-  to keep it (`hybrid_dt`), which gives most of the skill back. See below.
+  to keep it (`hybrid_dt`), which keeps most of the skill and about 60 % of the change in annual
+  runoff. See below.
 - **Weaknesses that stayed.** SCC has the lowest WY2004–18 score in every rung (0.45 to 0.62)
   and in `hybrid` and `hybrid_dt`.
 
@@ -88,7 +89,20 @@ watershed (`5_px`'s physical inputs and four climate indices), and scores an ens
 seeds. `hybrid_dt` fine-tunes each `hybrid` seed for 15 epochs with a loss term that pulls the
 network's change in flow under 14 combinations of precipitation change (−20 to +20 %) and
 warming (0, +2, +4 °C) toward the change `5_px` gives. `lstm` drops the simulated flow from the
-inputs.
+inputs. Each network (hidden size 64) trains for 60 epochs with Adam at a learning rate of 1e-3,
+without dropout, input noise, weight decay or a log-flow term, and keeps the epoch with the best
+training-period KGE. With 15 watersheds the statics can serve as a label for each one; in
+single-seed tests a one-hot label in their place did about as well.
+
+| | WY1989–2003 (training) | WY2004–18 | WY1976–85 (monthly, 13 outlets) |
+|---|---|---|---|
+| `5_px` | 0.868 | 0.841 | 0.859 |
+| `hybrid` | 0.961 | 0.878 | 0.860 |
+| `hybrid_dt` | 0.942 | 0.873 | 0.880 |
+| `lstm` | 0.948 | 0.855 | 0.782 |
+
+`hybrid`'s gain on WY2004–18 does not reach the older held-out decade, where it is level with
+`5_px`. `hybrid_dt`'s response term holds it there: it keeps most of the skill in both windows.
 
 Change at +3 °C with precipitation unchanged, over the 15 watersheds
 (`artifacts/results/dpl/studies/hybrids/hybrids_metrics.csv`):
@@ -96,16 +110,15 @@ Change at +3 °C with precipitation unchanged, over the 15 watersheds
 | | Annual runoff, mean | Same sign as `5_px` | Correlation with `5_px` across watersheds | April–July volume, mean |
 |---|---|---|---|---|
 | `5_px` | −2.4 % | | | −33 % |
-| `hybrid` | −0.3 % | 8 of 15 | −0.12 | −24 % |
-| `hybrid_dt` | −1.6 % | 13 of 15 | 0.66 | −31 % |
-| `lstm` | +11.3 % | 2 of 15 | −0.40 | −5 % |
+| `hybrid` | 0.0 % | 9 of 15 | 0.45 | −23 % |
+| `hybrid_dt` | −1.5 % | 13 of 15 | 0.83 | −29 % |
+| `lstm` | +10.5 % | 2 of 15 | 0.28 | −5 % |
 
-`hybrid` keeps most of the physics' shift away from spring, but its change in annual runoff is
-unrelated to `5_px`'s and runs from −7.7 % to +10.3 % across watersheds. `hybrid_dt` keeps about
-two-thirds of the annual change and nearly all of the spring change, and gives back most of
-`hybrid`'s skill (validation KGE 0.847 against 0.871 and 0.841 for `5_px`). `lstm` gains runoff
-as it warms. With precipitation changed by ±10 or ±20 % at +2 °C, `hybrid_dt` gives about 93 %
-of `5_px`'s change in annual runoff, `hybrid` about 80 % and `lstm` about 40 %.
+`hybrid` keeps most of the physics' shift away from spring, but its annual runoff hardly changes:
+from −5.8 % to +5.1 % across watersheds, and slightly up below +2.5 °C. `hybrid_dt` keeps about
+60 % of the annual change and about 90 % of the spring change. `lstm` gains runoff as it warms.
+With precipitation changed by ±10 or ±20 % at +2 °C, `hybrid_dt` gives about 90 % of `5_px`'s
+change in annual runoff, `hybrid` about 77 % and `lstm` about 36 %.
 
 ![Skill and response of the hybrid family](../artifacts/results/dpl/studies/hybrids/hybrid_summary.png)
 
