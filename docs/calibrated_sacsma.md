@@ -69,7 +69,7 @@ Full record, October 1921 to December 2018 (`artifacts/results/calsim3/anchor_me
 | Set | Watersheds | Mean KGE | Median KGE | Mean \|bias\| | VIC mean KGE |
 |---|---|---|---|---|---|
 | Observed11 | 11 | 0.91 | 0.94 | 4.2 % | 0.76 |
-| Unimpaired9 | 9 | 0.92 | 0.92 | 4.9 % | 0.62 |
+| Unimpaired9 | 9 | 0.91 | 0.92 | 4.9 % | 0.67 |
 | CDEC15 | 11 with a CalSim3 reference | 0.87 | 0.91 | 7.6 % | 0.77 |
 
 VIC is the routed VIC simulation used in CalSim3's development, scored the same way. SAC-SMA
@@ -89,20 +89,20 @@ outside every set's calibration period, so they are a common out-of-sample test.
 | Set | Mean KGE, WY1922–1949 | Mean \|bias\| | Mean KGE, from WY1950 | Mean \|bias\| |
 |---|---|---|---|---|
 | Observed11 | 0.84 | 10.7 % | 0.92 | 4.0 % |
-| Unimpaired9 | 0.83 | 12.6 % | 0.93 | 4.2 % |
+| Unimpaired9 | 0.84 | 11.3 % | 0.91 | 4.9 % |
 | CDEC15 | 0.81 | 12.9 % | 0.88 | 7.0 % |
 
 **Single arcs.** Scored one CalSim3 arc at a time (`calset_metrics.csv`), the median KGE is
-0.68 (Observed11), 0.67 (CDEC15) and 0.77 (Unimpaired9); summing to the watershed cancels
+0.68 (Observed11), 0.67 (CDEC15) and 0.74 (Unimpaired9); summing to the watershed cancels
 most of that error. A quantile-mapping correction per arc, fitted on WY1922–1971 and scored on
 WY1972–2018, lifts the median over the scored years from 0.68 to 0.81 (Observed11) and from
-0.76 to 0.86 (Unimpaired9) (`subarc_validation_metrics.csv`).
+0.75 to 0.83 (Unimpaired9) (`subarc_validation_metrics.csv`).
 
 **How close the calibration targets are to CalSim3** (`target_vs_calsim3.csv`). Of the 20
-watersheds, the target agrees with CalSim3 at 11, differs as a data product at 6 (Cache Creek
-−11 %, Bear River −8 %, Fresno River +7 %, among others), and differs through the drainage area
-at 3 (Chowchilla −10 %, SNS −9 %, YRS +8 %). These offsets are the bias a perfect fit to the
-target would still show against CalSim3. They are left visible.
+watersheds, the target agrees with CalSim3 at 11, differs as a data product at 5 (Cache Creek
+−11 %, Bear River −8 %, Calaveras River +5 %, among others), and differs through the drainage
+area at 4 (Fresno River −15 %, Chowchilla −10 %, SNS −9 %, YRS +8 %). These offsets are the
+bias a perfect fit to the target would still show against CalSim3. They are left visible.
 
 Maps and figures show skill at the level of the whole watershed: every catchment polygon
 carries its watershed's anchor score, never its own arc score, which stays in the tables. The
@@ -128,8 +128,8 @@ PET.
 
 **Split and unsplit precipitation.** Under `historical_lto` the anchor skill over the full
 record changes little (median KGE 0.93 for both), but it moves between watersheds before
-WY1950: Trinity rises from 0.40 to 0.83 and the Cosumnes falls from 0.96 to 0.81
-(`artifacts/results/forcing/split_unsplit_anchor_skill.csv`). Some of the disagreement
+WY1950: Trinity rises from 0.40 to 0.83, and the Fresno River falls from 0.86 to 0.48 and the
+Cosumnes from 0.96 to 0.81 (`artifacts/results/forcing/split_unsplit_anchor_skill.csv`). Some of the disagreement
 with CalSim3 before 1950 therefore comes from the precipitation data and not from the model.
 
 Figures for both: [`artifacts/results/forcing/figures/`](../artifacts/results/forcing/figures/), each product against the

@@ -72,7 +72,6 @@ MIXED_WINDOW = "WY1950-84"
 #: creeks, the back-extended monthly family and the arcs train WY1950-75) and is kept under
 #: this suffix.
 MIXED_SUFFIX = "_mixed"
-_WY_MONTHS = ["Oct", "Nov", "Dec", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep"]
 
 
 def wy_label(first: int, last: int) -> str:
@@ -419,74 +418,63 @@ def _run_obs_mask(run_dir: str | Path) -> tuple[str, ...]:
     return tuple(cfg.get("obs_mask", ()))
 
 
-def location_figure(panel: dict, out: Path, run_label: str = "") -> None:
-    """Per-location figure in the basin-diagnostics layout: the monthly volume series (validation
-    window shaded, training window clear) with per-window stat boxes, and the two
-    mean-monthly regimes.  The entity's own gauge record is overlaid where one exists,
-    with its volume ratio to the CalSim3 reference in the legend; for a partial footprint
-    the sum of the covered arcs is drawn dashed."""
+def location_figure(panel: dict, out: Path) -> None:
+    """Per-location figure in the basin-diagnostics layout: the monthly volume series with the
+    validation window (the run's held-out water years) shaded and each window's KGE and bias
+    above it, and the mean-monthly regimes of the training window (left) and the validation
+    window (right) on one scale.  The entity's own gauge record is drawn where it overlaps the
+    reference for a year or more; for a partial footprint the sum of the covered arcs is drawn
+    dashed."""
+    from matplotlib.patches import Patch
+
     from ..._figures import _period_stats, _stat_text, plt
     st, sim, ref = panel["row"], panel["sim"], panel["ref"]
     idx = sim.index
     d = idx.to_timestamp()
     s, r = sim.to_numpy(), ref.to_numpy()
-    kind = (f"FLOW-UNIMPAIRED {st.system}" if panel["kind"] == "anchor"
-            else f"sum of {len(st.arcs)} INFLOW arcs")
     # the validation window is the run's held-out water years (score_run's panel)
     vname, vrange = panel["val_window"]
     v0, v1 = (pd.Period(x, "M") for x in vrange)
     c0, c1 = panel["train"]
     in_val = np.asarray((idx >= v0) & (idx <= v1))
     in_cal = np.asarray((idx >= c0) & (idx <= c1)) & ~holdout_month_mask(idx, panel["holdout_wy"])
-    train_label = f"{c0}..{c1} minus WY{panel['holdout_wy'][0]}-{panel['holdout_wy'][1]}"
     val = _period_stats(s[in_val], r[in_val])
     cal = _period_stats(s[in_cal], r[in_cal])
 
-    fig = plt.figure(figsize=(7.0, 5.8))
+    fig = plt.figure(figsize=(6.5, 5.8))
     gs = fig.add_gridspec(2, 2, height_ratios=[3, 2])
-    fig.suptitle(f"{st.entity_id} — {st.name}\ndPL simulated vs CalSim3 {kind}"
-                 + (f"   [{run_label}]" if run_label else ""), fontsize=8, fontweight="bold")
+    fig.suptitle(st.name.split(" (")[0])
     ax = fig.add_subplot(gs[0, :])
     rec = panel.get("record")
-    rec_label = None
     if rec is not None:
         rec = rec.reindex(idx).to_numpy()
-        for wname, mask in (("validation", in_val), ("training window", in_cal)):
-            k = mask & np.isfinite(rec) & np.isfinite(r)
-            if k.sum() >= 12:
-                rec_label = f"gauge record ({rec[k].sum() / r[k].sum():.2f}x CalSim3 over {wname})"
-                break
-        if rec_label is not None:
-            ax.plot(d, rec, color="tab:green", lw=0.7, alpha=0.8, label=rec_label)
-    ax.plot(d, r, color="0.25", lw=0.7, label=f"CalSim3 ({kind})")
+        if any((m & np.isfinite(rec) & np.isfinite(r)).sum() >= 12 for m in (in_val, in_cal)):
+            ax.plot(d, rec, color="tab:green", lw=0.7, alpha=0.8, label="Gauge record")
+        else:
+            rec = None
+    ax.plot(d, r, color="0.25", lw=0.7,
+            label="CalSim3 unimpaired" if panel["kind"] == "anchor" else "CalSim3 inflow")
     cov = panel.get("covered")
     if cov is not None:
-        ax.plot(d, cov.to_numpy(), color="0.5", lw=0.7, ls="--", label="CalSim3, covered arcs only")
-    ax.plot(d, s, color="tab:red", lw=0.7, alpha=0.8, label="dPL simulated")
+        ax.plot(d, cov.to_numpy(), color="0.5", lw=0.7, ls="--", label="Covered arcs")
+    ax.plot(d, s, color="tab:red", lw=0.7, alpha=0.8, label="Simulated")
+    ax.axvspan(v0.to_timestamp(), (v1 + 1).to_timestamp(), color="tab:blue", alpha=0.07, lw=0)
     dmin, dmax = d.min(), d.max()
-    ax.axvspan(dmin, c0.to_timestamp(), color="tab:blue", alpha=0.05)
-    ax.axvline(c0.to_timestamp(), color="tab:blue", lw=1.2, ls="--")
-    if c1.to_timestamp() < dmax:
-        ax.axvspan(c1.to_timestamp(), dmax, color="tab:blue", alpha=0.05)
-        ax.axvline(c1.to_timestamp(), color="tab:blue", lw=1.2, ls="--")
     ax.set_xlim(dmin, dmax)
-    ax.set_ylabel("volume (TAF/month)")
-    ax.set_title(f"Monthly volume — validation {vname} shaded, training window "
-                 f"{train_label} clear", fontsize=8.5)
-    ax.set_ylim(0, np.nanmax([np.nanmax(s), np.nanmax(r)]) * 1.5)
-    # stat boxes in the two top corners; the single legend goes below the whole figure
-    box = dict(boxstyle="round", fc="white", ec="0.7", alpha=0.9)
-    ax.text(0.01, 0.97, _stat_text(f"VAL {vname}", val), transform=ax.transAxes, va="top",
-            ha="left", fontsize=8, family="monospace", bbox=box)
-    ax.text(0.99, 0.97, _stat_text(f"CAL {train_label}", cal), transform=ax.transAxes, va="top",
-            ha="right", fontsize=8, family="monospace", bbox=box)
+    ax.set_ylim(0, np.nanmax([np.nanmax(s), np.nanmax(r)]) * 1.1)
+    ax.set_ylabel("Volume (TAF/month)")
+    # each window's line of skill on the side of its window
+    val_left = v0.to_timestamp() < c0.to_timestamp()
+    for label, st_, left in (("Training", cal, not val_left), ("Validation", val, val_left)):
+        ax.text(0.0 if left else 1.0, 1.02, _stat_text(label, st_), transform=ax.transAxes,
+                ha="left" if left else "right", va="bottom")
 
     wy_months = [10, 11, 12, 1, 2, 3, 4, 5, 6, 7, 8, 9]
     x = np.arange(12)
     axes_rg = [fig.add_subplot(gs[1, 0]), fig.add_subplot(gs[1, 1])]
     month = np.asarray(idx.month)
-    for axrg, mask, lab in zip(axes_rg, (in_val, in_cal),
-                               (f"validation {vname}", f"training {train_label}"), strict=True):
+    for axrg, mask, lab in zip(axes_rg, (in_cal, in_val), ("Training", f"Validation, {vname}"),
+                               strict=True):
         fin = mask & np.isfinite(s) & np.isfinite(r)
         if fin.sum():
             def regime(y):
@@ -495,27 +483,27 @@ def location_figure(panel: dict, out: Path, run_label: str = "") -> None:
                     v = y[fin & (month == mo)]
                     out.append(np.nanmean(v) if np.isfinite(v).any() else np.nan)
                 return out
-            axrg.plot(x, regime(r), "o-", color="0.25", ms=3.5, label="CalSim3")
-            if rec_label is not None and np.isfinite(rec[mask]).sum() >= 12:
-                axrg.plot(x, regime(rec), "^-", color="tab:green", ms=3.0, label="gauge record")
+            axrg.plot(x, regime(r), color="0.25", lw=1.4)
+            if rec is not None and np.isfinite(rec[mask]).sum() >= 12:
+                axrg.plot(x, regime(rec), color="tab:green", lw=1.4)
             if cov is not None:
-                axrg.plot(x, regime(cov.to_numpy()), "--", color="0.5", label="covered arcs")
-            axrg.plot(x, regime(s), "s-", color="tab:red", ms=3.5, label="dPL")
+                axrg.plot(x, regime(cov.to_numpy()), color="0.5", lw=1.2, ls="--")
+            axrg.plot(x, regime(s), color="tab:red", lw=1.4)
         else:
-            axrg.text(0.5, 0.5, "no reference", transform=axrg.transAxes,
+            axrg.text(0.5, 0.5, "No reference", transform=axrg.transAxes,
                       ha="center", va="center", color="0.5")
-        axrg.set_title(f"Regime — {lab}", fontsize=8)
-        axrg.set_xlabel("water-year month")
-        axrg.set_ylabel("volume (TAF/month)")
-        axrg.set_xticks(x)
-        axrg.set_xticklabels(list("ONDJFMAMJJAS"))
+        axrg.set_title(lab)
+        axrg.set_xticks([0, 3, 6, 9])
+        axrg.set_xticklabels(["O", "J", "A", "J"])
+    axes_rg[0].set_ylabel("Mean (TAF/month)")
     top = max(a_.get_ylim()[1] for a_ in axes_rg)
     for a_ in axes_rg:
         a_.set_ylim(0, top)
-    handles, labels = ax.get_legend_handles_labels()
-    fig.legend(handles, labels, loc="lower center", ncol=2, fontsize=7.5,
-               frameon=False, bbox_to_anchor=(0.5, 0.0))
-    fig.tight_layout(rect=(0, 0.075, 1, 0.93))
+    handles, _ = ax.get_legend_handles_labels()
+    handles.append(Patch(color="tab:blue", alpha=0.15, label="Validation"))
+    fig.legend(handles=handles, loc="lower center", ncol=len(handles) if len(handles) <= 4 else 3,
+               bbox_to_anchor=(0.5, 0.0), handlelength=1.5, columnspacing=1.2)
+    fig.tight_layout(rect=(0, 0.11 if len(handles) > 4 else 0.06, 1, 1))
     fig.savefig(out, dpi=200)
     plt.close(fig)
 
@@ -557,47 +545,49 @@ def summarize(metrics: pd.DataFrame, window: str) -> str:
     return "\n".join(lines)
 
 
-def regime_figure(monthly: pd.DataFrame, metrics: pd.DataFrame, path: Path,
-                  window: str, title: str = "") -> None:
-    """Mean-monthly regime (Oct-Sep) per set over ``window``: reference vs simulation."""
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
+def regime_figure(monthly: pd.DataFrame, path: Path, window: str) -> None:
+    """Mean-monthly regime (Oct-Sep) per set over ``window``, one panel per set: the CalSim3
+    reference, the simulation and, for a partial footprint, the sum of the covered arcs."""
+    from matplotlib.lines import Line2D
+
+    from ..._figures import plt
     m0, m1 = window_range(window)
     mon = monthly.copy()
     mon["period"] = pd.PeriodIndex(mon["month"], freq="M")
     mon = mon[(mon.period >= pd.Period(m0, "M")) & (mon.period <= pd.Period(m1, "M"))]
     mon["wm"] = (mon.period.dt.month - 10) % 12
     sets = list(dict.fromkeys(monthly.set_id))
-    ncol = 5
+    ncol = 4
     nrow = int(np.ceil(len(sets) / ncol))
-    fig, axes = plt.subplots(nrow, ncol, figsize=(3.4 * ncol, 2.6 * nrow), squeeze=False)
-    met = metrics[metrics.window == window].set_index(["set_id", "ref_kind"])
+    height = 1.5 * nrow + 1.0
+    fig, axes = plt.subplots(nrow, ncol, figsize=(6.5, height), squeeze=False)
+    any_cov = False
     for ax, sid in zip(axes.ravel(), sets, strict=False):
         g = mon[mon.set_id == sid]
-        main = g[g.ref_kind != "arcsum_covered"]
-        reg = main.groupby("wm")[["sim_taf", "ref_taf"]].mean()
-        kind = main.ref_kind.iloc[0]
-        ax.plot(reg.index, reg.ref_taf, color="k", lw=1.8, label=f"CalSim3 ({kind})")
-        ax.plot(reg.index, reg.sim_taf, color="tab:blue", lw=1.6, label="dPL")
+        reg = g[g.ref_kind != "arcsum_covered"].groupby("wm")[["sim_taf", "ref_taf"]].mean()
+        ax.plot(reg.index, reg.ref_taf, color="0.25", lw=1.4)
+        ax.plot(reg.index, reg.sim_taf, color="tab:red", lw=1.4)
         cov = g[g.ref_kind == "arcsum_covered"]
         if len(cov):
+            any_cov = True
             rc = cov.groupby("wm")["ref_taf"].mean()
-            ax.plot(rc.index, rc, color="0.5", lw=1.2, ls="--", label="CalSim3 (covered arcs)")
-        r = met.loc[(sid, kind)]
-        ax.set_title(f"{r.entity_id}  KGE {r.kge:.2f}  bias {r.pbias:+.0f}%  seas {r.seas_mismatch:.2f}",
-                     fontsize=9)
-        ax.set_xticks(range(12))
-        ax.set_xticklabels([s[0] for s in _WY_MONTHS], fontsize=7)
-        ax.tick_params(axis="y", labelsize=7)
-        ax.grid(alpha=0.3)
+            ax.plot(rc.index, rc, color="0.5", lw=1.2, ls="--")
+        ax.set_title(sid, pad=2)
+        ax.set_xticks([0, 3, 6, 9])
+        ax.set_xticklabels(["O", "J", "A", "J"])
+        ax.set_ylim(bottom=0)
     for ax in axes.ravel()[len(sets):]:
         ax.axis("off")
-    handles, labels = axes[0, 0].get_legend_handles_labels()
-    fig.legend(handles, labels, loc="lower right", fontsize=8, frameon=False)
-    fig.suptitle(f"Tier 1 mean-monthly regime, {window} (TAF/month)  {title}", fontsize=11)
-    fig.tight_layout(rect=(0, 0.02, 1, 0.97))
-    fig.savefig(path, dpi=130)
+    handles = [Line2D([], [], color="0.25", lw=1.4, label="CalSim3"),
+               Line2D([], [], color="tab:red", lw=1.4, label="Simulated")]
+    if any_cov:
+        handles.append(Line2D([], [], color="0.5", lw=1.2, ls="--", label="Covered arcs"))
+    fig.suptitle(f"Tier-1 locations, {window}", y=1 - 0.1 / height, va="top")
+    fig.legend(handles=handles, loc="upper center", ncol=len(handles),
+               bbox_to_anchor=(0.5, 1 - 0.36 / height))
+    fig.supylabel("Mean monthly volume (TAF)")
+    fig.tight_layout(rect=(0, 0, 1, 1 - 0.7 / height))
+    fig.savefig(path, dpi=200)
     plt.close(fig)
 
 
@@ -608,7 +598,6 @@ def main(argv=None, prog=None) -> None:
                    help="one output folder for everything (default: tier1/ in the run's "
                         "results folder, the bulk in its local folder)")
     p.add_argument("--data-dir", default="data")
-    p.add_argument("--label", default="", help="figure title suffix")
     p.add_argument("--no-figures", action="store_true",
                    help="skip the per-location figures (figures/<set_id>.png)")
     p.add_argument("--score-holdout", action="store_true",
@@ -622,18 +611,17 @@ def main(argv=None, prog=None) -> None:
     bulk = Path(a.out) if a.out else run.local / "tier1"
     out.mkdir(parents=True, exist_ok=True)
     bulk.mkdir(parents=True, exist_ok=True)
-    label = a.label or run.results.name
     metrics, monthly, panels = score_run(a.run_dir, a.data_dir, holdout_wy=ho)
     metrics.to_csv(out / "tier1_metrics.csv", index=False)
     monthly.to_csv(bulk / "tier1_monthly.csv", index=False)
     # validated over the held-out water years (score_run)
     vwin = next(iter(holdout_windows(ho)))
-    regime_figure(monthly, metrics, bulk / f"tier1_regime_{vwin}.png", window=vwin, title=label)
+    regime_figure(monthly, bulk / f"tier1_regime_{vwin}.png", window=vwin)
     n_fig = 1
     if not a.no_figures:
         (bulk / "figures").mkdir(exist_ok=True)
         for sid, panel in panels.items():
-            location_figure(panel, bulk / "figures" / f"{sid}.png", run_label=label)
+            location_figure(panel, bulk / "figures" / f"{sid}.png")
             n_fig += 1
     print(summarize(metrics, window=vwin))
     print(f"wrote {out / 'tier1_metrics.csv'}; tier1_monthly.csv and {n_fig} figures -> {bulk}")

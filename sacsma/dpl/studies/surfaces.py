@@ -23,10 +23,10 @@ from .climatology import _WY, _monthly_taf
 #: *declines* under warming), whereas the flood peak *intensifies* (snow→rain +
 #: rain-on-snow), the complementary half of the warming story.  ``q30`` = low flow.
 METRICS: list[tuple[str, str]] = [
-    ("annual", "Total annual runoff"),
-    ("freshet", "Apr–Jul freshet"),
-    ("q999", "Daily Q99.9 (flood peak)"),
-    ("q30", "Daily Q30 (low flow)"),
+    ("annual", "Annual runoff"),
+    ("freshet", "April–July runoff"),
+    ("q999", "Peak flow"),
+    ("q30", "Low flow"),
 ]
 
 #: response-surface grid — nodes sit exactly on the ±10% / +3 °C points, and bracket
@@ -44,7 +44,7 @@ REGIMES: dict[str, list[str]] = {
     "mix":  ["NML", "TRM", "MKM", "SCC", "FOL"],
     "rain": ["YRS", "ORO", "SHA", "BND", "NHG"],
 }
-REGIME_TITLE = {"snow": "SNOW-dominated", "mix": "MIXED", "rain": "RAIN-dominated"}
+REGIME_TITLE = {"snow": "Snow-dominated", "mix": "Mixed rain and snow", "rain": "Rain-dominated"}
 
 #: response-surface EVALUATION window — the metrics reduce over this subset of the
 #: daily record: WY1951-1975 + WY1986-1988 (pre-cal) + WY2004-2018 (the test years).  It

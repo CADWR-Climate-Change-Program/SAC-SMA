@@ -37,7 +37,7 @@ import pandas as pd
 from .. import cdec15, paths
 from .._figures import _period_stats, basin_diagnostics_fig, parity_fig, skill_summary_fig
 from ..io import load_reference
-from ..model import load_domain_forcing, run_basins
+from ..model import load_domain_forcing, load_matlab_forcing, run_basins
 from . import DOMAINS, load_calib_monthly, load_fnf_monthly
 from .compare import _BASIN_ABBREV, basin_order_north_south
 
@@ -50,6 +50,9 @@ def _make_calib_monthly(basins, data_dir, forcing, figdir, domain):
         obs_tbl = load_calib_monthly(data_dir, domain=domain)  # calibration period only
     records, parity = [], {}
     flows = run_basins(basins, data_dir=data_dir, domain=domain, forcing=forcing)
+    # parity runs on the forcing MATLAB ran on; the scores and products on the shared store
+    flows_ref = run_basins(basins, data_dir=data_dir, domain=domain,
+                           forcing=load_matlab_forcing(data_dir, domain=domain))
     for b in basins:
         sim_d = flows[b].rename("flow").reset_index()
         # daily mm/day -> monthly total mm
@@ -81,11 +84,10 @@ def _make_calib_monthly(basins, data_dir, forcing, figdir, domain):
         mplot = (m[(m["date"] >= obs_dates.min()) & (m["date"] <= obs_dates.max())]
                  .reset_index(drop=True) if not obs_dates.empty else m)
         basin_diagnostics_fig(b, mplot, cal_end_ts, cal, val, figdir / f"{b}_diagnostics.png",
-                              unit="mm/month", obs_label="observed FNF", cal_start=cal_start_ts,
-                              title_obs="FNF Flow")
+                              unit="mm/month", obs_label="Observed FNF", cal_start=cal_start_ts)
 
         ref = load_reference(data_dir, basin=b, domain=domain)[["date", "flow"]].rename(columns={"flow": "flow_ref"})
-        pm = pd.merge(sim_d.rename(columns={"flow": "flow_sim"}), ref, on="date", how="inner")
+        pm = pd.merge(flows_ref[b].rename("flow_sim").reset_index(), ref, on="date", how="inner")
         if not pm.empty:
             parity[b] = pm
 
@@ -154,8 +156,7 @@ def _make_calsim3_diagnostics(basins, data_dir, domain, figdir, *, screened, cal
         if val.get("n", 0) < 24:                # too little out-of-cal data for a meaningful VAL
             val = {"n": 0}
         basin_diagnostics_fig(b, m, cal_end_ts, cal, val, figdir / f"{b}_diagnostics{suffix}.png",
-                              unit="TAF/month", obs_label=obs_label, cal_start=cal_start_ts,
-                              title_obs="CalSim3 FNF Flow")
+                              unit="TAF/month", obs_label=obs_label, cal_start=cal_start_ts)
         records.append({
             "basin": b,
             "cal_kge": cal.get("kge"), "cal_nse": cal.get("nse"),

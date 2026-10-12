@@ -39,6 +39,7 @@ import numpy as np
 import pandas as pd
 
 from ... import paths
+from ..._figures import plt
 from ...io import load_forcing
 from ...model import load_domain_forcing
 from .climatology import _WY, _WY_LABELS, _monthly_taf
@@ -57,13 +58,13 @@ ENSEMBLES: dict[str, Path] = {
 #: COLOR = the physics (blue Hamon, red PT, olive Noah-type ET, green the learned threshold;
 #: the ensembles on 5_px green, lstm gray); LINESTYLE = role (solid physics, broken LSTM)
 STYLE: dict[str, dict] = {
-    "2_grid":    dict(color="#1f77b4", lw=2.3, ls="-"),
-    "3_pt":      dict(color="#d62728", lw=2.3, ls="-"),
-    "4_noah":    dict(color="#bcbd22", lw=2.3, ls="-"),
-    "5_px":      dict(color="#2ca02c", lw=2.3, ls="-"),
-    "hybrid":    dict(color="#2ca02c", lw=2.0, ls="--"),
-    "hybrid_dt": dict(color="#2ca02c", lw=2.0, ls="-."),
-    "lstm":      dict(color="#7f7f7f", lw=2.0, ls=":"),
+    "2_grid":    dict(color="#1f77b4", lw=1.4, ls="-"),
+    "3_pt":      dict(color="#d62728", lw=1.4, ls="-"),
+    "4_noah":    dict(color="#bcbd22", lw=1.4, ls="-"),
+    "5_px":      dict(color="#2ca02c", lw=1.4, ls="-"),
+    "hybrid":    dict(color="#2ca02c", lw=1.2, ls="--"),
+    "hybrid_dt": dict(color="#2ca02c", lw=1.2, ls="-."),
+    "lstm":      dict(color="#7f7f7f", lw=1.2, ls=":"),
 }
 #: marker by role (reinforces the linestyle on the monthly plot only; the rolling
 #: time series stays marker-free).
@@ -216,27 +217,21 @@ def _agg_monthly_taf(daily_dq: pd.DataFrame, areas, basins) -> pd.Series:
 
 
 def _plot_rolling(data: dict, path: Path, window: int = 10) -> None:
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
+    """The change of the water-year total summed over the covered basins, as a centred
+    ``window``-year mean."""
     order, areas = data["order"], data["areas"]
-    fig, ax = plt.subplots(figsize=(10.0, 5.2))
+    fig, ax = plt.subplots(figsize=(6.5, 3.8), layout="constrained")
     for label, dqf in data["dq"].items():
         m = _agg_monthly_taf(dqf, areas, order)        # monthly aggregate TAF
         wyear = m.index.year + (m.index.month >= 10)   # water-year total
         annual = m.groupby(wyear).sum()
         roll = annual.rolling(window, center=True, min_periods=window // 2).mean()
         ax.plot(roll.index, roll.values, label=label, **STYLE[label])
-    ax.axhline(0, color="#888888", lw=0.8, zorder=1)
-    ax.set_xlabel("water year")
-    ax.set_ylabel(f"aggregate ΔQ  (TAF/yr, {window}-yr rolling mean)")
-    ax.set_title("Temperature-detrending sensitivity over time — "
-                 "detrended − historical, summed over 11 basins",
-                 fontsize=12.5, fontweight="bold")
-    ax.grid(alpha=0.3, lw=0.5)
-    ax.legend(fontsize=10, frameon=False)
-    fig.tight_layout()
+    ax.axhline(0, color="0.6", lw=0.8, zorder=1)
+    ax.set_xlabel("Water year")
+    ax.set_ylabel("Flow change (TAF/year)")
+    ax.set_title(f"Temperature detrending, {len(order)} watersheds")
+    ax.legend(ncol=2)
     path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(path, dpi=300)
     plt.close(fig)
@@ -244,29 +239,21 @@ def _plot_rolling(data: dict, path: Path, window: int = 10) -> None:
 
 
 def _plot_monthly(data: dict, path: Path) -> None:
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
+    """The mean monthly change summed over the covered basins, before 1950."""
     order, areas = data["order"], data["areas"]
-    fig, ax = plt.subplots(figsize=(10.0, 5.2))
+    fig, ax = plt.subplots(figsize=(6.5, 3.8), layout="constrained")
     for label, dqf in data["dq"].items():
         m = _agg_monthly_taf(dqf[dqf.index < pd.Timestamp(_PRE1950)], areas, order)
         reg = m.groupby(m.index.month).mean().reindex(_WY)
         st = STYLE[label]
-        ax.plot(range(12), reg.values, marker=_ROLE_MARKER[st["ls"]], ms=5,
+        ax.plot(range(12), reg.values, marker=_ROLE_MARKER[st["ls"]], ms=3.5,
                 label=label, **st)
-    ax.axhline(0, color="#888888", lw=0.8, zorder=1)
+    ax.axhline(0, color="0.6", lw=0.8, zorder=1)
     ax.set_xticks(range(12))
     ax.set_xticklabels(_WY_LABELS)
-    ax.set_xlabel("water-year month (Oct → Sep)")
-    ax.set_ylabel("aggregate ΔQ  (TAF/month)")
-    ax.set_title("Monthly detrending sensitivity, pre-1950 — "
-                 "detrended − historical, summed over 11 basins",
-                 fontsize=12.5, fontweight="bold")
-    ax.grid(alpha=0.3, lw=0.5)
-    ax.legend(fontsize=10, frameon=False)
-    fig.tight_layout()
+    ax.set_ylabel("Flow change (TAF/month)")
+    ax.set_title(f"Temperature detrending before 1950, {len(order)} watersheds")
+    ax.legend(ncol=2)
     path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(path, dpi=300)
     plt.close(fig)

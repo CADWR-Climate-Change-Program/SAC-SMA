@@ -46,9 +46,9 @@ sidecars. Products, units, encodings and the sampling conventions are in
 
 ## Checks
 
-- Parity. `hruinfo.csv` and the GA optimum with the default forcing must reproduce the archived MATLAB
-  simulation: `sacsma verify parity` requires KGE > 0.9999 and a largest daily difference < 0.1 mm/day on
-  one watershed per domain (results in [the MATLAB reference README](../../reference/matlab/README.md)).
+- Parity. `hruinfo.csv` and the GA optimum on the forcing the MATLAB simulation ran on must reproduce it:
+  `sacsma verify parity` requires KGE > 0.9999 and a largest daily difference < 0.1 mm/day at every
+  watershed (results in [the MATLAB reference README](../../reference/matlab/README.md)).
   `15cdec_grid` has no MATLAB reference.
 - Sidecars. `15cdec`: 7,891 of 7,891 rows finite; 35 HRUs are POLARIS gap-filled and 239 LAI gap-filled.
 - `basin_tminmax_livneh.csv`: the watershed mean of Tmin and Tmax reproduces the stored `tavg` forcing to

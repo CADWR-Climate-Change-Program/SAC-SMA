@@ -67,9 +67,10 @@ python data/inputs/forcing/aorc_region.py --assemble               # partials ->
 
 ## Checks
 
-- Parity. With the grid stores in place, `run_basin` against the MATLAB simulations
-  (`data/reference/matlab/`) gives KGE 0.99999658 (BND), 0.99998883 (CacheCreek), 0.99995206 (SHA),
-  0.99990781 (SHAST), all with max |Δ| ≤ 0.063 mm/day. Rerun with `sacsma verify parity`.
+- Parity. `sacsma verify parity` runs every watershed on the forcing its MATLAB simulation ran on
+  (`data/reference/matlab/`). On this store the CalLite watersheds differ from MATLAB by up to
+  0.61 mm/day on a day and 0.007 % in volume, through the Snow-17 rain/snow threshold (see the
+  [MATLAB reference](../../reference/matlab/README.md)).
 - Livneh store. The WGEN ASCII store is the verified source of the lineage (2026-07-16: `prcp` to float32
   rounding, `tavg` exactly `(tmax + tmin) / 2`). `wgen_forcing.py --verify` requires the store to equal the
   master with exactly the x10 table applied, `tmin` and `tmax` included.
@@ -79,8 +80,9 @@ python data/inputs/forcing/aorc_region.py --assemble               # partials ->
   2-decimal rounding (ratio 9.997 to 10.003) and the raw value equals the WGEN ASCII. With them corrected
   the two stores agree to 0.0050 mm everywhere, so the table is complete against scenario 1. The ASCII
   value over 10 reproduces the stored value at all 289 pairs.
-- The grid stores replaced per-domain stores, now in git history. The Livneh store matched them to their
-  3-decimal write precision, artifact days included, and differed from the one raw store at exactly 175
+- The grid stores replaced per-domain stores; the three CalLite ones are kept as the parity input in
+  `data/reference/matlab/`. The Livneh store matches them within 0.0055 (theirs are on a 0.01 grid),
+  artifact days included, and differed from the one raw store at exactly 175
   table pairs; `wgen_product_a.nc` and `historical_lto.nc` matched bit for bit. The build still runs this
   comparison and skips each store that is absent.
 - Scenario 12. Pull gates on all 4,410 cells: scenario 1 of the release equals `wgen_product_a.nc`;

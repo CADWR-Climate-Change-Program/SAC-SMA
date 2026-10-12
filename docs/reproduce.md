@@ -146,6 +146,7 @@ hybrid reconstructions run on the GPU (`--device cpu` otherwise).
 sacsma dpl study climatology       # each watershed's mean-monthly regime, one figure per ladder step
 sacsma dpl study hybrids --regen   # the hybrids' skill and response surfaces
 sacsma dpl study forcing           # the sensitivity to the forcing product
+sacsma dpl study ladder            # skill and climate response of every run, CPU (after hybrids and dPL-CalSim)
 ```
 
 ## 6. dPL-CalSim and the rim-inflow product

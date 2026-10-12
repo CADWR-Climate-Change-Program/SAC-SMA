@@ -226,12 +226,67 @@ def _entity_footprints(data_dir: str | Path, entity_ids=None):
     return gpd.GeoDataFrame(reg, geometry=[geoms[e] for e in reg["entity_id"]], crs="EPSG:4326")
 
 
-def family_maps(catch, data_dir, out: Path, trained=None, label: str = "") -> dict:
+#: the white halo behind a label on a map
+_HALO = dict(boxstyle="round,pad=0.1", fc="white", ec="none", alpha=0.75)
+#: the resolution of the atlas images (embedded in the page as JPEG)
+_DPI = 200
+
+
+def _map_size(bounds, asp: float, width: float = 6.5, tall: float = 8.5,
+              side: float = 0.7) -> tuple[float, float]:
+    """A map's figure size at ``width`` inches for lon/lat ``bounds`` drawn at aspect ``asp``,
+    ``side`` inches of the width beside the map (tick labels, a colorbar), the height capped at
+    ``tall``."""
+    minx, miny, maxx, maxy = bounds
+    return width, min(tall, (width - side) * (maxy - miny) * asp / max(maxx - minx, 1e-9) + 0.6)
+
+
+#: the offsets (points) tried around a mark for its label, nearest first
+_LABEL_OFFSETS = ((3, 3), (3, -14), (-3, 3), (-3, -14), (10, 12), (10, -24), (-10, 12),
+                  (-10, -24), (22, -5), (-22, -5), (0, 24), (0, -34), (26, 18), (-26, 18),
+                  (26, -30), (-26, -30))
+
+
+def _place_labels(ax, points, texts, avoid=()) -> None:
+    """Label each point with the first offset of :data:`_LABEL_OFFSETS` whose label overlaps no
+    label placed before it nor an artist of ``avoid`` (else the least crowded); a label set off
+    from its mark gets a thin leader line.  Call it once the axes have their final limits and
+    position."""
+    fig = ax.figure
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    placed = [a.get_window_extent(renderer) for a in avoid]
+
+    def put(t, xy, k, lead=False):
+        dx, dy = _LABEL_OFFSETS[k]
+        return ax.annotate(t, xy, xytext=(dx, dy), textcoords="offset points",
+                           ha="left" if dx >= 0 else "right", va="bottom", bbox=_HALO, zorder=6,
+                           arrowprops=(dict(arrowstyle="-", color="0.3", lw=0.5, shrinkA=0,
+                                            shrinkB=2) if lead else None))
+
+    for xy, t in zip(points, texts, strict=True):
+        best = None
+        for k in range(len(_LABEL_OFFSETS)):
+            a = put(t, xy, k)
+            bb = a.get_window_extent(renderer)
+            a.remove()
+            n = sum(bb.overlaps(p) for p in placed)
+            if best is None or n < best[0]:
+                best = (n, k, bb)
+            if n == 0:
+                break
+        _, k, bb = best
+        put(t, xy, k, lead=k >= 4)
+        placed.append(bb)
+
+
+def family_maps(catch, data_dir, out: Path, trained=None) -> dict:
     """One map per family: its entities' footprints outlined and labelled, gauges marked, the
     CalSim3 rim domain behind.  Returns {family: (path, table rows)}."""
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
+    from matplotlib.lines import Line2D
+    from matplotlib.patches import Patch
+
+    from ..._figures import plt
     fp = _entity_footprints(data_dir, trained)
     asp = _aspect(catch)
     out_map = {}
@@ -243,48 +298,41 @@ def family_maps(catch, data_dir, out: Path, trained=None, label: str = "") -> di
         cb = catch.total_bounds
         minx, miny = min(bx[0], cb[0]) - 0.2, min(bx[1], cb[1]) - 0.2
         maxx, maxy = max(bx[2], cb[2]) + 0.2, max(bx[3], cb[3]) + 0.2
-        h_in = 10.0
-        w_in = max(5.0, min(9.5, h_in * (maxx - minx) / max((maxy - miny) * asp, 1e-9)))
-        fig, ax = plt.subplots(figsize=(w_in, h_in))
+        fig, ax = plt.subplots(figsize=_map_size((minx, miny, maxx, maxy), asp))
         catch.plot(ax=ax, color="0.94", edgecolor="0.82", linewidth=0.3)
         g.plot(ax=ax, color=FAMILY_COLOR[fam], edgecolor="k", linewidth=0.6, alpha=0.45)
-        rows = []
+        rows, marks = [], []
         big = fam not in ("usgs_daily", "calsim_monthly")
         for i, r in enumerate(g.itertuples(index=False), start=1):
             tag = r.entity_id if big else str(i)
             has_out = pd.notna(r.outlet_lat) and pd.notna(r.outlet_lon)
             if has_out:
-                ax.plot(r.outlet_lon, r.outlet_lat, marker="o", ms=4.5, color="red", mec="k",
+                ax.plot(r.outlet_lon, r.outlet_lat, marker="o", ms=4, color="red", mec="k",
                         mew=0.4, ls="none", zorder=5)
             px, py = ((r.outlet_lon, r.outlet_lat) if has_out
                       else (r.geometry.representative_point().x, r.geometry.representative_point().y))
-            ax.annotate(tag, (px, py), xytext=(3, 3), textcoords="offset points",
-                        fontsize=6.5 if big else 5.5, fontweight="bold" if big else "normal",
-                        bbox=dict(boxstyle="round,pad=0.12", fc="white", ec="none", alpha=0.75), zorder=6)
+            marks.append((px, py))
             rows.append((tag, r.entity_id, str(r.site_id), r.name, float(r.area_mi2),
                          str(r.train_start)[:7], str(r.train_end)[:7], int(r.n_obs)))
-        from matplotlib.lines import Line2D
-        from matplotlib.patches import Patch
         ax.legend(handles=[Patch(facecolor=FAMILY_COLOR[fam], edgecolor="k", alpha=0.45,
-                                 label=f"{FAMILY_LABEL[fam]} ({len(g)})"),
+                                 label="Footprint"),
                            Line2D([], [], marker="o", color="red", mec="k", ls="none", ms=5,
-                                  label="gauge / pour point")],
-                  loc="lower left", fontsize=8, frameon=True)
+                                  label="Gauge or pour point")],
+                  loc="lower left")
         ax.set_xlim(minx, maxx)
         ax.set_ylim(miny, maxy)
         ax.set_aspect(asp)
-        ax.set_title(f"{FAMILY_LABEL[fam]}: training footprints"
-                     + (f"\n[{label}]" if label else ""), fontsize=9)
-        ax.tick_params(labelsize=7)
+        ax.set_title(FAMILY_LABEL[fam])
         fig.tight_layout()
+        _place_labels(ax, marks, [t[0] for t in rows], avoid=[ax.get_legend()])
         path = out / f"family_{fam}.png"
-        fig.savefig(path, dpi=135)
+        fig.savefig(path, dpi=_DPI)
         plt.close(fig)
         out_map[fam] = (path, rows)
     return out_map
 
 
-def _hatch(ax, overlap, crs, label="daily + monthly targets overlap"):
+def _hatch(ax, overlap, crs, label="Daily and monthly targets"):
     import geopandas as gpd
     from matplotlib.patches import Patch
     if overlap is None:
@@ -293,21 +341,25 @@ def _hatch(ax, overlap, crs, label="daily + monthly targets overlap"):
     return Patch(facecolor="none", edgecolor="0.15", hatch="////", label=label)
 
 
-def domain_maps(catch, sets, geoms, metrics, out: Path, label: str, window: str,
+def domain_maps(catch, sets, geoms, metrics, out: Path, window: str,
                 overlap=None) -> list[Path]:
-    import matplotlib
-    matplotlib.use("Agg")
+    """The tier-1 locations on the rim domain, coloured by their KGE (0 to 1) and their percent
+    bias over ``window``, nested sets drawn on top of their parents and labelled on their own
+    ground; the small ones are labelled in a column beside the map."""
     import geopandas as gpd
-    import matplotlib.pyplot as plt
     from matplotlib import colormaps
     from matplotlib.colors import Normalize
+
+    from ..._figures import plt
     m = metrics[(metrics.window == window) & metrics.ref_kind.isin(["anchor", "arcsum"])].set_index("set_id")
     S = sets.set_index("set_id")
     order = sorted(geoms, key=lambda k: -float(S.loc[k, "area_mi2"]))
     paths = []
+    minx, miny, maxx, maxy = catch.total_bounds
+    lims = (minx - 0.9, miny - 0.2, maxx + 0.9, maxy + 0.2)
     for col, cmap_name, vmin, vmax, cb in (("kge", "plasma", 0.0, 1.0, "KGE"),
-                                           ("pbias", "BrBG", -40.0, 40.0, "volume bias (%)")):
-        fig, ax = plt.subplots(figsize=(11.0, 10.5))
+                                           ("pbias", "BrBG", -40.0, 40.0, "Percent bias")):
+        fig, ax = plt.subplots(figsize=_map_size(lims, _aspect(catch), side=1.8))
         catch.plot(ax=ax, color="0.94", edgecolor="0.8", linewidth=0.3)
         cmap, norm = colormaps[cmap_name], Normalize(vmin, vmax)
         for sid in order:                       # big sets first so nested ones draw on top
@@ -317,7 +369,6 @@ def domain_maps(catch, sets, geoms, metrics, out: Path, label: str, window: str,
             v = float(m.loc[sid, col])
             gpd.GeoSeries([diss], crs=catch.crs).plot(
                 ax=ax, color=cmap(norm(v)) if np.isfinite(v) else "0.7", edgecolor="k", linewidth=0.6)
-        minx, miny, maxx, maxy = catch.total_bounds
         labels = []
         for sid in order:
             g, diss = geoms[sid]
@@ -329,45 +380,34 @@ def domain_maps(catch, sets, geoms, metrics, out: Path, label: str, window: str,
                         and od.intersection(diss).area > 0.9 * od.area:
                     own = own.difference(od)
             p = (own if not own.is_empty else diss).representative_point()
-            r = m.loc[sid]
-            txt = (f"{sid}  KGE {r.kge:.2f}  {r.pbias:+.0f}%" if np.isfinite(r.kge) else f"{sid}  not scored")
-            if not bool(S.loc[sid, "volume_scored"]):
-                txt += "\n(not counted)"
-            labels.append((sid, p.x, p.y, txt, float(S.loc[sid, "area_mi2"])))
-        box = dict(boxstyle="round,pad=0.25", fc="white", ec="0.4", alpha=0.95)
+            labels.append((sid, p.x, p.y, float(S.loc[sid, "area_mi2"])))
         # big basins carry their label inside; the rest go to a side column with a leader line
-        inside = [t for t in labels if t[4] >= 1500]
-        side = [t for t in labels if t[4] < 1500]
-        for sid, x, y, txt, _ in inside:
-            ax.annotate(txt.replace("  KGE", "\nKGE"), (x, y), ha="center", va="center", fontsize=9,
-                        fontweight="bold", bbox=box)
+        for sid, x, y, _ in (t for t in labels if t[3] >= 1500):
+            ax.annotate(sid, (x, y), ha="center", va="center", bbox=_HALO)
+        side = [t for t in labels if t[3] < 1500]
         mid = 0.5 * (minx + maxx)
         for col_sign, group in ((-1, [t for t in side if t[1] < mid]), (+1, [t for t in side if t[1] >= mid])):
             group = sorted(group, key=lambda t: t[2])
             if not group:
                 continue
-            xs = (minx - 0.3) if col_sign < 0 else (maxx + 0.3)
-            ys = np.linspace(miny + 0.15, maxy - 0.15, len(group)) if len(group) > 1 else [group[0][2]]
-            for (sid, x, y, txt, _), yy in zip(group, ys, strict=True):
-                ax.annotate(txt, (x, y), xytext=(xs, yy), ha="right" if col_sign < 0 else "left", va="center",
-                            fontsize=9, fontweight="bold", bbox=box,
-                            arrowprops=dict(arrowstyle="-", color="0.3", lw=0.8, shrinkB=2))
+            xs = (minx - 0.2) if col_sign < 0 else (maxx + 0.2)
+            ys = np.linspace(miny + 0.6, maxy - 0.15, len(group)) if len(group) > 1 else [group[0][2]]
+            for (sid, x, y, _), yy in zip(group, ys, strict=True):
+                ax.annotate(sid, (x, y), xytext=(xs, yy), ha="right" if col_sign < 0 else "left",
+                            va="center", arrowprops=dict(arrowstyle="-", color="0.4", lw=0.6,
+                                                         shrinkB=2))
         hp = _hatch(ax, overlap, catch.crs)
         if hp is not None:
-            ax.legend(handles=[hp], loc="lower left", fontsize=9, frameon=True)
+            ax.legend(handles=[hp], loc="lower left")
         sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
-        fig.colorbar(sm, ax=ax, shrink=0.6, label=cb, pad=0.02)
-        ax.set_xlim(minx - 1.9, maxx + 2.0)
-        ax.set_ylim(miny - 0.2, maxy + 0.2)
+        fig.colorbar(sm, ax=ax, shrink=0.5, label=cb, pad=0.02)
+        ax.set_xlim(lims[0], lims[2])
+        ax.set_ylim(lims[1], lims[3])
         ax.set_aspect(_aspect(catch))
-        ax.set_xlabel("lon")
-        ax.set_ylabel("lat")
-        ax.set_title(f"Tier 1 — {cb} per location, {window}  [{label}]\n"
-                     "grey: rim arcs in no tier-1 set; nested sets drawn on top; "
-                     "hatched: trained at both daily and monthly timescale", fontsize=10.5)
+        ax.set_title(f"Tier-1 locations, {window}")
         fig.tight_layout()
         path = out / f"tier1_map_{col}_{window}.png"
-        fig.savefig(path, dpi=150)
+        fig.savefig(path, dpi=_DPI)
         plt.close(fig)
         paths.append(path)
     return paths
@@ -498,23 +538,39 @@ def creek_overlap(sets, geoms, data_dir: str | Path, trained=None, *, window: st
 
 def creek_overlap_figure(sid: str, row, catch, geoms, outlets, df, summary: dict, out: Path) -> Path:
     """Left: the location (thick outline, its arcs as thin lines) with the overlapping creek
-    watersheds and their gauges numbered.  Right: each creek's daily record as a timeline of
-    complete water years, the validation window shaded, with the record's water years and the
-    two shares written beside it."""
-    import matplotlib
-    matplotlib.use("Agg")
+    watersheds and their gauges numbered.  Right: each creek's daily record as a timeline, its
+    complete water years filled inside the outline of its first to last year, the validation
+    window shaded."""
     import geopandas as gpd
-    import matplotlib.pyplot as plt
     from matplotlib import colormaps
     from matplotlib.lines import Line2D
     from matplotlib.patches import Patch, Rectangle
     from matplotlib.ticker import MaxNLocator
+
+    from ..._figures import plt
     g, diss = geoms[sid]
     asp = _aspect(catch)
     n = len(df)
     w = summary["window"]
-    fig, (ax, at) = plt.subplots(1, 2, figsize=(11.6, max(5.2, 2.8 + 0.3 * n)),
-                                 gridspec_kw=dict(width_ratios=[1.0, 1.25]))
+    any_filled = bool(n) and (df["trained"] & (df["val_months"] > 0)).any()
+    any_dashed = bool(n) and (df["trained"] & (df["val_months"] == 0)).any()
+    any_untrained = bool(n) and (~df["trained"]).any()
+    handles = [Patch(fc="#fff8e1", ec="k", lw=1.4, label="Location"),
+               Line2D([], [], marker="*", ms=10, color="red", mec="k", ls="none",
+                      label="Entity outlet")]
+    if any_filled:
+        handles.append(Patch(fc="0.6", ec="0.3", alpha=0.5, lw=1.3, label="Creek, record in window"))
+    if any_dashed:
+        handles.append(Patch(fc="none", ec="0.3", lw=1.3, ls="--", label="Creek, no record in window"))
+    if any_untrained:
+        handles.append(Patch(fc="0.5", ec="0.35", hatch="///", label="Creek, not trained"))
+    if n:
+        handles.append(Line2D([], [], marker="o", ms=9, mfc="white", mec="0.2", mew=1.4, ls="none",
+                              label="Gauge"))
+    handles.append(Patch(fc="tab:blue", alpha=0.15, label=f"Validation, {w}"))
+    n_rows = int(np.ceil(len(handles) / 3))
+    height = max(4.2, 2.4 + 0.28 * n) + 0.3 * n_rows
+    fig, (ax, at) = plt.subplots(1, 2, figsize=(6.5, height))
     bx = list(diss.bounds)
     if n:
         bx = [min(bx[0], df["outlet_lon"].min()), min(bx[1], df["outlet_lat"].min()),
@@ -525,7 +581,8 @@ def creek_overlap_figure(sid: str, row, catch, geoms, outlets, df, summary: dict
     gpd.GeoSeries([diss], crs=catch.crs).plot(ax=ax, facecolor="none", edgecolor="k", linewidth=1.4, zorder=3)
     cmap = colormaps["tab10"]
     placed: list[tuple[float, float]] = []
-    step = 0.035 * max(1.0, (bx[2] - bx[0]) / 1.2)
+    # a numbered marker is about a twelfth of the map's width across
+    step = 0.09 * (bx[2] - bx[0] + 2 * pad)
     o = outlets.get(row.entity_id)
     if o is not None:
         ax.plot(o[1], o[0], marker="*", color="red", ms=13, mec="k", mew=0.6, ls="none", zorder=4)
@@ -549,40 +606,20 @@ def creek_overlap_figure(sid: str, row, catch, geoms, outlets, df, summary: dict
         placed.append((x, y))
         if (x, y) != (r.outlet_lon, r.outlet_lat):
             ax.plot([r.outlet_lon, x], [r.outlet_lat, y], color="0.3", linewidth=0.6, zorder=4.5)
-        ax.plot(x, y, marker="o", ms=11, mfc="white", mec=col if r.trained else "0.35", mew=1.6, ls="none", zorder=5)
-        ax.annotate(str(i + 1), (x, y), ha="center", va="center", fontsize=6.5, fontweight="bold", zorder=6)
+        ax.plot(x, y, marker="o", ms=15, mfc="white", mec=col if r.trained else "0.35", mew=1.6,
+                ls="none", zorder=5)
+        ax.annotate(str(i + 1), (x, y), ha="center", va="center", zorder=6)
     ax.set_xlim(bx[0] - pad, bx[2] + pad)
     ax.set_ylim(bx[1] - pad, bx[3] + pad)
     ax.set_aspect(asp)
-    ax.xaxis.set_major_locator(MaxNLocator(nbins=5))
-    ax.yaxis.set_major_locator(MaxNLocator(nbins=6))
-    ax.tick_params(labelsize=7)
-    any_filled = bool(n) and (df["trained"] & (df["val_months"] > 0)).any()
-    any_dashed = bool(n) and (df["trained"] & (df["val_months"] == 0)).any()
-    any_untrained = bool(n) and (~df["trained"]).any()
-    handles = [Patch(fc="#fff8e1", ec="k", lw=1.4, label="this location (thick outline); thin lines: its CalSim3 arcs"),
-               Line2D([], [], marker="*", ms=10, color="red", mec="k", ls="none", label="outlet of the trained entity")]
-    if any_filled:
-        handles.append(Patch(fc="0.6", ec="0.3", alpha=0.5, lw=1.3, label=f"creek watershed with a record inside {w} (fill + outline; colour = its bar)"))
-    if any_dashed:
-        handles.append(Patch(fc="none", ec="0.3", lw=1.3, ls="--", label=f"creek watershed, no record inside {w} (dashed outline)"))
-    if any_untrained:
-        handles.append(Patch(fc="none", ec="0.35", hatch="///", label="not in this run's training set (hatched)"))
-    if n:
-        handles.append(Line2D([], [], marker="o", ms=8, mfc="white", mec="0.2", mew=1.4, ls="none", label="gauge, numbered as in the table"))
-    plural = "creek watershed" if n == 1 else "creek watersheds"
-    if n:
-        ttl = (f"{sid}: {n} USGS {plural} overlap this location (coverage {100 * summary['covered']:.0f}%)\n"
-               f"{summary['n_seen']} trained with a record inside {w}: coverage with a record {100 * summary['covered_val']:.0f}%, "
-               f"window coverage {100 * summary['window_cover']:.0f}%")
-    else:
-        ttl = f"{sid}: no USGS creek watershed overlaps this location\n(out of sample)"
-    ax.set_title(ttl, fontsize=8.2)
+    ax.xaxis.set_major_locator(MaxNLocator(nbins=3))
+    ax.yaxis.set_major_locator(MaxNLocator(nbins=5))
+    ax.set_title(sid)
     # timeline
     m0, m1 = window_range(w)
     y0 = int(m0[:4]) + (int(m0[5:7]) >= 10)
     y1 = int(m1[:4]) + (int(m1[5:7]) >= 10)
-    at.axvspan(y0 - 0.5, y1 + 0.5, color="0.86", alpha=0.6, label=f"validation window {w}")
+    at.axvspan(y0 - 0.5, y1 + 0.5, color="tab:blue", alpha=0.15, lw=0)
     if n:
         for i, r in enumerate(df.itertuples(index=False)):
             col = cmap(i % 10) if r.trained else "0.5"
@@ -594,32 +631,24 @@ def creek_overlap_figure(sid: str, row, catch, geoms, outlets, df, summary: dict
                                        edgecolor=col, linewidth=0.8))
                 for y in r.wy_with_data:
                     at.add_patch(Rectangle((y - 0.5, yy - 0.32), 1.0, 0.64, color=col, linewidth=0))
-                span = f"WY{f_wy}-{l_wy % 100:02d}"
-            else:
-                span = "no data"
-            loc_txt = "<1%" if r.share_set < 0.005 else f"{100 * r.share_set:.1f}%"
-            at.text(1945.5, yy, f"{i + 1:>2d}  {r.site_id}", ha="right", va="center", fontsize=7, family="monospace")
-            at.text(2021.5, yy, f"{span:<11s} {100 * r.share_creek:3.0f}% of creek, {loc_txt:>5s} of location",
-                    ha="left", va="center", fontsize=6.3, family="monospace")
         at.set_ylim(-0.7, n - 0.3)
-        tl_handles = [Patch(fc="0.86", alpha=0.6, label=f"validation window {w}")]
-        if any_untrained:
-            tl_handles.append(Patch(fc="0.5", label="grey bar: not in this run's training set"))
-        fig.legend(handles=tl_handles, loc="lower right", bbox_to_anchor=(0.995, 0.0), fontsize=6.3, frameon=True)
+        at.set_yticks(range(n))
+        at.set_yticklabels([f"{n - j}  {s}" for j, s in enumerate(df["site_id"][::-1])])
     else:
-        at.text(0.5, 0.5, "no overlapping creek records", transform=at.transAxes, ha="center", va="center", fontsize=9)
-    at.set_xlim(1946, 2060)
-    at.set_xticks(range(1950, 2021, 10))
-    at.set_yticks([])
-    at.set_xlabel("water year", fontsize=8)
-    at.tick_params(labelsize=7)
-    at.set_title("gauge records (filled: complete water years with data; outline: first to last year)", fontsize=8.2)
-    for sp in ("top", "right", "left"):
-        at.spines[sp].set_visible(False)
-    fig.legend(handles=handles, loc="lower left", bbox_to_anchor=(0.005, 0.0), ncol=2, fontsize=6.3, frameon=True)
-    fig.tight_layout(rect=[0, 0.1, 1, 1])
+        at.text(0.5, 0.5, "No overlapping creek records", transform=at.transAxes, ha="center",
+                va="center", color="0.5")
+        at.set_yticks([])
+    at.set_xlim(1946, 2021)
+    at.set_xticks(range(1950, 2021, 20))
+    at.tick_params(axis="y", length=0)
+    at.spines["left"].set_visible(False)
+    at.set_xlabel("Water year")
+    at.set_title("Gauge records")
+    fig.legend(handles=handles, loc="lower center", ncol=3, bbox_to_anchor=(0.5, 0.0),
+               handlelength=1.5, columnspacing=1.0)
+    fig.tight_layout(rect=(0, (0.3 * n_rows + 0.1) / height, 1, 1))
     p = out / f"{sid}_creeks.png"
-    fig.savefig(p, dpi=120, bbox_inches="tight", pad_inches=0.15)
+    fig.savefig(p, dpi=_DPI)
     plt.close(fig)
     return p
 
@@ -732,45 +761,50 @@ def _creek_domain_block(sets, creeks: dict, window: str, e, fmt: str = "html") -
 
 def location_maps(sid: str, row, catch, geoms, outlets, out: Path, overlap=None, t2=None,
                   window: str = "") -> tuple[Path, Path]:
-    """The set on the domain map (with its registry outlet) and a zoom naming its arcs; with ``t2`` (tier-2
-    metrics indexed by arc) the zoom colours each arc by its tier-2 KGE over ``window``."""
-    import matplotlib
-    matplotlib.use("Agg")
+    """The set on the domain map (with its registry outlet) and a zoom naming its arcs (the
+    eight largest of a set with more than ten); with ``t2`` (tier-2 metrics indexed by arc) the
+    zoom colours each arc by its tier-2 KGE over ``window``, grey where it has no score."""
     import geopandas as gpd
-    import matplotlib.pyplot as plt
+    import matplotlib as mpl
     from matplotlib import colormaps
+    from matplotlib.ticker import MaxNLocator
+
+    from ..._figures import plt
     g, diss = geoms[sid]
     asp = _aspect(catch)
     o = outlets.get(row.entity_id)
-    # domain map
-    fig, ax = plt.subplots(figsize=(4.2, 5.2))
+    # the two sit side by side on the page
+    minx, miny, maxx, maxy = catch.total_bounds
+    fig, ax = plt.subplots(figsize=_map_size((minx, miny, maxx, maxy), asp, width=3.25))
     catch.plot(ax=ax, color="0.93", edgecolor="0.8", linewidth=0.3)
     if diss is not None:
         gpd.GeoSeries([diss], crs=catch.crs).plot(ax=ax, color="tab:orange", edgecolor="k", linewidth=0.6)
-    hp = _hatch(ax, overlap, catch.crs, label="daily + monthly overlap")
+    hp = _hatch(ax, overlap, catch.crs)
     if o is not None:
         ax.plot(o[1], o[0], marker="*", color="red", ms=10, mec="k", mew=0.5, ls="none")
     if hp is not None:
-        ax.legend(handles=[hp], loc="lower left", fontsize=7, frameon=True)
-    minx, miny, maxx, maxy = catch.total_bounds
+        ax.legend(handles=[hp], loc="lower left", handlelength=1.2)
     ax.set_xlim(minx - 0.15, maxx + 0.15)
     ax.set_ylim(miny - 0.15, maxy + 0.15)
     ax.set_aspect(asp)
-    ax.set_title(f"{sid} in the CalSim3 rim domain", fontsize=9)
-    ax.tick_params(labelsize=7)
+    ax.xaxis.set_major_locator(MaxNLocator(nbins=3))
+    ax.set_title(sid)
     fig.tight_layout()
     p_map = out / f"{sid}_map.png"
-    fig.savefig(p_map, dpi=120)
+    fig.savefig(p_map, dpi=_DPI)
     plt.close(fig)
     # zoom
-    fig, ax = plt.subplots(figsize=(5.4, 5.2))
+    bx = diss.bounds if diss is not None else catch.total_bounds
+    pad = max(0.12, 0.12 * max(bx[2] - bx[0], bx[3] - bx[1]))
+    lims = (bx[0] - pad, bx[1] - pad, bx[2] + pad, bx[3] + pad)
+    w, h = _map_size(lims, asp, width=3.25, tall=4.6)
+    has_cb = diss is not None and t2 is not None and "kge" in t2.columns
+    fig, ax = plt.subplots(figsize=(w, h + (0.8 if has_cb else 0.0)))
+    marks = []
     if diss is not None:
-        bx = diss.bounds
-        pad = max(0.12, 0.12 * max(bx[2] - bx[0], bx[3] - bx[1]))
         catch.plot(ax=ax, color="0.94", edgecolor="0.75", linewidth=0.4)
         gg = g.sort_values("sq_mi", ascending=False).reset_index(drop=True)
-        if t2 is not None and "kge" in t2.columns:
-            import matplotlib as mpl
+        if has_cb:
             key = "arc" if "arc" in gg.columns else "node"
             kge = gg[key].map(t2["kge"])
             norm = mpl.colors.Normalize(vmin=0.0, vmax=1.0)
@@ -779,29 +813,27 @@ def location_maps(sid: str, row, catch, geoms, outlets, out: Path, overlap=None,
             gg.plot(ax=ax, color=cols, edgecolor="k", linewidth=0.5, alpha=0.9)
             sm = mpl.cm.ScalarMappable(norm=norm, cmap=cm)
             sm.set_array([])
-            fig.colorbar(sm, ax=ax, fraction=0.04, pad=0.02, label=f"tier-2 KGE {window} (grey: no series)")
+            fig.colorbar(sm, ax=ax, orientation="horizontal", fraction=0.05, pad=0.08,
+                         label=f"KGE, {window}" if window else "KGE")
         else:
             cmap = colormaps["tab20"]
             gg.plot(ax=ax, color=[cmap(i % 20) for i in range(len(gg))], edgecolor="k", linewidth=0.5, alpha=0.85)
-        n_label = len(gg) if len(gg) <= 25 else 12
-        for i, r in enumerate(gg.itertuples(index=False)):
-            if i >= n_label:
-                break
+        for r in gg.head(len(gg) if len(gg) <= 10 else 8).itertuples(index=False):
             p = r.geometry.representative_point()
-            ax.annotate(r.node, (p.x, p.y), ha="center", va="center", fontsize=6 if len(gg) > 8 else 7.5,
-                        bbox=dict(boxstyle="round,pad=0.15", fc="white", ec="none", alpha=0.7))
+            marks.append(((p.x, p.y), r.node))
         if o is not None:
-            ax.plot(o[1], o[0], marker="*", color="red", ms=13, mec="k", mew=0.6, ls="none", label="registry outlet")
-            ax.legend(fontsize=7, loc="lower left")
-        ax.set_xlim(bx[0] - pad, bx[2] + pad)
-        ax.set_ylim(bx[1] - pad, bx[3] + pad)
+            ax.plot(o[1], o[0], marker="*", color="red", ms=13, mec="k", mew=0.6, ls="none")
+        ax.set_xlim(lims[0], lims[2])
+        ax.set_ylim(lims[1], lims[3])
         ax.set_aspect(asp)
-    sub = f"{len(row.arcs)} arc(s), {row.area_mi2:,.0f} mi²" + ("" if len(g) <= 25 else " — labels on the 12 largest")
-    ax.set_title(f"{sid}: {sub}", fontsize=9)
-    ax.tick_params(labelsize=7)
+        ax.xaxis.set_major_locator(MaxNLocator(nbins=3))
+        ax.yaxis.set_major_locator(MaxNLocator(nbins=4))
+    ax.set_title(f"{sid} arcs")
     fig.tight_layout()
+    if marks:
+        _place_labels(ax, [m[0] for m in marks], [m[1] for m in marks])
     p_zoom = out / f"{sid}_zoom.png"
-    fig.savefig(p_zoom, dpi=120)
+    fig.savefig(p_zoom, dpi=_DPI)
     plt.close(fig)
     return p_map, p_zoom
 
@@ -1242,11 +1274,11 @@ def main(argv=None, prog=None) -> None:
     else:
         t2_bulk = None
     t2_idx = t2.set_index("arc") if t2 is not None else None
-    maps = domain_maps(catch, sets, geoms, metrics, bulk, label, vwin, overlap=overlap)
+    maps = domain_maps(catch, sets, geoms, metrics, bulk, vwin, overlap=overlap)
     trained = None
     if (run.results / "sim_daily.npz").exists():
         trained = set(np.load(run.results / "sim_daily.npz")["entity_id"].tolist())
-    fam_maps = family_maps(catch, a.data_dir, bulk, trained=trained, label=label)
+    fam_maps = family_maps(catch, a.data_dir, bulk, trained=trained)
     print("atlas: family footprint maps for " + ", ".join(f"{k} ({len(v[1])})" for k, v in fam_maps.items())
           + ("" if trained else " (all base registry entities: the run has no sim_daily.npz)"))
     creeks = creek_overlap(sets, geoms, a.data_dir, trained=trained, window=vwin, holdout_wy=ho)

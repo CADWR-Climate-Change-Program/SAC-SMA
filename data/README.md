@@ -34,7 +34,7 @@ it. The README is the provenance record of that folder.
 | [`targets/dwr_unimpaired/`](targets/dwr_unimpaired/README.md) | DWR's published unimpaired flows, 24 Central Valley subbasins, water years 1922 to 2014. | DWR (2016) report | `dwr_unimpaired.py`, `build_uf_depth.py`, `check_uf_locations.py` (its checks in `verification/`) | 3 MB |
 | [`targets/usgs/`](targets/usgs/README.md) | Daily flow at 69 USGS gauges inside the CalSim3 domain. | USGS, through the neuralhyd-ca cleaned set | `usgs_flows.py` | 6 MB |
 | [`targets/calsim3/`](targets/calsim3/README.md) | CalSim3 monthly inflows on the rim arcs, the unimpaired series of the rim systems, and the tables that say which arc-months are an arc's own record. | CalSim3; DWR hydrology report | `build_calsim_arcs.py` | 20 MB |
-| [`reference/matlab/`](reference/matlab/README.md) | The archived MATLAB simulations: the parity baseline. | study archive | delivered | 49 MB |
+| [`reference/matlab/`](reference/matlab/README.md) | The archived MATLAB simulations and the forcing the CalLite ones ran on: the parity baseline. | study archive | delivered | 585 MB |
 | [`reference/vic/`](reference/vic/README.md) | VIC routed monthly flows under three climates, and the VIC routing grids. | CalSim3 stochastic-input pipeline | delivered | 31 MB |
 | [`reference/bcm/`](reference/bcm/README.md) | Basin Characterization Model v8, two weather-generator scenarios, and the parameters of its monthly routing to 11 CDEC gauges. | USGS | `bcm_region.py`, `bcm_routing_params.py` | 202 MB |
 | [`reference/et/`](reference/et/README.md) | Nine evapotranspiration products on the grid. | Earth Engine, GLEAM, FLUXCOM, Reitz et al. (2023) | `gee_obs_region.py`, `local_obs_region.py`, `reitz_et.py` | 39 MB |

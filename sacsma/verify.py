@@ -20,8 +20,9 @@ The repository has no test suite; the model is verified by running it.  The chec
     cached flow of each of its 11 calibration sheets (``bcm_routing_check.csv``) within
     :data:`BCM_RTOL`, and the sheet's r2, NSE and percent bias
 ``parity``
-    the Python model against the archived MATLAB simulation, one watershed per domain
-    (:data:`PARITY_BASINS`): KGE > 0.9999 and max daily difference < 0.1 mm/day
+    the Python model against the archived MATLAB simulation, every watershed of the four
+    calibrated domains on the forcing MATLAB ran on (:func:`sacsma.model.load_matlab_forcing`):
+    KGE > 0.9999 and max daily difference < 0.1 mm/day
 ``learned``
     the learned model's step on the CPU engine (``sacsma.sma_learned``) against the torch step it
     mirrors, one tracked run per physics (:data:`LEARNED_RUNS`): 32 rows, two years from the
@@ -49,9 +50,8 @@ from pathlib import Path
 
 from . import paths
 
-#: one watershed per domain for the parity check
-PARITY_BASINS = (("15cdec", "BND"), ("9unimp", "CacheCreek"), ("11obs", "SHA"),
-                 ("12rim", "SHAST"))
+#: the domains of the parity check, every watershed of each
+PARITY_DOMAINS = (paths.CDEC15, *paths.CALLITE)
 PARITY_KGE = 0.9999
 PARITY_MAX_MM = 0.1
 #: one tracked run per physics of the learned step: Noah-lite with the SAC exchanges and a
@@ -268,24 +268,30 @@ def check_parity(data_dir: str = "data", **_) -> tuple[bool, str]:
 
     from .io import load_reference
     from .metrics import kge
-    from .model import run_basins
+    from .model import load_matlab_forcing, run_basins
 
     ok, rows = True, []
-    sims = {d: run_basins([b for d2, b in PARITY_BASINS if d2 == d], data_dir=data_dir, domain=d)
-            for d in dict.fromkeys(d for d, _ in PARITY_BASINS)}
-    for domain, basin in PARITY_BASINS:
-        s = sims[domain][basin]
-        ref = load_reference(data_dir, basin, domain=domain)
-        r = pd.Series(ref["flow"].to_numpy(), index=pd.DatetimeIndex(ref["date"]))
-        j = s.index.intersection(r.index)
-        k = kge(s[j].to_numpy(), r[j].to_numpy())
-        d = float(np.abs(s[j].to_numpy() - r[j].to_numpy()).max())
-        good = k > PARITY_KGE and d < PARITY_MAX_MM
-        ok &= good
-        rows.append(f"\n    {domain:7s} {basin:11s} KGE {k:.6f}  max |d| {d:.4f} mm/day"
-                    + ("" if good else "   FAIL"))
+    for domain in PARITY_DOMAINS:
+        sim = run_basins(data_dir=data_dir, domain=domain,
+                         forcing=load_matlab_forcing(data_dir, domain=domain))
+        worst = None
+        for basin, ref in load_reference(data_dir, domain=domain).groupby("basin"):
+            r = pd.Series(ref["flow"].to_numpy(), index=pd.DatetimeIndex(ref["date"]))
+            s = sim[basin]
+            j = s.index.intersection(r.index)
+            k = kge(s[j].to_numpy(), r[j].to_numpy())
+            d = float(np.abs(s[j].to_numpy() - r[j].to_numpy()).max())
+            good = k > PARITY_KGE and d < PARITY_MAX_MM
+            ok &= good
+            if not good:
+                rows.append(f"\n    {domain:7s} {basin:15s} KGE {k:.6f}  "
+                            f"max |d| {d:.4f} mm/day   FAIL")
+            if worst is None or d > worst[2]:
+                worst = (basin, k, d)
+        rows.append(f"\n    {domain:7s} {sim.shape[1]:2d} watersheds, largest at {worst[0]}: "
+                    f"KGE {worst[1]:.6f}  max |d| {worst[2]:.4f} mm/day")
     return ok, (f"KGE > {PARITY_KGE} and max |d| < {PARITY_MAX_MM} mm/day against the MATLAB "
-                "simulation" + "".join(rows))
+                "simulation, every watershed, on the forcing it ran on" + "".join(rows))
 
 
 # ------------------------------------------------------------------------------- learned

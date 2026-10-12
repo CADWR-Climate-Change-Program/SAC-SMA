@@ -286,38 +286,37 @@ def outlet_scores(daily: pd.DataFrame, wy: tuple[int, int], data_dir: str = "dat
     return pd.DataFrame(rows)
 
 
+#: the figure title of each target family
+_FAMILY_TITLE = {"usgs_daily": "USGS daily", "cdec_daily": "CDEC daily",
+                 "uf_monthly": "DWR monthly", "calsim_monthly": "CalSim3 arcs"}
+
+
 def _skill_by_family_fig(met: pd.DataFrame, out: Path) -> None:
-    """Sorted per-entity cal KGE, one panel per family (fixed 0-1 scale,
-    negatives clipped and marked)."""
-    fams = [f for f in ("usgs_daily", "cdec_daily", "uf_monthly", "calsim_monthly")
-            if (met["family"] == f).any()]
-    fig, axes = plt.subplots(
-        1, len(fams), figsize=(2.6 + 1.6 * len(fams), 3.2),
-        gridspec_kw={"width_ratios": [max((met["family"] == f).sum(), 4)
-                                      for f in fams]})
-    axes = np.atleast_1d(axes)
-    for ax, fam in zip(axes, fams, strict=True):
+    """Per-entity training-window KGE at its native timescale, sorted, one row per family
+    (fixed 0-1 scale, a value below 0 pinned to 0 with a triangle).  The families with few
+    entities name them on the x-axis."""
+    fams = [f for f in _FAMILY_TITLE if (met["family"] == f).any()]
+    labelled = [f for f in fams if (met["family"] == f).sum() <= 30]
+    fig, axes = plt.subplots(len(fams), 1, figsize=(6.5, 1.8 * len(fams) + 0.5 * len(labelled)),
+                             squeeze=False, layout="constrained")
+    for ax, fam in zip(axes[:, 0], fams, strict=True):
         sub = met[met["family"] == fam].sort_values("kge", ascending=False)
         x = np.arange(len(sub))
-        ax.bar(x, sub["kge"].clip(lower=0.0), color="tab:blue", width=0.8)
-        for i, v in enumerate(sub["kge"]):
-            if np.isfinite(v) and v < 0:
-                ax.annotate("↓", (i, 0.01), ha="center", va="bottom",
-                            fontsize=7, color="tab:blue")
-        med = sub["kge"].median()
-        ax.axhline(med, color="tab:red", lw=1.0, ls="--")
-        ax.set_ylim(0, 1.05)
-        ax.set_title(f"{fam} (n={len(sub)}, median {med:.3f})")
-        if fam in ("usgs_daily", "calsim_monthly"):
-            ax.set_xticks([])
-            ax.set_xlabel("entities (sorted)")
-        else:
+        v = sub["kge"].to_numpy(float)
+        ax.bar(x, np.clip(v, 0, None), color="tab:blue", width=0.8)
+        neg = np.isfinite(v) & (v < 0)
+        if neg.any():
+            ax.plot(x[neg], np.zeros(neg.sum()), "v", ms=5, color="tab:blue", clip_on=False)
+        ax.set_ylim(0, 1)
+        ax.set_yticks([0, 0.5, 1])
+        ax.set_xlim(-0.6, len(sub) - 0.4)
+        ax.set_ylabel("KGE")
+        ax.set_title(_FAMILY_TITLE[fam])
+        if fam in labelled:
             ax.set_xticks(x)
             ax.set_xticklabels(sub["site_id"], rotation=90)
-    axes[0].set_ylabel("cal KGE (native timescale)")
-    fig.suptitle("Multi-timescale entities — per-entity calibration KGE",
-                 fontsize=8, fontweight="bold")
-    fig.tight_layout(rect=(0, 0, 1, 0.94))
+        else:
+            ax.set_xticks([])
     fig.savefig(out, dpi=300)
     plt.close(fig)
 
@@ -484,8 +483,7 @@ def evaluate_checkpoint_mt(
         basin_diagnostics_fig(
             eid, m, cal_end=te, cal=cal, val={"n": 0},
             out=figdir / f"{eid}.png", unit=unit, cal_start=ts,
-            obs_label="observed (native store)",
-            title_obs="observed flow (training window)")
+            obs_label="Observed")
     n_figs = len(figs) + 1
     print(f"wrote {n_figs} figures under {run.local / 'figures'}", flush=True)
     return met

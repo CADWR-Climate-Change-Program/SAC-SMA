@@ -29,6 +29,9 @@ STUDIES: dict[str, tuple[str, str, str]] = {
                 "the hybrid family (hybrid, hybrid_dt, lstm) response surfaces and skill summary"),
     "forcing": ("forcing_sensitivity", "make_forcing_sensitivity",
                 "forcing-product sensitivity of the dPL chain"),
+    "ladder": ("ladder", "make_ladder",
+               "skill and climate response (+3 degC, precipitation +-10 %%) of every rung and "
+               "LSTM model (CPU)"),
 }
 
 
@@ -214,7 +217,7 @@ def _dpl_study(args: argparse.Namespace) -> int:
     import importlib
 
     module, func, _ = STUDIES[args.study]
-    kw = {"device": args.device}
+    kw = {} if args.study == "ladder" else {"device": args.device}
     if args.study == "hybrids":
         kw["regen"] = args.regen
     if args.out is not None:
@@ -528,7 +531,8 @@ def register(sub) -> None:
 
     st = dpl_sub.add_parser(
         "study",
-        help="figures and tables of the 15-CDEC dPL study (regimes, response surfaces, forcing)",
+        help="figures and tables of the 15-CDEC dPL study (regimes, response surfaces, forcing, "
+             "the ladder)",
     )
     st_sub = st.add_subparsers(dest="study", required=True)
     for name, (_, _, text) in STUDIES.items():
@@ -537,8 +541,9 @@ def register(sub) -> None:
         sp.add_argument("--out", default=None,
                         help="output folder (default: "
                              f"artifacts/results/dpl/studies/{name}/)")
-        sp.add_argument("--device", default="cuda", choices=["cuda", "cpu"],
-                        help="torch device for the hybrid reconstructions")
+        if name != "ladder":
+            sp.add_argument("--device", default="cuda", choices=["cuda", "cpu"],
+                            help="torch device for the hybrid reconstructions")
         if name == "hybrids":
             sp.add_argument("--regen", action="store_true",
                             help="recompute the metrics table instead of reloading it")
