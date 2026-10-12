@@ -102,6 +102,7 @@ set,cid,node,arc,basin,kind,cov_frac,n_hru
 11obs,197,PEDRO,I_PEDRO,TLG,rim_member,1.0,85
 11obs,205,HTCHY,I_HTCHY,TLG,rim_member,0.96,51
 11obs,23,TRNTY,I_TRNTY,TNL,rim_cumulative,0.928,56
+11obs,48,LWSTN,I_LWSTN,TNL,rim_cumulative,0.613,2
 11obs,95,MFY013,I_MFY013,YRS,rim_member,1.003,18
 11obs,113,LCBRF,I_LCBRF,YRS,rim_member,1.002,6
 11obs,67,SLT009,I_SLT009,YRS,rim_member,1.002,11
@@ -263,6 +264,9 @@ set,cid,node,arc,basin,kind,cov_frac,n_hru
 9unimp,144,CMP014,I_CMP014,CosumnesRiver,secondary,0.997,9
 9unimp,143,JNKSN,I_JNKSN,CosumnesRiver,secondary,0.997,6
 9unimp,9,HNSLY,I_HNSLY,FresnoRiver,secondary,1.001,29
+9unimp,77,FRS046,I_FRS046,FresnoRiver,secondary,0.959,10
+9unimp,73,DBC024,I_DBC024,FresnoRiver,secondary,0.855,5
+9unimp,74,COT033,I_COT033,FresnoRiver,secondary,0.389,4
 9unimp,173,TGC003,I_TGC003,MokelumneRiver,secondary,1.005,4
 9unimp,138,UBEAR,I_UBEAR,MokelumneRiver,secondary,1.003,10
 9unimp,174,COL003,I_COL003,MokelumneRiver,secondary,1.002,5
