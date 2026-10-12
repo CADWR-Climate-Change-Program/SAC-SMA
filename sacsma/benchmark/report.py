@@ -243,26 +243,6 @@ def _clip_marks(ax, x, vals, ylim, color):
                     color=color, mec="white", mew=0.4, zorder=4, clip_on=False)
 
 
-def _late(met: pd.DataFrame) -> dict[str, int]:
-    """``{site: first water year scored}`` for the sites whose observation starts after the
-    window does (BND, CSN)."""
-    first = met.groupby("site")["wy_start"].first()
-    return {s: int(first[s]) for s in flows.SITES if s in first and first[s] > WY[0]}
-
-
-def _site_label(site: str, met: pd.DataFrame) -> str:
-    """The site code, starred when its observation starts after the window does."""
-    return f"{site}*" if site in _late(met) else site
-
-
-def _late_note(met: pd.DataFrame) -> str:
-    """The footnote of the starred sites, as a sentence ("" when every site starts with the
-    window)."""
-    late = _late(met)
-    return ("* scored from " + ", ".join(f"WY{y} ({s})" for s, y in late.items()) + "."
-            if late else "")
-
-
 def skill_fig(met: pd.DataFrame, path: Path) -> None:
     """KGE (0 to 1) and percent bias (+-75 %) per site and model, as vertical dumbbells: a
     grey bar spans the models at a site, one marker per model.  Sites north to south."""
@@ -276,7 +256,7 @@ def skill_fig(met: pd.DataFrame, path: Path) -> None:
         for xi in x:
             v = [np.clip(vals[m][xi], *ylim) for m in MODELS if np.isfinite(vals[m][xi])]
             if len(v) > 1:
-                ax.plot([xi, xi], [min(v), max(v)], color="0.8", lw=1.5, zorder=1)
+                ax.plot([xi, xi], [min(v), max(v)], color="0.85", lw=1.5, zorder=1)
         for m in MODELS:
             ax.scatter(x, np.clip(vals[m], *ylim), s=MARKER_SIZE[m], marker=MARKERS[m],
                        color=COLORS[m], label=LABELS[m], zorder=3, edgecolor="white",
@@ -287,16 +267,11 @@ def skill_fig(met: pd.DataFrame, path: Path) -> None:
             ax.axhline(0, color="0.6", lw=0.8)
         ax.set_xlim(-0.6, len(sites) - 0.4)
         ax.set_ylabel(ylab)
-        ax.grid(axis="y", color="0.9", lw=0.6)
-        ax.set_axisbelow(True)
-    axes[0].legend(loc="lower left", ncol=5, fontsize=7, framealpha=0.95, handletextpad=0.2,
-                   columnspacing=0.8)
+    axes[0].legend(loc="lower left", ncol=3, handletextpad=0.2, columnspacing=1.0)
     axes[1].set_xticks(x)
-    axes[1].set_xticklabels([_site_label(s, met) for s in sites], rotation=90)
-    axes[0].set_title(f"Monthly skill against CDEC full natural flow, WY{WY[0]}–{WY[1]}")
-    fig.text(0.01, 0.005, f"{_late_note(met)}\nWGEN Product A scenario 1.  A value outside an "
-             "axis is pinned to it with a triangle.", fontsize=6.5, color="0.3")
-    fig.tight_layout(rect=(0, 0.035, 1, 1))
+    axes[1].set_xticklabels(sites, rotation=90)
+    axes[0].set_title(f"Monthly skill, WY{WY[0]}–{WY[1]}")
+    fig.tight_layout()
     _save(fig, path)
     plt.close(fig)
 
@@ -306,7 +281,7 @@ def _get(met, site, model, col) -> float:
     return float(m[col].iloc[0]) if len(m) else np.nan
 
 
-def hydrograph_fig(long: pd.DataFrame, met: pd.DataFrame, path: Path,
+def hydrograph_fig(long: pd.DataFrame, path: Path,
                    titles: dict[str, str] | None = None) -> None:
     """Monthly flow over the window, one panel per site, north to south: the observation in
     black (a month with an invalid day is a gap), each model in its colour.  ``titles`` adds a
@@ -314,31 +289,22 @@ def hydrograph_fig(long: pd.DataFrame, met: pd.DataFrame, path: Path,
     plt = _plt()
     titles = titles or {}
     sites = list(flows.SITES)
-    height = 1.05 * len(sites) + 0.75
+    height = 1.15 * len(sites) + 0.8
     fig, axes = plt.subplots(len(sites), 1, figsize=(_W, height), sharex=True)
     for ax, site in zip(axes, sites, strict=True):
         wide = _wide(long, site)
         for m in _present(wide):
             ax.plot(wide.index, wide[m], color=COLORS[m], lw=0.6, alpha=0.9, label=LABELS[m])
-        ax.plot(wide.index, wide[REF], color=COLORS[REF], lw=0.9, marker="o", ms=1.2,
-                label=LABELS[REF], zorder=4)
+        ax.plot(wide.index, wide[REF], color=COLORS[REF], lw=0.9, label=LABELS[REF], zorder=4)
         ax.set_ylim(bottom=0)
-        ax.text(0.005, 0.95, f"{_site_label(site, met)}  {titles.get(site, '')}",
-                transform=ax.transAxes, ha="left", va="top", fontsize=7,
-                bbox=dict(fc="white", ec="none", alpha=0.8, pad=1))
-        ax.set_ylabel("TAF/mo", fontsize=7)
-        ax.tick_params(labelsize=6.5)
-        ax.grid(color="0.93", lw=0.5)
-        ax.set_axisbelow(True)
+        ax.set_title(f"{site}  {titles.get(site, '')}", loc="left", pad=2)
         ax.margins(x=0.005)
     handles = [plt.Line2D([], [], color=COLORS[m], lw=1.4 if m == REF else 1.0,
                           label=LABELS[m]) for m in (REF, *MODELS)]
-    fig.suptitle(f"Monthly flow (TAF/month), WY{WY[0]}–{WY[1]}.  {_late_note(met)}",
-                 y=1 - 0.08 / height)
-    fig.legend(handles=handles, loc="upper center", ncol=6, fontsize=7, frameon=False,
-               bbox_to_anchor=(0.5, 1 - 0.26 / height))
-    fig.subplots_adjust(left=0.09, right=0.99, bottom=0.3 / height, top=1 - 0.48 / height,
-                        hspace=0.12)
+    fig.legend(handles=handles, loc="upper center", ncol=len(handles),
+               bbox_to_anchor=(0.5, 1.0))
+    fig.supylabel("Monthly flow (TAF)")
+    fig.tight_layout(rect=(0, 0, 1, 1 - 0.35 / height), h_pad=0.4)
     _save(fig, path)
     plt.close(fig)
 
@@ -356,30 +322,27 @@ def climatology_fig(long: pd.DataFrame, met: pd.DataFrame, path: Path) -> None:
     plt = _plt()
     sites = [s for s in flows.SITES if s in set(met["site"])]
     ncol = 4
-    nrow = int(np.ceil((len(sites) + 1) / ncol))
-    fig, axes = plt.subplots(nrow, ncol, figsize=(_W, 1.45 * nrow + 0.4), squeeze=False)
+    nrow = int(np.ceil(len(sites) / ncol))
+    height = 1.75 * nrow + 0.6
+    fig, axes = plt.subplots(nrow, ncol, figsize=(_W, height), squeeze=False)
     for ax, site in zip(axes.ravel(), sites, strict=False):
         sc = _scored(_wide(long, site))
         clim = sc.groupby(sc.index.month).mean().reindex(list(_WY_MONTHS))
         for m in [c for c in MODELS if c in sc]:
-            ax.plot(range(12), clim[m], color=COLORS[m], lw=1.0, marker=MARKERS[m], ms=1.8)
+            ax.plot(range(12), clim[m], color=COLORS[m], lw=1.0)
         ax.plot(range(12), clim[REF], color=COLORS[REF], lw=1.6, zorder=4)
-        ax.set_title(f"{_site_label(site, met)} ({len(sc)} months)", fontsize=7, pad=2)
+        ax.set_title(site, pad=2)
         ax.set_xticks([0, 3, 6, 9])
-        ax.set_xticklabels(["O", "J", "A", "J"], fontsize=6.5)
-        ax.tick_params(axis="y", labelsize=6)
+        ax.set_xticklabels(["O", "J", "A", "J"])
         ax.set_ylim(bottom=0)
-        ax.grid(color="0.93", lw=0.5)
-        ax.set_axisbelow(True)
     for ax in axes.ravel()[len(sites):]:
         ax.axis("off")
-    handles = [plt.Line2D([], [], color=COLORS[m], lw=1.6 if m == REF else 1.0,
-                          marker=None if m == REF else MARKERS[m], ms=3, label=LABELS[m])
+    handles = [plt.Line2D([], [], color=COLORS[m], lw=1.6 if m == REF else 1.0, label=LABELS[m])
                for m in (REF, *MODELS)]
-    axes.ravel()[-1].legend(handles=handles, loc="center", fontsize=7, frameon=False)
-    fig.suptitle(f"Mean monthly flow (TAF/month) on the months scored, WY{WY[0]}–{WY[1]}.  "
-                 f"{_late_note(met)}")
-    fig.tight_layout(rect=(0, 0, 1, 0.97))
+    fig.legend(handles=handles, loc="upper center", ncol=len(handles),
+               bbox_to_anchor=(0.5, 1.0))
+    fig.supylabel("Mean monthly flow (TAF)")
+    fig.tight_layout(rect=(0, 0, 1, 1 - 0.4 / height))
     _save(fig, path)
     plt.close(fig)
 
@@ -413,7 +376,7 @@ def make_all(data_dir: str | Path = "data", artifacts_dir: str | Path = "artifac
         df.to_csv(out / name, index=False)
     fit.reset_index().to_csv(out / "bcm_routing_fit.csv", index=False)
     skill_fig(met, figs / "skill.png")
-    hydrograph_fig(long, met, figs / "hydrographs.png",
+    hydrograph_fig(long, figs / "hydrographs.png",
                    {s: f"{RIVERS.get(s, '')} (CDEC {c})" for s, c in
                     zip(sites["site"], sites["cdec_id"], strict=True)})
     climatology_fig(long, met, figs / "climatology.png")

@@ -61,20 +61,17 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from .. import paths
-from .._figures import plt  # Agg backend
+from .._figures import plt  # Agg backend and the house rcParams
 from ..io import load_reference
 from .compare import _BASIN_ABBREV, basin_order_north_south
 
-_FIG_W, _DPI = 6.5, 600  # <=6.5in wide; high-dpi small-font deck figures
-_RC = {
-    "font.size": 6.5, "axes.titlesize": 6.5, "axes.labelsize": 6.5,
-    "xtick.labelsize": 5.5, "ytick.labelsize": 5.5, "legend.fontsize": 5.5,
-    "figure.titlesize": 7.5, "axes.linewidth": 0.6,
-    "xtick.major.width": 0.6, "ytick.major.width": 0.6,
-}
+_W, _DPI = 6.5, 300  # house style: at most 6.5 in wide, 300 dpi
+#: water-year ticks of the time-series figures; 1950 is the period split (dotted line)
+_YEAR_TICKS = (1920, 1950, 1980, 2010)
 
 #: analysis periods: the storm-splitting artifact is concentrated before 1950.
 PERIODS = (
@@ -88,37 +85,31 @@ SETS = ("9unimp", "11obs")
 
 #: figure sets, keyed by output prefix: each compares one ``model``'s run under an
 #: alternate climate ``product`` against that model's Livneh-unsplit baseline run.
-#: ``title`` prefixes the figure titles; ``label``/``base`` name the product/baseline
-#: lines; ``sign`` sets the difference convention (+1 = product − baseline, −1 =
-#: baseline − product) with ``pct_phrase`` stating it in the axis labels/titles;
-#: ``legend_loc`` = where the volume-bar legend has empty space.  The VIC sets reuse
-#: their climate product's styling — the ``vic_`` prefix and titles carry the model.
+#: ``title`` names the product in the figure titles; ``label``/``base`` name the
+#: product/baseline lines; ``sign`` sets the difference convention (+1 = product −
+#: baseline, −1 = baseline − product) with ``pct_phrase`` stating it in the axis labels;
+#: ``c1``/``c2`` colour the 1915–1949 and 1950–2018 periods.  The VIC sets reuse their
+#: climate product's styling; the ``vic_`` prefix and the titles carry the model.
 PRODUCTS = {
     "split_unsplit": dict(
         model="SAC-SMA", product="historical_lto",
         title="Split precipitation", label="Split", base="Unsplit",
-        sign=-1.0, pct_phrase="Unsplit − Split",
-        c1="#d95f0e", c2="#fdbe85", legend_loc="upper right",
+        sign=-1.0, pct_phrase="Unsplit − split", c1="#d95f0e", c2="#fdbe85",
     ),
     "wgen": dict(
         model="SAC-SMA", product="wgen_product_a",
-        title="WGEN Product A (detrended temperature)",
-        label="Detrended", base="Baseline",
-        sign=1.0, pct_phrase="Detrended − Baseline",
-        c1="#2c7fb8", c2="#a6cbe3", legend_loc="upper left",
+        title="WGEN Product A", label="Detrended", base="Baseline",
+        sign=1.0, pct_phrase="Detrended − baseline", c1="#2c7fb8", c2="#a6cbe3",
     ),
     "vic_split_unsplit": dict(
         model="VIC", product="historical_lto",
         title="Split precipitation", label="Split", base="Unsplit",
-        sign=-1.0, pct_phrase="Unsplit − Split",
-        c1="#d95f0e", c2="#fdbe85", legend_loc="upper right",
+        sign=-1.0, pct_phrase="Unsplit − split", c1="#d95f0e", c2="#fdbe85",
     ),
     "vic_wgen": dict(
         model="VIC", product="wgen_product_a",
-        title="WGEN Product A (detrended temperature)",
-        label="Detrended", base="Baseline",
-        sign=1.0, pct_phrase="Detrended − Baseline",
-        c1="#2c7fb8", c2="#a6cbe3", legend_loc="upper left",
+        title="WGEN Product A", label="Detrended", base="Baseline",
+        sign=1.0, pct_phrase="Detrended − baseline", c1="#2c7fb8", c2="#a6cbe3",
     ),
 }
 
@@ -232,34 +223,38 @@ def _mean_monthly(m: pd.Series, a: str, b: str) -> pd.Series:
 # figures
 # --------------------------------------------------------------------------
 
+def _year_axis(ax) -> None:
+    """Water years 1916–2018, the period split at 1950 marked by a dotted line."""
+    ax.axvline(1950, color="0.2", lw=0.8, ls=":")
+    ax.set_xlim(1916, 2018)
+    ax.set_xticks(_YEAR_TICKS)
+
+
 def volume_by_period_fig(series: dict, orders: dict, cfg: dict, path: Path) -> None:
-    """Horizontal bars: % volume difference vs baseline, one bar per period."""
-    with plt.rc_context(_RC):
-        fig, axes = plt.subplots(
-            len(orders), 1, figsize=(_FIG_W, 0.225 * sum(map(len, orders.values()))),
-            sharex=True, gridspec_kw={"height_ratios": [len(o) for o in orders.values()]},
-        )
-        for ax, (domain, order) in zip(axes, orders.items(), strict=True):
-            vals = {b: _pct_diff_by_period(*series[domain][b], cfg["sign"]) for b in order}
-            y = range(len(order))
-            for k, ((plabel, _, _), color) in enumerate(
-                    zip(PERIODS, (cfg["c1"], cfg["c2"]), strict=True)):
-                off = 0.2 if k == 0 else -0.2
-                ax.barh([i + off for i in y], [vals[b][k] for b in order],
-                        height=0.38, color=color, label=plabel)
-            ax.axvline(0, color="0.4", lw=0.7)
-            ax.set_yticks(list(y), order)
-            ax.invert_yaxis()  # north at top
-            ax.set_ylabel(domain)
-            ax.grid(axis="x", color="0.9", lw=0.5)
-            ax.set_axisbelow(True)
-        axes[0].legend(loc=cfg["legend_loc"], frameon=False, title=None)
-        axes[-1].set_xlabel(f"{cfg['pct_phrase']} {cfg['model']} runoff volume (%)")
-        fig.suptitle(f"{cfg['title']}: {cfg['model']} runoff volume difference by period "
-                     "(basins north→south)")
-        fig.tight_layout(rect=(0, 0, 1, 0.98))
-        fig.savefig(path, dpi=_DPI)
-        plt.close(fig)
+    """Horizontal bars: % volume difference against the baseline, one bar per period, one
+    panel per set, watersheds north to south."""
+    n = sum(map(len, orders.values()))
+    fig, axes = plt.subplots(
+        len(orders), 1, figsize=(_W, 0.27 * n + 1.2), sharex=True,
+        gridspec_kw={"height_ratios": [len(o) for o in orders.values()]},
+    )
+    for ax, (domain, order) in zip(axes, orders.items(), strict=True):
+        vals = {b: _pct_diff_by_period(*series[domain][b], cfg["sign"]) for b in order}
+        y = np.arange(len(order))
+        for k, ((plabel, _, _), color) in enumerate(
+                zip(PERIODS, (cfg["c1"], cfg["c2"]), strict=True)):
+            ax.barh(y + (k - 0.5) * 0.4, [vals[b][k] for b in order], height=0.38,
+                    color=color, label=plabel)
+        ax.axvline(0, color="0.4", lw=0.8)
+        ax.set_yticks(y, order)
+        ax.invert_yaxis()  # north at top, the first period above the second
+        ax.set_ylabel(domain)
+    axes[0].set_title(f"{cfg['title']}, {cfg['model']}", loc="left")
+    axes[0].legend(loc="lower right", bbox_to_anchor=(1.0, 1.0), ncol=2, borderaxespad=0)
+    axes[-1].set_xlabel(f"{cfg['pct_phrase']} volume (%)")
+    fig.tight_layout()
+    fig.savefig(path, dpi=_DPI)
+    plt.close(fig)
 
 
 def annual_diff_fig(series: dict, orders: dict, cfg: dict, path: Path) -> None:
@@ -273,79 +268,62 @@ def annual_diff_fig(series: dict, orders: dict, cfg: dict, path: Path) -> None:
             diffs.append((cfg["sign"] * 100.0 * (r / base - 1.0))
                          .rolling(5, center=True).mean())
     d = pd.concat(diffs, axis=1)
-    with plt.rc_context(_RC):
-        fig, (ax, ax2) = plt.subplots(2, 1, figsize=(_FIG_W, 3.6), sharex=True,
-                                      gridspec_kw={"height_ratios": (3, 1)})
-        colors = plt.get_cmap("tab20").colors
-        for k, lab in enumerate(labels):
-            ax.plot(d.index, d.iloc[:, k], color=colors[k % len(colors)],
-                    lw=0.7, label=lab)
-        ax2.plot(d.index, d.abs().mean(axis=1), color="0.1", lw=1.2)
-        ax2.set_ylabel("mean |diff| (%)")
-        ax2.set_ylim(bottom=0)
-        fig.legend(*ax.get_legend_handles_labels(), ncol=7, loc="lower center",
-                   frameon=False, fontsize=5)
-        ax.axhline(0, color="0.4", lw=0.7)
-        for a in (ax, ax2):
-            a.axvline(1950, color="0.2", lw=0.8, ls=":")
-            a.set_xlim(1916, 2018)
-            a.grid(color="0.92", lw=0.5)
-            a.set_axisbelow(True)
-        ax.text(1951, 0.93, "1950", fontsize=5.5, color="0.2",
-                transform=ax.get_xaxis_transform())
-        ax2.set_xlabel("water year")
-        ax.set_ylabel("volume difference (%)")
-        ax.set_title(f"{cfg['title']}: {cfg['model']} water-year runoff volume difference "
-                     f"({cfg['pct_phrase']})\n(5-yr rolling, one line per 9unimp/11obs "
-                     "watershed)")
-        fig.tight_layout(rect=(0, 0.14, 1, 1))
-        fig.savefig(path, dpi=_DPI)
-        plt.close(fig)
+    fig, (ax, ax2) = plt.subplots(2, 1, figsize=(_W, 6.0), sharex=True,
+                                  gridspec_kw={"height_ratios": (3, 1.2)})
+    colors = plt.get_cmap("tab20").colors
+    for k, lab in enumerate(labels):
+        ax.plot(d.index, d.iloc[:, k], color=colors[k % len(colors)], lw=0.7, label=lab)
+    ax.axhline(0, color="0.4", lw=0.8)
+    ax2.plot(d.index, d.abs().mean(axis=1), color="0.1", lw=1.2)
+    ax2.set_ylim(bottom=0)
+    for a in (ax, ax2):
+        _year_axis(a)
+    ax.set_title(f"{cfg['title']}, {cfg['model']}")
+    ax.set_ylabel(f"{cfg['pct_phrase']} volume (%)")
+    ax2.set_ylabel("Mean absolute\ndifference (%)")
+    ax2.set_xlabel("Water year")
+    fig.legend(*ax.get_legend_handles_labels(), ncol=5, loc="lower center",
+               handlelength=1.5, columnspacing=1.2)
+    fig.tight_layout(rect=(0, 0.15, 1, 1))
+    fig.savefig(path, dpi=_DPI)
+    plt.close(fig)
 
 
 def regime_domain_fig(series_d: dict, order: list, cfg: dict, domain: str,
                       path: Path) -> None:
-    """Mean-monthly regime, baseline vs product, both periods: one panel per basin
+    """Mean-monthly regime, baseline and product, both periods: one panel per basin
     of ``domain`` (north -> south); solid = baseline, dashed = product, dark =
-    1915-1949, light = 1950-2018.  Each panel is annotated top-right with the
-    per-period volume difference (``sign`` convention, period-coloured)."""
+    1915-1949, light = 1950-2018."""
+    from matplotlib.lines import Line2D
+
     ncol = 4 if len(order) > 9 else 3
     nrow = -(-len(order) // ncol)
-    with plt.rc_context(_RC):
-        fig, axes = plt.subplots(nrow, ncol, figsize=(_FIG_W, 1.25 * nrow + 1.0),
-                                 sharex=True)
-        for ax in axes.flat[len(order):]:
-            ax.set_visible(False)
-        for ax, basin in zip(axes.flat, order, strict=False):  # trailing axes hidden
-            base, r = series_d[basin]
-            for (plabel, a, b), color in zip(PERIODS, (cfg["c1"], cfg["c2"]),
-                                             strict=True):
-                ax.plot(range(12), _mean_monthly(base, a, b), color=color, lw=1.1,
-                        label=f"{cfg['base']} {plabel}")
-                ax.plot(range(12), _mean_monthly(r, a, b), color=color, lw=1.1,
-                        ls="--", label=f"{cfg['label']} {plabel}")
-            for v, color, dy in zip(_pct_diff_by_period(base, r, cfg["sign"]),
-                                    (cfg["c1"], cfg["c2"]), (0.0, 0.12), strict=True):
-                ax.text(0.96, 0.94 - dy, f"{v:+.1f}%", transform=ax.transAxes,
-                        ha="right", va="top", color=color, fontsize=5.5)
-            ax.set_title(basin)
-            ax.set_xticks(range(12), list("ONDJFMAMJJAS"))
-            ax.grid(color="0.92", lw=0.5)
-            ax.set_axisbelow(True)
-        for i in range(nrow):
-            axes[i, 0].set_ylabel("mm/month")
-        for j in range(ncol):  # x tick labels on each column's last VISIBLE panel
-            vis = [i for i in range(nrow) if i * ncol + j < len(order)]
-            if vis and vis[-1] < nrow - 1:
-                axes[vis[-1], j].tick_params(labelbottom=True)
-        handles, labels = axes.flat[0].get_legend_handles_labels()
-        fig.legend(handles, labels, ncol=4, loc="upper center",
-                   bbox_to_anchor=(0.5, 0.925), frameon=False)
-        fig.suptitle(f"{cfg['title']}: {cfg['model']} mean-monthly runoff regime — {domain}\n"
-                     f"(north→south; % = {cfg['pct_phrase']} volume)")
-        fig.tight_layout(rect=(0, 0, 1, 0.885))
-        fig.savefig(path, dpi=_DPI)
-        plt.close(fig)
+    colors = (cfg["c1"], cfg["c2"])
+    fig, axes = plt.subplots(nrow, ncol, figsize=(_W, 1.7 * nrow + 0.9), sharex=True,
+                             squeeze=False, layout="constrained")
+    for ax in axes.flat[len(order):]:
+        ax.set_visible(False)
+    for ax, basin in zip(axes.flat, order, strict=False):  # trailing axes hidden
+        base, r = series_d[basin]
+        for (_, a, b), color in zip(PERIODS, colors, strict=True):
+            ax.plot(range(12), _mean_monthly(base, a, b), color=color, lw=1.1)
+            ax.plot(range(12), _mean_monthly(r, a, b), color=color, lw=1.1, ls="--")
+        ax.set_title(basin, pad=2)
+        ax.set_xticks([0, 3, 6, 9], ["O", "J", "A", "J"])
+        ax.set_ylim(bottom=0)
+    for j in range(ncol):  # x tick labels on each column's last VISIBLE panel
+        vis = [i for i in range(nrow) if i * ncol + j < len(order)]
+        if vis and vis[-1] < nrow - 1:
+            axes[vis[-1], j].tick_params(labelbottom=True)
+    handles = ([Line2D([], [], color=c, lw=1.1, label=p[0])
+                for p, c in zip(PERIODS, colors, strict=True)]
+               + [Line2D([], [], color="0.3", lw=1.1, label=cfg["base"]),
+                  Line2D([], [], color="0.3", lw=1.1, ls="--", label=cfg["label"])])
+    axes[nrow // 2, 0].set_ylabel("Mean flow (mm/month)")
+    fig.suptitle(f"{cfg['title']}, {cfg['model']} {domain}")
+    fig.legend(handles=handles, loc="outside lower center", ncol=4)
+    fig.savefig(path, dpi=_DPI)
+    plt.close(fig)
 
 
 #: watersheds excluded from the cross-model AGGREGATE so it sums disjoint drainage:
@@ -374,38 +352,32 @@ def _aggregate(series: dict, orders: dict, data_dir) -> tuple[pd.Series, pd.Seri
 
 
 def agg_models_fig(model_pairs: dict, cfg: dict, path: Path) -> None:
-    """SAC-SMA vs VIC on one axes: % difference of the aggregate water-year volume
+    """SAC-SMA and VIC on one axes: % difference of the aggregate water-year volume
     (:func:`_aggregate`), 5-yr rolling; each model's per-period aggregate difference
-    is drawn as dashed level lines and quoted in the legend."""
-    with plt.rc_context(_RC):
-        fig, ax = plt.subplots(figsize=(_FIG_W, 2.6))
-        for (model, (base, run)), color in zip(model_pairs.items(),
-                                               ("#c02f1d", "#2c7fb8"), strict=True):
-            ann_b, ann_r = _wy_annual(base), _wy_annual(run)
-            diff = (cfg["sign"] * 100.0 * (ann_r / ann_b - 1.0)).rolling(5, center=True).mean()
-            pcts = _pct_diff_by_period(base, run, cfg["sign"])
-            ax.plot(diff.index, diff, color=color, lw=1.2,
-                    label=f"{model}   {PERIODS[0][0]}: {pcts[0]:+.1f}%   "
-                          f"{PERIODS[1][0]}: {pcts[1]:+.1f}%")
-            for (_, a, b), v in zip(PERIODS, pcts, strict=True):
-                ax.plot([max(int(a[:4]), 1916), min(int(b[:4]), 2018)], [v, v],
-                        color=color, lw=0.8, ls="--", alpha=0.8)
-        ax.axhline(0, color="0.4", lw=0.7)
-        ax.axvline(1950, color="0.2", lw=0.8, ls=":")
-        ax.text(1951, 0.93, "1950", fontsize=5.5, color="0.2",
-                transform=ax.get_xaxis_transform())
-        ax.set_xlim(1916, 2018)
-        ax.grid(color="0.92", lw=0.5)
-        ax.set_axisbelow(True)
-        ax.set_xlabel("water year")
-        ax.set_ylabel("aggregate volume difference (%)")
-        ax.legend(loc="best", frameon=False)
-        ax.set_title(f"{cfg['title']}: aggregate water-year runoff volume difference "
-                     f"({cfg['pct_phrase']}), SAC-SMA vs VIC\n(total over the disjoint "
-                     "9unimp+11obs watersheds, 5-yr rolling; dashed = period aggregate)")
-        fig.tight_layout()
-        fig.savefig(path, dpi=_DPI)
-        plt.close(fig)
+    is drawn as dashed level lines."""
+    from matplotlib.lines import Line2D
+
+    fig, ax = plt.subplots(figsize=(_W, 3.4))
+    for (model, (base, run)), color in zip(model_pairs.items(),
+                                           ("#c02f1d", "#2c7fb8"), strict=True):
+        ann_b, ann_r = _wy_annual(base), _wy_annual(run)
+        diff = (cfg["sign"] * 100.0 * (ann_r / ann_b - 1.0)).rolling(5, center=True).mean()
+        ax.plot(diff.index, diff, color=color, lw=1.2, label=model)
+        for (_, a, b), v in zip(PERIODS, _pct_diff_by_period(base, run, cfg["sign"]),
+                                strict=True):
+            ax.plot([max(int(a[:4]), 1916), min(int(b[:4]), 2018)], [v, v],
+                    color=color, lw=0.8, ls="--", alpha=0.8)
+    ax.axhline(0, color="0.4", lw=0.8)
+    _year_axis(ax)
+    ax.set_xlabel("Water year")
+    ax.set_ylabel(f"{cfg['pct_phrase']} volume (%)")
+    handles = ax.get_legend_handles_labels()[0] + [
+        Line2D([], [], color="0.4", lw=0.8, ls="--", label="Period total")]
+    ax.legend(handles=handles, loc="best")
+    ax.set_title(f"{cfg['title']}, total of 9unimp and 11obs")
+    fig.tight_layout()
+    fig.savefig(path, dpi=_DPI)
+    plt.close(fig)
 
 
 # --------------------------------------------------------------------------
@@ -465,55 +437,50 @@ def split_unsplit_skill_table(data_dir: str | Path = "data") -> pd.DataFrame:
 
 
 def skill_boxplot_fig(met: pd.DataFrame, path: Path) -> None:
-    """Boxplots of the per-basin anchor skill (KGE / NSE / pbias vs CalSim3), baseline
-    vs split product, per period, all anchor basins pooled and overlaid as jittered
-    points.  House axis rules: KGE/NSE on the full 0-1 scale, pbias symmetric about 0."""
-    import numpy as np
-
+    """Boxplots of the per-basin anchor skill against CalSim3 (KGE, NSE, percent bias),
+    baseline and split product, per period, all anchor basins pooled and overlaid as
+    jittered points.  House axis rules: KGE/NSE on the full 0-1 scale (a value below 0
+    pinned to 0 with a triangle), percent bias symmetric about 0."""
     cfg = PRODUCTS["split_unsplit"]
     periods = [("full", "Full"), ("pre1950", "Pre-1950"), ("post1950", "Post-1950")]
-    forcings = [("unsplit", f"{cfg['base']} (Livneh baseline)", "0.55"),
+    forcings = [("unsplit", f"{cfg['base']} (Livneh)", "0.55"),
                 ("lto", f"{cfg['label']} ({cfg['product']})", cfg["c1"])]
-    metrics = [("kge", "KGE"), ("nse", "NSE"), ("pbias", "pbias (%)")]
+    metrics = [("kge", "KGE"), ("nse", "NSE"), ("pbias", "Percent bias")]
     rng = np.random.default_rng(7)
     plim = float(np.ceil(met["pbias"].abs().max() / 5.0) * 5.0)
-    with plt.rc_context(_RC):
-        fig, axes = plt.subplots(1, 3, figsize=(_FIG_W, 2.9))
-        for ax, (m, mlab) in zip(axes, metrics, strict=True):
-            for gi, (plab, _) in enumerate(periods):
-                for fi, (frc, _, color) in enumerate(forcings):
-                    v = met[(met["period"] == plab)
-                            & (met["forcing"] == frc)][m].to_numpy()
-                    x = gi + (fi - 0.5) * 0.38
-                    ax.boxplot(v, positions=[x], widths=0.30, patch_artist=True,
-                               showfliers=False,
-                               medianprops=dict(color="0.1", lw=1.1),
-                               boxprops=dict(facecolor=color, edgecolor="0.25",
-                                             lw=0.6, alpha=0.55),
-                               whiskerprops=dict(color="0.35", lw=0.7),
-                               capprops=dict(color="0.35", lw=0.7))
-                    ax.scatter(x + rng.uniform(-0.07, 0.07, len(v)), v, s=4, zorder=3,
-                               facecolor=color, edgecolor="0.2", linewidth=0.25)
-            ax.set_xticks(range(len(periods)))
-            ax.set_xticklabels([p[1] for p in periods])
-            ax.set_title(mlab)
-            ax.grid(axis="y", color="0.92", lw=0.5)
-            ax.set_axisbelow(True)
-            ax.set_xlim(-0.6, len(periods) - 0.4)
-            if m == "pbias":
-                ax.set_ylim(-plim, plim)
-                ax.axhline(0, color="0.4", lw=0.7)
-            else:
-                ax.set_ylim(0, 1)          # house rule: KGE/NSE on the full 0-1 axis
-        handles = [plt.Rectangle((0, 0), 1, 1, facecolor=c, edgecolor="0.25", lw=0.6,
-                                 alpha=0.55) for _, _, c in forcings]
-        fig.legend(handles, [lab for _, lab, _ in forcings], loc="lower center",
-                   ncol=2, frameon=False)
-        fig.suptitle("SAC-SMA vs CalSim3 unimpaired FNF — forcing-product effect on "
-                     "the screened-anchor skill (11obs + 9unimp basins)")
-        fig.tight_layout(rect=(0, 0.07, 1, 1))
-        fig.savefig(path, dpi=_DPI)
-        plt.close(fig)
+    fig, axes = plt.subplots(3, 1, figsize=(_W, 6.6), sharex=True)
+    for ax, (m, mlab) in zip(axes, metrics, strict=True):
+        lo, hi = (-plim, plim) if m == "pbias" else (0.0, 1.0)
+        for gi, (plab, _) in enumerate(periods):
+            for fi, (frc, _, color) in enumerate(forcings):
+                v = met[(met["period"] == plab) & (met["forcing"] == frc)][m].to_numpy()
+                x = gi + (fi - 0.5) * 0.38
+                ax.boxplot(v, positions=[x], widths=0.30, patch_artist=True,
+                           showfliers=False,
+                           medianprops=dict(color="0.1", lw=1.1),
+                           boxprops=dict(facecolor=color, edgecolor="0.25",
+                                         lw=0.6, alpha=0.55),
+                           whiskerprops=dict(color="0.35", lw=0.7),
+                           capprops=dict(color="0.35", lw=0.7))
+                xs = x + rng.uniform(-0.07, 0.07, len(v))
+                low = v < lo
+                ax.scatter(xs[~low], v[~low], s=6, zorder=3,
+                           facecolor=color, edgecolor="0.2", linewidth=0.25)
+                ax.scatter(xs[low], np.full(low.sum(), lo), s=14, marker="v", zorder=3,
+                           facecolor=color, edgecolor="0.2", linewidth=0.25, clip_on=False)
+        ax.set_ylim(lo, hi)
+        if lo < 0:
+            ax.axhline(0, color="0.4", lw=0.8)
+        ax.set_ylabel(mlab)
+    axes[-1].set_xticks(range(len(periods)), [p[1] for p in periods])
+    axes[-1].set_xlim(-0.6, len(periods) - 0.4)
+    handles = [plt.Rectangle((0, 0), 1, 1, facecolor=c, edgecolor="0.25", lw=0.6,
+                             alpha=0.55, label=lab) for _, lab, c in forcings]
+    axes[0].legend(handles=handles, loc="lower left", ncol=2)
+    axes[0].set_title("Anchor skill against CalSim3")
+    fig.tight_layout()
+    fig.savefig(path, dpi=_DPI)
+    plt.close(fig)
 
 
 def make_split_unsplit_skill(data_dir: str | Path = "data",

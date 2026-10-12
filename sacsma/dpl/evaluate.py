@@ -84,6 +84,16 @@ CAL_WINDOW = ("1988-10-01", CAL_END)
 VAL_WINDOW = ("2003-10-01", "2018-09-30")
 
 
+def north_to_south(data_dir: str = "data") -> list[str]:
+    """The 15 CDEC watersheds in the house figure order: north to south by the mean latitude
+    of their HRUs, the Folsom before the Yuba (:func:`sacsma._figures.folsom_before_yuba`)."""
+    from .._figures import folsom_before_yuba
+    from ..io import load_hru_table
+
+    lat = load_hru_table(data_dir, domain="15cdec").groupby("basin")["lat"].mean()
+    return folsom_before_yuba("15cdec", lat.sort_values(ascending=False).index.tolist())
+
+
 def score_basins(sim: np.ndarray, basins, dates: pd.DatetimeIndex, out: Path, *,
                  data_dir: str = "data", figures: bool = True,
                  cal: tuple[str, str] = CAL_WINDOW, val: tuple[str, str] = VAL_WINDOW,
@@ -93,18 +103,12 @@ def score_basins(sim: np.ndarray, basins, dates: pd.DatetimeIndex, out: Path, *,
     the days of ``obs_mask`` left out (``None``: :func:`daily_obs_mask`), north to south:
     ``metrics.csv`` in ``out`` (the columns of the calibrated model's), and with ``figures``
     the diagnostics under ``out/figures/``."""
-    from .._figures import (
-        _period_stats,
-        basin_diagnostics_fig,
-        folsom_before_yuba,
-        skill_summary_fig,
-    )
-    from ..io import load_basin_area, load_hru_table, mmday_to_cfs
+    from .._figures import _period_stats, basin_diagnostics_fig, skill_summary_fig
+    from ..io import load_basin_area, mmday_to_cfs
 
     cal_end_ts = pd.Timestamp(cal[1])
     masked = daily_obs_mask(data_dir) if obs_mask is None else obs_mask
-    lat = load_hru_table(data_dir, domain="15cdec").groupby("basin")["lat"].mean()
-    order = folsom_before_yuba("15cdec", lat.sort_values(ascending=False).index.tolist())
+    order = north_to_south(data_dir)
     areas = load_basin_area(data_dir, domain="15cdec").set_index("basin")["area_mi2"].to_dict()
     is_cal = np.asarray((dates >= pd.Timestamp(cal[0])) & (dates <= cal_end_ts))
     is_val = np.asarray((dates >= pd.Timestamp(val[0])) & (dates <= pd.Timestamp(val[1])))
@@ -365,37 +369,35 @@ def fidelity_benchmark(data_dir: str = "data", out_dir: str | Path | None = None
     df["d_cal_kge"] = df["cal_kge_learned"] - df["cal_kge_reference"]
     df["d_val_kge"] = df["val_kge_learned"] - df["val_kge_reference"]
     df.to_csv(out / "fidelity_benchmark.csv", index=False)
-    _fidelity_figure(df, out / "figures" / "fidelity_benchmark.png")
+    _fidelity_figure(df, out / "figures" / "fidelity_benchmark.png", north_to_south(data_dir))
     print(f"wrote {out / 'fidelity_benchmark.csv'}", flush=True)
     return df
 
 
-def _fidelity_figure(df: pd.DataFrame, path: Path) -> None:
-    import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
+def _fidelity_figure(df: pd.DataFrame, path: Path, order: list[str]) -> None:
+    """Per watershed (``order``) and sub-step count: the daily KGE of the learned numerics
+    against the reference model (0-1) and their largest daily difference (log scale)."""
+    from .._figures import plt
 
     n_incs = list(dict.fromkeys(df["n_inc"]))
-    basins = [b for b in BASINS if b in set(df["basin"])]
-    fig, axes = plt.subplots(2, 1, figsize=(6.5, 5.2), dpi=300, sharex=True)
+    basins = [b for b in order if b in set(df["basin"])]
+    fig, axes = plt.subplots(2, 1, figsize=(6.5, 5.8), sharex=True)
     x = np.arange(len(basins))
     width = 0.8 / len(n_incs)
     for c_i, c in enumerate(n_incs):
         d = df[df["n_inc"] == c].set_index("basin").reindex(basins)
-        axes[0].bar(x + c_i * width, d["kge_sim"], width, label=f"n_inc {c}")
-        axes[1].bar(x + c_i * width, d["max_abs_diff"], width, label=f"n_inc {c}")
-    axes[0].set_ylabel("daily KGE, learned vs reference", fontsize=8)
-    axes[0].set_ylim(0.8, 1.001)
-    axes[0].axhline(0.999, color="0.4", lw=0.6, ls="--")
-    axes[1].set_ylabel("max |learned − reference| (mm/day)", fontsize=8)
+        xc = x - 0.4 + (c_i + 0.5) * width
+        axes[0].bar(xc, d["kge_sim"].clip(lower=0.0), width, label=str(c))
+        axes[1].bar(xc, d["max_abs_diff"], width)
+    axes[0].set_ylim(0, 1)
+    axes[0].set_ylabel("KGE against reference")
+    fig.suptitle("Learned numerics, archived GA optimum")
+    axes[0].legend(title="Sub-steps a day", ncol=len(n_incs), loc="lower center",
+                   bbox_to_anchor=(0.5, 1.0), handlelength=1.2, columnspacing=1.2)
     axes[1].set_yscale("log")
-    axes[1].set_xticks(x + 0.4 - width / 2)
-    axes[1].set_xticklabels(basins, fontsize=7, rotation=45)
-    axes[0].legend(fontsize=6, ncol=5, frameon=False, loc="lower center")
-    for ax in axes:
-        ax.tick_params(labelsize=7)
-    fig.suptitle("Learned numerics vs the reference model — archived GA optimum", fontsize=9)
+    axes[1].set_ylabel("Largest difference (mm/day)")
+    axes[1].set_xticks(x)
+    axes[1].set_xticklabels(basins, rotation=90)
     fig.tight_layout()
-    fig.savefig(path)
+    fig.savefig(path, dpi=300)
     plt.close(fig)

@@ -296,7 +296,7 @@ CALIBRATED = (CDEC15, *CALLITE, "calsim3", "benchmark", "footprints", "forcing")
 #: the delivered products, one folder each under product/
 PRODUCTS = ("calsim3", CALLITE_DIR, CDEC15)
 #: the ``sacsma dpl study`` result folders
-DPL_STUDIES = ("climatology", "hybrids", "forcing")
+DPL_STUDIES = ("climatology", "hybrids", "forcing", "ladder")
 #: the roles of a learned-parameter run
 ROLES = ("models", "results", "local")
 

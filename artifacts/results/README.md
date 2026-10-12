@@ -14,7 +14,7 @@ same path under `artifacts/_local/`.
 | `forcing/` | The effect of the forcing product on both SAC-SMA and VIC, and the daily runs it compares | `sacsma calsim --forcing-compare` |
 | `dpl/15cdec/` | The runs fitted to the 15 CDEC watersheds: the ladder's rungs `1_hru` to `6_aef` and the LSTM ensembles: see [dpl](dpl/README.md) | `sacsma dpl ...` |
 | `dpl/multifamily/` | dPL-CalSim (`7_calsim`): scores per entity, the daily flow, tier 1, tier 2, the atlas: see [dpl](dpl/README.md) | `sacsma dpl ...` |
-| `dpl/fidelity/`, `dpl/studies/` | The fidelity check of the differentiable model, and the three studies (climatology, hybrids, forcing): see [dpl](dpl/README.md) | `sacsma dpl fidelity`, `sacsma dpl study <name>` |
+| `dpl/fidelity/`, `dpl/studies/` | The fidelity check of the differentiable model, and the four studies (climatology, hybrids, forcing, ladder): see [dpl](dpl/README.md) | `sacsma dpl fidelity`, `sacsma dpl study <name>` |
 
 ## The calibrated SAC-SMA
 
@@ -48,16 +48,33 @@ the reference model (`sacsma.model.run_basins`) and redraws on CPU in minutes. M
 | `basin_map_metrics.csv`, `vic_full_metrics.csv` | The values behind the maps; VIC on every arc |
 | `figures/` | Anchor dumbbells (`anchor_skill_*`, also by period), hydrographs and regimes, skill maps of SAC-SMA, VIC and their difference, coverage maps, rolling skill |
 
+On the maps every catchment carries its watershed's anchor score, and the outlines on a
+`<set>_coverage_map.png` are each watershed's HRU footprint. In `calsim_sacsma_minus_vic_*` a
+positive value means SAC-SMA is closer to CalSim3 than VIC (for percent bias, the drop in its
+absolute value). `anchor_pbias_vs_seasonal_<set>.png` places each watershed by its absolute
+percent bias and its seasonal mismatch, with a grey line from SAC-SMA to VIC.
+`anchor_hydrographs.png` covers WY1986–2005 and `main_river_climatology.png` the whole record,
+for the eight 8-River Index systems.
+
 ### `footprints/`
 
 `figures/<watershed>_footprint_panels.png` (the screening method for SHA, SNS, Chowchilla,
 Trinity and Fresno), `figures/hru_*` (vegetation and soil classes and `Kpet` of the units), and
 the two tables behind the `Kpet` maps (`hru_veg_kpet_15cdec.csv`, `hru_kpet_by_soil_15cdec.csv`).
+The panels draw the geometry only: SHA, SNS and Chowchilla are screened to their CalSim3
+catchment, Trinity and Fresno are scored on their whole footprint, and VIC's grid is used as it
+is except for the Goose Lake cells at Shasta. `Kpet` is uniform within each 11obs and 9unimp
+watershed and follows the soil class alone in 15cdec.
 
 ### `forcing/`
 
 `figures/` holds each product against the Livneh baseline on both models, split at WY1950;
-`split_unsplit_anchor_skill.csv` scores both precipitation lineages against CalSim3.
+`split_unsplit_anchor_skill.csv` scores both precipitation lineages against CalSim3 (drawn in
+`figures/split_unsplit_skill_boxplot.png`, whole record, before and from WY1950). The split
+product is shown as unsplit − split and WGEN Product A as detrended − baseline. The water-year
+figures are 5-year rolling means; `agg_*_annual_diff.png` totals the disjoint 9unimp and 11obs
+watersheds (SHA and BLB are left out: BND and StonyCreek hold their drainage), with each
+period's total as a dashed line.
 The comparison simulates the daily runs of the three CalLite sets under each product when it
 needs them and caches them in `_local/cache/forcing/`. The monthly series of the same model under
 `wgen_product_a` is delivered in [`product/callite/`](../product/callite/README.md).

@@ -100,7 +100,7 @@ sacsma dpl calsim atlas $RUN --score-holdout       # all of it on one HTML page
 sacsma dpl calsim product apply --forcing wgen_product_a   # the rim-inflow product under a forcing
 
 # studies of the 15-watershed runs -> artifacts/results/dpl/studies/
-sacsma dpl study hybrids          # also: climatology, forcing
+sacsma dpl study hybrids          # also: climatology, forcing, ladder
 sacsma dpl fidelity               # the learned numerics vs the reference model -> artifacts/results/dpl/fidelity/
 ```
 

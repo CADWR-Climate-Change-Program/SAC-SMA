@@ -37,6 +37,7 @@ import numpy as np
 import pandas as pd
 
 from ... import paths
+from ..._figures import plt
 from ...io import load_hru_table, mmday_to_cfs
 
 _AF_PER_CFS_DAY = 1.98347          # cfs-day -> acre-feet; /1000 -> TAF
@@ -59,32 +60,37 @@ HYBRID: dict[str, Path] = {
     "lstm": paths.dpl_run(run="lstm"),
 }
 
-#: per-series line style (identity by hue; CalSim3 FNF emphasized in black).
+#: per-series line style (identity by hue; CalSim3 FNF in black, drawn on top).
 STYLE: dict[str, dict] = {
-    "CalSim3 FNF":    dict(color="#000000", lw=2.4, ls="--", marker="o", ms=4.5,
-                          zorder=10),
-    "GA":             dict(color="#9e9e9e", lw=1.9),
-    "1_hru":          dict(color="#8c564b", lw=1.9),
-    "2_grid":         dict(color="#1f77b4", lw=1.9),
-    "3_pt":           dict(color="#ff7f0e", lw=1.9),
-    "4_noah":         dict(color="#bcbd22", lw=2.0),
-    "5_px":           dict(color="#2ca02c", lw=2.0),
-    "6_aef":          dict(color="#e377c2", lw=2.0),
-    "hybrid":         dict(color="#9467bd", lw=2.1),
-    "hybrid_dt":      dict(color="#17becf", lw=2.1),
-    "lstm":           dict(color="#7f7f7f", lw=2.1),
+    "CalSim3 FNF":    dict(color="#000000", lw=1.6, zorder=10),
+    "GA":             dict(color="#9e9e9e", lw=1.1),
+    "1_hru":          dict(color="#8c564b", lw=1.1),
+    "2_grid":         dict(color="#1f77b4", lw=1.1),
+    "3_pt":           dict(color="#ff7f0e", lw=1.1),
+    "4_noah":         dict(color="#bcbd22", lw=1.1),
+    "5_px":           dict(color="#2ca02c", lw=1.1),
+    "6_aef":          dict(color="#e377c2", lw=1.1),
+    "hybrid":         dict(color="#9467bd", lw=1.1),
+    "hybrid_dt":      dict(color="#17becf", lw=1.1),
+    "lstm":           dict(color="#7f7f7f", lw=1.1),
 }
 
-#: (tag, subtitle, [model labels]) -- each renders one 11-basin figure.
+#: (tag, title, [model labels]) -- each renders one 11-basin figure.
 COMPARISONS: list[tuple[str, str, list[str]]] = [
-    ("a", "the network in place of the GA (Hamon, SAC ET, fine HRUs)", ["GA", "1_hru"]),
-    ("b", "grid cells + CalSim3 outlines", ["1_hru", "2_grid"]),
+    ("a", "Network in place of the GA", ["GA", "1_hru"]),
+    ("b", "Grid cells and CalSim3 outlines", ["1_hru", "2_grid"]),
     ("c", "Priestley–Taylor PET", ["2_grid", "3_pt"]),
-    ("d", "Noah-type ET with the SAC exchanges", ["3_pt", "4_noah"]),
-    ("e", "learned rain/snow threshold", ["4_noah", "5_px"]),
-    ("f", "aef_u inputs in place of soil/vegetation/terrain", ["5_px", "6_aef"]),
-    ("g", "the LSTM step on 5_px: hybrid, hybrid_dt and the plain lstm",
-        ["5_px", "hybrid", "hybrid_dt", "lstm"]),
+    ("d", "Noah-type ET", ["3_pt", "4_noah"]),
+    ("e", "Learned rain/snow threshold", ["4_noah", "5_px"]),
+    ("f", "aef_u inputs", ["5_px", "6_aef"]),
+    ("g", "LSTM models on 5_px", ["5_px", "hybrid", "hybrid_dt", "lstm"]),
+]
+#: the rows of the all-series skill figures: (axis label, value from a (KGE, NSE, pbias,
+#: seasonal mismatch) tuple)
+_SKILL_ROWS = [
+    ("KGE", lambda m: m[0]),
+    ("Absolute percent bias", lambda m: abs(m[2])),
+    ("Seasonal mismatch (%)", lambda m: m[3] * 100.0),
 ]
 
 
@@ -256,144 +262,109 @@ def assemble(data_dir: str = "data", *, device: str = "cuda") -> dict:
     return dict(clim=clim, order=order, metrics=metrics)
 
 
+def _mean_range_bar(ax, x: float, vals: np.ndarray, width: float, color: str,
+                    *, skill: bool = False) -> None:
+    """A bar at the mean of ``vals`` with a whisker over their range.  On a skill axis
+    (``skill``: 0 to 1) a mean or a minimum below 0 is cut at 0 and marked there with a
+    triangle."""
+    mean, lo, hi = float(vals.mean()), float(vals.min()), float(vals.max())
+    if skill:
+        if lo < 0:
+            ax.plot([x], [0.0], "v", ms=4, color=color, clip_on=False, zorder=4)
+        mean, lo, hi = max(mean, 0.0), max(lo, 0.0), min(hi, 1.0)
+    ax.bar(x, mean, width=width, color=color, zorder=2)
+    ax.errorbar(x, mean, yerr=[[mean - lo], [hi - mean]], fmt="none", ecolor="0.2",
+                elinewidth=0.8, capsize=2, zorder=3)
+
+
 def _bar_summary(ax, models: list[str], metrics: dict, order: list[str]) -> None:
-    """Grouped bars in the spare 12th cell: mean KGE and NSE over the 11 basins
-    per model (bar), with min-max whiskers.  Model-coloured to match the lines."""
+    """The spare cell of a comparison figure: KGE and NSE per model, the mean over the 11
+    watersheds with their range, model-coloured to match the lines."""
     n = len(models)
     width = 0.8 / n
-    gmin = gmax = 0.0
-    for gi, mi in ((0, 0), (1, 1)):                # 0 -> KGE, 1 -> NSE
+    for gi in (0, 1):                                  # 0 -> KGE, 1 -> NSE
         for k, label in enumerate(models):
-            vals = np.array([metrics[label][b][mi] for b in order
+            vals = np.array([metrics[label][b][gi] for b in order
                              if b in metrics.get(label, {})
-                             and np.isfinite(metrics[label][b][mi])])
-            if not vals.size:
-                continue
-            x = gi + (k - (n - 1) / 2) * width
-            mean = float(vals.mean())
-            ax.bar(x, mean, width=width * 0.9, color=STYLE[label]["color"],
-                   alpha=0.85, zorder=2)
-            ax.errorbar(x, mean, yerr=[[mean - vals.min()], [vals.max() - mean]],
-                        fmt="none", ecolor="#333333", elinewidth=0.9, capsize=2.5,
-                        zorder=3)
-            ax.text(x, vals.max() + 0.012, f"{mean:.2f}", ha="center", va="bottom",
-                    fontsize=6.0, fontweight="bold", color=STYLE[label]["color"])
-            gmin, gmax = min(gmin, vals.min()), max(gmax, vals.max())
+                             and np.isfinite(metrics[label][b][gi])])
+            if vals.size:
+                _mean_range_bar(ax, gi + (k - (n - 1) / 2) * width, vals, width * 0.9,
+                                STYLE[label]["color"], skill=True)
     ax.set_xticks([0, 1])
-    ax.set_xticklabels(["KGE", "NSE"], fontsize=9)
+    ax.set_xticklabels(["KGE", "NSE"])
     ax.set_xlim(-0.5, 1.5)
-    ax.set_ylim(gmin - 0.05 if gmin < 0 else 0.0, min(1.15, gmax + 0.12))
-    ax.tick_params(axis="y", labelsize=7)
-    ax.grid(axis="y", alpha=0.25, lw=0.5)
-    ax.set_title("mean skill, 11 basins (min–max)", fontsize=9.5, fontweight="bold")
+    ax.set_ylim(0.0, 1.0)
+    ax.set_title("Skill")
 
 
-def _plot_comparison(data: dict, models: list[str], tag: str, subtitle: str,
-                     path: Path) -> None:
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
+def _plot_comparison(data: dict, models: list[str], title: str, path: Path) -> None:
+    """One ladder step: the mean-monthly regime of each watershed (north to south) against
+    CalSim3 FNF, and in the spare cell the step's KGE and NSE over the watersheds."""
     clim, order, metrics = data["clim"], data["order"], data["metrics"]
     series = ["CalSim3 FNF", *models]
-    nrow, ncol = 4, 3
-    fig, axes = plt.subplots(nrow, ncol, figsize=(11.0, 12.0))
-    seen: dict[str, object] = {}
-    for ax, basin in zip(axes.ravel(), order, strict=False):
-        for label in series:
-            if basin not in clim[label].columns:
-                continue
-            (ln,) = ax.plot(range(12), clim[label][basin].to_numpy(),
-                            label=label, **STYLE[label])
-            seen[label] = ln
-        # KGE / NSE (monthly vs CalSim3 FNF, combined period), same colour
-        ax.text(0.03, 0.965, "KGE / NSE", transform=ax.transAxes, fontsize=6.0,
-                color="#888888", va="top", ha="left")
-        for j, label in enumerate(models):
-            mv = metrics.get(label, {}).get(basin)
-            if mv is None or not np.isfinite(mv[0]):
-                continue
-            ax.text(0.03, 0.965 - (j + 1) * 0.072, f"{mv[0]:.2f} / {mv[1]:.2f}",
-                    transform=ax.transAxes, fontsize=6.8, fontweight="bold",
-                    color=STYLE[label]["color"], va="top", ha="left")
-        ax.set_title(basin, fontsize=11, fontweight="bold")
-        ax.set_xticks(range(12))
-        ax.set_xticklabels(_WY_LABELS, fontsize=8)
-        ax.tick_params(axis="y", labelsize=8)
-        ax.margins(x=0.02)
-        ax.grid(alpha=0.25, lw=0.5)
-        ax.set_ylim(bottom=0)
+    ncol = 4
+    nrow = int(np.ceil((len(order) + 1) / ncol))
+    fig, axes = plt.subplots(nrow, ncol, figsize=(6.5, 1.9 * nrow + 0.9), squeeze=False,
+                             layout="constrained")
     raveled = axes.ravel()
+    for ax, basin in zip(raveled, order, strict=False):
+        for label in series:
+            if basin in clim[label].columns:
+                ax.plot(range(12), clim[label][basin].to_numpy(), **STYLE[label])
+        ax.set_title(basin)
+        ax.set_xticks([0, 3, 6, 9])
+        ax.set_xticklabels(["O", "J", "A", "J"])
+        ax.set_ylim(bottom=0)
     _bar_summary(raveled[len(order)], models, metrics, order)
     for ax in raveled[len(order) + 1:]:
         ax.axis("off")
-    leg = [s for s in series if s in seen]
-    fig.legend([seen[s] for s in leg], leg, loc="lower center",
-               ncol=len(leg), fontsize=10, frameon=False, bbox_to_anchor=(0.5, 0.012))
-    fig.suptitle(f"({tag})  {subtitle}", fontsize=13, fontweight="bold", y=0.998)
-    fig.text(0.5, 0.966, "mean-monthly flow, TAF/month  •  "
-             "WY1950–1975 + WY1986–1987 + WY2004–2018 (training years and WY1976–85 "
-             "excluded)",
-             ha="center", fontsize=9.5, color="#555555")
-    fig.supylabel("mean-monthly flow (TAF/month)", fontsize=10)
-    fig.supxlabel("water-year month (Oct → Sep)", fontsize=10, y=0.052)
-    fig.tight_layout(rect=(0.015, 0.055, 1, 0.955))
+    handles = [plt.Line2D([], [], label=s, **STYLE[s]) for s in series]
+    fig.legend(handles=handles, loc="outside lower center", ncol=len(handles))
+    fig.suptitle(title)
+    fig.supylabel("Mean monthly flow (TAF)")
     path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(path, dpi=300)
     plt.close(fig)
     print(f"wrote {path}", flush=True)
 
 
-def _plot_metrics_bars(data: dict, path: Path) -> None:
-    """All-series per-basin grouped bars on three metrics (KGE, |pbias|,
-    seasonal misplaced volume), one metric per row."""
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
+def _pin_below_zero(ax, xs, ys, color: str) -> None:
+    """Triangles at 0 for the KGE values below the 0 to 1 axis."""
+    neg = [x for x, y in zip(xs, ys, strict=True) if y < 0]
+    if neg:
+        ax.plot(neg, np.zeros(len(neg)), "v", ms=4, color=color, ls="none", clip_on=False,
+                zorder=4)
 
+
+def _plot_metrics_bars(data: dict, path: Path) -> None:
+    """Every series per watershed on the three metrics of :data:`_SKILL_ROWS`, one metric per
+    row."""
     metrics, order = data["metrics"], data["order"]
     models = [*RUNS, *HYBRID]
     n = len(models)
-    width = 0.86 / n
-    # (row label, value from a (kge,nse,pbias,smv) tuple, y-lower)
-    rows = [
-        ("KGE", lambda m: m[0], 0.0),
-        ("| PBIAS |  (%)", lambda m: abs(m[2]), 0.0),
-        ("seasonal misplaced volume  (%)", lambda m: m[3] * 100.0, 0.0),
-    ]
-    fig, axes = plt.subplots(3, 1, figsize=(14.0, 11.0), sharex=True)
-    seen: dict[str, object] = {}
-    for ax, (name, fn, ylo) in zip(axes, rows, strict=True):
-        for i in range(len(order)):                 # alternate-column shading = clear groups
-            if i % 2:
-                ax.axvspan(i - 0.5, i + 0.5, color="#f4f4f4", zorder=0)
+    width = 0.8 / n
+    fig, axes = plt.subplots(3, 1, figsize=(6.5, 7.5), sharex=True, layout="constrained")
+    for ax, (name, fn) in zip(axes, _SKILL_ROWS, strict=True):
         for k, label in enumerate(models):
             xs, ys = [], []
             for i, b in enumerate(order):
                 mv = metrics.get(label, {}).get(b)
-                if mv is None or not np.isfinite(fn(mv)):
-                    continue
-                xs.append(i + (k - (n - 1) / 2) * width)
-                ys.append(fn(mv))
-            bc = ax.bar(xs, ys, width=width * 0.92, color=STYLE[label]["color"],
-                        alpha=0.9, zorder=2, label=label)
-            seen[label] = bc
-        ax.set_ylabel(name, fontsize=10.5)
+                if mv is not None and np.isfinite(fn(mv)):
+                    xs.append(i + (k - (n - 1) / 2) * width)
+                    ys.append(fn(mv))
+            ax.bar(xs, np.clip(ys, 0.0, None), width=width, color=STYLE[label]["color"],
+                   label=label)
+            if name == "KGE":
+                _pin_below_zero(ax, xs, ys, STYLE[label]["color"])
+        ax.set_ylabel(name)
         ax.set_xlim(-0.5, len(order) - 0.5)
-        ax.set_ylim(bottom=ylo)
-        ax.margins(x=0)
-        ax.grid(axis="y", alpha=0.3, lw=0.5, zorder=1)
-    axes[0].set_ylim(0, 1.0)                          # KGE
+        ax.set_ylim(bottom=0.0)
+    axes[0].set_ylim(0.0, 1.0)
+    axes[0].set_title("Monthly skill by watershed")
     axes[-1].set_xticks(range(len(order)))
-    axes[-1].set_xticklabels(order, fontsize=11, fontweight="bold")
-    # two legend rows: 11 series in one row clip the outer entries at the edges
-    ncol = (n + 1) // 2
-    fig.legend([seen[m] for m in models], models, loc="lower center", ncol=ncol,
-               fontsize=9.5, frameon=False, bbox_to_anchor=(0.5, 0.008))
-    fig.suptitle("All series vs CalSim3 FNF — monthly skill by basin "
-                 "(WY1950–75, WY1986–87, WY2004–18)", fontsize=13.5, fontweight="bold",
-                 y=0.998)
-    fig.tight_layout(rect=(0, 0.075, 1, 0.985))
+    axes[-1].set_xticklabels(order)
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="outside lower center", ncol=(n + 1) // 2)
     path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(path, dpi=300)
     plt.close(fig)
@@ -401,45 +372,24 @@ def _plot_metrics_bars(data: dict, path: Path) -> None:
 
 
 def _plot_metrics_bars_agg(data: dict, path: Path) -> None:
-    """All-series skill AGGREGATED across the 11 basins: one bar per model (mean)
-    with a min-max whisker, one metric per row."""
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
+    """Every series over the 11 watersheds on the three metrics of :data:`_SKILL_ROWS`: the
+    mean with the range, one metric per row."""
     metrics, order = data["metrics"], data["order"]
     models = [*RUNS, *HYBRID]
-    rows = [
-        ("KGE", lambda m: m[0], (0.0, 1.05)),
-        ("| PBIAS |  (%)", lambda m: abs(m[2]), None),
-        ("seasonal misplaced volume  (%)", lambda m: m[3] * 100.0, None),
-    ]
-    fig, axes = plt.subplots(3, 1, figsize=(9.5, 10.0), sharex=True)
-    for ax, (name, fn, ylim) in zip(axes, rows, strict=True):
-        gmax = 0.0
+    fig, axes = plt.subplots(3, 1, figsize=(6.5, 7.0), sharex=True, layout="constrained")
+    for ax, (name, fn) in zip(axes, _SKILL_ROWS, strict=True):
         for k, label in enumerate(models):
             vals = np.array([fn(metrics[label][b]) for b in order
                              if b in metrics.get(label, {})
                              and np.isfinite(fn(metrics[label][b]))])
-            if not vals.size:
-                continue
-            mean = float(vals.mean())
-            ax.bar(k, mean, width=0.7, color=STYLE[label]["color"], alpha=0.9, zorder=2)
-            ax.errorbar(k, mean, yerr=[[mean - vals.min()], [vals.max() - mean]],
-                        fmt="none", ecolor="#333333", elinewidth=1.0, capsize=3, zorder=3)
-            ax.annotate(f"{mean:.2f}", (k, vals.max()), textcoords="offset points",
-                        xytext=(0, 3), ha="center", va="bottom", fontsize=7.5,
-                        fontweight="bold", color=STYLE[label]["color"])
-            gmax = max(gmax, vals.max())
-        ax.set_ylabel(name, fontsize=10.5)
-        ax.grid(axis="y", alpha=0.3, lw=0.5)
-        ax.set_ylim(*(ylim if ylim else (0.0, gmax * 1.15)))
+            if vals.size:
+                _mean_range_bar(ax, k, vals, 0.7, STYLE[label]["color"], skill=name == "KGE")
+        ax.set_ylabel(name)
+        ax.set_ylim(bottom=0.0)
+    axes[0].set_ylim(0.0, 1.0)
+    axes[0].set_title("Monthly skill, 11 watersheds")
     axes[-1].set_xticks(range(len(models)))
-    axes[-1].set_xticklabels(models, rotation=22, ha="right", fontsize=10)
-    fig.suptitle("All series vs CalSim3 FNF — skill aggregated across the 11 basins "
-                 "(mean, min–max)\nmonthly, WY1950–75, WY1986–87, WY2004–18",
-                 fontsize=12.5, fontweight="bold")
-    fig.tight_layout(rect=(0, 0, 1, 0.955))
+    axes[-1].set_xticklabels(models, rotation=45, ha="right", rotation_mode="anchor")
     path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(path, dpi=300)
     plt.close(fig)
@@ -454,9 +404,8 @@ def make_cdec15_climatology(data_dir: str = "data",
     (default: the study's result folder)."""
     data = assemble(data_dir, device=device)
     figdir = Path(out_dir) if out_dir is not None else paths.dpl_study(name="climatology")
-    for tag, subtitle, models in COMPARISONS:
-        _plot_comparison(data, models, tag, subtitle,
-                         figdir / f"climatology_{tag}.png")
+    for tag, title, models in COMPARISONS:
+        _plot_comparison(data, models, title, figdir / f"climatology_{tag}.png")
     _plot_metrics_bars(data, figdir / "climatology_summary.png")
     _plot_metrics_bars_agg(data, figdir / "climatology_summary_agg.png")
     return data

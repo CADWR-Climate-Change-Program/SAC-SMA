@@ -37,7 +37,7 @@ Usage::
     sacsma dpl calsim tier2 <run_dir | checkpoint.pt> [--out DIR] [--data-dir data]
                                   [--no-maps] [--no-extend]
                                   [--tiles-dir tmp/hydrosheds] [--trace-python PY] [--figures-only]
-                                  [--label NAME] [--components parts]
+                                  [--components parts]
                                   [--extension-cells CSV] [--scenarios NAME=DT:PS,...]
                                   [--forcing NAME] [--start DATE] [--end DATE]
 
@@ -778,31 +778,33 @@ def summarize(metrics: pd.DataFrame, not_sim: pd.DataFrame, window: str) -> str:
     return "\n".join(lines)
 
 
-def maps(metrics: pd.DataFrame, out: Path, label: str, data_dir: str | Path = "data", *,
+def maps(metrics: pd.DataFrame, out: Path, data_dir: str | Path = "data", *,
          window: str) -> None:
     from ...calsim.compare import _arc_choropleth
     m = metrics[(metrics.window == window) & metrics.has_series].set_index("arc")
-    _arc_choropleth(data_dir, m["kge"], f"Tier 2 — KGE per rim arc, {window}  [{label}]", "KGE",
+    _arc_choropleth(data_dir, m["kge"], f"Rim arcs, {window}", "KGE",
                     out / f"tier2_kge_{window}.png", cmap="plasma", vmin=0.0, vmax=1.0)
-    _arc_choropleth(data_dir, m["pbias"], f"Tier 2 — volume bias per rim arc, {window}  [{label}]",
-                    "pbias (%)", out / f"tier2_pbias_{window}.png", cmap="BrBG", vmin=-50.0, vmax=50.0)
+    _arc_choropleth(data_dir, m["pbias"], f"Rim arcs, {window}", "Percent bias",
+                    out / f"tier2_pbias_{window}.png", cmap="BrBG", vmin=-50.0, vmax=50.0)
 
 
 #: single-arc tier-1 sets share one regime figure instead of one figure each
 _SINGLE_ARC_GROUP = "single-arc sets"
 
 
-def regime_figures(out: Path, data_dir: str | Path = "data", label: str = "", *,
+def regime_figures(out: Path, data_dir: str | Path = "data", *,
                    window: str, bulk: Path | None = None) -> list[Path]:
     """One mean-monthly-regime figure per tier-1 set (the anchor system where one exists),
-    every rim arc of the set as a panel — simulated arcs show CalSim3 vs dPL with their score,
-    arcs this run does not simulate show the CalSim3 regime alone on a shaded panel.  Arcs in
-    no tier-1 set go to an "unconstrained" figure.  Reads the CSVs written by :func:`main`:
-    ``tier2_metrics.csv`` from ``out``, ``tier2_monthly.csv`` from ``bulk`` (default ``out``),
-    and draws into ``bulk/figures``."""
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
+    every rim arc of the set as a panel, largest first: the CalSim3 regime and the simulated
+    one; an extrapolated arc's panel is shaded pale yellow, an arc this run does not simulate
+    shows the CalSim3 regime alone on a grey panel.  Arcs in no tier-1 set go to an
+    "unconstrained" figure.  Reads the CSVs written by :func:`main`: ``tier2_metrics.csv`` from
+    ``out``, ``tier2_monthly.csv`` from ``bulk`` (default ``out``), and draws into
+    ``bulk/figures``."""
+    from matplotlib.lines import Line2D
+    from matplotlib.patches import Patch
+
+    from ..._figures import plt
     bulk = out if bulk is None else bulk
     if not (bulk / "tier2_monthly.csv").exists():
         # the monthly table is not tracked: a fresh clone holds the metrics only
@@ -856,52 +858,46 @@ def regime_figures(out: Path, data_dir: str | Path = "data", label: str = "", *,
     if len(single) > 1:
         groups[_SINGLE_ARC_GROUP] = [groups.pop(g)[0] for g in single]
 
+    shade = {"extrapolated": "#fff4d6", "not simulated": "0.93"}
+    titles = {"unconstrained": "Unconstrained arcs", _SINGLE_ARC_GROUP: "Single-arc sets"}
     written = []
     for g, arcs in groups.items():
         arcs = sorted(arcs, key=lambda a: -float(sq_mi[a]))
-        ncol = min(5, max(len(arcs), 2))
+        ncol = min(4, max(len(arcs), 2))
         nrow = int(np.ceil(len(arcs) / ncol))
-        fig, axes = plt.subplots(nrow, ncol, figsize=(3.4 * ncol, 2.7 * nrow), squeeze=False)
-        n_sim = 0
+        height = 1.5 * nrow + 1.0
+        fig, axes = plt.subplots(nrow, ncol, figsize=(6.5, height), squeeze=False)
+        shaded = set()
         for ax, arc in zip(axes.ravel(), arcs, strict=False):
             r = ref_regime(arc)
             if r is not None:
-                ax.plot(range(12), r, color="k", lw=1.8, label="CalSim3 INFLOW")
-            head = f"{arc}  {float(sq_mi[arc]):,.0f} mi²"
+                ax.plot(range(12), r, color="0.25", lw=1.4)
             if arc in sim_reg.index:
-                ax.plot(range(12), sim_reg.loc[arc].reindex(range(12)), color="tab:blue", lw=1.6, label="dPL")
-                n_sim += 1
-                extrap = arc in met.index and str(met.loc[arc, "basis"]) == "extrapolated"
-                if extrap:
-                    ax.set_facecolor("#fff4d6")
-                if arc in met.index and np.isfinite(met.loc[arc, "kge"]):
-                    head += f"\nKGE {met.loc[arc, 'kge']:.2f}  bias {met.loc[arc, 'pbias']:+.0f}%  seas {met.loc[arc, 'seas_mismatch']:.2f}"
-                    if extrap:
-                        head += "  (extrapolated)"
-                else:
-                    head += "\nsimulated, no reference series"
+                ax.plot(range(12), sim_reg.loc[arc].reindex(range(12)), color="tab:red", lw=1.4)
+                if arc in met.index and str(met.loc[arc, "basis"]) == "extrapolated":
+                    shaded.add("extrapolated")
+                    ax.set_facecolor(shade["extrapolated"])
             else:
-                ax.set_facecolor("0.93")
-                head += "\nnot simulated in this run"
-            ax.set_title(head, fontsize=7.5)
-            ax.set_xticks(range(12))
-            ax.set_xticklabels(list("ONDJFMAMJJAS"), fontsize=7)
-            ax.tick_params(axis="y", labelsize=7)
-            ax.grid(alpha=0.3)
+                shaded.add("not simulated")
+                ax.set_facecolor(shade["not simulated"])
+            ax.set_title(arc, pad=2)
+            ax.set_xticks([0, 3, 6, 9])
+            ax.set_xticklabels(["O", "J", "A", "J"])
+            ax.set_ylim(bottom=0)
         for ax in axes.ravel()[len(arcs):]:
             ax.axis("off")
-        handles, labels = axes[0, 0].get_legend_handles_labels()
-        if handles:
-            fig.legend(handles, labels, loc="lower right", fontsize=8, frameon=False)
-        title = (f"{g} — {set_name[g]}" if g in set_name else g)
-        if g in set_system and set_system[g]:
-            title += f"  (anchor {set_system[g]})"
-        fig.suptitle(f"Tier 2 mean-monthly regime, {window} (TAF/month): {title}  |  {n_sim} of "
-                     f"{len(arcs)} arcs simulated  [{label}]", fontsize=10)
-        fig.tight_layout(rect=(0, 0.02, 1, 0.96))
+        handles = [Line2D([], [], color="0.25", lw=1.4, label="CalSim3"),
+                   Line2D([], [], color="tab:red", lw=1.4, label="Simulated")]
+        handles += [Patch(facecolor=shade[k], label=k.capitalize()) for k in shade if k in shaded]
+        name = set_name[g].split(" (")[0] if g in set_name else titles.get(g, g)
+        fig.suptitle(f"{name}, {window}", y=1 - 0.1 / height, va="top")
+        fig.legend(handles=handles, loc="upper center", ncol=len(handles),
+                   bbox_to_anchor=(0.5, 1 - 0.36 / height), handlelength=1.5, columnspacing=1.2)
+        fig.supylabel("Mean monthly volume (TAF)")
+        fig.tight_layout(rect=(0, 0, 1, 1 - 0.7 / height))
         path = bulk / "figures" / f"tier2_regime_{g.replace(' ', '_')}_{window}.png"
         path.parent.mkdir(exist_ok=True)
-        fig.savefig(path, dpi=130)
+        fig.savefig(path, dpi=200)
         plt.close(fig)
         written.append(path)
     return written
@@ -986,7 +982,6 @@ def main(argv=None, prog=None) -> None:
                    help="one output folder for everything (default: tier2/ in the run's results "
                         "folder, the bulk in its local folder)")
     p.add_argument("--data-dir", default="data")
-    p.add_argument("--label", default="")
     p.add_argument("--no-maps", action="store_true")
     p.add_argument("--no-extend", action="store_true",
                    help="do not simulate the arcs outside every trained footprint")
@@ -1045,7 +1040,6 @@ def main(argv=None, prog=None) -> None:
     bulk = Path(a.out) if a.out else roles.local / "tier2"
     out.mkdir(parents=True, exist_ok=True)
     bulk.mkdir(parents=True, exist_ok=True)
-    label = a.label or roles.results.name
     # validated over the held-out water years (score_run)
     ho_win = holdout_windows(ho)
     vwin = next(iter(ho_win))
@@ -1092,8 +1086,8 @@ def main(argv=None, prog=None) -> None:
               f"-> {out / 'tier2_anchor_rescaled.csv'}", flush=True)
     if not a.no_maps:
         try:
-            maps(metrics, bulk, label, a.data_dir, window=vwin)
+            maps(metrics, bulk, a.data_dir, window=vwin)
         except Exception as e:  # noqa: BLE001 — maps are a convenience on top of the CSVs
             print(f"tier2: maps skipped ({e})")
-    figs = regime_figures(out, a.data_dir, label, window=vwin, bulk=bulk)
+    figs = regime_figures(out, a.data_dir, window=vwin, bulk=bulk)
     print(f"wrote {len(figs)} regime figures under {bulk / 'figures'}")

@@ -151,7 +151,7 @@ The routing against the USGS sheets as delivered (the Kings by its refit) and ag
 | `sites.csv` | Per site: CDEC record, registry area, footprint size, VIC node area, the observed months of the BCM fit (`bcm_fit_months`) and the USGS sheet compared with, the models scored, the observed months |
 | `bcm_routing_fit.csv` | The fitted BCM routing, per site: the parameters `route` reads, `area_m2`, `n_months` (observed months of the fit) and the fit's `kge`, `r2`, `nse`, `pbias` (the last three the sheets' statistics; `pbias` positive when low) |
 | `bcm_routing_effect.csv` | BCM per site on the scored months: the fitted routing (`_fit`), the USGS sheets (`_workbook`) and `run + rch` unrouted (`_unrouted`) |
-| `figures/skill.png` | KGE (0 to 1) and percent bias (±75 %) per site and model, north to south |
+| `figures/skill.png` | KGE (0 to 1) and percent bias (±75 %) per site and model, north to south; a value outside an axis is pinned to it with a triangle |
 | `figures/hydrographs.png` | Monthly flow of every model and the observation, one panel per site |
 | `figures/climatology.png` | Mean flow per calendar month on the months scored, one panel per site |
 

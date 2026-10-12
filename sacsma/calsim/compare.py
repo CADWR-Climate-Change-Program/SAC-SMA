@@ -387,11 +387,10 @@ def make_subarc_validation(data_dir: str | Path = "data", artifacts_dir: str | P
 
 
 def _arc_choropleth(data_dir, value_by_arc, title, cb_label, path, *,
-                    cmap="managua", vmin=0.0, vmax=1.0, annot=None):
+                    cmap="plasma", vmin=0.0, vmax=1.0, annot=None):
     """Map a per-arc value (Series indexed by CalSim arc) onto the merged Rim catchments:
     faint grey context + the scored catchments coloured by the value.  ``cmap`` may be a
-    name or a Colormap object (e.g. the grey-centred diverging map for difference views);
-    ``annot`` passes through to :func:`_nse_choropleth`."""
+    name or a Colormap object; ``annot`` passes through to :func:`_nse_choropleth`."""
     from .catchments import MERGED_LAYER, load_catchments, series_arc
 
     catch = load_catchments(data_dir, layer=MERGED_LAYER, rim_only=True).copy()
@@ -493,8 +492,8 @@ def make_basin_maps(data_dir, out, anchor_met, sets=ADJUST_SETS):
     Sacramento system only Shasta is drawn; the excluded basins keep their scores in
     ``basin_map_metrics.csv`` and every other anchor product.
 
-    Each coloured watershed is annotated in place (abbreviated basin name + its value for
-    the mapped metric, at a representative interior point of the basin)."""
+    Each coloured watershed carries its abbreviated name at a representative interior point;
+    the values are in ``basin_map_metrics.csv``."""
     from .catchments import MERGED_LAYER, load_catchments, series_arc
 
     part = _composite_arc_partition(data_dir, sets)
@@ -520,39 +519,36 @@ def make_basin_maps(data_dir, out, anchor_met, sets=ADJUST_SETS):
         """Expand a per-basin metric onto that basin's arcs (all sub-areas = basin value)."""
         return pd.Series({a: vals[sb] for a, sb in part.items() if sb in vals}, dtype=float)
 
-    def annot(vals, fmt):
-        """In-map labels: abbreviated basin name + formatted value at the basin's anchor point."""
-        return [(*pts[b], f"{_BASIN_ABBREV.get(b, b)}\n{fmt.format(v)}")
+    def annot(vals):
+        """In-map labels: the abbreviated basin name at the basin's anchor point."""
+        return [(*pts[b], _BASIN_ABBREV.get(b, b))
                 for (_, b), v in vals.items() if b in pts and np.isfinite(v)]
 
     # NSE/KGE: plasma (perceptually-uniform) over 0..1 (negatives clamp to the
     # floor); signed pbias: BrBG diverging (brown=under, teal=over, 0=light),
     # centred over -20..20%.
-    spec = {"nse": ("NSE", "plasma", 0.0, 1.0, "{:.2f}"),
-            "kge": ("KGE", "plasma", 0.0, 1.0, "{:.2f}"),
-            "pbias": ("pbias (%)", "BrBG", -20.0, 20.0, "{:+.0f}%")}
-    label = {"sac": f"SAC-SMA ({'+'.join(sets)} basins)", "vic": "VIC"}
+    spec = {"nse": ("NSE", "plasma", 0.0, 1.0),
+            "kge": ("KGE", "plasma", 0.0, 1.0),
+            "pbias": ("Percent bias", "BrBG", -20.0, 20.0)}
+    label = {"sac": f"SAC-SMA {' and '.join(sets)}", "vic": "VIC"}
     fname = {"sac": "calsim_sacsma_map", "vic": "calsim_vic_map"}
     for which in ("sac", "vic"):
-        for m, (mlab, cmap, vmin, vmax, vfmt) in spec.items():
+        for m, (mlab, cmap, vmin, vmax) in spec.items():
             vals = by_basin(which, m)
-            _arc_choropleth(data_dir, by_arc(vals),
-                            f"{label[which]} — basin-level {mlab} vs CalSim3 anchor "
-                            f"(all sub-areas coloured by their watershed)",
-                            f"basin {mlab} vs CalSim3 anchor", fig / f"{fname[which]}_{m}.png",
-                            cmap=cmap, vmin=vmin, vmax=vmax, annot=annot(vals, vfmt))
-    for m, lim, vfmt, cb in [("nse", 0.2, "{:+.2f}", "NSE difference (SAC − VIC)  [+ = SAC better]"),
-                             ("kge", 0.2, "{:+.2f}", "KGE difference (SAC − VIC)  [+ = SAC better]"),
-                             ("pbias", 20.0, "{:+.0f}%",
-                              "|pbias| reduction vs VIC (%)  [+ = SAC better]")]:
+            _arc_choropleth(data_dir, by_arc(vals), label[which], mlab,
+                            fig / f"{fname[which]}_{m}.png",
+                            cmap=cmap, vmin=vmin, vmax=vmax, annot=annot(vals))
+    # positive = SAC-SMA closer to CalSim3 (for pbias: the reduction in its absolute value)
+    for m, lim, cb in [("nse", 0.2, "NSE difference"), ("kge", 0.2, "KGE difference"),
+                       ("pbias", 20.0, "Reduction in absolute percent bias")]:
         s, v = by_basin("sac", m), by_basin("vic", m)
         if m == "pbias":                             # closer-to-zero is better -> compare |bias|
             d = {sb: abs(v[sb]) - abs(s[sb]) for sb in s if sb in v}
         else:
             d = {sb: s[sb] - v[sb] for sb in s if sb in v}
-        _arc_choropleth(data_dir, by_arc(d), f"SAC-SMA − VIC basin-level {spec[m][0]} vs CalSim3 anchor",
-                        cb, fig / f"calsim_sacsma_minus_vic_{m}.png",
-                        cmap="RdBu", vmin=-lim, vmax=lim, annot=annot(d, vfmt))
+        _arc_choropleth(data_dir, by_arc(d), "SAC-SMA minus VIC", cb,
+                        fig / f"calsim_sacsma_minus_vic_{m}.png",
+                        cmap="RdBu", vmin=-lim, vmax=lim, annot=annot(d))
     sac_med = met[met["which"] == "sac"]["kge"].median()
     vic_med = met[met["which"] == "vic"]["kge"].median()
     print(f"basin maps: {met['basin'].nunique()} basins ({'+'.join(sets)} partition); "
@@ -638,15 +634,16 @@ _ROLLING_STYLE = {
 }
 
 
-#: the four rolling metrics (key, axis label, fallback ylim as (lo, hi) with None = autoscale,
+#: the four rolling metrics (key, axis label, ylim as (lo, hi) with None = autoscale,
 #: draw-zero-line) — shared by the median panels and the per-watershed decomposition figures.
 #: KGE/NSE axes are always the full 0–1 scale (house rule); pbias/seasonal-mismatch bounds are
-#: data-driven but shared across the anchor sets so the per-set figures compare directly.
+#: data-driven (in the per-watershed figures shared across the anchor sets, so the per-set
+#: figures compare directly; there the ylim is only the fallback for an all-NaN metric).
 _ROLLING_METRICS = (
-    ("kge", "rolling KGE", (None, 1.02), False),
-    ("nse", "rolling NSE", (None, 1.02), False),
-    ("pbias", "rolling pbias (%)", None, True),
-    ("seas_mismatch", "rolling seasonal mismatch", (0.0, None), False),
+    ("kge", "KGE", (0.0, 1.0), False),
+    ("nse", "NSE", (0.0, 1.0), False),
+    ("pbias", "Percent bias", None, True),
+    ("seas_mismatch", "Seasonal mismatch", (0.0, None), False),
 )
 
 
@@ -744,17 +741,13 @@ def _basin_to_product_medians(basin: pd.DataFrame, products=_ROLLING_PRODUCTS) -
 
 def _rolling_skill_fig(tbl, products, window_years, path):
     """Four stacked panels (KGE / NSE / pbias / seasonal mismatch), one line per product
-    (x = window centre).  SAC sets keep their palette colour; VIC is split into two lines by
-    linestyle.  ≤6.5in wide, 300 dpi, 8-pt text, compact legend."""
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
+    (x = window centre), each the median over the product's watersheds.  SAC sets keep their
+    palette colour; VIC is split into two lines by linestyle."""
+    from .._figures import plt
 
     order = [p[0] for p in products if (tbl["source"] == p[0]).any()]
-    # house rule: skill (KGE/NSE) axes are always the full 0–1 scale.
-    ylims = {"kge": (0.0, 1.0), "nse": (0.0, 1.0), "pbias": None, "seas_mismatch": (0.0, None)}
-    fig, axes = plt.subplots(len(_ROLLING_METRICS), 1, figsize=(_MAP_W, 9.5), sharex=True)
-    for ax, (m, ylab, _pbylim, zero) in zip(axes, _ROLLING_METRICS):
+    fig, axes = plt.subplots(len(_ROLLING_METRICS), 1, figsize=(_MAP_W, 9.0), sharex=True)
+    for ax, (m, ylab, ylim, zero) in zip(axes, _ROLLING_METRICS):
         for label in order:
             d = tbl[(tbl["source"] == label) & (tbl["metric"] == m)].sort_values("center")
             if not len(d):
@@ -763,59 +756,64 @@ def _rolling_skill_fig(tbl, products, window_years, path):
             ax.plot(d["center"], d["value"], color=_COLORS.get(ckey, "k"), ls=ls, lw=1.5, label=leg)
         if zero:
             ax.axhline(0, color="0.6", lw=0.8)
-        _apply_ylim(ax, ylims[m])
-        ax.set_ylabel(ylab, fontsize=8)
-        ax.grid(color="0.93", lw=0.5); ax.set_axisbelow(True); ax.tick_params(labelsize=8)
-    axes[0].legend(loc="lower center", ncol=2, fontsize=6)
-    axes[-1].set_xlabel(f"{window_years}-year window centre", fontsize=8)
-    fig.suptitle(_wrap(f"Rolling {window_years}-yr skill vs CalSim3 FLOW-UNIMPAIRED anchors "
-                       f"— median across each set's basins (VIC split onto the 11obs & 9unimp "
-                       f"basins)", 84), fontsize=8)
-    fig.tight_layout(rect=(0, 0, 1, 0.98))
+        _apply_ylim(ax, ylim)
+        ax.set_ylabel(ylab)
+    axes[0].legend(loc="lower center", ncol=2)
+    axes[0].set_title("Median over watersheds")
+    axes[-1].set_xlabel(f"Centre of {window_years}-year window")
+    fig.tight_layout()
     fig.savefig(path, dpi=_MAP_DPI); plt.close(fig)
 
 
-def _rolling_basin_fig(basin_tbl, st, metric, mlabel, ylim, window_years, path):
+def _pin_runs(ax, x, y, lo, color):
+    """Mark each stretch of a line that runs below the axis floor ``lo`` with one triangle on
+    the floor (the house rule for a value below an axis bound)."""
+    y = np.asarray(y, dtype=float)
+    idx = np.flatnonzero(np.isfinite(y) & (y < lo))
+    if not idx.size:
+        return
+    x = np.asarray(x)
+    for run in np.split(idx, np.flatnonzero(np.diff(idx) > 1) + 1):
+        ax.plot([x[run[len(run) // 2]]], [lo], "v", ms=5, color=color, clip_on=False, zorder=4)
+
+
+def _rolling_basin_fig(basin_tbl, st, metric, mlabel, ylim, window_years, path, basins):
     """Per (set, metric) rolling figure: SAC-SMA (top panel) and VIC (bottom panel), **one line
-    per watershed**, shared y so the two panels are directly comparable.  KGE/NSE use the fixed
-    0–1 skill scale (house rule; values below 0 are clipped); pbias/seasonal-mismatch bounds are
-    computed over ALL sets so the per-set figures share a y-scale.  ≤6.5in wide, 300 dpi, 8-pt
-    text, compact legend."""
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
+    per watershed** (``basins``, north to south), shared y so the two panels are directly
+    comparable.  KGE/NSE use the fixed 0–1 skill scale (house rule; a stretch below 0 is
+    marked by a triangle on the floor); pbias/seasonal-mismatch bounds are computed over ALL
+    sets so the per-set figures share a y-scale."""
     from matplotlib.lines import Line2D
+
+    from .._figures import plt
 
     d = basin_tbl[(basin_tbl["set"] == st) & (basin_tbl["metric"] == metric)]
     if d.empty:
         return
-    if metric in ("kge", "nse"):
-        ylim = (0.0, 1.02)
-    else:
+    if metric not in ("kge", "nse"):
         ylim = _padded_bounds(basin_tbl[basin_tbl["metric"] == metric]["value"], fallback=ylim)
-    basins = sorted(d["basin"].unique())
+    basins = [b for b in basins if b in set(d["basin"])]
     cmap = plt.get_cmap("tab20")
     colors = {b: cmap(i % 20) for i, b in enumerate(basins)}
-    fig, axes = plt.subplots(2, 1, figsize=(_MAP_W, 6.5), sharex=True, sharey=True)
-    for ax, src, title in ((axes[0], "sac", f"SAC-SMA {st}"),
-                           (axes[1], "vic", f"VIC ({st} basins)")):
+    fig, axes = plt.subplots(2, 1, figsize=(_MAP_W, 6.8), sharex=True, sharey=True)
+    for ax, src, title in ((axes[0], "sac", f"SAC-SMA {st}"), (axes[1], "vic", "VIC")):
         for b in basins:
             g = d[(d["source"] == src) & (d["basin"] == b)].sort_values("center")
             if len(g):
                 ax.plot(g["center"], g["value"], color=colors[b], lw=1.0)
+                if metric in ("kge", "nse"):
+                    _pin_runs(ax, g["center"], g["value"], ylim[0], colors[b])
         if metric == "pbias":
             ax.axhline(0, color="0.6", lw=0.8)
         _apply_ylim(ax, ylim)
-        ax.set_ylabel(mlabel, fontsize=8)
-        ax.set_title(title, fontsize=8)
-        ax.grid(color="0.93", lw=0.5); ax.set_axisbelow(True); ax.tick_params(labelsize=8)
-    axes[-1].set_xlabel(f"{window_years}-year window centre", fontsize=8)
+        ax.set_ylabel(mlabel)
+        ax.set_title(title)
+    axes[-1].set_xlabel(f"Centre of {window_years}-year window")
     handles = [Line2D([0], [0], color=colors[b], lw=1.4) for b in basins]
-    fig.legend(handles, basins, loc="lower center", ncol=min(len(basins), 6), fontsize=6,
-               frameon=False)
-    fig.suptitle(_wrap(f"Rolling {window_years}-yr {mlabel.removeprefix('rolling ')} vs CalSim3 "
-                       f"anchor by watershed — {st} (SAC-SMA top, VIC bottom)", 84), fontsize=8)
-    fig.tight_layout(rect=(0, 0.07, 1, 0.97))
+    fig.legend(handles, [_BASIN_ABBREV.get(b, b) for b in basins], loc="lower center",
+               ncol=min(len(basins), 6))
+    nrow = int(np.ceil(len(basins) / 6))
+    fig.tight_layout(rect=(0, (0.12 + 0.22 * nrow) / fig.get_figheight(), 1, 1))
     fig.savefig(path, dpi=_MAP_DPI); plt.close(fig)
 
 
@@ -844,13 +842,13 @@ def make_rolling_skill(data_dir: str | Path = "data", artifacts_dir: str | Path 
     tbl.to_csv(out / f"rolling_skill_{window_years}yr.csv", index=False)
     _rolling_skill_fig(tbl, _ROLLING_PRODUCTS, window_years,
                        out / "figures" / f"rolling_skill_{window_years}yr.png")
-    # per-(set, metric) decomposition: SAC top / VIC bottom, one line per watershed.  Each figure
-    # auto-bounds y just past its own set's min/max (over both panels); bounds are NOT shared
-    # across sets.  The static _ROLLING_METRICS ylim is only a fallback for an all-NaN metric.
+    # per-(set, metric) decomposition: SAC top / VIC bottom, one line per watershed, north to
+    # south.  pbias/seasonal-mismatch bounds are shared across the sets (_rolling_basin_fig).
     for st in asets:
+        order = basin_order_north_south(data_dir, st, basin[basin["set"] == st]["basin"].unique())
         for metric, mlabel, ylim, _zero in _ROLLING_METRICS:
             _rolling_basin_fig(basin, st, metric, mlabel, ylim, window_years,
-                               out / "figures" / f"rolling_basin_{st}_{metric}.png")
+                               out / "figures" / f"rolling_basin_{st}_{metric}.png", order)
     if tbl.empty:
         return out
     span = f"{tbl['center'].min().date()}..{tbl['center'].max().date()}"
@@ -937,7 +935,7 @@ def make_all(
     # per-set basin-coloured NSE map (with watershed outlines) + per-set basin skill fig
     for s in sets:
         _calset_coverage_map(data_dir, s, anchor_met, out / "figures" / f"{s}_coverage_map.png")
-        _calset_skill_fig(anchor_met, s, out / "figures" / f"{s}_skill.png")
+        _calset_skill_fig(anchor_met, s, out / "figures" / f"{s}_skill.png", data_dir=data_dir)
     # basin-level (anchor) comparison: each basin vs the sum of its sub-nodes (15cdec is
     # folded onto the same dumbbells inside make_anchor, behind a dashed divider)
     make_anchor(data_dir, artifacts_dir, sets, anchor_long=anchor_long)
@@ -990,11 +988,22 @@ _LABELS = {"calsim3": "CalSim3", "15cdec": "SAC-SMA 15cdec", "9unimp": "SAC-SMA 
 _MAP_W, _MAP_DPI = 6.5, 300                 # every figure <=6.5in wide; all figures at 300 dpi
 
 
-def _wrap(s, width=58):
-    """Wrap a long figure title onto multiple lines so it never runs off the page."""
-    import textwrap
-
-    return "\n".join(textwrap.wrap(str(s), width=width)) if s else s
+def _pin_marks(ax, x, vals, lim, color, *, horizontal=False, size=6, zorder=3):
+    """Draw each value outside the axis range ``lim`` as a triangle on the bound it crosses
+    (``v``/``^``, or ``<``/``>`` on a horizontal value axis) — the house rule that keeps an
+    off-scale value visible.  Returns the mask of the values drawn this way."""
+    lo, hi = lim
+    v = np.asarray(vals, dtype=float)
+    out = np.isfinite(v) & ((v < lo) | (v > hi))
+    for xi, vi in zip(np.asarray(x)[out], v[out], strict=True):
+        p = lo if vi < lo else hi
+        if horizontal:
+            ax.plot([p], [xi], "<" if vi < lo else ">", ms=size, color=color, clip_on=False,
+                    zorder=zorder)
+        else:
+            ax.plot([xi], [p], "v" if vi < lo else "^", ms=size, color=color, clip_on=False,
+                    zorder=zorder)
+    return out
 
 
 def _map_extent(data_dir):
@@ -1015,18 +1024,17 @@ def _nse_choropleth(catch, covered_gdf, title, cb_label, path, *, cells=None,
     and thick **subsystem outlines** (``subsystems`` = a GeoSeries of basin unions).
 
     The NSE colour scale is fixed **0..1** for every map (negative NSE clamps to the
-    floor).  Catchments not scored are drawn once as faint "not covered" context.
-    ``annot`` = optional ``[(lon, lat, text), ...]`` in-map labels (basin abbreviation +
-    value), drawn with a white halo so they read over any fill colour.
+    floor).  Catchments not scored are drawn once as faint "not scored" context.
+    ``annot`` = optional ``[(lon, lat, text), ...]`` in-map labels (basin abbreviation),
+    drawn with a white halo so they read over any fill colour.
     """
     import geopandas as gpd
-    import matplotlib
-    matplotlib.use("Agg")
     import matplotlib.patheffects as pe
-    import matplotlib.pyplot as plt
     from matplotlib.cm import ScalarMappable
     from matplotlib.colors import Colormap, Normalize
     from matplotlib.patches import Patch
+
+    from .._figures import plt
 
     cmap = cmap_name if isinstance(cmap_name, Colormap) else plt.get_cmap(cmap_name)
     norm = Normalize(vmin=vmin, vmax=vmax)
@@ -1036,33 +1044,31 @@ def _nse_choropleth(catch, covered_gdf, title, cb_label, path, *, cells=None,
     if len(covered_gdf):
         covered_gdf.plot(ax=ax, column="nse", cmap=cmap, norm=norm,
                          edgecolor="0.55", linewidth=0.2, missing_kwds={"color": "#cccccc"})
-    handles = [Patch(facecolor="#f3f3f3", edgecolor="0.85", label="not covered")]
+    handles = [Patch(facecolor="#f3f3f3", edgecolor="0.85", label="Not scored")]
     if subsystems:
         # one distinct colour per basin sub-system (HRU footprint = the watershed extent)
         bcmap = plt.get_cmap("tab20")
-        for i, (basin, geom) in enumerate(sorted(subsystems.items())):
+        for i, (basin, geom) in enumerate(subsystems.items()):
             col = bcmap(i % 20)
             gpd.GeoSeries([geom], crs=catch.crs).boundary.plot(ax=ax, color=col, linewidth=1.4, zorder=4)
-            handles.append(plt.Line2D([], [], color=col, lw=1.4, label=str(basin)))
+            handles.append(plt.Line2D([], [], color=col, lw=1.4,
+                                      label=_BASIN_ABBREV.get(str(basin), str(basin))))
     if cells is not None:
         ax.scatter(cells["lon"], cells["lat"], s=1.0, c="#222222", alpha=0.4, zorder=3)
         handles.append(plt.Line2D([], [], marker="o", ls="", color="#222222", markersize=3,
-                                  label=cells_label or f"HRU cells ({len(cells)})"))
+                                  label=cells_label or "HRU cell"))
     if annot:
         for ax_x, ax_y, txt in annot:
-            ax.annotate(txt, (ax_x, ax_y), ha="center", va="center", fontsize=5,
-                        color="0.1", zorder=6, linespacing=1.1,
-                        path_effects=[pe.withStroke(linewidth=1.4, foreground="white")])
+            ax.annotate(txt, (ax_x, ax_y), ha="center", va="center", color="0.1", zorder=6,
+                        path_effects=[pe.withStroke(linewidth=2.0, foreground="white")])
 
     sm = ScalarMappable(cmap=cmap, norm=norm); sm.set_array([])
     cb = fig.colorbar(sm, ax=ax, fraction=0.045, pad=0.02)
-    cb.set_label(cb_label, fontsize=8)
-    cb.ax.tick_params(labelsize=7)
-    ax.legend(handles=handles, loc="lower left", fontsize=6, framealpha=0.9, ncol=2,
-              title=f"scored: {len(covered_gdf)}", title_fontsize=6)
-    ax.set_title(_wrap(title), fontsize=8)
-    ax.set_xlabel("lon", fontsize=8); ax.set_ylabel("lat", fontsize=8)
-    ax.tick_params(labelsize=7); ax.set_aspect(1.25)
+    cb.set_label(cb_label)
+    ax.legend(handles=handles, loc="lower left", ncol=2 if len(handles) > 6 else 1)
+    ax.set_title(title)
+    ax.set_xlabel("Longitude"); ax.set_ylabel("Latitude")
+    ax.set_aspect(1.25)
     if extent is not None:
         ax.set_xlim(extent[0], extent[1]); ax.set_ylim(extent[2], extent[3])
     fig.tight_layout()
@@ -1097,15 +1103,11 @@ def _calset_coverage_map(data_dir, set_name, anchor_met, path):
     scored = scored[scored["nse"].notna()]
     cells = load_hru_cells(data_dir, domain=set_name)
     footprints = basin_footprints(data_dir, set_name)
-    pts = _basin_label_points(scored)
-    annot = [(*pts[b], f"{_BASIN_ABBREV.get(b, b)}\n{v:.2f}")
-             for b, v in nse_by_basin.items() if b in pts and np.isfinite(v)]
-    _nse_choropleth(catch, scored,
-                    f"{set_name}: basin-level NSE vs CalSim3 anchor (all sub-areas coloured by "
-                    f"their watershed) + basin outlines ({set_name} HRUs)",
-                    "basin monthly NSE vs CalSim3 anchor", path,
-                    cells=cells, cells_label=f"{set_name} HRU cells ({len(cells)})",
-                    subsystems=footprints, extent=_map_extent(data_dir), annot=annot)
+    footprints = {b: footprints[b]
+                  for b in basin_order_north_south(data_dir, set_name, list(footprints))}
+    _nse_choropleth(catch, scored, f"SAC-SMA {set_name}", "NSE", path,
+                    cells=cells, cells_label=f"{set_name} HRU cell",
+                    subsystems=footprints, extent=_map_extent(data_dir))
 
 
 # ---------------------------------------------------------------------------
@@ -1160,24 +1162,21 @@ def _fill_cells(ax, geoms, color, frac=None, alpha=0.85, hatch=None, zorder=3):
         linewidth=0.15, hatch=hatch, zorder=zorder)
 
 
-def _fp_panel(ax, title, note, *, context, outline, extent, aspect):
+def _fp_panel(ax, title, *, context, outline, extent, aspect):
     """One footprint-map panel: grey context catchments, the basin outline as the
-    common reference, the stats note box, and the shared extent."""
+    common reference, and the shared extent; no axes (the panels are too narrow for
+    10 pt coordinates, and the grey context places the basin)."""
     import geopandas as gpd
 
     context.plot(ax=ax, facecolor="#f3f3f3", edgecolor="0.85", linewidth=0.2, zorder=1)
     gpd.GeoSeries([outline], crs=context.crs).boundary.plot(
         ax=ax, color=_COLORS["calsim3"], linewidth=0.9, zorder=5)
-    ax.set_title(title, fontsize=8)
-    ax.text(0.03, 0.03, note, transform=ax.transAxes, fontsize=6, va="bottom",
-            ha="left", linespacing=1.3, zorder=6,
-            bbox=dict(facecolor="white", edgecolor="0.7", lw=0.4, alpha=0.85,
-                      boxstyle="round,pad=0.25"))
+    ax.set_title(title)
     xmin, ymin, xmax, ymax = extent
     ax.set_xlim(xmin, xmax)
     ax.set_ylim(ymin, ymax)
     ax.set_aspect(aspect)
-    ax.tick_params(labelsize=6)
+    ax.set_axis_off()
 
 
 def make_shasta_footprint_maps(data_dir: str | Path = "data",
@@ -1200,18 +1199,17 @@ def make_shasta_footprint_maps(data_dir: str | Path = "data",
     **single-basin** (SHA/SHSTA) — a methods illustration of the footprint screening
     (``docs/calibrated_sacsma.md``), not a basin-level skill map.  The other
     single-basin counterparts render via :func:`make_basin_footprint_maps`
-    (:data:`FOOTPRINT_MAP_BASINS`).
+    (:data:`FOOTPRINT_MAP_BASINS`).  The cell counts and areas against the catchment
+    are printed, not drawn.
     """
     import geopandas as gpd
-    import matplotlib
-    matplotlib.use("Agg")
     import matplotlib.patheffects as pe
-    import matplotlib.pyplot as plt
     from matplotlib.colors import to_rgba
     from matplotlib.lines import Line2D
     from matplotlib.patches import Patch
     from shapely.ops import unary_union
 
+    from .._figures import plt
     from ..io import load_basin_area, load_hru_table
     from . import load_vic_gridinfo
     from .catchments import (
@@ -1277,62 +1275,55 @@ def make_shasta_footprint_maps(data_dir: str | Path = "data",
     def pct(a):
         return f"{100.0 * (a / calsim_mi2 - 1.0):+.1f}%"
 
-    def panel(ax, title, note):
-        _fp_panel(ax, title, note, context=catch, outline=shsta_geom,
+    def panel(ax, title):
+        _fp_panel(ax, title, context=catch, outline=shsta_geom,
                   extent=(xmin, ymin, xmax, ymax), aspect=1.30)
 
-    fig, axes = plt.subplots(2, 3, figsize=(_MAP_W, 5.2), sharex=True, sharey=True)
+    fig, axes = plt.subplots(2, 3, figsize=(_MAP_W, 5.6), sharex=True, sharey=True)
     ax = axes.ravel()
-    panel(ax[0], "(a) VIC routing grid — original",
-          f"{n_vic_all} cells\n{vic_all_mi2:,.0f} mi$^2$ ({pct(vic_all_mi2)})")
+    panel(ax[0], "VIC grid")
     _fill_cells(ax[0], vic_orig_kept.geometry, _COLORS["vic"], frac=vic_orig_kept["frac"])
     _fill_cells(ax[0], vic_drop.geometry, _FP_RED, frac=vic_drop["frac"])
-    panel(ax[1], "(b) SAC-SMA 11obs HRUs (full)",
-          f"{len(sha)} HRUs\neffective {full11_mi2:,.0f} mi$^2$ ({pct(full11_mi2)})")
+    panel(ax[1], "11obs HRUs")
     _fill_cells(ax[1], sha_boxes[kept11], _COLORS["11obs"])
     _fill_cells(ax[1], sha_boxes[~kept11], _FP_RED)
-    panel(ax[2], "(c) SAC-SMA 15cdec HRUs (SHA)",
-          f"{len(cdec)} HRUs (sub-grid points)\n{cdec_mi2:,.0f} mi$^2$ ({pct(cdec_mi2)})")
+    panel(ax[2], "15cdec HRUs")
     ax[2].scatter(cdec["lon"], cdec["lat"], s=0.8, c=_COLORS["15cdec"], alpha=0.7,
                   linewidths=0, zorder=3)
-    panel(ax[3], "(d) CalSim3 delineation (SHSTA)",
-          f"{calsim_mi2:,.0f} mi$^2$\nthe anchor basis")
+    panel(ax[3], "CalSim3 catchment")
     gpd.GeoSeries([shsta_geom], crs=catch.crs).plot(ax=ax[3], facecolor="#e0dcd3",
                                                     edgecolor="none", zorder=2)
     gpd.GeoSeries([goose_geom], crs=catch.crs).boundary.plot(
         ax=ax[3], color=_FP_RED, linewidth=0.8, linestyle=(0, (3, 2)), zorder=4)
     gx, gy = goose_geom.centroid.x, goose_geom.centroid.y
-    ax[3].annotate("Goose Lake\n(endorheic)", (gx, gy), ha="center", va="center",
-                   fontsize=5.5, color=_FP_RED, zorder=6, linespacing=1.2,
-                   path_effects=[pe.withStroke(linewidth=1.4, foreground="white")])
-    panel(ax[4], "(e) screened — both models",
-          f"SAC-SMA: {int(kept11.sum())}/{len(sha)} HRUs kept\n"
-          f"VIC: {n_vic_kept}/{n_vic_all} cells kept")
+    ax[3].annotate("Goose Lake", (gx, gy), ha="center", va="center", color=_FP_RED, zorder=6,
+                   path_effects=[pe.withStroke(linewidth=2.0, foreground="white")])
+    panel(ax[4], "Screened")
     # VIC still SIMULATES its whole no-Goose-Lake grid (the screening cut only the
     # SAC-SMA HRU set) — draw the VIC cells underneath the screened HRUs so terrain
     # only VIC covers stays visibly purple.
     _fill_cells(ax[4], vic_kept.geometry, _COLORS["vic"], frac=vic_kept["frac"], zorder=2)
     _fill_cells(ax[4], sha_boxes[kept11], _COLORS["11obs"], frac=ov_frac[kept11])
     handles = [
-        Line2D([], [], color=_COLORS["calsim3"], lw=0.9,
-               label=f"CalSim3 SHSTA catchment ({calsim_mi2:,.0f} mi$^2$)"),
+        Line2D([], [], color=_COLORS["calsim3"], lw=0.9, label="CalSim3 catchment"),
         Patch(facecolor=to_rgba(_COLORS["vic"], 0.7), label="VIC grid cell"),
         Patch(facecolor=to_rgba(_COLORS["11obs"], 0.85), label="11obs HRU cell"),
         Line2D([], [], marker="o", ls="", color=_COLORS["15cdec"], markersize=3,
-               label="15cdec (SHA) HRU"),
-        Patch(facecolor=to_rgba(_FP_RED, 0.8), label="Goose Lake over-reach (dropped)"),
+               label="15cdec HRU"),
+        Patch(facecolor=to_rgba(_FP_RED, 0.8), label="Goose Lake (dropped)"),
     ]
     ax[5].axis("off")
-    ax[5].legend(handles=handles, loc="center", fontsize=6, framealpha=0.9)
-    ax[2].tick_params(labelbottom=True)     # sharex hides labels above the legend slot
-    fig.suptitle("Shasta: screening the VIC grid and SAC-SMA HRU footprints to the "
-                 "CalSim3 SHSTA catchment", fontsize=8.5)
-    fig.supxlabel("lon", fontsize=7)
-    fig.supylabel("lat", fontsize=7)
-    fig.tight_layout(rect=(0.01, 0.0, 1, 1))
+    ax[5].legend(handles=handles, loc="center")
+    fig.suptitle("Shasta")
+    fig.tight_layout()
     fig.savefig(figs / "shasta_footprint_panels.png", dpi=_MAP_DPI)
     plt.close(fig)
     print(f"compare: wrote shasta_footprint_panels.png -> {figs}")
+    print(f"  CalSim3 SHSTA {calsim_mi2:,.0f} mi2 | VIC grid {n_vic_all} cells, "
+          f"{vic_all_mi2:,.0f} mi2 ({pct(vic_all_mi2)}) | 11obs {len(sha)} HRUs, effective "
+          f"{full11_mi2:,.0f} mi2 ({pct(full11_mi2)}) | 15cdec {len(cdec)} HRUs, "
+          f"{cdec_mi2:,.0f} mi2 ({pct(cdec_mi2)}) | screened: 11obs {int(kept11.sum())}/"
+          f"{len(sha)} HRUs, VIC {n_vic_kept}/{n_vic_all} cells")
 
 
 #: single-basin footprint-map configs for :func:`make_basin_footprint_maps` —
@@ -1372,19 +1363,17 @@ def make_basin_footprint_maps(data_dir: str | Path = "data",
 
     The slot after the panels carries the legend.  Shared extent, black catchment
     outline; single-basin methods figures — the basin-level colouring rule does not
-    apply.  ``make_all`` renders :data:`FOOTPRINT_MAP_BASINS`.
+    apply.  The cell counts and areas against the catchment are printed, not drawn.
+    ``make_all`` renders :data:`FOOTPRINT_MAP_BASINS`.
     """
     import geopandas as gpd
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
     from matplotlib.colors import to_rgba
     from matplotlib.lines import Line2D
     from matplotlib.patches import Patch
-    from matplotlib.ticker import MaxNLocator
     from shapely.geometry import MultiPolygon, Polygon
     from shapely.ops import unary_union
 
+    from .._figures import plt
     from ..io import load_basin_area, load_hru_table
     from . import load_vic_gridinfo
     from .catchments import (
@@ -1462,8 +1451,8 @@ def make_basin_footprint_maps(data_dir: str | Path = "data",
     def pct(a):
         return f"{100.0 * (a / calsim_mi2 - 1.0):+.1f}%"
 
-    def panel(ax, ttl, note):
-        _fp_panel(ax, ttl, note, context=catch, outline=bgeom,
+    def panel(ax, ttl):
+        _fp_panel(ax, ttl, context=catch, outline=bgeom,
                   extent=(xmin, ymin, xmax, ymax), aspect=aspect)
 
     def draw_vic(a):
@@ -1495,71 +1484,48 @@ def make_basin_footprint_maps(data_dir: str | Path = "data",
         else:
             _fill_cells(a, hru_boxes, _COLORS[set_name], alpha=0.62)
 
-    panels = [
-        (f"VIC routing grid ({vic_node})",
-         f"{n_vic} cells — used as-is\n{vic_mi2:,.0f} mi$^2$ ({pct(vic_mi2)})",
-         draw_vic),
-        (f"SAC-SMA {set_name} HRUs" + (" (full)" if screened else ""),
-         f"{len(hru)} HRUs — {f'{int(inside.sum())} kept' if screened else 'all kept'}\n"
-         f"effective {full_mi2:,.0f} mi$^2$ ({pct(full_mi2)})",
-         draw_full),
-    ]
+    panels = [("VIC grid", draw_vic), (f"{set_name} HRUs", draw_full)]
+    stats = [f"VIC grid {n_vic} cells, {vic_mi2:,.0f} mi2 ({pct(vic_mi2)})",
+             f"{set_name} {len(hru)} HRUs, effective {full_mi2:,.0f} mi2 ({pct(full_mi2)})"]
     if cdec is not None:
-        panels.append((f"SAC-SMA 15cdec HRUs ({cdec_basin})",
-                       f"{len(cdec)} HRUs (sub-grid points)\n"
-                       f"{cdec_mi2:,.0f} mi$^2$ ({pct(cdec_mi2)})", draw_cdec))
-    ncatch = len(bcatch)
-    blab = _BASIN_ABBREV.get(basin, basin)
-    panels += [
-        (f"CalSim3 delineation ({blab})",
-         f"{calsim_mi2:,.0f} mi$^2$ in {ncatch} catchment{'s' if ncatch > 1 else ''}\n"
-         "the anchor basis", draw_delin),
-        ("screened — both models" if screened else "scored footprints — both models",
-         (f"SAC-SMA: {int(inside.sum())}/{len(hru)} HRUs kept" if screened
-          else f"SAC-SMA: all {len(hru)} HRUs (not screened)")
-         + f"\nVIC: all {n_vic} cells",
-         draw_scored),
-    ]
+        panels.append(("15cdec HRUs", draw_cdec))
+        stats.append(f"15cdec {len(cdec)} HRUs, {cdec_mi2:,.0f} mi2 ({pct(cdec_mi2)})")
+    panels += [("CalSim3 catchment", draw_delin), ("Screened" if screened else "Scored",
+                                                   draw_scored)]
+    stats.append(f"{'screened' if screened else 'not screened'}: {set_name} "
+                 f"{int(inside.sum()) if screened else len(hru)}/{len(hru)} HRUs, "
+                 f"VIC {n_vic}/{n_vic} cells")
 
-    fig, axes = plt.subplots(2, 3, figsize=(_MAP_W, 5.2), sharex=True, sharey=True)
+    fig, axes = plt.subplots(2, 3, figsize=(_MAP_W, 5.6), sharex=True, sharey=True)
     ax = axes.ravel()
-    for k, (ttl, note, draw) in enumerate(panels):
-        panel(ax[k], f"({'abcde'[k]}) {ttl}", note)
+    for k, (ttl, draw) in enumerate(panels):
+        panel(ax[k], ttl)
         draw(ax[k])
     handles = [
-        Line2D([], [], color=_COLORS["calsim3"], lw=0.9,
-               label=f"CalSim3 {blab} catchment ({calsim_mi2:,.0f} mi$^2$)"),
+        Line2D([], [], color=_COLORS["calsim3"], lw=0.9, label="CalSim3 catchment"),
         Patch(facecolor=to_rgba(_COLORS["vic"], 0.7), label="VIC grid cell"),
         Patch(facecolor=to_rgba(_COLORS[set_name], 0.85), label=f"{set_name} HRU cell"),
     ]
     if cdec is not None:
         handles.append(Line2D([], [], marker="o", ls="", color=_COLORS["15cdec"],
-                              markersize=3, label=f"15cdec ({cdec_basin}) HRU"))
+                              markersize=3, label="15cdec HRU"))
     if (~inside).any():                     # e.g. Trinity has no out-of-catchment cells
         handles.append(
-            Patch(facecolor=to_rgba(_FP_RED, 0.8), label="outside catchment (screened out)")
+            Patch(facecolor=to_rgba(_FP_RED, 0.8), label="Outside (dropped)")
             if screened else
             Patch(facecolor="none", edgecolor=_FP_RED, hatch="////", lw=0.6,
-                  label="extends outside catchment (kept)"))
+                  label="Outside (kept)"))
     ax[len(panels)].axis("off")
-    ax[len(panels)].legend(handles=handles, loc="center", fontsize=6, framealpha=0.9)
+    ax[len(panels)].legend(handles=handles, loc="center")
     for k in range(len(panels) + 1, 6):
         ax[k].axis("off")
-    for col in range(3):                          # sharex hides labels above off axes
-        vis = [k for k in (col, col + 3) if k < len(panels)]
-        if vis and vis[-1] != col + 3:
-            ax[vis[-1]].tick_params(labelbottom=True)
-    ax[0].xaxis.set_major_locator(MaxNLocator(4))  # small extents: default ticks collide
-    fig.suptitle(f"{title}: screening the SAC-SMA footprint to the CalSim3 "
-                 "catchment (VIC grid as-is)" if screened else
-                 f"{title}: the model footprints vs the CalSim3 catchment — "
-                 "not screened; both grids scored as-is", fontsize=8.5)
-    fig.supxlabel("lon", fontsize=7)
-    fig.supylabel("lat", fontsize=7)
-    fig.tight_layout(rect=(0.01, 0.0, 1, 1))
+    fig.suptitle(title)
+    fig.tight_layout()
     fig.savefig(figs / f"{stem}_footprint_panels.png", dpi=_MAP_DPI)
     plt.close(fig)
     print(f"compare: wrote {stem}_footprint_panels.png -> {figs}")
+    print(f"  CalSim3 {basin} {calsim_mi2:,.0f} mi2 in {len(bcatch)} catchment(s) | "
+          + " | ".join(stats))
 
 
 # ---------------------------------------------------------------------------
@@ -1582,9 +1548,7 @@ def _hru_map_context(ax, data_dir, extent):
     ax.set_xlim(extent[0], extent[1])
     ax.set_ylim(extent[2], extent[3])
     ax.set_aspect(1.0 / np.cos(np.deg2rad((extent[2] + extent[3]) / 2.0)))
-    ax.tick_params(labelsize=6)
-    for s in ax.spines.values():
-        s.set_linewidth(0.5)
+    ax.set_xlabel("Longitude")
 
 
 def make_hru_attribute_maps(data_dir: str | Path = "data",
@@ -1616,29 +1580,24 @@ def make_hru_attribute_maps(data_dir: str | Path = "data",
     does not apply.  Repo map style (≤6.5in, 300 dpi).  Rendered by ``make_all``.
     """
     import geopandas as gpd
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
     from matplotlib.cm import ScalarMappable
     from matplotlib.colors import Normalize, to_rgba
     from matplotlib.lines import Line2D
-    from matplotlib.patheffects import withStroke
 
+    from .._figures import plt
     from ..io import load_hru_table, load_params
     from .catchments import basin_footprints
 
     figs = Path(out if out is not None else paths.calibrated(name="footprints")) / "figures"
     figs.mkdir(parents=True, exist_ok=True)
-    halo = [withStroke(linewidth=1.6, foreground="white")]
 
     # --- Figures 1-2: 15cdec categorical attribute maps (veg_class, soil_class) ---
     h = load_hru_table(data_dir, domain="15cdec")
     ext = _hru_extent(h["lat"].to_numpy(), h["lon"].to_numpy())
     foots15 = basin_footprints(data_dir, domain="15cdec")
 
-    def _cat_map(field, title, fname):
+    def _cat_map(field, legend_title, fname):
         classes = sorted(h[field].unique())
-        counts = h[field].value_counts()
         cm = plt.get_cmap("tab20")
         col = {c: cm(i % 20) for i, c in enumerate(classes)}
         fig, ax = plt.subplots(figsize=(5.0, 6.6))
@@ -1649,22 +1608,19 @@ def make_hru_attribute_maps(data_dir: str | Path = "data",
             hc = h[h[field] == c]
             ax.scatter(hc["lon"], hc["lat"], s=3.0, c=[col[c]], marker="s",
                        linewidths=0, zorder=4)
-        handles = [Line2D([0], [0], marker="s", linestyle="", markersize=6,
-                          markerfacecolor=col[c], markeredgewidth=0,
-                          label=f"class {c}  (n={counts[c]})") for c in classes]
-        ax.legend(handles=handles, title=field, fontsize=6, title_fontsize=7,
-                  loc="upper right", framealpha=0.9, borderpad=0.5, handletextpad=0.4,
+        handles = [Line2D([0], [0], marker="s", linestyle="", markersize=7,
+                          markerfacecolor=col[c], markeredgewidth=0, label=str(c))
+                   for c in classes]
+        ax.legend(handles=handles, title=legend_title, loc="upper right", handletextpad=0.3,
                   labelspacing=0.3)
-        ax.set_title(f"{title}  ({len(h)} HRUs, {h['basin'].nunique()} watersheds)",
-                     fontsize=9)
-        ax.set_xlabel("lon", fontsize=7)
-        ax.set_ylabel("lat", fontsize=7)
+        ax.set_title("15cdec")
+        ax.set_ylabel("Latitude")
         fig.tight_layout()
         fig.savefig(figs / fname, dpi=_MAP_DPI, bbox_inches="tight")
         plt.close(fig)
 
-    _cat_map("veg_class", "15cdec HRUs by vegetation class", "hru_veg_15cdec.png")
-    _cat_map("soil_class", "15cdec HRUs by soil class", "hru_soil_15cdec.png")
+    _cat_map("veg_class", "Vegetation class", "hru_veg_15cdec.png")
+    _cat_map("soil_class", "Soil class", "hru_soil_15cdec.png")
 
     # --- Figure 3: 15cdec calibrated Kpet (tracks soil_class) ---
     kp15 = load_params(domain="15cdec").set_index("key")["Kpet"]
@@ -1679,17 +1635,14 @@ def make_hru_attribute_maps(data_dir: str | Path = "data",
     ax.scatter(h["lon"], h["lat"], s=3.0, c=h["Kpet"], cmap=cmap, norm=norm,
                marker="s", linewidths=0, zorder=4)
     cb = fig.colorbar(ScalarMappable(norm=norm, cmap=cmap), ax=ax, fraction=0.045, pad=0.02)
-    cb.set_label("calibrated Hamon PET coefficient  Kpet", fontsize=8)
-    cb.ax.tick_params(labelsize=6)
-    ax.set_title(f"15cdec HRUs by calibrated Kpet  ({len(h)} HRUs, "
-                 f"{h['basin'].nunique()} watersheds)", fontsize=9)
-    ax.set_xlabel("lon", fontsize=7)
-    ax.set_ylabel("lat", fontsize=7)
+    cb.set_label("Kpet")
+    ax.set_title("15cdec")
+    ax.set_ylabel("Latitude")
     fig.tight_layout()
     fig.savefig(figs / "hru_kpet_15cdec.png", dpi=_MAP_DPI, bbox_inches="tight")
     plt.close(fig)
 
-    # --- Figure 3: 11obs + 9unimp per-basin Kpet ---
+    # --- Figure 4: 11obs + 9unimp per-basin Kpet ---
     doms = ["11obs", "9unimp"]
     hru = {d: load_hru_table(data_dir, domain=d) for d in doms}
     par = {d: load_params(domain=d).groupby("basin")["Kpet"].first() for d in doms}
@@ -1707,19 +1660,13 @@ def make_hru_attribute_maps(data_dir: str | Path = "data",
         gpd.GeoDataFrame(geometry=_cell_boxes(hb["lat"], hb["lon"])).plot(
             ax=ax, color=[to_rgba(cmap(norm(v))) for v in hb["Kpet"]],
             edgecolor="white", linewidth=0.05, zorder=3)
-        for b, geom in basin_footprints(data_dir, domain=d).items():
+        for geom in basin_footprints(data_dir, domain=d).values():
             gpd.GeoSeries([geom], crs="EPSG:4326").boundary.plot(
                 ax=ax, color="0.15", linewidth=0.4, zorder=4)
-            pt = geom.representative_point()
-            ax.text(pt.x, pt.y, f"{_BASIN_ABBREV.get(b, b)}\n{par[d][b]:.2f}", fontsize=5.0,
-                    ha="center", va="center", zorder=6, path_effects=halo)
-        ax.set_title(f"{d}  ({len(hb)} HRUs, {hb['basin'].nunique()} basins)", fontsize=8)
-        ax.set_xlabel("lon", fontsize=7)
-    axes[0].set_ylabel("lat", fontsize=7)
+        ax.set_title(d)
+    axes[0].set_ylabel("Latitude")
     cb = fig.colorbar(ScalarMappable(norm=norm, cmap=cmap), ax=axes, fraction=0.045, pad=0.02)
-    cb.set_label("Hamon PET coefficient  Kpet", fontsize=8)
-    cb.ax.tick_params(labelsize=6)
-    fig.suptitle("SAC-SMA CalSim domains — Hamon PET coefficient (per-basin uniform)", fontsize=9)
+    cb.set_label("Kpet")
     fig.savefig(figs / "hru_kpet_calsim.png", dpi=_MAP_DPI, bbox_inches="tight")
     plt.close(fig)
     print("compare: wrote hru_veg_15cdec.png, hru_soil_15cdec.png, hru_kpet_15cdec.png, "
@@ -1782,40 +1729,59 @@ def kpet_soil_table(data_dir: str | Path = "data", domain: str = "15cdec") -> pd
     return tbl
 
 
-def _calset_skill_fig(anchor_met, set_name, path):
+def _dumbbells(ax, x, sac, vic, sac_color, ylim):
+    """Vertical SAC-SMA/VIC dumbbells at positions ``x``: a grey bar joins the two values, a
+    circle marks SAC-SMA and a diamond VIC; a value outside ``ylim`` (None = no bound) is a
+    triangle on the bound it crosses."""
+    sac, vic = np.asarray(sac, dtype=float), np.asarray(vic, dtype=float)
+    lo, hi = ylim if ylim is not None else (-np.inf, np.inf)
+    for xi, a, b in zip(x, np.clip(sac, lo, hi), np.clip(vic, lo, hi), strict=True):
+        if np.isfinite(a) and np.isfinite(b):
+            ax.plot([xi, xi], [min(a, b), max(a, b)], color="0.8", lw=1.4, zorder=1)
+    for vals, color, marker, size in ((sac, sac_color, "o", 34), (vic, _COLORS["vic"], "D", 26)):
+        out = (_pin_marks(ax, x, vals, ylim, color) if ylim is not None
+               else np.zeros(len(vals), bool))
+        keep = np.isfinite(vals) & ~out
+        ax.scatter(np.asarray(x)[keep], vals[keep], color=color, s=size, marker=marker,
+                   zorder=2, edgecolor="white", linewidth=0.5)
+
+
+def _calset_skill_fig(anchor_met, set_name, path, data_dir="data"):
     """Per-set **basin-level** skill: the set's anchor KGE per main basin vs CalSim3
-    (:func:`anchor_metrics`), with VIC alongside on the same basins."""
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
+    (:func:`anchor_metrics`), with VIC alongside on the same basins, north to south."""
+    from .._figures import plt
 
     m = anchor_met[anchor_met["set"] == set_name]
     s = m[m["source"] == set_name].set_index("basin")
     if s.empty:
         return
-    order = s.sort_values("kge", ascending=False).index
+    order = basin_order_north_south(data_dir, set_name, list(s.index))
     v = m[m["source"] == "vic"].set_index("basin").reindex(order)
 
     fig, ax = plt.subplots(figsize=(_MAP_W, 4.0))
     x = np.arange(len(order))
-    ax.axhline(0, color="0.7", lw=0.8)
-    ax.scatter(x, s.reindex(order)["kge"], s=22, alpha=0.9,
-               color=_COLORS.get(set_name, "k"),
-               label=f"{set_name} (med {s['kge'].median():.2f})")
-    if v["kge"].notna().any():
-        ax.scatter(x, v["kge"], s=18, alpha=0.8, color=_COLORS["vic"], marker="^",
-                   label=f"VIC (med {v['kge'].median():.2f})")
-    ax.set_ylim(-1, 1)
-    ax.set_xticks(x); ax.set_xticklabels(order, fontsize=6, rotation=90)
-    ax.set_ylabel("basin monthly KGE vs CalSim3 anchor", fontsize=8)
-    ax.tick_params(axis="y", labelsize=7)
-    ax.grid(axis="y", color="0.92", lw=0.6); ax.set_axisbelow(True)
-    ax.set_title(f"{set_name} basin-level KGE vs CalSim3 anchor (with VIC) — "
-                 f"{len(order)} basins", fontsize=8)
-    ax.legend(loc="lower left", fontsize=7)
+    _dumbbells(ax, x, s.reindex(order)["kge"], v["kge"], _COLORS.get(set_name, "k"), (0.0, 1.0))
+    ax.set_ylim(0, 1)
+    ax.set_xticks(x)
+    ax.set_xticklabels([_BASIN_ABBREV.get(b, b) for b in order], rotation=90)
+    ax.set_ylabel("KGE")
+    ax.set_title(f"{set_name} watersheds")
+    ax.legend(handles=_dumbbell_handles((set_name,)), loc="lower left", ncol=2)
     fig.tight_layout()
     fig.savefig(path, dpi=_MAP_DPI)
     plt.close(fig)
+
+
+def _dumbbell_handles(sets):
+    """Legend handles of :func:`_dumbbells`: one circle per SAC-SMA set, the VIC diamond."""
+    from matplotlib.lines import Line2D
+
+    def h(color, marker, size, label):
+        return Line2D([], [], ls="", marker=marker, ms=size, color=color, mec="white",
+                      mew=0.5, label=label)
+
+    return ([h(_COLORS[s], "o", 7, _LABELS[s]) for s in sets]
+            + [h(_COLORS["vic"], "D", 6, _LABELS["vic"])])
 
 
 _ANCHOR_STYLE = {k: (_COLORS[k], _LABELS[k]) for k in _COLORS}   # the one shared palette
@@ -2043,9 +2009,9 @@ def make_anchor(data_dir: str | Path = "data", artifacts_dir: str | Path = "arti
     plot_sets = sets + (CDEC15,) if not met_15.empty else sets
     plot_met = pd.concat([met, met_15], ignore_index=True) if not met_15.empty else met
 
-    for col, lab, xlim in [("kge", "monthly KGE", (0.0, 1.0)), ("nse", "monthly NSE", (0.0, 1.0)),
-                           ("pbias", "percent bias (%)", None)]:
-        _anchor_dumbbell_fig(plot_met, plot_sets, col, lab, xlim,
+    for col, lab, ylim in [("kge", "KGE", (0.0, 1.0)), ("nse", "NSE", (0.0, 1.0)),
+                           ("pbias", "Percent bias", None)]:
+        _anchor_dumbbell_fig(plot_met, plot_sets, col, lab, ylim,
                              out / "figures" / f"anchor_skill_{col}.png", data_dir=data_dir)
     _anchor_scatter_fig(long, sets, out / "figures" / "anchor_scatter.png")
     for st in sets:                          # one |pbias| x seasonal-mismatch diagram per set
@@ -2236,11 +2202,11 @@ def _anchor_screened_fig(cmp, sets, path, data_dir="data"):
     Open marker = full (current anchor), filled = screened; a green connector means screening
     moved the value toward CalSim3 (pbias toward 0 / higher KGE), red = away.  The VIC
     benchmark (same months, same CalSim3 reference; its own footprint conventions, incl. the
-    no_gooselake substitution at SHA/BND) is the purple diamond."""
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
+    no_gooselake substitution at SHA/BND) is the purple diamond.  A value outside an axis is
+    a triangle on its edge."""
     from matplotlib.lines import Line2D
+
+    from .._figures import plt
 
     rows = [(s, b) for s in sets
             for b in basin_order_north_south(data_dir, s, cmp[cmp["set"] == s]["basin"].unique())]
@@ -2253,52 +2219,54 @@ def _anchor_screened_fig(cmp, sets, path, data_dir="data"):
         m = cmp[(cmp["set"] == s) & (cmp["basin"] == b)]
         return float(m[c].iloc[0]) if len(m) else np.nan
 
-    fig, ax = plt.subplots(1, 2, figsize=(_MAP_W, 0.30 * len(rows) + 1.3), sharey=True)
-    vic_col = _ANCHOR_STYLE["vic"][0]
-    # axis limits sized to the SAC values; VIC outliers (e.g. Fresno +95% / KGE -0.18) clamp to
-    # the edge rather than stretching the shared scale (KGE axis stays 0-1 per the house rule).
+    height = 0.30 * len(rows) + 1.6
+    fig, ax = plt.subplots(1, 2, figsize=(_MAP_W, height), sharey=True)
+    vic_col = _COLORS["vic"]
+    # axis limits sized to the SAC values; VIC outliers (e.g. Fresno +95% / KGE -0.18) are pinned
+    # to the edge rather than stretching the shared scale (KGE axis stays 0-1 per the house rule).
     sac_pb = pd.concat([cmp["pbias_full"], cmp["pbias_screened"]]).dropna()
     pb_lim = (min(-25.0, float(sac_pb.min()) - 5.0), max(50.0, float(sac_pb.max()) + 5.0))
     for col_full, col_scr, col_vic, panel, lab, zero, lim in [
-            ("pbias_full", "pbias_screened", "pbias_vic", ax[0], "percent bias (%)", True, pb_lim),
-            ("kge_full", "kge_screened", "kge_vic", ax[1], "monthly KGE", False, (0.0, 1.0))]:
+            ("pbias_full", "pbias_screened", "pbias_vic", ax[0], "Percent bias", True, pb_lim),
+            ("kge_full", "kge_screened", "kge_vic", ax[1], "KGE", False, (0.0, 1.0))]:
         for yi, (s, b) in zip(y, rows):
             vf, vs = get(s, b, col_full), get(s, b, col_scr)
             if np.isnan(vf) or np.isnan(vs):
                 continue
             vf, vs = _clipv(vf, *lim), _clipv(vs, *lim)
             improved = (abs(vs) < abs(vf)) if zero else (vs > vf)
-            col = "#2ca25f" if improved else "#cc3311"
+            col = "0.4" if vs == vf else "#2ca25f" if improved else "#cc3311"
             panel.plot([vf, vs], [yi, yi], color=col, lw=1.5, zorder=1)
             panel.scatter([vf], [yi], facecolor="white", edgecolor="0.4", s=26, zorder=2, lw=0.9)
             panel.scatter([vs], [yi], color=col, s=30, zorder=3, edgecolor="white", lw=0.5)
-            vv = get(s, b, col_vic)
-            if not np.isnan(vv):                # VIC benchmark, same months + reference
-                panel.scatter([_clipv(vv, *lim)], [yi], color=vic_col, s=22, marker="D",
-                              zorder=2.5, edgecolor="white", lw=0.4)
+        vic = np.array([get(s, b, col_vic) for s, b in rows])   # same months + reference
+        out = _pin_marks(panel, y, vic, lim, vic_col, horizontal=True, zorder=2.5)
+        keep = np.isfinite(vic) & ~out
+        panel.scatter(vic[keep], y[keep], color=vic_col, s=22, marker="D", zorder=2.5,
+                      edgecolor="white", lw=0.4)
         panel.set_xlim(*lim)
         if zero:
             panel.axvline(0, color="0.6", lw=0.8)
-        panel.set_xlabel(lab, fontsize=8)
-        panel.tick_params(labelsize=7)
-        panel.grid(axis="x", color="0.92", lw=0.6)
-        panel.set_axisbelow(True)
+        panel.set_xlabel(lab)
     for i in range(1, len(rows)):                  # dashed divider at each set boundary
         if rows[i][0] != rows[i - 1][0]:
             for panel in ax:
                 panel.axhline(y[i] + 0.5, color="0.5", lw=0.9, ls="--", zorder=0)
     ax[0].set_yticks(y)
-    ax[0].set_yticklabels(labels, fontsize=6)
-    ax[1].legend(handles=[
-        Line2D([0], [0], marker="o", color="w", markerfacecolor="white", markeredgecolor="0.4",
-               label="full footprint"),
-        Line2D([0], [0], marker="o", color="w", markerfacecolor="#666",
-               label="screened (corrected)"),
-        Line2D([0], [0], marker="D", color="w", markerfacecolor=vic_col, label="VIC"),
-        Line2D([0], [0], color="#2ca25f", label="toward CalSim3"),
-        Line2D([0], [0], color="#cc3311", label="away")], loc="best", fontsize=6)
-    fig.suptitle("Anchor vs CalSim3 unimpaired FNF: full vs GIS-screened footprint", fontsize=8)
-    fig.tight_layout()
+    ax[0].set_yticklabels(labels)
+    ax[0].set_ylim(-0.6, len(rows) - 0.4)
+    # column-major fill: the three markers on the first row, the two connectors below
+    fig.legend(handles=[
+        Line2D([0], [0], marker="o", ls="", ms=7, markerfacecolor="white",
+               markeredgecolor="0.4", label="Full footprint"),
+        Line2D([0], [0], color="#2ca25f", lw=1.5, label="Toward CalSim3"),
+        Line2D([0], [0], marker="o", ls="", ms=7, markerfacecolor="0.4",
+               markeredgecolor="white", label="Screened"),
+        Line2D([0], [0], color="#cc3311", lw=1.5, label="Away from CalSim3"),
+        Line2D([0], [0], marker="D", ls="", ms=6, markerfacecolor=vic_col,
+               markeredgecolor="white", label="VIC")],
+        loc="upper center", ncol=3, bbox_to_anchor=(0.5, 1.0))
+    fig.tight_layout(rect=(0, 0, 1, 1 - 0.55 / height))
     fig.savefig(path, dpi=_MAP_DPI)
     plt.close(fig)
 
@@ -2380,11 +2348,11 @@ def make_anchor_skill_periods(data_dir: str | Path = "data",
     pb_lim = float(np.nanmax(np.abs(allmet["pbias"]))) * 1.08   # shared across the periods
     for met in mets:
         plab, window = met["period"].iloc[0], met["window"].iloc[0]
-        for col, ylab, ylim in [("kge", "monthly KGE", (0.0, 1.0)),
-                                ("pbias", "percent bias (%)", (-pb_lim, pb_lim))]:
+        for col, ylab, ylim in [("kge", "KGE", (0.0, 1.0)),
+                                ("pbias", "Percent bias", (-pb_lim, pb_lim))]:
             _anchor_dumbbell_fig(met, plot_sets, col, ylab, ylim,
                                  out / "figures" / f"anchor_skill_{col}_{plab}.png",
-                                 data_dir=data_dir, title_suffix=f" — {window}")
+                                 data_dir=data_dir, title=window)
         sac = met[met["set"] == met["source"]]
         vicm = met[met["source"] == "vic"]
         print(f"anchor by period [{plab} {window}]: median KGE sac={sac['kge'].median():.2f} "
@@ -2411,13 +2379,12 @@ def basin_order_north_south(data_dir, domain, basins=None):
     return order
 
 
-def _anchor_dumbbell_fig(met, sets, col, ylab, ylim, path, data_dir="data", title_suffix=""):
+def _anchor_dumbbell_fig(met, sets, col, ylab, ylim, path, data_dir="data", title=None):
     """**Vertical** dumbbell per (set, basin): SAC-SMA vs VIC for one metric, grouped by
     set along the x-axis (basins as x ticks, metric on the y-axis).  Basins within each set
-    are ordered **north -> south** (:func:`basin_order_north_south`)."""
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
+    are ordered **north -> south** (:func:`basin_order_north_south`); a value outside
+    ``ylim`` is a triangle on the bound."""
+    from .._figures import plt
 
     rows = [(s, b) for s in sets for b in
             basin_order_north_south(data_dir, s, met[(met["set"] == s)]["basin"].unique())]
@@ -2425,7 +2392,7 @@ def _anchor_dumbbell_fig(met, sets, col, ylab, ylim, path, data_dir="data", titl
         return
     labels = [f"{s}:{_BASIN_ABBREV.get(b, b)}" for s, b in rows]
     x = np.arange(len(rows))
-    fig, ax = plt.subplots(figsize=(_MAP_W, 4.6))
+    fig, ax = plt.subplots(figsize=(_MAP_W, 5.0))
     if ylim is not None:
         ax.set_ylim(*ylim)
     if ylim is None or ylim[0] < 0 < ylim[1]:
@@ -2439,52 +2406,43 @@ def _anchor_dumbbell_fig(met, sets, col, ylab, ylim, path, data_dir="data", titl
         m = met[(met["set"] == st) & (met["basin"] == basin) & (met["source"] == src)]
         return float(m[col].iloc[0]) if len(m) else np.nan
 
-    def clip(v):
-        return min(max(v, ylim[0]), ylim[1]) if ylim is not None else v
-
-    for xi, (st, basin) in zip(x, rows):
-        a, b = val(st, basin, st), val(st, basin, "vic")
-        vv = [clip(v) for v in (a, b) if not np.isnan(v)]
-        if len(vv) > 1:
-            ax.plot([xi, xi], [min(vv), max(vv)], color="0.8", lw=1.4, zorder=1)
-        if not np.isnan(a):
-            ax.scatter([xi], [clip(a)], color=_ANCHOR_STYLE[st][0], s=34, zorder=2,
-                       edgecolor="white", linewidth=0.5)
-        if not np.isnan(b):
-            ax.scatter([xi], [clip(b)], color=_ANCHOR_STYLE["vic"][0], s=26, marker="D",
-                       zorder=2, edgecolor="white", linewidth=0.5)
-    ax.set_xticks(x); ax.set_xticklabels(labels, fontsize=6, rotation=90)
-    ax.set_ylabel(ylab, fontsize=8); ax.tick_params(axis="y", labelsize=7)
-    ax.grid(axis="y", color="0.92", lw=0.6); ax.set_axisbelow(True)
-    ax.scatter([], [], color="#666", s=34, label="SAC-SMA (set)")
-    ax.scatter([], [], color=_ANCHOR_STYLE["vic"][0], marker="D", s=26, label="VIC")
-    ax.legend(loc="best", fontsize=7)
-    ax.set_title(_wrap(f"Basin-level {ylab} vs CalSim3 (FLOW-UNIMPAIRED for rim systems, "
-                       f"else sub-node sum){title_suffix}"), fontsize=8)
-    fig.tight_layout(); fig.savefig(path, dpi=_MAP_DPI); plt.close(fig)
+    for st in sets:
+        k = [i for i, (s, _) in enumerate(rows) if s == st]
+        _dumbbells(ax, x[k], [val(st, rows[i][1], st) for i in k],
+                   [val(st, rows[i][1], "vic") for i in k], _COLORS[st], ylim)
+    ax.set_xlim(-0.6, len(rows) - 0.4)
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, rotation=90)
+    ax.set_ylabel(ylab)
+    if title:
+        ax.set_title(title)
+    fig.legend(handles=_dumbbell_handles(sets), loc="upper center", ncol=len(sets) + 1,
+               bbox_to_anchor=(0.5, 1.0))
+    fig.tight_layout(rect=(0, 0, 1, 0.94))
+    fig.savefig(path, dpi=_MAP_DPI); plt.close(fig)
 
 
 def _anchor_scatter_fig(long, sets, path):
     """Pooled monthly: each set's basin inflow (y) vs CalSim3 sum (x), common log axes."""
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
+    from .._figures import plt
 
-    fig, axes = plt.subplots(1, len(sets), figsize=(_MAP_W, max(2.6, _MAP_W / len(sets))))
-    for a, st in zip(np.atleast_1d(axes), sets):
+    fig, axes = plt.subplots(1, len(sets), figsize=(_MAP_W, max(3.0, _MAP_W / len(sets) + 0.2)))
+    axes = np.atleast_1d(axes)
+    for a, st in zip(axes, sets):
         w = long[long["set"] == st].pivot_table(index=["basin", "date"], columns="source",
                                                 values="flow_taf")
         if "calsim3" not in w or st not in w:
             a.set_visible(False); continue
         d = w[["calsim3", st]].dropna()
-        a.scatter(d["calsim3"], d[st], s=5, alpha=0.25, color=_ANCHOR_STYLE[st][0])
+        a.scatter(d["calsim3"], d[st], s=5, alpha=0.25, color=_ANCHOR_STYLE[st][0],
+                  edgecolors="none")
         lim = [1e-1, 1e5]
         a.plot(lim, lim, "k--", lw=0.8)
         a.set_xscale("log"); a.set_yscale("log"); a.set_xlim(lim); a.set_ylim(lim)
         a.set_aspect("equal")
-        a.set_xlabel("CalSim3 reference (unimpaired / sub-node sum, TAF/mo)", fontsize=8)
-        a.set_ylabel(f"{_ANCHOR_STYLE[st][1]} (TAF/mo)", fontsize=8)
-        a.set_title(f"{st} (KGE={kge(d[st].to_numpy(), d['calsim3'].to_numpy()):.2f})", fontsize=8)
+        a.set_xlabel("CalSim3 (TAF/month)")
+        a.set_title(f"{st}, KGE {kge(d[st].to_numpy(), d['calsim3'].to_numpy()):.2f}")
+    axes[0].set_ylabel("SAC-SMA (TAF/month)")
     fig.tight_layout(); fig.savefig(path, dpi=_MAP_DPI); plt.close(fig)
 
 
@@ -2494,11 +2452,9 @@ def _anchor_bias_diagram_fig(met, st, path):
     annual flow delivered in the wrong month; :func:`sacsma.metrics.seasonal_mismatch`) — one
     marker per basin for SAC-SMA and for VIC, with a faint connector joining each basin's SAC
     and VIC point.  Both axes are error magnitudes, so the **lower-left corner is a perfect
-    match**.  ≤6.5in wide, 300 dpi, 8-pt text.  Reads :func:`anchor_metrics` (needs ``pbias`` +
-    ``seas_mismatch``)."""
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
+    match**.  The points are not named (the per-basin values are in ``anchor_metrics.csv``).
+    Reads :func:`anchor_metrics` (needs ``pbias`` + ``seas_mismatch``)."""
+    from .._figures import plt
 
     if "seas_mismatch" not in met.columns:
         return
@@ -2517,19 +2473,11 @@ def _anchor_bias_diagram_fig(met, st, path):
                edgecolor="white", linewidth=0.5, zorder=3, label=_LABELS.get(st, st))
     ax.scatter(vic["abs_pbias"], vic["seas_mismatch"], color=_COLORS["vic"], s=30, marker="D",
                edgecolor="white", linewidth=0.5, alpha=0.85, zorder=2, label="VIC")
-    for src_df, col in ((sac, _COLORS.get(st, "k")), (vic, _COLORS["vic"])):
-        for b, r in src_df.iterrows():
-            ax.annotate(str(b), (r["abs_pbias"], r["seas_mismatch"]), fontsize=6, color=col,
-                        xytext=(3, 2), textcoords="offset points", zorder=4)
     ax.set_xlim(left=0); ax.set_ylim(bottom=0)
-    ax.set_xlabel("|percent bias|  (%)   [volume-error magnitude]", fontsize=8)
-    ax.set_ylabel("seasonal mismatch   [fraction of annual flow in the wrong month]", fontsize=8)
-    ax.tick_params(labelsize=8)
-    ax.grid(color="0.93", lw=0.5); ax.set_axisbelow(True)
-    ax.legend(loc="best", fontsize=6)
-    ax.set_title(_wrap(f"{_LABELS.get(st, st)} vs VIC — |pbias| × seasonal mismatch vs CalSim3 "
-                       f"anchors ({st} basins; lower-left = perfect, grey = same basin)", 80),
-                fontsize=8)
+    ax.set_xlabel("Absolute percent bias")
+    ax.set_ylabel("Seasonal mismatch")
+    ax.legend(loc="upper right")
+    ax.set_title(f"{st} watersheds")
     fig.tight_layout(); fig.savefig(path, dpi=_MAP_DPI); plt.close(fig)
 
 
@@ -2539,10 +2487,7 @@ def _anchor_hydrograph_fig(long, sets, path, *, window=("1985-10-01", "2005-09-3
     CalSim3 FLOW-UNIMPAIRED reference (bold).  Each set's basin is matched to its river via
     :data:`calsim.BASIN_RIM_SYSTEM`; the reference/VIC series are identical across sets for a
     given river, so they are de-duplicated by date."""
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
+    from .._figures import plt
     from .catchments import BASIN_RIM_SYSTEM
 
     lo, hi = pd.Timestamp(window[0]), pd.Timestamp(window[1])
@@ -2550,65 +2495,67 @@ def _anchor_hydrograph_fig(long, sets, path, *, window=("1985-10-01", "2005-09-3
     sys_of = {(st, b): sy for st in sets for b, sy in BASIN_RIM_SYSTEM.get(st, {}).items()}
     win["system"] = [sys_of.get((s, b)) for s, b in zip(win["set"], win["basin"])]
 
-    fig, axes = plt.subplots(4, 2, figsize=(_MAP_W, 9.0), sharex=True)
+    height = 9.0
+    fig, axes = plt.subplots(4, 2, figsize=(_MAP_W, height), sharex=True)
+    handles = {}
     for ax, (sysn, label) in zip(axes.ravel(), MAIN_RIVERS):
         sub = win[win["system"] == sysn]
         if not len(sub):
             ax.set_visible(False); continue
         ref = sub[sub["source"] == "calsim3"].drop_duplicates("date").sort_values("date")
         if len(ref):
-            ax.plot(ref["date"], ref["flow_taf"], color=_ANCHOR_STYLE["calsim3"][0], lw=1.9,
-                    label="CalSim3 unimpaired", zorder=3)
+            handles["calsim3"], = ax.plot(ref["date"], ref["flow_taf"],
+                                          color=_ANCHOR_STYLE["calsim3"][0], lw=1.9,
+                                          label="CalSim3 unimpaired", zorder=3)
         for src in list(sets) + ["vic"]:
             s = sub[sub["source"] == src].drop_duplicates("date").sort_values("date")
             if len(s):
-                ax.plot(s["date"], s["flow_taf"], color=_ANCHOR_STYLE[src][0], lw=1.0,
-                        alpha=0.85, label=_ANCHOR_STYLE[src][1])
-        ax.set_title(label, fontsize=8)
-        ax.set_ylabel("TAF/mo", fontsize=8)
-        ax.tick_params(labelsize=7)
-    axes.ravel()[0].legend(loc="upper right", fontsize=7)
-    fig.suptitle(_wrap("8 main river indices: SAC-SMA & VIC vs CalSim3 FLOW-UNIMPAIRED (bold)", 70),
-                 fontsize=8)
-    fig.tight_layout(rect=(0, 0, 1, 0.98))
+                handles[src], = ax.plot(s["date"], s["flow_taf"], color=_ANCHOR_STYLE[src][0],
+                                        lw=1.0, alpha=0.85, label=_ANCHOR_STYLE[src][1])
+        ax.set_title(label)
+        ax.set_ylim(bottom=0)
+    fig.legend(handles=[handles[k] for k in ("calsim3", *sets, "vic") if k in handles],
+               loc="upper center", ncol=len(handles), bbox_to_anchor=(0.5, 1.0))
+    fig.supylabel("Monthly flow (TAF)")
+    fig.tight_layout(rect=(0, 0, 1, 1 - 0.35 / height))
     fig.savefig(path, dpi=_MAP_DPI); plt.close(fig)
 
 
 def _main_river_climatology_fig(long, path, *, climset="11obs"):
     """Mean-monthly (water-year O..S) climatology of the 8 main river indices over the FULL
     period: SAC-SMA (``climset``, default 11obs) vs VIC vs CalSim (FLOW-UNIMPAIRED), TAF/mo."""
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
+    from matplotlib.lines import Line2D
 
+    from .._figures import plt
     from .catchments import BASIN_RIM_SYSTEM
 
     inv = {sy: b for b, sy in BASIN_RIM_SYSTEM.get(climset, {}).items()}
     sub = long[long["set"] == climset].copy()
     sub["mon"] = pd.to_datetime(sub["date"]).dt.month
     wy = [10, 11, 12, 1, 2, 3, 4, 5, 6, 7, 8, 9]
-    labels = ["O", "N", "D", "J", "F", "M", "A", "M", "J", "J", "A", "S"]
-    order = [("calsim3", "CalSim (unimpaired)"), (climset, f"SAC-SMA {climset}"), ("vic", "VIC")]
+    order = [("calsim3", "CalSim3 unimpaired"), (climset, _LABELS[climset]), ("vic", "VIC")]
 
-    fig, axes = plt.subplots(4, 2, figsize=(_MAP_W, 9.0), sharex=True)
+    height = 9.0
+    fig, axes = plt.subplots(4, 2, figsize=(_MAP_W, height), sharex=True)
     for ax, (sysn, label) in zip(axes.ravel(), MAIN_RIVERS):
         b = inv.get(sysn)
         g = sub[sub["basin"] == b] if b is not None else sub.iloc[:0]
         if not len(g):
             ax.set_visible(False); continue
-        for src, slabel in order:
+        for src, _ in order:
             s = g[g["source"] == src]
             if len(s):
                 clim = s.groupby("mon")["flow_taf"].mean().reindex(wy)
                 ax.plot(range(12), clim.to_numpy(), color=_ANCHOR_STYLE[src][0],
-                        lw=2.2 if src == "calsim3" else 1.4, marker="o", ms=3, label=slabel)
-        ax.set_title(label, fontsize=8); ax.set_ylabel("mean TAF/mo", fontsize=8)
-        ax.set_xticks(range(12)); ax.set_xticklabels(labels); ax.tick_params(labelsize=7)
-        ax.grid(color="0.93", lw=0.6); ax.set_axisbelow(True)
-    axes.ravel()[0].legend(loc="upper right", fontsize=8)
-    fig.suptitle(_wrap(f"8 main river indices — mean-monthly climatology, full period "
-                       f"(SAC-SMA {climset}, VIC, CalSim unimpaired)", 70), fontsize=8)
-    fig.tight_layout(rect=(0, 0, 1, 0.98))
+                        lw=2.0 if src == "calsim3" else 1.2)
+        ax.set_title(label)
+        ax.set_xticks([0, 3, 6, 9]); ax.set_xticklabels(["O", "J", "A", "J"])
+        ax.set_ylim(bottom=0)
+    handles = [Line2D([], [], color=_ANCHOR_STYLE[src][0], lw=2.0 if src == "calsim3" else 1.2,
+                      label=slabel) for src, slabel in order]
+    fig.legend(handles=handles, loc="upper center", ncol=len(handles), bbox_to_anchor=(0.5, 1.0))
+    fig.supylabel("Mean monthly flow (TAF)")
+    fig.tight_layout(rect=(0, 0, 1, 1 - 0.35 / height))
     fig.savefig(path, dpi=_MAP_DPI); plt.close(fig)
 
 

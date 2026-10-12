@@ -27,9 +27,10 @@ import numpy as np
 import pandas as pd
 
 from ... import paths
-from ..._figures import plt  # noqa: F401
+from ..._figures import _CAL_COLOR, _VAL_COLOR, plt
 from ...io import load_basin_area
 from ..hybrid.train import RESPONSE_ANCHORS as ANCHORS
+from .climatology import STYLE as CLIM_STYLE
 from .climatology import _basin_order
 from .surfaces import (
     DP,
@@ -213,14 +214,18 @@ def assemble(data_dir: str = "data", *, device: str = "cuda",
     return tbl
 
 
-def _plot_basin(basin: str, sub: pd.DataFrame, out: Path,
-                title: str | None = None) -> None:
+def _plot_surfaces(sub: pd.DataFrame, out: Path, title: str) -> None:
+    """The four metrics (rows) of the four models (columns) as % change over the (Δprecip, ΔT)
+    grid, one colour scale per metric, with the present climate and the response-loss anchors
+    marked."""
     from matplotlib.colors import Normalize
+    from matplotlib.lines import Line2D
     from matplotlib.ticker import MaxNLocator
 
     X, Y = np.meshgrid(DP * 100.0, DT)
-    fig, axes = plt.subplots(len(METRICS), len(COL_ORDER), figsize=(9.2, 8.4),
-                             sharex=True, sharey=True, constrained_layout=True)
+    adp, adt = np.array(ANCHORS, float).T
+    fig, axes = plt.subplots(len(METRICS), len(COL_ORDER), figsize=(6.5, 8.2),
+                             sharex=True, sharey=True, layout="constrained")
     for r, (mkey, mlab) in enumerate(METRICS):
         surf = {}
         for mdl in COL_ORDER:
@@ -239,39 +244,40 @@ def _plot_basin(basin: str, sub: pd.DataFrame, out: Path,
                              norm=norm, extend="both")
             ax.contour(X, Y, surf[mdl], levels=levels, colors="0.35",
                        linewidths=0.25)
-            for adp, adt in ANCHORS:             # dt·dp anchors on EVERY column
-                ax.plot(adp * 100.0, adt, marker="x", ms=3.0, mew=0.8,  # (eye cross-ref)
-                        color="0.15", zorder=5, clip_on=False)
-            ax.plot(0.0, 0.0, marker="o", ms=3.0, mfc="w", mec="0.1", mew=0.8,
-                    zorder=6, clip_on=False)
+            ax.plot(adp * 100.0, adt, "x", ms=3.0, mew=0.8, color="0.15", zorder=5,
+                    clip_on=False)
+            ax.plot(0.0, 0.0, "o", ms=3.0, mfc="w", mec="0.1", mew=0.8, zorder=6,
+                    clip_on=False)
             if r == 0:
-                ax.set_title(mdl, fontsize=8)
-            if c == 0:
-                ax.set_ylabel(f"{mlab}\nΔT (°C)", fontsize=7.5)
-            if r == len(METRICS) - 1:
-                ax.set_xlabel("Δprecip (%)", fontsize=7.5)
-            ax.set_xticks([-20, -10, 0, 10, 20])
-            ax.set_yticks([0, 1, 2, 3, 4])
-            ax.tick_params(labelsize=6.5)
-        cb = fig.colorbar(cf, ax=list(axes[r, :]), fraction=0.035, pad=0.01,
+                ax.set_title(RUN[mdl])
+        cb = fig.colorbar(cf, ax=list(axes[r, :]), fraction=0.04, pad=0.02,
                           ticks=levels[::2])
-        cb.set_label("% change", fontsize=6.5)
-        cb.ax.tick_params(labelsize=6)
-    fig.suptitle(
-        title if title is not None else
-        f"{basin} — 5_px / Hybrid / Hybrid DT / LSTM: climate-response surfaces  "
-        "(% change vs present climate)\n"
-        "○ present climate    ×  Δp·ΔT response-loss anchors (every panel)    "
-        "the LSTMs on 5_px's physics",
-        fontsize=8.5)
+        cb.set_label(f"{mlab} (%)")
+    axes[0, 0].set_xticks([-10, 0, 10])
+    axes[0, 0].set_yticks([0, 2, 4])
+    fig.supxlabel("Precipitation change (%)")
+    fig.supylabel("Temperature change (°C)")
+    fig.suptitle(title, x=0.02, ha="left")
+    marks = [Line2D([], [], ls="none", marker="o", ms=4, mfc="w", mec="0.1",
+                    label="Present climate"),
+             Line2D([], [], ls="none", marker="x", ms=4, mew=0.8, color="0.15",
+                    label="Response-loss anchor")]
+    fig.legend(handles=marks, loc="outside upper right")
     out.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out, dpi=300)
     plt.close(fig)
 
 
 # --------------------------------------------------------------------------- #
-# skill + response summary (3-panel) and the regime-aggregate surfaces
+# skill + response summary and the regime-aggregate surfaces
 # --------------------------------------------------------------------------- #
+#: the line and marker of each model in the summary and progression figures: the physics
+#: (5_px) is the black reference, the ensembles take their colours of the climatology study
+_STY = {PHYSICS: dict(color="k", marker="o", ms=4.0, lw=1.6, zorder=5),
+        **{lab: dict(color=CLIM_STYLE[RUN[lab]]["color"], marker=mk, ms=4.0, lw=1.2)
+           for lab, mk in ((BASE, "s"), (DTDP, "^"), (LSTM, "v"))}}
+
+
 def _mean_calval(csv: str | Path) -> tuple[float, float]:
     """(mean cal_kge, mean val_kge) of a run's ``metrics.csv``."""
     m = pd.read_csv(csv)
@@ -289,70 +295,58 @@ def _pooled(tbl: pd.DataFrame, model: str, col: str, dp: float, dt: float):
     return s.set_index("basin")[col]
 
 
+def _warming_curve(tbl: pd.DataFrame, model: str) -> list[float]:
+    """The mean over the basins of the % change of annual runoff along ΔT, at Δprecip = 0."""
+    return [float(_pooled(tbl, model, "pct_annual", 0.0, float(dt)).mean()) for dt in DT]
+
+
 def make_summary(tbl: pd.DataFrame, out_dir: str | Path | None = None,
                  ) -> Path:
-    """3-panel headline: (1) ensemble-mean skill bars, (2) the warming-response
-    CURVE (pooled annual %Δ vs present along ΔT at Δp=0), (3) the precip-response
-    CURVE (pooled annual %Δ along Δp, held at ΔT=+2 °C, isolated vs the +2 °C
-    state).  One line per model, physics the black reference.  Skill from the
-    metrics CSVs; responses pooled (15-basin mean) from the response table."""
-    MODELS = [PHYSICS, BASE, DTDP, LSTM]
-    SHORT = {PHYSICS: PHYSICS, BASE: BASE, DTDP: "Hybrid\nDT", LSTM: LSTM}
-    LEG = {PHYSICS: PHYSICS, BASE: BASE, DTDP: DTDP, LSTM: LSTM}
-    STY = {PHYSICS: dict(color="k", lw=2.4, marker="o", ms=4.5, zorder=5),
-           BASE: dict(color="#2ca02c", lw=1.8, marker="s", ms=3.5),
-           DTDP: dict(color="#1f77b4", lw=1.9, marker="^", ms=4.0),
-           LSTM: dict(color="#d62728", lw=1.8, marker="v", ms=4.0)}
-
+    """Skill and response of 5_px and the three ensembles: (1) the mean calibration and
+    validation KGE over the basins (from the metrics CSVs), (2) the warming curve (the mean
+    over the basins of the % change of annual runoff along ΔT, at Δprecip = 0), (3) the
+    precipitation curve (the same along Δprecip at ΔT = +2 °C, against the +2 °C climate)."""
     skill = _skill_pairs()
-    # warming curve: pooled annual %Δ (vs present) along ΔT, at Δp=0
-    temp_curve = {m: [float(_pooled(tbl, m, "pct_annual", 0.0, float(dt)).mean())
-                      for dt in DT] for m in MODELS}
-    # precip curve: pooled annual %Δ along Δp, held at ΔT=+2 °C, isolated vs (0,+2)
     precip_curve = {}
-    for m in MODELS:
+    for m in COL_ORDER:
         a2 = _pooled(tbl, m, "annual", 0.0, 2.0)
         precip_curve[m] = [float((_pooled(tbl, m, "annual", float(dp), 2.0) / a2
                                   - 1.0).mean() * 100) for dp in DP]
 
-    fig, (axk, axt, axp) = plt.subplots(1, 3, figsize=(14.0, 4.5),
-                                        constrained_layout=True)
+    fig = plt.figure(figsize=(6.5, 5.6), layout="constrained")
+    gs = fig.add_gridspec(2, 2, height_ratios=[1.0, 1.25])
+    axk = fig.add_subplot(gs[0, :])
+    axt = fig.add_subplot(gs[1, 0])
+    axp = fig.add_subplot(gs[1, 1])
 
-    # (1) skill bars
-    x = np.arange(len(MODELS)); bw = 0.38
-    axk.bar(x - bw / 2, [skill[m][0] for m in MODELS], bw, label="cal",
-            color="#9ecae1", edgecolor="0.3")
-    axk.bar(x + bw / 2, [skill[m][1] for m in MODELS], bw, label="val",
-            color="#3182bd", edgecolor="0.3")
-    axk.set_ylim(0.0, 1.0); axk.set_ylabel("KGE")
-    axk.set_title("Skill (ensemble-mean)")
-    axk.set_xticks(x); axk.set_xticklabels([SHORT[m] for m in MODELS], fontsize=8)
-    axk.legend(fontsize=8); axk.grid(axis="y", alpha=0.3, lw=0.4)
-    for xi, m in zip(x, MODELS):
-        axk.annotate(f"{skill[m][1]:.3f}", (xi + bw / 2, skill[m][1]), fontsize=6.5,
-                     ha="center", va="bottom")
+    x = np.arange(len(COL_ORDER))
+    bw = 0.38
+    axk.bar(x - bw / 2, [skill[m][0] for m in COL_ORDER], bw, label="Calibration",
+            color=_CAL_COLOR)
+    axk.bar(x + bw / 2, [skill[m][1] for m in COL_ORDER], bw, label="Validation",
+            color=_VAL_COLOR)
+    axk.set_ylim(0.0, 1.0)
+    axk.set_ylabel("Mean KGE")
+    axk.set_xticks(x)
+    axk.set_xticklabels([RUN[m] for m in COL_ORDER])
+    axk.set_title("Skill")
+    axk.legend(loc="upper left", bbox_to_anchor=(1.0, 1.0))
 
-    # (2) warming-response curve (Δp=0)
-    axt.axhline(0, color="0.6", lw=0.7)
-    for m in MODELS:
-        axt.plot(DT, temp_curve[m], label=LEG[m], **STY[m])
-    axt.set_xlabel("ΔT (°C)   (Δprecip = 0)")
-    axt.set_ylabel("annual runoff %Δ vs present  (pooled)")
-    axt.set_title("Warming response")
-    axt.legend(fontsize=7.5); axt.grid(alpha=0.3, lw=0.4)
+    axt.axhline(0, color="0.6", lw=0.8)
+    for m in COL_ORDER:
+        axt.plot(DT, _warming_curve(tbl, m), label=RUN[m], **_STY[m])
+    axt.set_xlabel("Temperature change (°C)")
+    axt.set_ylabel("Annual runoff change (%)")
+    axt.set_title("Warming")
+    fig.legend(*axt.get_legend_handles_labels(), loc="outside lower center", ncol=len(COL_ORDER))
 
-    # (3) precip-response curve (held at ΔT = +2 °C, isolated vs the +2 °C state)
-    axp.axhline(0, color="0.6", lw=0.7); axp.axvline(0, color="0.85", lw=0.7)
-    for m in MODELS:
-        axp.plot(DP * 100.0, precip_curve[m], label=LEG[m], **STY[m])
-    axp.set_xlabel("Δprecip (%)   (ΔT = +2 °C)")
-    axp.set_ylabel("annual runoff %Δ vs +2 °C state  (pooled)")
-    axp.set_title("Precip response  (held at +2 °C)")
-    axp.legend(fontsize=7.5, loc="upper left"); axp.grid(alpha=0.3, lw=0.4)
+    axp.axhline(0, color="0.6", lw=0.8)
+    for m in COL_ORDER:
+        axp.plot(DP * 100.0, precip_curve[m], **_STY[m])
+    axp.set_xlabel("Precipitation change (%)")
+    axp.set_ylabel("Annual runoff change (%)")
+    axp.set_title("Precipitation at +2 °C")
 
-    fig.suptitle("5_px / Hybrid / Hybrid DT / LSTM — skill vs climate-response "
-                 "fidelity  (physics sim channel + Δp·ΔT response loss)",
-                 fontsize=11, fontweight="bold")
     out = _out(out_dir) / "hybrid_summary.png"
     out.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out, dpi=300)
@@ -370,12 +364,8 @@ def make_regime_surfaces(tbl: pd.DataFrame, data_dir: str = "data",
     figdir = _out(out_dir) / "hybrid_regimes"
     for reg, basins in REGIMES.items():
         agg = aggregate_regime(tbl, basins, areas)
-        title = (f"{REGIME_TITLE[reg]} regime  ({len(basins)} basins: "
-                 f"{' '.join(basins)})  — 5_px / Hybrid / Hybrid DT / LSTM "
-                 "response surfaces\n"
-                 "area-weighted % change vs present climate    "
-                 "○ present climate    ×  Δp·ΔT response-loss anchors (every panel)")
-        _plot_basin(reg, agg, figdir / f"{reg}.png", title=title)
+        _plot_surfaces(agg, figdir / f"{reg}.png",
+                       f"{REGIME_TITLE[reg]}: {', '.join(basins)}")
     print(f"wrote {len(REGIMES)} regime figures -> {figdir}", flush=True)
 
 
@@ -385,41 +375,38 @@ def make_hybrid_progression(tbl: pd.DataFrame, data_dir: str = "data",
     Hybrid DT: (a) per-basin validation skill, (b) the pooled warming-response
     curve."""
     MODELS = [PHYSICS, BASE, DTDP]
-    STY = {PHYSICS: dict(color="k", marker="o", mfc="none", mec="k", mew=1.4),
-           BASE: dict(color="#2ca02c", marker="s", mfc="#2ca02c", mec="#2ca02c"),
-           DTDP: dict(color="#1f77b4", marker="^", mfc="#1f77b4", mec="#1f77b4")}
 
     order = _basin_order(data_dir, sorted(tbl["basin"].unique()))
     val = {lab: pd.read_csv(paths.dpl_metrics(run=RUN[lab])).set_index("basin")["val_kge"]
-           for lab in (PHYSICS, BASE, DTDP)}
-    temp_curve = {m: [float(_pooled(tbl, m, "pct_annual", 0.0, float(dt)).mean())
-                      for dt in DT] for m in MODELS}
+           for lab in MODELS}
+    temp_curve = {m: _warming_curve(tbl, m) for m in MODELS}
 
-    fig, (axa, axb) = plt.subplots(1, 2, figsize=(11.0, 6.2),
-                                   constrained_layout=True)
+    fig, (axa, axb) = plt.subplots(1, 2, figsize=(6.5, 4.8), layout="constrained")
     y = np.arange(len(order))
     for m in MODELS:
-        v = val[m].reindex(order)
-        axa.plot(v.to_numpy(), y, ls="none", ms=6.5, label=m, **STY[m])
+        v = val[m].reindex(order).to_numpy(float)
+        sty = {**_STY[m], "ms": 5.0}
+        axa.plot(np.clip(v, 0.0, None), y, ls="none", label=RUN[m], **sty)
+        neg = np.isfinite(v) & (v < 0)
+        if neg.any():
+            axa.plot(np.zeros(neg.sum()), y[neg], "<", ms=5, color=sty["color"], ls="none",
+                     clip_on=False)
     axa.invert_yaxis()
-    axa.set_yticks(y); axa.set_yticklabels(order, fontsize=9)
+    axa.set_yticks(y)
+    axa.set_yticklabels(order)
     axa.set_xlim(0, 1)
-    axa.set_xlabel("validation KGE (WY2004-2018)")
-    axa.set_title("a)  skill", fontsize=11, fontweight="bold")
-    axa.legend(loc="lower left", fontsize=8.5, frameon=False)
-    axa.grid(axis="x", alpha=0.3, lw=0.5)
+    axa.set_xlabel("Validation KGE (WY2004–2018)")
+    axa.set_title("Skill")
+    axa.legend(loc="center left")
 
-    axb.axhline(0, color="0.6", lw=0.7)
+    axb.axhline(0, color="0.6", lw=0.8)
     for m in MODELS:
-        axb.plot(DT, temp_curve[m], lw=2.2, ms=6, label=m, **STY[m])
-    axb.set_xlabel("ΔT (°C)   (Δprecip = 0)")
-    axb.set_ylabel("annual runoff %Δ vs present  (pooled, 15 basins)")
-    axb.set_title("b)  warming response", fontsize=11, fontweight="bold")
-    axb.legend(loc="lower left", fontsize=8.5, frameon=False)
-    axb.grid(alpha=0.3, lw=0.5)
+        axb.plot(DT, temp_curve[m], label=RUN[m], **_STY[m])
+    axb.set_xlabel("Temperature change (°C)")
+    axb.set_ylabel("Annual runoff change (%)")
+    axb.set_title("Warming")
+    axb.legend(loc="lower left")
 
-    fig.suptitle("5_px → Hybrid → Hybrid DT: skill vs a trustworthy warming "
-                "response", fontsize=12.5, fontweight="bold")
     out = _out(out_dir) / "hybrid_progression.png"
     out.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out, dpi=300)
@@ -428,7 +415,7 @@ def make_hybrid_progression(tbl: pd.DataFrame, data_dir: str = "data",
     rows = []
     for m in MODELS:
         row = {"model": m, "val_kge_mean": round(float(val[m].reindex(order).mean()), 4)}
-        for dt, v in zip(DT.tolist(), temp_curve[m]):
+        for dt, v in zip(DT.tolist(), temp_curve[m], strict=True):
             row[f"pct_annual_dt{dt:g}"] = round(v, 4)
         rows.append(row)
     csv = _out(out_dir) / "hybrid_progression.csv"
@@ -460,7 +447,7 @@ def make_hybrids(data_dir: str = "data",
     order = _basin_order(data_dir, sorted(tbl["basin"].unique()))
     figdir = out_dir / "basins"
     for b in order:
-        _plot_basin(b, tbl[tbl.basin == b], figdir / f"{b}.png")
+        _plot_surfaces(tbl[tbl.basin == b], figdir / f"{b}.png", b)
     print(f"wrote {len(order)} figures -> {figdir}", flush=True)
     make_regime_surfaces(tbl, data_dir, out_dir)
     make_summary(tbl, out_dir)

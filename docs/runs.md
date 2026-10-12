@@ -90,11 +90,11 @@ dPL-CalSim together, the LSTM runs in a second read once their recipe was set.
 |---|---|---|---|
 | GA parameters | 0.808 | 0.768 | 0.769 |
 | `1_hru` | 0.863 | 0.838 | 0.855 |
-| `2_grid` | 0.855 | 0.826 | 0.836 |
+| `2_grid` | 0.854 | 0.826 | 0.836 |
 | `3_pt` | 0.847 | 0.843 | 0.852 |
 | `4_noah` | 0.858 | 0.844 | 0.850 |
 | `5_px` | 0.868 | 0.841 | 0.859 |
-| `6_aef` | 0.863 | 0.837 | 0.866 |
+| `6_aef` | 0.862 | 0.837 | 0.866 |
 | `7_calsim` | training | training | 0.899 |
 | `hybrid` | 0.961 | 0.878 | 0.860 |
 | `hybrid_dt` | 0.942 | 0.873 | 0.880 |
@@ -111,6 +111,29 @@ unimpaired-flow subbasins and CalSim3 arcs monthly):
 | `5_px` | 0.352 | 0.710 | 0.591 |
 | `6_aef` | 0.532 | 0.864 | 0.658 |
 | `7_calsim` | 0.638 | 0.874 | 0.706 |
+
+The response to a changed climate is the change in runoff against the run's own present climate,
+in percent, averaged over the 15 CDEC watersheds on WY1951–75, WY1986–88 and WY2004–18; the
+precipitation columns are annual runoff (`sacsma dpl study ladder`,
+`artifacts/results/dpl/studies/ladder/ladder.csv`).
+
+| Run | +3 °C, annual | +3 °C, April–July | Precipitation −10 % | Precipitation +10 % |
+|---|---|---|---|---|
+| GA parameters | −10.6 | −33.3 | −17.3 | +18.0 |
+| `1_hru` | −12.0 | −33.7 | −18.3 | +19.1 |
+| `2_grid` | −13.3 | −34.0 | −18.7 | +19.4 |
+| `3_pt` | −3.4 | −29.8 | −17.8 | +18.7 |
+| `4_noah` | −2.9 | −29.3 | −17.9 | +18.8 |
+| `5_px` | −2.4 | −32.7 | −17.7 | +18.5 |
+| `6_aef` | −2.9 | −33.1 | −17.9 | +18.7 |
+| `7_calsim` | −1.2 | −30.4 | −17.6 | +18.3 |
+| `hybrid` | 0.0 | −22.8 | −14.4 | +14.2 |
+| `hybrid_dt` | −1.5 | −29.4 | −16.2 | +16.8 |
+| `lstm` | +10.5 | −5.1 | −6.6 | +6.3 |
+
+The annual response at +3 °C is −11 to −13 % with Hamon PET (GA, `1_hru`, `2_grid`) and
+−1 to −3 % with Priestley–Taylor PET (`3_pt` onward), while April–July falls 29 to 34 % in every
+rung.
 
 What the ladder shows (a step counts when the mean moves by 0.01 or more):
 
