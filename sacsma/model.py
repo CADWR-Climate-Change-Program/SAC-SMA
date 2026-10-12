@@ -15,6 +15,7 @@ import numpy as np
 import pandas as pd
 
 from . import parameters as P
+from . import paths
 from .engine import Field, Physics, simulate
 from .io import (
     DEFAULT_DOMAIN,
@@ -68,6 +69,23 @@ def load_domain_forcing(
     finally:
         ds.close()
     return DomainForcing(pos=pos, prcp=prcp, tavg=tavg, dates=dates, doy=doy, is_leap=is_leap)
+
+
+def load_matlab_forcing(data_dir: str | Path, *, domain: str = DEFAULT_DOMAIN) -> DomainForcing:
+    """The forcing the archived MATLAB simulation of ``domain`` ran on
+    (:func:`sacsma.paths.matlab_forcing`), for the parity check: the shared store puts
+    ``tavg`` on a 0.005 grid, where a day at exactly 0.00 degC sits on the Snow-17 rain/snow
+    threshold of the CalLite optima (``PXTEMP`` = 0)."""
+    if domain not in paths.CALLITE:
+        return load_domain_forcing(data_dir, domain=domain)
+    import xarray as xr
+
+    with xr.open_dataset(paths.matlab_forcing(data_dir, domain)) as ds:
+        dates = pd.DatetimeIndex(ds["time"].values)
+        doy, is_leap = doy_and_leap(dates)
+        return DomainForcing(pos={str(k): i for i, k in enumerate(ds["key"].values)},
+                             prcp=ds["prcp"].values, tavg=ds["tavg"].values, dates=dates,
+                             doy=doy, is_leap=is_leap)
 
 
 def simulate_ga(hrus: pd.DataFrame, params: pd.DataFrame, weights: np.ndarray,

@@ -37,7 +37,7 @@ sacsma verify --quick    # the checks that need no model run
 | `links` | every relative link in the tracked markdown resolves |
 | `artifacts` | the output tree keeps its layout: tracked files only in `product/`, `models/` and `results/`, each with its README; no untracked file in them; a model and a results folder for every run |
 | `bcm` | the port of the BCM routing workbook reproduces the cached flow of its 11 calibration sheets within 1e-9 relative, and their r2, NSE and percent bias |
-| `parity` | one watershed per domain matches the MATLAB simulation: KGE above 0.9999 and a largest daily difference below 0.1 mm/day |
+| `parity` | every watershed of the four calibrated domains matches the MATLAB simulation on the forcing it ran on: KGE above 0.9999 and a largest daily difference below 0.1 mm/day |
 | `learned` | the learned step of the CPU engine (`sacsma/sma_learned.py`) matches the torch step it copies, for one tracked run of each physics, within 1e-9 mm/day |
 | `product` | `sacsma dpl calsim product apply` reproduces every tracked series of the rim-inflow product from the tier-2 pass kept beside it, to 1 part in 100,000 |
 

@@ -72,14 +72,20 @@ values is corrected when the default store is built. Where each store comes from
 **The reference model** (`sacsma/pet.py`, `snow17.py`, `sma.py`, `routing.py`, driven by
 `sacsma/model.py`) is NumPy and Numba. It reproduces the archived MATLAB simulations, and that
 is the regression baseline for every change: `sacsma verify parity` requires KGE above 0.9999
-and a largest daily difference below 0.1 mm/day on one watershed per domain.
+and a largest daily difference below 0.1 mm/day at every watershed, on the forcing the MATLAB
+simulation ran on. The largest per domain:
 
 | Domain | Watershed | KGE | Largest daily difference |
 |---|---|---|---|
-| `15cdec` | BND | 0.999997 | 0.0009 mm/day |
-| `9unimp` | CacheCreek | 0.999989 | 0.039 mm/day |
-| `11obs` | SHA | 0.999952 | 0.028 mm/day |
-| `12rim` | SHAST | 0.999908 | 0.063 mm/day |
+| `15cdec` | NHG | 0.999908 | 0.019 mm/day |
+| `9unimp` | BearRiver | 1.000000 | 0.000 mm/day |
+| `11obs` | TNL | 0.999970 | 0.074 mm/day |
+| `12rim` | FOL_I | 1.000000 | 0.001 mm/day |
+
+On the shared forcing store the CalLite watersheds differ from MATLAB by up to 0.61 mm/day on a
+day (MokelumneRiver), 1.6 mm in a month and 0.007 % in long-term volume: the store's
+temperatures sit on a 0.005 grid, and the CalLite optima put the rain/snow threshold at exactly
+0 °C ([MATLAB reference](../data/reference/matlab/README.md)).
 
 These files are frozen. Several quirks of the original code are kept on purpose because the
 archived parameters were calibrated with them: the variable number of percolation sub-steps, the

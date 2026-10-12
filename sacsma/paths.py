@@ -233,6 +233,15 @@ def simflow(data_dir="data", domain: str = CDEC15) -> Path:
     return _root(data_dir) / R_MATLAB / f"simflow_{_check(domain)}.csv"
 
 
+def matlab_forcing(data_dir="data", domain: str = CDEC15) -> Path:
+    """The forcing the archived MATLAB simulation ran on (the parity input): for a CalLite set
+    the store it was first given (``prcp`` and ``tavg`` on a 0.01 grid); ``15cdec`` keeps its
+    own store."""
+    if _check(domain) not in CALLITE:
+        return forcing(data_dir, domain)
+    return _root(data_dir) / R_MATLAB / f"forcing_{domain}.nc"
+
+
 def vic_routed(data_dir="data", product: str | None = None) -> Path:
     sfx = f"_{product}" if product else ""
     return _root(data_dir) / R_VIC / f"vic_routed_monthly{sfx}.csv"
