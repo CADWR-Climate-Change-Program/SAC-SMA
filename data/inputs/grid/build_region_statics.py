@@ -1,31 +1,21 @@
-"""Consolidate the per-domain static sidecars into the REGION statics store.
+"""Write the REGION statics store from the cell-footprint sample of every region cell.
 
 Writes ``data/inputs/grid/soilveg_continuous.csv`` + ``data/inputs/grid/lai_climatology.csv``
 covering every cell of ``data/inputs/grid/grid_cells.csv`` (4410 cells, the full
-CalSim3-gpkg intersection with the 1/16-deg grid), by consolidating four
-COMMITTED per-domain sidecars plus a full-coverage raster layer:
+CalSim3-gpkg intersection with the 1/16-deg grid) from
+``data/inputs/grid/{soilveg_continuous,lai_climatology}_raster.csv``, the output of
+``data/inputs/grid/sample_gis.py region`` (the ``sacsma-gis`` env): each cell the mean of its
+13 x 13 sub-points, with the terrain from the sub-point elevations (``sample_gis.run_footprint``).
 
-* ``data/inputs/domains/15cdec_grid/{soilveg_continuous,lai_climatology}.csv`` — per-cell rows
-  in the **cell-footprint-mean** convention (e.g. ``dem_elev`` = mean 3DEP
-  elevation over the 1/16-deg cell).  This is the convention the dPL parameter
-  net was trained on; it wins wherever available.
-* ``data/inputs/domains/<d>/{soilveg_continuous,lai_climatology}.csv`` of the three
-  CalLite domains — per-cell rows
-  (repeated per HRU; identical within a key) in the **cell-center point-sample**
-  convention (``dem_elev`` = 3DEP at the cell center; verified 2026-07-16).
-  Fills the calsim-only cells.
-* ``data/inputs/grid/{soilveg_continuous,lai_climatology}_raster.csv`` — produced by
-  ``data/inputs/grid/sample_gis.py region`` (the ``sacsma-gis`` env): EVERY region
-  cell, point-sampled at its center from the raw POLARIS/LANDFIRE/3DEP/MODIS-LAI
-  stack, same convention as the calsim sidecars (verified to reproduce them
-  exactly, see ``data/inputs/grid/README.md``).  Fills whatever the four sidecars above
-  still miss, so the region store now covers the full 4410-cell grid with no
-  documented gap.
-
-The two point-sample-vs-footprint-mean conventions differ (median |Δdem_elev|
-≈ 93 m over shared cells); the ``src`` column records which store each row
-came from so the seam is explicit. Keys are normalized to the 5-decimal
-``sacsma.io`` convention.
+Gate: the ``15cdec_grid`` sidecars (``data/inputs/domains/15cdec_grid/``, the inputs the dPL
+parameter network of the ladder's physical rungs was trained on) must be reproduced at every
+one of their cells, to 1e-9 relative.  The one exception is the leaf area at cells with a
+sub-point MODIS never fills (open water; ``lai_gapfill`` > 0 in the sample): such a sub-point
+takes the climatology of the nearest valid sub-point, and the region sample has more
+sub-points to draw from than the ``15cdec_grid`` one had, so the leaf area there must agree
+within 0.02 (the peak day within one 8-day bin).  A cell the sample leaves without a value
+stops the build if a modeling domain uses it and is left out otherwise.  Keys are normalized
+to the 5-decimal ``sacsma.io`` convention.
 
 Usage:
     python data/inputs/grid/build_region_statics.py [--grid <csv>] [--out-dir <dir>]
@@ -37,15 +27,19 @@ import argparse
 import sys
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(next(p for p in Path(__file__).resolve().parents
                             if (p / "_paths.py").is_file())))
 from _paths import layout  # noqa: E402
 
-#: fill order for cells absent from cdec15_grid (values are identical across
-#: the calsim domains except a handful of lai_* columns — reported at run time)
-CALSIM_ORDER = ("11obs", "12rim", "9unimp")
+#: the domain whose committed sidecars the footprint sample must reproduce
+GATE_DOMAIN = "15cdec_grid"
+#: relative tolerance of the gate
+GATE_RTOL = 1e-9
+#: the gate's leaf-area tolerance at cells with an all-fill MODIS sub-point (LAI; peak day, d)
+LAI_ATOL, PEAK_ATOL = 0.02, 8
 
 
 def norm_key(k: str) -> str:
@@ -62,87 +56,55 @@ def _load(path: Path) -> pd.DataFrame:
     return df.drop_duplicates("key").set_index("key")
 
 
-def consolidate(root: Path, grid: pd.DataFrame, stem: str, out: Path) -> None:
-    prim = _load(layout.domain_dir(root / "data", "15cdec_grid") / f"{stem}.csv")
-    cols = list(prim.columns)
-    cal = {}
-    for d in CALSIM_ORDER:
-        df = _load(layout.domain_dir(root / "data", d) / f"{stem}.csv")
-        missing = set(cols) - set(df.columns)
-        if missing:
-            raise SystemExit(f"{stem}_{d}: missing columns {sorted(missing)}")
-        extra = sorted(set(df.columns) - set(cols))
-        if extra:   # e.g. the calsim-only lai_gapfill flag — schema follows cdec15_grid
-            print(f"  {stem}_{d}: dropping calsim-only columns {extra}")
-        cal[d] = df[cols]
+def write_table(root: Path, grid: pd.DataFrame, stem: str, out: Path,
+                lai_fill: pd.Series) -> None:
+    """One of the two tables (``stem``) from the footprint sample, after the gate."""
+    raster = _load(layout.raster_sample(root / "data", stem))
+    gate = _load(layout.domain_dir(root / "data", GATE_DOMAIN) / f"{stem}.csv")
+    missing = set(gate.columns) - set(raster.columns)
+    if missing:
+        raise SystemExit(f"{stem}_raster: missing columns {sorted(missing)}")
+    raster = raster[list(gate.columns)]
 
-    raster_path = layout.raster_sample(root / "data", stem)
-    raster = None
-    if raster_path.exists():
-        rdf = _load(raster_path)
-        missing = set(cols) - set(rdf.columns)
-        if missing:
-            raise SystemExit(f"{stem}_raster: missing columns {sorted(missing)}")
-        extra = sorted(set(rdf.columns) - set(cols))
-        if extra:   # e.g. lai_gapfill — schema follows cdec15_grid
-            print(f"  {stem}_raster: dropping raster-only columns {extra}")
-        raster = rdf[cols]
+    shared = gate.index.intersection(raster.index)
+    if len(shared) != len(gate):
+        raise SystemExit(f"{stem}: {len(gate) - len(shared)} {GATE_DOMAIN} cells not sampled")
+    a = raster.loc[shared].to_numpy(np.float64)
+    b = gate.loc[shared].to_numpy(np.float64)
+    bad = ~np.isclose(a, b, rtol=GATE_RTOL, atol=0.0, equal_nan=True)
+    lai = np.array([stem == "lai_climatology" or c.startswith("lai_") for c in gate.columns])
+    filled = lai_fill.reindex(shared).fillna(0).to_numpy() > 0
+    loose = filled[:, None] & lai[None, :]
+    peak = np.array([c == "lai_peak_doy" for c in gate.columns])[None, :]
+    near = np.abs(a - b) <= np.where(peak, PEAK_ATOL, LAI_ATOL)
+    if (bad & ~(loose & near)).any():
+        bad &= ~(loose & near)
+        cols = gate.columns[bad.any(axis=0)].tolist()
+        raise SystemExit(f"{stem}: the footprint sample differs from the {GATE_DOMAIN} sidecar "
+                         f"at {int(bad.any(axis=1).sum())} cells (columns {cols})")
+    n_lai = int((bad & loose).any(axis=1).sum())
+    if n_lai:
+        d = np.abs(a - b)[:, lai & ~peak[0]][(bad & loose).any(axis=1)]
+        print(f"  {stem}: reproduces the {GATE_DOMAIN} sidecar at {len(shared) - n_lai} of "
+              f"{len(shared)} cells; at the other {n_lai}, cells with an all-fill MODIS "
+              f"sub-point, the leaf area is within {d.max():.4f}")
+    else:
+        print(f"  {stem}: reproduces the {GATE_DOMAIN} sidecar at all {len(shared)} cells")
 
-    # cross-domain consistency (same point-sample convention -> expect identical)
-    disagree = 0
-    for i, a in enumerate(CALSIM_ORDER):
-        for b in CALSIM_ORDER[i + 1:]:
-            shared = cal[a].index.intersection(cal[b].index)
-            if len(shared):
-                d = (cal[a].loc[shared].select_dtypes("number")
-                     - cal[b].loc[shared].select_dtypes("number")).abs()
-                disagree += int((d.max(axis=1) > 1e-6).sum())
-
-    if raster is not None:
-        # reproduction gate (data/inputs/grid/README.md): the raster layer shares the
-        # calsim point-sample convention, so it should reproduce those rows
-        # exactly wherever both cover a cell
-        cal_all = pd.concat([cal[d] for d in CALSIM_ORDER]).groupby(level=0).first()
-        shared = raster.index.intersection(cal_all.index)
-        if len(shared):
-            d = (raster.loc[shared].select_dtypes("number")
-                 - cal_all.loc[shared].select_dtypes("number")).abs()
-            n_mismatch = int((d.max(axis=1) > 1e-6).sum())
-            print(f"  {stem}_raster: reproduces {len(shared)} calsim point-sample "
-                  f"cells, {n_mismatch} mismatches >1e-6")
-
-    prim = prim.assign(src="cdec15_grid")
-    parts = [prim]
-    covered = set(prim.index)
-    for d in CALSIM_ORDER:
-        keep = cal[d].index.difference(covered)
-        parts.append(cal[d].loc[keep].assign(src=f"calsim_{d}"))
-        covered |= set(keep)
-    if raster is not None:
-        keep = raster.index.difference(covered)
-        parts.append(raster.loc[keep].assign(src="region_raster"))
-        covered |= set(keep)
-    df = pd.concat(parts).reindex(grid["key"])
-    uncovered = df.index[df["src"].isna()]
+    df = raster.reindex(grid["key"])
+    uncovered = df.index[df.isna().all(axis=1)]
     if len(uncovered):
-        # cells no source could cover at all (e.g. a raster point that lands on
-        # water/nodata even after the sampler's own gap-fill) — left out rather
-        # than fabricated. Domain cells must be there.
-        dom_cols = [c for c in grid.columns if c.startswith("in_")
-                    and c != "in_calsim3_fp"]
+        dom_cols = [c for c in grid.columns if c.startswith("in_") and c != "in_calsim3_fp"]
         gd = grid.set_index("key")
         dom_miss = [k for k in uncovered if gd.loc[k, dom_cols].sum() > 0]
         if dom_miss:
             raise SystemExit(f"{stem}: {len(dom_miss)} DOMAIN cells uncovered "
                              f"(first: {dom_miss[:3]})")
-        print(f"  {stem}: {len(uncovered)} cells have no statics source at all "
-              "— left out (see data/inputs/grid/README.md)")
-        df = df.dropna(subset=["src"])
+        print(f"  {stem}: {len(uncovered)} cells have no value at all — left out")
+        df = df.drop(index=uncovered)
     df.index.name = "key"
     df.to_csv(out)
-    n_src = df["src"].value_counts().to_dict()
-    print(f"wrote {out}: {len(df)} cells {n_src}"
-          + (f"; {disagree} cross-calsim cell disagreements >1e-6" if disagree else ""))
+    print(f"wrote {out}: {len(df)} cells")
 
 
 def main() -> None:
@@ -152,10 +114,12 @@ def main() -> None:
     args = ap.parse_args()
     root = Path(".")
     grid = pd.read_csv(args.grid)
+    grid["key"] = grid["key"].map(norm_key)
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    consolidate(root, grid, "soilveg_continuous", out_dir / "soilveg_continuous.csv")
-    consolidate(root, grid, "lai_climatology", out_dir / "lai_climatology.csv")
+    lai_fill = _load(layout.raster_sample(root / "data", "soilveg_continuous"))["lai_gapfill"]
+    for stem in ("soilveg_continuous", "lai_climatology"):
+        write_table(root, grid, stem, out_dir / f"{stem}.csv", lai_fill)
 
 
 if __name__ == "__main__":
