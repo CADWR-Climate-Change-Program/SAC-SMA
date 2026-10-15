@@ -87,6 +87,16 @@ def potential_et_priestley_taylor(
     return pet.clamp_min(0.0)
 
 
+def _capped_pow(b: torch.Tensor, chi: torch.Tensor, cap: torch.Tensor) -> torch.Tensor:
+    """``b ** chi`` with its slope in ``b`` capped at ``cap`` in the backward only: the forward
+    adds a finite number times an exact zero, so every value is unchanged."""
+    p = b ** chi
+    with torch.no_grad():
+        d = chi * b ** (chi - 1.0)
+        corr = torch.minimum(d, cap) - d
+    return p + corr * (b - b.detach())
+
+
 def noah_lite_et(
     uztwc: torch.Tensor, uzfwc: torch.Tensor, lztwc: torch.Tensor,   # (N,) mm
     ep: torch.Tensor,              # (N,) mm/day potential ET (Hamon or PT base)
@@ -113,9 +123,21 @@ def noah_lite_et(
     avail_lo = ((slo - wilt) / (1.0 - wilt)).clamp(0.0, 1.0)
     sm_root = froot * avail_up + (1.0 - froot) * avail_lo
 
-    # one shared exponent; the bases are floored so the backward stays finite at avail -> 0
-    ed = ((1.0 - sig) * ep * avail_up.clamp_min(_EPS) ** chi).clamp_min(0.0)
-    et = (sig * ep * sm_root.clamp_min(_EPS) ** chi).clamp_min(0.0)
+    # one shared exponent; the bases are floored so the backward stays finite at avail -> 0.
+    # The slope chi * avail**(chi-1) is unbounded at the wilting point for chi < 1, and a store
+    # held there by a small daily input multiplies the backward each day by
+    # 1 - E * slope / (cap * (1 - wilt)) (-30 and beyond).  The slopes are capped in the backward
+    # only, at the values that keep the day's Jacobian over the two tension stores within
+    # [-1, 1] (bare soil in uztwc; the canopy term, rank one over uztwc and lztwc).  Where the
+    # daily step does not overshoot, the caps do not bind.
+    with torch.no_grad():
+        e_bare = ((1.0 - sig) * ep).clamp_min(1e-30)
+        e_can = (sig * ep).clamp_min(1e-30)
+        cap_up = uztwm * (1.0 - wilt) / e_bare
+        cap_root = 1.0 / (e_can * (froot ** 2 / (uztwm * (1.0 - wilt))
+                                   + (1.0 - froot) ** 2 / (lztwm * (1.0 - wilt))))
+    ed = ((1.0 - sig) * ep * _capped_pow(avail_up.clamp_min(_EPS), chi, cap_up)).clamp_min(0.0)
+    et = (sig * ep * _capped_pow(sm_root.clamp_min(_EPS), chi, cap_root)).clamp_min(0.0)
 
     # bare soil + upper transpiration from the upper zone (tension, then free); lower
     # transpiration from the lower tension
