@@ -246,14 +246,26 @@ def content_key(*files) -> str:
     return h.hexdigest()[:10]
 
 
+def statics_files(data_dir: str | Path = "data") -> tuple[Path, ...]:
+    """The static tables a learned run reads: the HRU sidecars of the ``15cdec`` domain and the
+    region store of the ``multifamily`` domain. They enter every cache key, so a rebuilt table
+    starts a new cache."""
+    from ..io import lai_climatology_path, soilveg_path
+
+    return tuple(f(data_dir, d) for d in (paths.CDEC15, paths.MULTIFAMILY)
+                 for f in (soilveg_path, lai_climatology_path))
+
+
 def ensemble_key(ens_dir: str | Path) -> str:
     """:func:`content_key` of an LSTM ensemble: its members' checkpoints and, for a physics input,
-    the checkpoint of the physics run and the engine's code (:data:`ENGINE_CODE`)."""
+    the checkpoint of the physics run, the engine's code (:data:`ENGINE_CODE`) and the static
+    tables (:func:`statics_files`)."""
     members = sorted(Path(ens_dir).glob("seed*/checkpoints/best.pt"))
     if not members:
         raise FileNotFoundError(f"no seed*/checkpoints/best.pt under {ens_dir}")
     physics = torch.load(members[0], map_location="cpu", weights_only=False)["cfg"].get("physics")
-    run = [paths.dpl_checkpoint(run=physics), *ENGINE_CODE] if physics else []
+    run = ([paths.dpl_checkpoint(run=physics), *ENGINE_CODE, *statics_files()] if physics
+           else [])
     return content_key(*members, *run)
 
 
@@ -272,8 +284,8 @@ def basin_daily(run: str | Path, *, data_dir: str = "data", dp: float = 0.0,
     temperatures: a number, or a field on the domain's forcing rows and days).
 
     Cached under ``artifacts/_local/cache/basin_daily/`` by run, by the content of the
-    checkpoint and of the engine's code, and by climate; clear it after a change to the
-    forcing."""
+    checkpoint, of the engine's code and of the static tables (:func:`statics_files`), and by
+    climate; clear it after a change to the forcing."""
     import hashlib
 
     ckpt = paths.dpl_checkpoint(run=str(run)).resolve()
@@ -284,7 +296,7 @@ def basin_daily(run: str | Path, *, data_dir: str = "data", dp: float = 0.0,
     else:
         dt = np.ascontiguousarray(dt, np.float64)
         tag = f"dt{hashlib.sha1(dt.tobytes()).hexdigest()[:10]}"
-    key = content_key(ckpt, *ENGINE_CODE)
+    key = content_key(ckpt, *ENGINE_CODE, *statics_files(data_dir))
     cache = (paths.local(name="cache/basin_daily") / f"{ckpt.parents[1].name}_{key}"
              / f"dp{dp:+g}_{tag}.npz")
     if cache.exists():

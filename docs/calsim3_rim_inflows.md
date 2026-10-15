@@ -29,8 +29,10 @@ dPL-CalSim is the run `7_calsim` (`artifacts/models/dpl/multifamily/7_calsim/`,
 It keeps the physics and inputs of the rung below it, `6_aef`: Priestley–Taylor PET, the
 soil-moisture-limited ET with the SAC-SMA exchange terms kept, a learned rain/snow threshold, and
 the AlphaEarth inputs (`aef_u`). It trains on all 159 entities of the four families, on every
-water year but WY1976–85, which is held out of every family. The recipe and the scores of every
-rung are in [Runs](runs.md#the-ladder).
+water year but WY1976–85, which is held out of every family, with wider ranges for four
+parameters the GA box pins (`MBASE`, `NMF`, `Velo`, `zperc`;
+[Model equations](equations.md#6-parameter-table)). The recipe and the scores of every rung are
+in [Runs](runs.md#the-ladder).
 
 ## How a run is checked against CalSim3
 
@@ -58,9 +60,9 @@ tables (`metrics_holdout.csv`, `tier1/tier1_metrics.csv`, `tier2/tier2_metrics.c
 | | Median monthly KGE, WY1976–85 |
 |---|---|
 | Tier 1, 20 locations | 0.91 |
-| The 64 trained arcs | 0.72 |
+| The 64 trained arcs | 0.71 |
 | The 9 unimpaired-flow subbasins | 0.89 |
-| All 196 arcs (tier 2) | 0.69 |
+| All 196 arcs (tier 2) | 0.68 |
 
 The means, with the 49 USGS gauges (daily), are in [Runs](runs.md#current-model-and-product).
 
@@ -93,14 +95,14 @@ Skill on the held-out decade, median monthly KGE against CalSim3
 
 | Arcs | dPL-CalSim | Product |
 |---|---|---|
-| 139 share arcs | 0.71 | **0.85** |
+| 139 share arcs | 0.70 | **0.85** |
 | 50 non-anchor arcs | 0.56 | 0.56 |
 | 7 single-arc systems | 0.90 | 0.90 |
-| All 196 | 0.69 | **0.82** |
+| All 196 | 0.68 | **0.81** |
 
-Over all 196 arcs the product's mean is 0.73 and its 10th percentile 0.45; 5 arcs are below
+Over all 196 arcs the product's mean is 0.73 and its 10th percentile 0.43; 5 arcs are below
 zero (12 for the model alone). At the five validation climate points the share arcs' response
-differs from the model's by at most 0.33 % in volume and 0.73 points in the April–July share at
+differs from the model's by at most 0.32 % in volume and 0.76 points in the April–July share at
 the 90th percentile (`artifacts/product/calsim3/response_gate.csv`), inside the limits set beforehand
 (median 1, 90th percentile 3).
 
@@ -115,19 +117,19 @@ historical series scores (median monthly KGE):
 | Arcs | dPL-CalSim | Product |
 |---|---|---|
 | 139 share arcs | 0.66 | **0.78** |
-| 50 non-anchor arcs | 0.43 | 0.43 |
-| 7 single-arc systems | 0.81 | 0.81 |
+| 50 non-anchor arcs | 0.40 | 0.40 |
+| 7 single-arc systems | 0.82 | 0.82 |
 | All 196 | 0.65 | **0.75** |
 
-**Under the WGEN weather.** Over WY1916–2018 the product carries 27,730 TAF a year under the
-historical weather, 27,990 under scenario 1 and 28,010 under scenario 12, and the April–July
-share of the year's flow falls from 40.6 % to 37.1 % and 28.8 %. The warmer early record of
+**Under the WGEN weather.** Over WY1916–2018 the product carries 27,780 TAF a year under the
+historical weather, 28,050 under scenario 1 and 28,120 under scenario 12, and the April–July
+share of the year's flow falls from 40.8 % to 37.3 % and 29.1 %. The warmer early record of
 scenario 1 (its temperature is detrended to 1991–2020) moves the melt earlier and leaves the
 volume within 1 %: the response the comparison of the calibrated sets finds in VIC, not in the
 Hamon-PET calibrations, which lose about 3 % ([Calibrated SAC-SMA](calibrated_sacsma.md)). On
 the share arcs the product keeps the model's own response. From scenario 1 to scenario 12 the
-model's arc volume changes by −0.5 % and its April–July share by −7.1 points at the median;
-the product differs from that by 0.06 % and 0.17 points at the median and by 0.16 % and 0.54
+model's arc volume changes by −0.1 % and its April–July share by −6.8 points at the median;
+the product differs from that by 0.05 % and 0.19 points at the median and by 0.16 % and 0.49
 points at the 90th percentile, within half the limits set for the fit's validation points.
 
 ## What was tried and not adopted
@@ -138,20 +140,18 @@ read, are listed in [Runs](runs.md#tried-and-not-adopted).
 ## Known costs
 
 - **Unimpaired-flow subbasins.** Their mean KGE is 0.92 over their training years (back to
-  WY1950) and 0.87 on the held-out WY1976–85, lowest at Chowchilla (0.78) and Putah Creek
-  (0.79). On their DWR record without the held-out WY1985 (WY1986–2014, `kge_reg` in
+  WY1950) and 0.87 on the held-out WY1976–85, lowest at Chowchilla (0.79) and Putah Creek
+  (0.80). On their DWR record without the held-out WY1985 (WY1986–2014, `kge_reg` in
   `metrics.csv`) it is 0.90.
 - **MKM and TLG in the [benchmark](benchmark.md).** On WGEN Product A scenario 1 against
   CDEC's monthly full natural flow, WY1991–2018, the median KGE over the 12 sites is 0.93; the
-  lowest are MKM (0.83, volume −10 %) and TLG (0.86, −7 %).
+  lowest are MKM (0.82, volume −11 %) and TLG (0.86, −6 %).
 - **One seed.** dPL-CalSim is a single seed; no rung of the ladder has a second.
-- **The held-out decade has been read six times**; dPL-CalSim's scores are the sixth reading.
-  A further design choice read against WY1976–85 is not a clean test.
-- **The start is remembered for decades in three southern Sierra arcs.** In McClure (Merced),
-  Hetch Hetchy (Tuolumne) and Millerton (San Joaquin) the slow lower-zone store keeps its
-  starting state for decades. A run started in WY1950 instead of WY1916 differs there by a few
-  TAF a year, mostly in dry years (13 % at McClure in WY1977). Over all arcs the median
-  difference is below 0.01 % from WY1953 on.
+- **The start is remembered for decades at Millerton and Hetch Hetchy.** In Millerton (San
+  Joaquin) and Hetch Hetchy (Tuolumne) the slow lower-zone store keeps its starting state for
+  decades. A run started in WY1950 instead of WY1916 differs by 12 TAF a year at the median at
+  Millerton (up to 6.7 %, WY1968) and 2 TAF at Hetch Hetchy (up to 5.8 %, WY1977). Over all arcs
+  the median difference is below 0.01 % from WY1953 on.
 
 ## Open
 

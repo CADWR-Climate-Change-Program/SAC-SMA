@@ -15,8 +15,8 @@ Keys are normalized to the ``sacsma.io`` 5-decimal ``<lat>_<lon>`` convention
 Membership flags ``in_<domain>`` + ``in_calsim3_fp`` record what touches each
 cell.
 
-Every region auxiliary ingest (GEE ET/SWE obs, GLEAM/FLUXCOM, statics
-consolidation, the WGEN forcing master) targets THIS cell list.  Cells must
+Every region auxiliary ingest (GEE ET/SWE obs, GLEAM/FLUXCOM, the statics
+store, the WGEN forcing master) targets THIS cell list.  Cells must
 exist in the local WGEN NonDetrend-Unsplit statewide store — the daily
 forcing master source (data/inputs/forcing/wgen_forcing.py): a missing DOMAIN cell
 aborts (key drift); missing FOOTPRINT-sweep cells are dropped with a report

@@ -16,8 +16,9 @@ optimum on the shifted forcing (:func:`sacsma.model.run_basins`), each learned r
 trained (:func:`sacsma.dpl.evaluate.basin_daily`, cached, CPU); the LSTM models' numbers are
 those of the hybrids study (``hybrids_metrics.csv``).
 
-Output (``artifacts/results/dpl/studies/ladder/``): ``ladder.csv``, ``response.csv`` and the
-figures ``skill.png``, ``response.png``, ``skill_response.png`` and ``regional.png``.
+Output (``artifacts/results/dpl/studies/ladder/``): ``ladder.csv``, ``response.csv``,
+``steps.csv`` (:func:`steps`) and the figures ``skill.png``, ``response.png``,
+``skill_response.png`` and ``regional.png``.
 """
 from __future__ import annotations
 
@@ -40,14 +41,17 @@ RUNS = RUNGS + LSTMS
 #: (dp, dt): present climate, +3 degC, precipitation -10 % and +10 %
 CLIMATES = ((0.0, 0.0), (0.0, 3.0), (-0.1, 0.0), (0.1, 0.0))
 #: the regional families of the held-out read: (set in the read record, label)
-FAMILIES = (("usgs", "49 USGS gauges"), ("uf", "9 UF subbasins"), ("arcs", "64 CalSim3 arcs"))
+FAMILIES = (("usgs", "49 USGS gauges, daily"), ("uf", "9 UF subbasins, monthly"),
+            ("arcs", "64 CalSim3 arcs, monthly"))
 #: the name of a run in the ladder's read records, where it differs
 _READ_NAME = {"GA": "0_ga"}
+#: the rung that trains on every record family, set apart in the figures
+_ALL_FAMILIES = "7_calsim"
 #: the hybrids study's label of each LSTM model
 _HYBRIDS_LABEL = {"hybrid": "Hybrid", "hybrid_dt": "Hybrid DT", "lstm": "LSTM"}
-_WINDOWS = (("kge_training", "WY1989–2003 (training)", "tab:blue"),
-            ("kge_test", "WY2004–18 (test)", "tab:orange"),
-            ("kge_heldout", "WY1976–85 (held out)", "0.45"))
+_WINDOWS = (("kge_training", "WY1989–2003 (training), daily", "tab:blue"),
+            ("kge_test", "WY2004–18 (test), daily", "tab:orange"),
+            ("kge_heldout", "WY1976–85 (held out), monthly", "0.45"))
 _W, _DPI = 6.5, 300
 
 
@@ -82,6 +86,43 @@ def skill() -> pd.DataFrame:
         for fam, _ in FAMILIES:
             row[f"kge_{fam}"] = region.get((name, fam), np.nan)
         rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def steps() -> pd.DataFrame:
+    """Each step of the ladder (a rung against the one before it) paired record by record: on
+    the test years (the 15 outlets, daily) and on the held-out records (the 13 outlets monthly,
+    and each regional family), the number of records ``n``, how many gain (``up``), and the
+    median and mean change of KGE. The mean is the step of :func:`skill`; the median and the
+    count show whether a few records carry it."""
+    prov = paths.dpl_run(run="7_calsim", domain=paths.MULTIFAMILY) / "provenance"
+    ro = pd.read_csv(prov / "readout_2004_2018_retrained.csv")
+    outlets = pd.read_csv(prov / "read_WY1976-85_outlets.csv")
+    region = pd.read_csv(prov / "read_WY1976-85_region.csv")
+
+    def scores(run: str, rec: str) -> pd.Series | None:
+        name = _READ_NAME.get(run, run)
+        if rec == "test":
+            if run == "GA":
+                s = ro[(ro["run"] == name) & (ro["window"] == "WY2004-18")]
+                return s.set_index("basin")["kge"]
+            if run == "7_calsim":
+                return None
+            return pd.read_csv(paths.dpl_metrics(run=run)).set_index("basin")["val_kge"]
+        if rec == "outlets":
+            return outlets[outlets["run"] == name].set_index("basin")["kge"]
+        s = region[(region["run"] == name) & (region["set"] == rec)]
+        return s.set_index("entity_id")["kge"] if len(s) else None
+
+    rows = []
+    for a, b in zip(RUNGS[:-1], RUNGS[1:], strict=True):
+        for rec in ("test", "outlets", *(f for f, _ in FAMILIES)):
+            x, y = scores(a, rec), scores(b, rec)
+            if x is None or y is None:
+                continue
+            d = (y - x.reindex(y.index)).dropna()
+            rows.append({"step": f"{a} -> {b}", "records": rec, "n": len(d),
+                         "up": int((d > 0).sum()), "median": d.median(), "mean": d.mean()})
     return pd.DataFrame(rows)
 
 
@@ -141,8 +182,19 @@ def response_summary(resp: pd.DataFrame) -> pd.DataFrame:
 
 # ------------------------------------------------------------------------------ figures
 def _x(runs) -> np.ndarray:
-    """Bar positions: the rungs, a half-step gap, the LSTM models."""
-    return np.array([i + 0.5 * (r in LSTMS) for i, r in enumerate(runs)], float)
+    """Bar positions: the rungs, a half-step gap, :data:`_ALL_FAMILIES`, a half-step gap, the
+    LSTM models."""
+    runs = list(runs)
+    gap = [0.5 * (r == _ALL_FAMILIES or (r in LSTMS and runs[i - 1] not in LSTMS))
+           for i, r in enumerate(runs)]
+    return np.arange(len(runs)) + np.cumsum(gap)
+
+
+def _dividers(ax, runs) -> None:
+    """A dashed line in each gap of :func:`_x`."""
+    x = _x(runs)
+    for i in np.flatnonzero(np.diff(x) > 1.01):
+        ax.axvline(0.5 * (x[i] + x[i + 1]), color="0.7", lw=0.8, ls="--", zorder=0)
 
 
 def _kge_bars(ax, x, vals, w, color, label) -> None:
@@ -173,8 +225,9 @@ def skill_fig(tbl: pd.DataFrame, path: Path) -> None:
     ax.set_ylabel("Mean KGE")
     ax.set_title("Skill by run")
     _run_ticks(ax, tbl["run"])
-    fig.legend(*ax.get_legend_handles_labels(), loc="lower center", ncol=3)
-    fig.tight_layout(rect=(0, 0.07, 1, 1))
+    _dividers(ax, tbl["run"])
+    fig.legend(*ax.get_legend_handles_labels(), loc="lower center", ncol=2)
+    fig.tight_layout(rect=(0, 0.11, 1, 1))
     _save(fig, path)
 
 
@@ -187,7 +240,7 @@ def response_fig(tbl: pd.DataFrame, path: Path) -> None:
              "+3 °C", (-40, 15), "upper left"),
             (ax2, (("annual_pct_p-10", "−10 %", "#b2182b"),
                    ("annual_pct_p+10", "+10 %", "#2166ac")),
-             "Precipitation ±10 %", (-25, 30), "upper right")):
+             "Precipitation ±10 %", (-25, 30), "upper left")):
         for off, (col, label, color) in zip((-0.5, 0.5), cols, strict=True):
             ax.bar(x + off * w, tbl[col], w, color=color, label=label)
         ax.axhline(0, color="0.4", lw=0.8)
@@ -195,6 +248,7 @@ def response_fig(tbl: pd.DataFrame, path: Path) -> None:
         ax.set_ylabel("Runoff change (%)")
         ax.set_title(title)
         ax.legend(loc=loc, ncol=2)
+        _dividers(ax, tbl["run"])
     _run_ticks(ax2, tbl["run"])
     fig.tight_layout()
     _save(fig, path)
@@ -268,7 +322,9 @@ def skill_response_fig(tbl: pd.DataFrame, path: Path) -> None:
     fig, ax = plt.subplots(figsize=(_W, 5.4))
     ms = 5
     ax.axvline(0, color="0.85", lw=0.8, zorder=0)
-    for runs, label, kw in ((RUNGS, "Rungs", dict(marker="o", color="0.2")),
+    for runs, label, kw in ((RUNGS[:-1], "Rungs", dict(marker="o", color="0.2")),
+                            ((_ALL_FAMILIES,), "7_calsim (every record family)",
+                             dict(marker="D", mfc="0.65", mec="0.2")),
                             (LSTMS, "LSTM models", dict(marker="s", mfc="white", mec="0.2"))):
         s = tbl[tbl["run"].isin(runs)]
         ax.plot(s["annual_pct_t+3"], s["kge_heldout"], ls="none", ms=ms, label=label, **kw)
@@ -289,7 +345,7 @@ def regional_fig(tbl: pd.DataFrame, path: Path) -> None:
     """Held-out mean KGE by run on the three regional record families."""
     tbl = tbl.dropna(subset=[f"kge_{f}" for f, _ in FAMILIES])
     fig, ax = plt.subplots(figsize=(_W, 3.8))
-    x, w = np.arange(len(tbl)), 0.27
+    x, w = _x(tbl["run"]), 0.27
     colors = ("#1b9e77", "#7570b3", "0.45")
     for i, ((fam, label), color) in enumerate(zip(FAMILIES, colors, strict=True)):
         _kge_bars(ax, x + (i - 1) * w, tbl[f"kge_{fam}"], w, color, label)
@@ -298,20 +354,23 @@ def regional_fig(tbl: pd.DataFrame, path: Path) -> None:
     ax.set_title("Regional records, WY1976–85")
     ax.set_xticks(x)
     ax.set_xticklabels(tbl["run"])
-    ax.legend(loc="upper left")
-    fig.tight_layout()
+    _dividers(ax, tbl["run"])
+    fig.legend(*ax.get_legend_handles_labels(), loc="lower center", ncol=3, handlelength=1.2,
+               columnspacing=1.2)
+    fig.tight_layout(rect=(0, 0.07, 1, 1))
     _save(fig, path)
 
 
 def make_ladder(data_dir: str = "data", out_dir: str | Path | None = None) -> pd.DataFrame:
-    """Write ``ladder.csv``, ``response.csv`` and the four figures into ``out_dir`` (default:
-    the study's result folder); returns the ladder table."""
+    """Write ``ladder.csv``, ``response.csv``, ``steps.csv`` and the four figures into
+    ``out_dir`` (default: the study's result folder); returns the ladder table."""
     out = _out(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     resp = response(data_dir)
     resp.round(4).to_csv(out / "response.csv", index=False)
     tbl = skill().merge(response_summary(resp), on="run")
     tbl.round(4).to_csv(out / "ladder.csv", index=False)
+    steps().round(4).to_csv(out / "steps.csv", index=False)
     skill_fig(tbl, out / "skill.png")
     response_fig(tbl, out / "response.png")
     skill_response_fig(tbl, out / "skill_response.png")

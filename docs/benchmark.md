@@ -38,13 +38,13 @@ Over the 12 sites (`summary.csv`):
 
 | Model | Median KGE | Median NSE | Median bias | Mean \|bias\| | Median seasonal mismatch | Highest KGE at |
 |---|---|---|---|---|---|---|
-| dPL-CalSim | 0.93 | 0.93 | 0 % | 3 % | 0.06 | 8 sites |
-| BCM | 0.91 | 0.82 | +1 % | 1 % | 0.08 | 4 sites (MKM, NML, TLG, MIL) |
+| dPL-CalSim | 0.93 | 0.93 | +1 % | 3 % | 0.06 | 8 sites |
+| BCM | 0.91 | 0.82 | +1 % | 1 % | 0.08 | 4 sites (YRS, MKM, TLG, MIL) |
 | VIC-CalSim3 | 0.79 | 0.79 | +7 % | 11 % | 0.11 | 0 |
 
-- dPL-CalSim has the highest KGE at 8 of the 12 sites, BCM at TLG, MIL, MKM and NML (the last
-  two by less than 0.005). Both were fitted to these records over this window, so this is
-  in-sample skill. dPL-CalSim is lowest at MKM (0.83, −10 % in volume) and TLG (0.86, −7 %).
+- dPL-CalSim has the highest KGE at 8 of the 12 sites, BCM at TLG, MIL, MKM and YRS (the last
+  two by less than 0.01). Both were fitted to these records over this window, so this is
+  in-sample skill. dPL-CalSim is lowest at MKM (0.82, −11 % in volume) and TLG (0.86, −6 %).
 - BCM, with its routing fitted here, is second on median KGE and within about 1 % in volume at
   every site, which the fit holds it to.
 - VIC-CalSim3 has the lowest median KGE and runs high at most sites, most at CSN (+39 %), NML

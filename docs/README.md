@@ -28,7 +28,7 @@ Beside the guide:
 | Need | Use | Why |
 |---|---|---|
 | Monthly inflows on the CalSim3 rim arcs | the rim-inflow product of dPL-CalSim | scored on a held-out decade at all 196 arcs; whole-watershed volumes and their response to climate are the model's own |
-| Daily flow at the 15 CDEC reservoir watersheds, present or changed climate | dPL-CalSim (`7_calsim`); of the runs trained on the 15 watersheds alone, `6_aef` or `5_px` | the best score on the held-out decade (monthly KGE 0.899 on WY1976–85, at the 13 outlets with a record then), with the learned physics' full response to climate; the LSTM models score lower there and keep at most about 60 % of the physics' change in annual runoff under warming (`hybrid_dt`; [Learned parameters](learned_parameters.md#the-lstm-hybrids-and-their-response-to-warming)) |
+| Daily flow at the 15 CDEC reservoir watersheds, present or changed climate | dPL-CalSim (`7_calsim`); of the runs trained on the 15 watersheds alone, `6_aef` or `5_px` | the best score on the held-out decade (monthly KGE 0.901 on WY1976–85, at the 13 outlets with a record then), with the learned physics' full response to climate; the LSTM models score lower there and keep at most about 60 % of the physics' change in annual runoff under warming (`hybrid_dt`; [Learned parameters](learned_parameters.md#the-lstm-hybrids-and-their-response-to-warming)) |
 | CalLite inflows as in the original study | the calibrated sets `12rim`, `11obs`, `9unimp`: the three CalLite files in [`artifacts/product/callite/`](../artifacts/product/callite/README.md) | per-watershed monthly calibrations to those targets |
 | The original MATLAB results | the reference model with the archived parameters | reproduces them to within 0.1 mm/day |
 

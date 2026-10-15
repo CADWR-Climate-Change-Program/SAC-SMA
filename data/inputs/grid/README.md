@@ -9,10 +9,10 @@ in this repository from public rasters (POLARIS, LANDFIRE, 3DEP, MODIS) and from
 | File | What | Source |
 |---|---|---|
 | `grid_cells.csv` | The 4,410 cells of the 1/16° Livneh grid: `key, lat, lon, in_15cdec_grid, in_9unimp, in_11obs, in_12rim, in_calsim3_fp`. The union of the four grid domains (2,480 cells) and the full CalSim3 footprint: every cell whose rectangle intersects a polygon of `data/inputs/calsim3/calsim3.gpkg` (both layers: all 215 Rim watersheds, Goose Lake included, and the 170 Valley polygons), which adds 1,930 cells. Keys are `<lat>_<lon>` normalized to 5 decimals. | `build_region_grid.py` |
-| `soilveg_continuous.csv` | Per-cell soil, vegetation and terrain attributes, all 4,410 cells, no blank field. Columns: `sand`, `clay`, `ksat`, `theta_s` at six depths each (`_0_5` to `_100_200`), `polaris_gapfill`, `EVC`, `EVH`, `EVC_cover_pct`, `EVH_height_m`, `dem_elev`, `slope_deg`, `aspect_sin`, `aspect_cos`, `curvature`, `relief_m`, `lai_mean`, `lai_min`, `lai_max`, `lai_amp`, `lai_peak_doy`, and `src` (where the row came from). | `build_region_statics.py` |
-| `lai_climatology.csv` | Per-cell MODIS leaf-area day-of-year climatology, 46 8-day values (`lai_doy001` to `lai_doy361`), and `src`. Same cells and consolidation. | `build_region_statics.py` |
+| `soilveg_continuous.csv` | Per-cell soil, vegetation and terrain attributes, all 4,410 cells, no blank field. Columns: `sand`, `clay`, `ksat`, `theta_s` at six depths each (`_0_5` to `_100_200`), `polaris_gapfill`, `EVC`, `EVH`, `EVC_cover_pct`, `EVH_height_m`, `dem_elev`, `slope_deg`, `aspect_sin`, `aspect_cos`, `curvature`, `relief_m`, `lai_mean`, `lai_min`, `lai_max`, `lai_amp`, `lai_peak_doy`. Each cell is the mean over its footprint (see How it is built). | `build_region_statics.py` |
+| `lai_climatology.csv` | Per-cell MODIS leaf-area day-of-year climatology, 46 8-day values (`lai_doy001` to `lai_doy361`). Same cells, the mean of the sub-points' climatologies. | `build_region_statics.py` |
 | `aef_cell_mean.npz` (1.1 MB, LFS) | AlphaEarth Foundations satellite embeddings as one static 64-value vector per cell. Arrays: `keys`, `lat`, `lon`, `bands`, `years`, `dataset_version`, `emb` (4410 x 64, float32), `norm`, `n_years`, `valid_frac` (4410 x 9), `year_cos_min`, `meta`. | Earth Engine `GOOGLE/SATELLITE_EMBEDDING/V1/ANNUAL`, `gee_aef_region.py` |
-| `soilveg_continuous_raster.csv`, `lai_climatology_raster.csv` (not tracked) | Every grid cell sampled at its centre from the raw rasters. An intermediate: its content is folded into the two tracked tables, and nothing else reads it. | `sample_gis.py region` |
+| `soilveg_continuous_raster.csv`, `lai_climatology_raster.csv` (not tracked) | Every grid cell sampled over its footprint from the raw rasters. An intermediate: `build_region_statics.py` checks it and writes the two tracked tables from it, and nothing else reads it. | `sample_gis.py region` |
 | `raw_gis/` (not tracked) | The default stage of the raw rasters, 89.5 GB. Normally kept on another drive and named by the `raw_gis` key of `data/local_paths.toml`. | `download_gis.py` |
 
 ## The raw rasters
@@ -30,7 +30,7 @@ tiles return 404 and are skipped (95 and 89 land tiles in the original extent). 
 | POLARIS soil (Chaney et al. 2019, doi:10.1029/2018WR022797) | 30 m, CONUS, continuous and gap-free remap of SSURGO. `sand`, `clay`, `ksat`, `theta_s`, statistic `mean`, six depths (0-5, 5-15, 15-30, 30-60, 60-100, 100-200 cm). Staged by property, so other variables (silt, bd, om, theta_r, van Genuchten n/alpha/hb/lambda, pH) and statistics (mode, p5, p50, p95) can be added without a re-fetch. | sand, clay: %. `theta_s`: m³/m³ (0.35 to 0.76). `ksat`: log10(cm/hr), so a depth-weighted arithmetic mean of the stored value is the depth-geometric mean of conductivity. Nodata over open water. Tiles 3600 x 3600, EPSG:4326, exact 1° bounds, 1/3600° pixel, float32, nodata -9999. | `http://hydrology.cee.duke.edu/POLARIS/PROPERTIES/v1.0/<prop>/mean/<depth>/lat{S}{N}_lon{W}{E}.tif`. Plain HTTP, no login. | `polaris/PROPERTIES/v1.0/<prop>/mean/<depth>/lat{S}{N}_lon{W}{E}.tif` |
 | LANDFIRE 2024 vegetation: Existing Vegetation Cover (EVC) and Height (EVH) | 30 m, CONUS, coded rasters banded by lifeform. | Bands: 100s = tree, 200s = shrub, 300s = herb; below 100 = water, developed, agriculture, sparse. The last two digits are cover % (EVC) or a height index (EVH). Height: tree `(v-100)` m, shrub `(v-200)*0.1` m, herb `(v-300)*0.1` m. Water class 11 is a valid code and decodes to cover 0. Tiles 3600 x 3600, EPSG:4326, int16, no nodata. | USGS ImageServer `exportImage`, no login: `https://lfps.usgs.gov/arcgis/rest/services/Landfire_LF2024/LF2024_{EVC,EVH}_CONUS/ImageServer`, with `bbox=<w>,<s>,<e>,<n>&bboxSR=4326&imageSR=4326&size=3600,3600&format=tiff&pixelType=S16&interpolation=RSP_NearestNeighbor&f=image`. | `landfire/{EVC,EVH}/{EVC,EVH}_lat{S}{N}_lon{W}{E}.tif` |
 | MODIS MCD15A2H.061 leaf area index | 500 m, 8-day, combined Terra and Aqua, 2003 to 2022. Sinusoidal tiles h08v04, h08v05, h09v04, h09v05; 918 granules per tile. | Valid LAI 0 to 100, scale 0.1; values above 100 are fill (cloud, water, unfilled). Analytic sinusoidal georeference: R = 6371007.181 m, tile 1111950.5197 m, x0 = -20015109.354, y0 = 10007554.677, 2400 x 2400 per tile, pixel 463.3127 m. | NASA CMR granule API (`cmr.earthdata.nasa.gov/search/granules.json`), then the LP DAAC cloud bucket (`data.lpdaac.earthdatacloud.nasa.gov`) with an Earthdata login in `.netrc`. | `lai/mcd15a2h/<tile>/MCD15A2H.A{yyyy}{ddd}.<tile>.061.*.hdf` |
-| USGS 3DEP 1 arc-second elevation | About 30 m seamless DEM. Gives slope, aspect (sin, cos), curvature (Laplacian) and relief (windowed elevation standard deviation). | Kept as published: tiles 3604 x 3604, EPSG:4269, 1° plus a 2-pixel overlap per side, float32, nodata -999999. | Public AWS `s3://prd-tnm/StagedProducts/Elevation/1/TIFF/current/` over HTTPS, no login. Tiles `n{N}w{W}` (north-edge latitude, west-corner longitude magnitude). | `dem/3dep_1as/USGS_1_n{N}w{W}.tif` |
+| USGS 3DEP 1 arc-second elevation | About 30 m seamless DEM. Gives slope, aspect (sin, cos), curvature (Laplacian) and relief (elevation standard deviation, over a window at an HRU point and over the sub-points of a cell). | Kept as published: tiles 3604 x 3604, EPSG:4269, 1° plus a 2-pixel overlap per side, float32, nodata -999999. | Public AWS `s3://prd-tnm/StagedProducts/Elevation/1/TIFF/current/` over HTTPS, no login. Tiles `n{N}w{W}` (north-edge latitude, west-corner longitude magnitude). | `dem/3dep_1as/USGS_1_n{N}w{W}.tif` |
 
 Not fetched, optional: gNATSGO (USDA NRCS 30 m composite of SSURGO, STATSGO2 and RSS, a cross-check for
 POLARIS) and the NLCD tree canopy cover (MRLC 30 m, overlaps LANDFIRE EVC).
@@ -44,8 +44,9 @@ From the repository root. `sample_gis.py` and `gee_aef_region.py` run in `sacsma
 python data/inputs/grid/build_region_grid.py              # -> grid_cells.csv (needs the wgen_ascii key)
 python data/inputs/grid/download_gis.py --status          # inventory of the stage, no network
 python data/inputs/grid/download_gis.py --all --jobs 8    # fetch what is missing (or --layers polaris)
-python data/inputs/grid/sample_gis.py region              # every cell -> the two *_raster.csv
-python data/inputs/grid/sample_gis.py 11obs               # a domain's sidecars (15cdec, 9unimp, 11obs, 12rim)
+python data/inputs/grid/sample_gis.py region              # every cell -> the two *_raster.csv (3 to 4 h)
+python data/inputs/grid/sample_gis.py 15cdec_grid         # that domain's sidecars, one row per cell
+python data/inputs/grid/sample_gis.py 11obs               # an HRU domain's sidecars (15cdec, 9unimp, 11obs, 12rim)
 python data/inputs/grid/build_region_statics.py           # -> soilveg_continuous.csv, lai_climatology.csv
 
 python data/inputs/grid/gee_aef_region.py --project <ee-project>     # the pull, 1 to 2 h, resumable
@@ -62,18 +63,28 @@ python data/inputs/grid/gee_aef_region.py --assemble                 # -> aef_ce
   `.netrc` (`_netrc` on Windows). Files are written to a `.part` name and renamed when complete, so a rerun
   resumes. LANDFIRE is requested at `size=3600,3600` over a 1° box on purpose: it lands on the POLARIS
   pixel grid.
-- The sampler. Each HRU or cell is a point, and the rasters are sampled there. Terrain derivatives use a
-  window around the point, because one 30 m slope is noisy. Water is gap-filled and flagged: POLARIS nodata
-  takes the nearest finite pixel in an 81-pixel window (`polaris_gapfill`), and an LAI pixel that is always
-  fill (open water, permanent snow) borrows the nearest valid point's climatology (`lai_gapfill`). MODIS is
-  read with pyhdf. The script is not importable by the `sacsma` package. `sample_gis.py <domain>` writes
-  the per-HRU sidecars of a calibration domain (see [the domains README](../domains/README.md));
-  `--layers polaris,landfire,terrain,lai` limits the layers.
-- The consolidation. `build_region_statics.py` fills each cell from the first source that has it: the
-  `15cdec_grid` sidecar (`src` = `cdec15_grid`, 2,074 cells), then the `11obs`, `12rim` and `9unimp`
-  sidecars (`calsim_11obs` 203, `calsim_12rim` 4, `calsim_9unimp` 199), then the raster sample
-  (`region_raster`, 1,930). It needs the untracked `*_raster.csv` files to cover the 1,930 footprint-only
-  cells. Regenerate them only if the grid changes.
+- The sampler, points. An HRU is a point, and the rasters are sampled there. Terrain derivatives use a
+  25-pixel window around the point, because one 30 m slope is noisy. Water is gap-filled and flagged:
+  POLARIS nodata takes the nearest finite pixel in an 81-pixel window (`polaris_gapfill`), and an LAI pixel
+  that is always fill (open water, permanent snow) borrows the nearest valid point's climatology
+  (`lai_gapfill`). MODIS is read with pyhdf. The script is not importable by the `sacsma` package.
+  `sample_gis.py <domain>` writes the per-HRU sidecars of a calibration domain (see
+  [the domains README](../domains/README.md)); `--layers polaris,landfire,terrain,lai` limits the layers.
+- The sampler, cells. A grid cell is the mean over its footprint: 13 x 13 sub-points from corner to
+  corner (`np.linspace` over ±1/32° in latitude and longitude about the centre), each sampled as a point.
+  POLARIS, the LANDFIRE codes and their decoded cover and height, and the MODIS LAI climatology are the
+  means over the 169 (`polaris_gapfill` the share gap-filled; the LAI summary columns come from the mean
+  climatology; `lai_gapfill`, in the sample only, the share of sub-points MODIS never fills, which take
+  the climatology of the nearest valid sub-point among those sampled). Terrain comes from the 169
+  sub-point elevations: `dem_elev` is their mean and `relief_m` their standard deviation; on the 13 x 13
+  grid (spacing 1/192°, 111,320 m per degree) `slope_deg` is the slope of the mean gradient magnitude,
+  `curvature` the mean Laplacian and the aspect that of the mean gradient. Each tile's band is read once.
+- The region store. `build_region_statics.py` writes the two tables from the cell sample after a gate: the
+  sample must reproduce the committed `15cdec_grid` sidecars (the inputs the ladder's physical rungs
+  trained on) to 1e-9 at all 2,074 of their cells. The exception is the leaf area at cells with a
+  sub-point MODIS never fills (lakes): the region sample offers that sub-point more neighbours to borrow
+  from than the `15cdec_grid` sample did, so there the leaf area must agree within 0.02 and the peak day
+  within one 8-day step. Regenerate the sample only if the grid changes.
 - Earth Engine. `gee_aef_region.py` needs an authenticated `earthengine-api` and a registered cloud project
   (`--project`, default the `gee_project` key). Behind a TLS-inspecting proxy the Windows trust store must
   be injected before `import ee` (`import pip._vendor.truststore as t; t.inject_into_ssl()`); the script
@@ -97,9 +108,9 @@ python data/inputs/grid/gee_aef_region.py --assemble                 # -> aef_ce
   composite starting 2002-12-27 (`A2002361`) and three are absent upstream (`A2016049`, `A2022097`,
   `A2022289`).
 - Units were verified at sample time; tile geometry was read off the stage.
-- The raster sample reproduces the point-sampled CalLite sidecars: 2,021 of 2,026 shared cells exactly. The
-  5 others differ only in `lai_mean`: they are always-fill LAI cells, and the full grid offers a denser
-  pool of neighbours to borrow from than one domain's HRU set.
+- The cell sample reproduces the `15cdec_grid` sidecars at 1,998 of their 2,074 cells to 1e-9 (the gate of
+  `build_region_statics.py`). The other 76 are among the 540 cells with a sub-point MODIS never fills; their
+  leaf area is within 0.015. Sampled alone, the `15cdec_grid` cells reproduce all 2,074.
 - Statics coverage: 4,410 of 4,410 cells, zero blank fields.
 - Domain cell sets from the `hruinfo` tables equal the key sets of the per-domain forcing stores of the
   time (2026-07-16).
@@ -111,10 +122,12 @@ python data/inputs/grid/gee_aef_region.py --assemble                 # -> aef_ce
 
 ## Know before using
 
-- Two sampling conventions meet in the statics tables, marked by `src`. The `cdec15_grid` rows are means
-  over the cell footprint (the convention the dPL parameter network was trained on, so they win where
-  available); all other rows are point samples at the cell centre. Over shared cells the median difference
-  in `dem_elev` is about 93 m.
+- The grid store and the HRU sidecars follow different conventions: cell footprint means against one point
+  per HRU. They are not mixed in any run (`1_hru` reads the `15cdec` HRU sidecars, every other learned run
+  the grid store). A point sample is much noisier than a footprint mean: between neighbouring cells the
+  correlation of LANDFIRE cover falls from 0.84 to 0.32, of LAI from 0.90 to 0.63, of POLARIS soil from
+  about 0.9 to about 0.5. Terrain differs in scale as well: next to a footprint cell a point-sampled cell
+  has curvature about 18 times larger, relief 4.7 times smaller and slope 1.7 times larger.
 - Depth aggregation is a modelling choice of `sacsma.dpl.features`, not of the sampler. Its `physical`
   variant collapses the six POLARIS depths into two zones, 0 to 30 cm and 30 to 200 cm (depth-weighted),
   and encodes `lai_peak_doy` as sin and cos. The six raw columns stay in the table.

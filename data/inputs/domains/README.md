@@ -24,7 +24,7 @@ grid (see [the grid README](../grid/README.md)).
 |---|---|---|
 | `<domain>/hruinfo.csv` (all five) | One row per HRU: `basin, lat, lon, area_weight, elev, flowlen, soil_class, veg_class, key` (plus `basin_id`, `basin_id2` except in `15cdec_grid`). `area_weight` is the HRU's percentage of its watershed. A cell shared by two watersheds appears once per watershed. | The study's HRUinfo tables |
 | `<domain>/basin_area.csv` (`15cdec`, `9unimp`, `11obs`, `12rim`) | `[basin, area_mi2]`. `15cdec`: the published drainage areas of the 15 watersheds. `9unimp`, `11obs`: the authoritative drainage areas. `12rim`: the areas the original study's CalLite wrapper converted with (its m² over 1609.344²; its `11obs` areas agree with the table here to 0.01 mi²), used only to write the CalLite product. Converts mm/day to cfs and back. | Study archive; `12rim`: the study's MATLAB CalLite wrapper |
-| `<domain>/soilveg_continuous.csv` (all five) | Continuous soil, vegetation and terrain attributes: POLARIS `sand`, `clay`, `ksat`, `theta_s` at six depths, LANDFIRE `EVC`, `EVH` and the decoded cover % and height, 3DEP elevation, slope, aspect sin and cos, curvature and relief, LAI mean, min, max, amplitude and peak day, with the `polaris_gapfill` and `lai_gapfill` flags (`15cdec_grid` has only the first). One row per HRU in `hruinfo` order, keyed by `key` (not unique). In `15cdec_grid`: one row per cell (2,074). | `data/inputs/grid/sample_gis.py <domain>`; `15cdec_grid`: no script in the repository |
+| `<domain>/soilveg_continuous.csv` (all five) | Continuous soil, vegetation and terrain attributes: POLARIS `sand`, `clay`, `ksat`, `theta_s` at six depths, LANDFIRE `EVC`, `EVH` and the decoded cover % and height, 3DEP elevation, slope, aspect sin and cos, curvature and relief, LAI mean, min, max, amplitude and peak day, with the `polaris_gapfill` and `lai_gapfill` flags (`15cdec_grid` has only the first). One row per HRU in `hruinfo` order, keyed by `key` (not unique). In `15cdec_grid`: one row per cell (2,074). | `data/inputs/grid/sample_gis.py <domain>` |
 | `<domain>/lai_climatology.csv` (all five) | The MODIS leaf-area day-of-year climatology, 46 8-day values per row (`lai_doy001` to `lai_doy361`). Same rows as the table above. The `15cdec_grid` file names its key column `cellkey`. | the same |
 | `15cdec/basin_tminmax_livneh.csv` | Watershed-mean daily Tmin and Tmax of the 15 watersheds: `date, tmin_<basin>, tmax_<basin>`, °C, 1915-01-01 to 2018-12-31. Ingested once from the WGEN 1/16° grid. | No script in the repository |
 | `15cdec/SACSMA_15CDEC.geojson` (3.6 MB) | The original SAC-SMA delineations of the 15 watersheds (polygons, `Name` = watershed code). | Study archive |
@@ -40,8 +40,8 @@ The attribute sidecars of `15cdec`, `9unimp`, `11obs` and `12rim` are rebuilt by
 
     python data/inputs/grid/sample_gis.py 11obs [--layers polaris,landfire,terrain,lai]
 
-The sampler has no `15cdec_grid` mode, and no script in the repository rebuilds that domain's two
-sidecars. Products, units, encodings and the sampling conventions are in
+`sample_gis.py 15cdec_grid` writes that domain's two sidecars as cell footprint means. Products, units,
+encodings and the sampling conventions are in
 [the grid README](../grid/README.md).
 
 ## Checks
@@ -76,8 +76,8 @@ sidecars. Products, units, encodings and the sampling conventions are in
   registry instead (CalSim3 catchment outlines); the hybrids' precipitation input is a mean over the
   `15cdec_grid` footprints. What the coarse grid loses against `15cdec` is the orographic downscaling of
   HRU meteorology, an upstream CADWR product that is not in the repository.
-- The `15cdec_grid` sidecars are means over the cell footprint (the convention the dPL parameter network
-  was trained on). All other sidecars are point samples at the HRU point.
+- The `15cdec_grid` sidecars, like the region store, are means over the cell footprint. The sidecars of
+  the HRU domains are point samples at the HRU point.
 - The sidecars are the soil, vegetation, terrain and LAI inputs of the `physical` feature variant of
   `sacsma.dpl.features`, in place of the `soil_class` and `veg_class` codes.
 - `SACSMA_15CDEC.geojson`: the four Tulare watersheds (ISB, PNF, SCC, TRM) have no CalSim3 polygons, so

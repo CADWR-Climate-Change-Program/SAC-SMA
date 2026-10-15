@@ -161,10 +161,13 @@ the other two. The tracked folders hold the selected checkpoint and the scores, 
 `epoch_s` column of its `train_log.csv`). dPL-CalSim is rung 7 of the ladder: the recipe of
 section 5 on 159 entities of every family (69 USGS gauges, 17 CDEC records, 9 unimpaired-flow
 subbasins, 64 CalSim3 arcs) and every year but WY1976–85, with the unimpaired-flow targets back
-to WY1950, the families weighted by footprint area and a fixed loss scale per family.
+to WY1950, the families weighted by footprint area and a fixed loss scale per family. Its
+`--param-bounds` replaces the one in `R`: it keeps `lzsk` down to 0.001 and widens the ranges of
+`MBASE`, `NMF`, `Velo` and `zperc` that the GA box pins ([Runs](runs.md#the-ladder)).
 
 ```bash
-sacsma dpl train aef_u $R --domain multifamily --holdout-wy 1976-1985 $NOAH $PX \
+sacsma dpl train aef_u $R --param-bounds lzsk=0.001:0.5,MBASE=-2:5,NMF=0.05:0.5,Velo=0.5:10,zperc=1:1000 \
+    --domain multifamily --holdout-wy 1976-1985 $NOAH $PX \
     --uf-train-start 1949-10-01 --calsim-arcs train_default --mt-select-weight area \
     --mt-family-weight usgs=0.2366,cdec=0.5508,uf=0.1226,calsim=0.0900 --mt-share-norm all \
     --mt-loss-ref usgs=0.6374,cdec=0.3511,uf=0.1140,calsim=0.3548 --mt-loss-ref-power 0.5 \
@@ -234,8 +237,9 @@ checks. What depends on what:
    `aorc_region.py` add the scenario and AORC stores. All need sources outside the repository.
 2. **Grid** (`data/inputs/grid/`). `build_region_grid.py` writes the cell list from the domain
    tables and the CalSim3 polygons. `download_gis.py` stages the raw rasters and
-   `sample_gis.py region` samples every cell (`sacsma-gis`); `build_region_statics.py` then
-   consolidates the per-cell attributes. `gee_aef_region.py` builds the embeddings.
+   `sample_gis.py region` samples every cell over its footprint (`sacsma-gis`);
+   `build_region_statics.py` then checks the sample against the `15cdec_grid` sidecars and writes
+   the per-cell attributes. `gee_aef_region.py` builds the embeddings.
 3. **Targets.** `cdec_fnf.py`, `dwr_unimpaired.py --pdf <report>`, `usgs_flows.py` ingest their
    sources. Then `build_uf_depth.py`, then `build_fnf_depth.py` (it checks against the first).
 4. **The registry** (`data/inputs/domains/multifamily/`), in this order:

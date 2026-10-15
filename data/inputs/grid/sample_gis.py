@@ -6,26 +6,24 @@ Runs in the ``sacsma-gis`` env (``environment-gis.yml``: rasterio + pyhdf); NOT 
 core ``sacsma`` package (keeps the model path torch/gdal-free).  Reusable across
 domains and for the future all-California extension.
 
-Outputs (per domain <d> in {15cdec, 9unimp, 11obs, 12rim}):
+Outputs (per HRU domain <d> in {15cdec, 9unimp, 11obs, 12rim}, each HRU a point):
   data/inputs/domains/<d>/soilveg_continuous.csv   one row per HRU (key), durable RAW values
   data/inputs/domains/<d>/lai_climatology.csv      HRU x 46 8-day DOY LAI climatology (Noah-ET)
 
-A fifth pseudo-domain, ``region``, samples EVERY cell of the region grid
-(``data/inputs/grid/grid_cells.csv``, all 4410 cells -- the full CalSim3-gpkg
-intersection with the 1/16-deg grid, not just the gap outside the four
-modeling domains) at its cell CENTER -- one homogeneous point-sample
-convention across the whole footprint, independent of which (if any) modeling
-domain a cell also belongs to:
+Grid cells are sampled over their footprint (:func:`run_footprint`): each cell is the mean of
+13 x 13 sub-points from corner to corner, and its terrain comes from the sub-point elevations.
+``region`` does EVERY cell of the region grid (``data/inputs/grid/grid_cells.csv``, all 4410
+cells, whatever modeling domain a cell belongs to):
   data/inputs/grid/soilveg_continuous_raster.csv
   data/inputs/grid/lai_climatology_raster.csv
-``data/inputs/grid/build_region_statics.py`` uses this as a full-coverage cross-check
-layer and as the final fill source for any cell the domain sidecars miss.
+from which ``data/inputs/grid/build_region_statics.py`` writes the region store; ``15cdec_grid``
+does that domain's cells into its two sidecars (one row per cell).
 
 Design notes
 ------------
 * Each HRU is a POINT (its lat/lon); rasters are sampled at that point.  Terrain
   derivatives use a small window around the point (sub-grid roughness), since a
-  single 30 m slope is noisy.
+  single 30 m slope is noisy.  A grid cell's sub-points are sampled the same way.
 * POLARIS stores RAW per-depth values (4 props x 6 depths = 24 cols) -- the
   durable artifact; depth aggregation into SAC-SMA zones is a *modelling* choice
   left to the feature builder.  ``ksat`` is log10(cm/hr); ``theta_s`` m3/m3;
@@ -62,12 +60,13 @@ PROPS = ("sand", "clay", "ksat", "theta_s")
 DEPTHS = ("0_5", "5_15", "15_30", "30_60", "60_100", "100_200")
 
 DOMAINS = ("15cdec", "9unimp", "11obs", "12rim")
+#: the grid domain whose sidecars are cell-footprint means (:func:`run_footprint`)
+FOOTPRINT_DOMAIN = "15cdec_grid"
 
 
 def load_region_cells() -> pd.DataFrame:
     """Every cell of the region grid -- the full CalSim3-gpkg intersection with
-    the 1/16-deg grid (4410 cells), sampled at the cell CENTER (point-sample,
-    matching the calsim convention) regardless of modeling-domain membership."""
+    the 1/16-deg grid (4410 cells), regardless of modeling-domain membership."""
     grid = pd.read_csv(layout.grid_cells(DATA))
     return grid[["key", "lat", "lon"]].reset_index(drop=True)
 
@@ -392,16 +391,197 @@ def _fill_doy_gaps(clim: np.ndarray) -> np.ndarray:
 
 
 # ==========================================================================
+# Cell footprint  -- the 13 x 13 sub-point mean of a 1/16-deg cell
+# ==========================================================================
+#: sub-points per side of a cell, from corner to corner (169 per cell)
+FOOT_N = 13
+CELL_DEG = 1.0 / 16.0
+#: metres per degree of latitude for the footprint terrain
+M_PER_DEG = 111320.0
+
+
+def footprint_points(cells: pd.DataFrame) -> pd.DataFrame:
+    """The FOOT_N x FOOT_N sub-points of each cell: ``np.linspace(-1/32, 1/32, 13)`` degrees
+    about the centre in latitude and longitude, latitude-major (south to north), one row per
+    sub-point with the cell's row number in ``cell``."""
+    off = np.linspace(-0.5, 0.5, FOOT_N) * CELL_DEG
+    n = len(cells)
+    lat = (cells["lat"].to_numpy()[:, None, None] + off[None, :, None]).repeat(FOOT_N, axis=2)
+    lon = (cells["lon"].to_numpy()[:, None, None] + off[None, None, :]).repeat(FOOT_N, axis=1)
+    return pd.DataFrame({"cell": np.repeat(np.arange(n), FOOT_N * FOOT_N),
+                         "lat": lat.ravel(), "lon": lon.ravel()})
+
+
+def _tile_values(points, path_fn, fill_window=0):
+    """The pixel under every point, as ``rasterio``'s ``sample`` gives it (``rowcol``; outside
+    the tile its nodata, or 0 without one), read from each tile's whole band at once.  Nodata
+    becomes NaN; with ``fill_window`` a NaN takes the nearest finite pixel in that window
+    (:func:`_windowed_nearest`).  Returns (values, filled)."""
+    import rasterio
+    from rasterio.transform import rowcol
+
+    lat, lon = points["lat"].to_numpy(), points["lon"].to_numpy()
+    out = np.full(len(points), np.nan)
+    filled = np.zeros(len(points), dtype=bool)
+    groups: dict[Path, list[int]] = defaultdict(list)
+    for i, (la, lo) in enumerate(zip(lat, lon)):
+        groups[path_fn(la, lo)].append(i)
+    for path, idx in groups.items():
+        if not path.exists():
+            continue
+        idx = np.asarray(idx)
+        with rasterio.open(path) as src:
+            nod = src.nodata
+            band = src.read(1)
+            r, c = rowcol(src.transform, lon[idx], lat[idx])
+            r, c = np.asarray(r), np.asarray(c)
+            inside = (r >= 0) & (r < src.height) & (c >= 0) & (c < src.width)
+            vals = np.full(len(idx), float(np.array(nod or 0, dtype=src.dtypes[0])))
+            vals[inside] = band[r[inside], c[inside]]
+            if nod is not None:
+                vals[vals == nod] = np.nan
+            if fill_window > 0:
+                for j in np.flatnonzero(~np.isfinite(vals)):
+                    vals[j] = _windowed_nearest(src, lon[idx[j]], lat[idx[j]], nod, fill_window)
+                    filled[idx[j]] = np.isfinite(vals[j])
+        out[idx] = vals
+    return out, filled
+
+
+def _point_elevation(points, win=25):
+    """3DEP elevation at every point: the pixel under it, else the mean of the ``win`` window
+    around it (:func:`sample_terrain`'s ``dem_elev``)."""
+    import rasterio
+    from rasterio.windows import Window
+
+    z, _ = _tile_values(points, dem_path)
+    lat, lon = points["lat"].to_numpy(), points["lon"].to_numpy()
+    for i in np.flatnonzero(~np.isfinite(z)):
+        path = dem_path(lat[i], lon[i])
+        if not path.exists():
+            continue
+        with rasterio.open(path) as src:
+            r, c = src.index(lon[i], lat[i])
+            half = win // 2
+            w = src.read(1, window=Window(c - half, r - half, win, win), boundless=True,
+                         fill_value=np.nan).astype(np.float64)
+            if src.nodata is not None:
+                w[w == src.nodata] = np.nan
+            if np.isfinite(w).any():
+                z[i] = np.nanmean(w)
+    return z
+
+
+def footprint_terrain(cells, z) -> pd.DataFrame:
+    """Terrain of each cell from its sub-point elevations ``z`` (n_cells, 169): the mean
+    elevation, the spread (``relief_m``, the standard deviation), and on the FOOT_N x FOOT_N
+    grid (spacing CELL_DEG / (FOOT_N - 1)) the slope of the mean gradient magnitude, the mean
+    Laplacian (``curvature``) and the aspect of the mean gradient."""
+    n = len(cells)
+    out = {k: np.full(n, np.nan) for k in ("dem_elev", "slope_deg", "aspect_sin", "aspect_cos",
+                                            "curvature", "relief_m")}
+    dy = CELL_DEG / (FOOT_N - 1) * M_PER_DEG
+    for k in range(n):
+        g = z[k].reshape(FOOT_N, FOOT_N)[::-1]                 # north up
+        if not np.isfinite(g).all():
+            continue
+        dx = dy * math.cos(math.radians(cells["lat"].iat[k]))
+        gy, gx = np.gradient(g, dy, dx)
+        dzdx, dzdy = gx, -gy                                   # rows run south
+        out["dem_elev"][k] = g.mean()
+        out["relief_m"][k] = g.std()
+        out["slope_deg"][k] = math.degrees(math.atan(np.mean(np.hypot(dzdx, dzdy))))
+        a = np.arctan2(dzdy.mean(), -dzdx.mean())
+        out["aspect_sin"][k], out["aspect_cos"][k] = math.sin(a), math.cos(a)
+        out["curvature"][k] = (np.gradient(gx, dx, axis=1) + np.gradient(gy, dy, axis=0)).mean()
+    return pd.DataFrame(out, index=cells.index)
+
+
+def run_footprint(cells: pd.DataFrame, layers: set[str], dest: Path, cdest: Path,
+                  key_col: str = "key") -> None:
+    """Each cell of ``cells`` (``key, lat, lon``) as the mean of its 169 sub-points: POLARIS
+    (``polaris_gapfill`` the share gap-filled), LANDFIRE codes and their decoded cover and
+    height, :func:`footprint_terrain`, and the MODIS LAI climatology (the mean of the
+    sub-points' climatologies, its summary columns from that mean; ``lai_gapfill`` the share
+    of sub-points with no valid MODIS value, which take the climatology of the nearest valid
+    sub-point among those sampled)."""
+    pts = footprint_points(cells)
+    print(f"[footprint] {len(cells)} cells, {len(pts)} sub-points  layers={sorted(layers)}",
+          flush=True)
+    nc = FOOT_N * FOOT_N
+
+    def cell_mean(v):
+        with np.errstate(invalid="ignore"):
+            return np.nanmean(np.asarray(v, np.float64).reshape(len(cells), nc), axis=1)
+
+    parts = [cells[["key"]].reset_index(drop=True)]
+    if "polaris" in layers:
+        t, cols, fill = time.time(), {}, np.zeros(len(pts), dtype=bool)
+        for prop in PROPS:
+            for depth in DEPTHS:
+                v, f = _tile_values(pts, lambda la, lo, p=prop, d=depth: polaris_path(la, lo, p, d),
+                                    fill_window=81)
+                cols[f"{prop}_{depth}"] = cell_mean(v)
+                fill |= f
+                print(f"    polaris {prop}_{depth}: {int(f.sum())} sub-points gap-filled", flush=True)
+        cols["polaris_gapfill"] = cell_mean(fill)
+        parts.append(pd.DataFrame(cols))
+        print(f"  polaris done ({time.time() - t:.0f}s)", flush=True)
+    if "landfire" in layers:
+        t, cols = time.time(), {}
+        for prod in ("EVC", "EVH"):
+            v, _ = _tile_values(pts, lambda la, lo, p=prod: landfire_path(la, lo, p))
+            cols[prod] = cell_mean(v)
+            dec = decode_evc_cover(v) if prod == "EVC" else decode_evh_height(v)
+            cols["EVC_cover_pct" if prod == "EVC" else "EVH_height_m"] = cell_mean(dec)
+        parts.append(pd.DataFrame(cols)[["EVC", "EVH", "EVC_cover_pct", "EVH_height_m"]])
+        print(f"  landfire done ({time.time() - t:.0f}s)", flush=True)
+    if "terrain" in layers:
+        t = time.time()
+        z = _point_elevation(pts).reshape(len(cells), nc)
+        parts.append(footprint_terrain(cells.reset_index(drop=True), z))
+        print(f"  terrain done ({time.time() - t:.0f}s)", flush=True)
+    clim = None
+    if "lai" in layers:
+        t = time.time()
+        summ, cl = sample_lai(pts)
+        clim = cl.to_numpy().reshape(len(cells), nc, -1).mean(axis=1)
+        mx = clim.max(axis=1)
+        mn = clim.min(axis=1)
+        parts.append(pd.DataFrame({"lai_mean": clim.mean(axis=1), "lai_min": mn, "lai_max": mx,
+                                   "lai_amp": mx - mn,
+                                   "lai_peak_doy": np.argmax(clim, axis=1) * 8 + 1,
+                                   "lai_gapfill": cell_mean(summ["lai_gapfill"])}))
+        clim = pd.DataFrame(clim, columns=cl.columns)
+        print(f"  lai done ({time.time() - t:.0f}s)", flush=True)
+    out = pd.concat(parts, axis=1)
+    out.to_csv(dest, index=False)
+    print(f"WROTE {dest}  ({out.shape[0]}x{out.shape[1]})", flush=True)
+    if clim is not None:
+        keys = cells[["key"]].reset_index(drop=True).rename(columns={"key": key_col})
+        pd.concat([keys, clim], axis=1).to_csv(cdest, index=False)
+        print(f"WROTE {cdest}  ({clim.shape[0]}x{clim.shape[1]})", flush=True)
+
+
+# ==========================================================================
 # Driver
 # ==========================================================================
 def run(domain: str, layers: set[str]):
     if domain == "region":
-        hrus = load_region_cells()
-        dest = layout.raster_sample(DATA, "soilveg_continuous")
-        cdest = layout.raster_sample(DATA, "lai_climatology")
-    else:
-        hrus = load_hrus(domain)
-        dest, cdest = layout.soilveg(DATA, domain), layout.lai_climatology(DATA, domain)
+        run_footprint(load_region_cells(), layers,
+                      layout.raster_sample(DATA, "soilveg_continuous"),
+                      layout.raster_sample(DATA, "lai_climatology"))
+        return
+    if domain == FOOTPRINT_DOMAIN:
+        keys = load_hrus(domain)["key"].drop_duplicates()
+        ll = keys.str.split("_", expand=True).astype(float)
+        cells = pd.DataFrame({"key": keys.to_numpy(), "lat": ll[0].to_numpy(),
+                              "lon": ll[1].to_numpy()})
+        run_footprint(cells, layers, layout.soilveg(DATA, domain),
+                      layout.lai_climatology(DATA, domain), key_col="cellkey")
+        return
+    hrus = load_hrus(domain)
+    dest, cdest = layout.soilveg(DATA, domain), layout.lai_climatology(DATA, domain)
     print(f"[{domain}] {len(hrus)} HRUs  layers={sorted(layers)}", flush=True)
     parts = [hrus[["key"]].copy()]
 
@@ -460,7 +640,7 @@ def test(domain: str, nrows: int = 3):
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("domain", choices=[*DOMAINS, "region"])
+    ap.add_argument("domain", choices=[*DOMAINS, FOOTPRINT_DOMAIN, "region"])
     ap.add_argument("--test", action="store_true")
     ap.add_argument("--nrows", type=int, default=3)
     ap.add_argument("--layers", default="polaris,landfire,terrain,lai")
