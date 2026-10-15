@@ -188,7 +188,7 @@ the percentage of annual volume placed in the wrong month. It is reported as a p
 
 ## 6. Parameter table
 
-The table lists the 31-parameter structure with the GA feasible ranges ([Wi & Steinschneider, 2023](references.md#wimemo)). The parameter network of the [learned-parameter model](learned_parameters.md) emits the same 28 free parameters into the same box (with the two noted widenings); `side` and `SCF` are fixed in both systems, and `PXTEMP` in both except `5_px`, `6_aef` and `7_calsim` (dPL-CalSim), which learn it between −1 and 3 °C.
+The table lists the 31-parameter structure with the GA feasible ranges ([Wi & Steinschneider, 2023](references.md#wimemo)). The parameter network of the [learned-parameter model](learned_parameters.md) emits the same 28 free parameters into the same box (with the widenings noted below the table); `side` and `SCF` are fixed in both systems, and `PXTEMP` in both except `5_px`, `6_aef` and `7_calsim` (dPL-CalSim), which learn it between −1 and 3 °C.
 
 | Process | Parameter | Description | Units | Lower | Upper |
 |---|---|---|---|---|---|
@@ -226,4 +226,6 @@ The table lists the 31-parameter structure with the GA feasible ranges ([Wi & St
 
 Parameters marked "fixed" are not calibrated.
 
-For the learned-parameter search, the `rexp` upper bound is widened to 15 and the `lzsk` lower bound to 0.001 (every learned-parameter run sets it with `--param-bounds lzsk=0.001:0.5`). The network maps `lzsk`, `lzpk`, `MFMAX` and `MFMIN` in log space, as it does the five storage capacities and `zperc`. The Noah-lite ET variant adds one learned parameter, $\chi \in [0.5, 2.5]$ (soil-moisture limitation exponent), and pins vegetation fraction and seasonal LAI to observations.
+For the learned-parameter search, the `rexp` upper bound is widened to 15 and the `lzsk` lower bound to 0.001 (every learned-parameter run sets it with `--param-bounds lzsk=0.001:0.5`). dPL-CalSim also widens `MBASE` to −2 to 5 °C, `NMF` to 0.05 to 0.5, `Velo` to 0.5 to 10 m/s and `zperc` to 1 to 1000; its trained `MBASE` is below 0 °C and its `NMF` above 0.3 in every cell, outside the published Snow-17 ranges ([Runs](runs.md#known-costs)). The network maps `lzsk`, `lzpk`, `MFMAX` and `MFMIN` in log space, as it does the five storage capacities and `zperc`. The Noah-lite ET variant adds one learned parameter, $\chi \in [0.5, 2.5]$ (soil-moisture limitation exponent), and pins vegetation fraction and seasonal LAI to observations.
+
+The Noah-lite ET limits each store's ET by $a^{\chi}$, $a$ the available fraction of tension water above wilting. For $\chi < 1$ the slope $\chi a^{\chi - 1}$ has no bound as $a$ falls to wilting, and the daily step's gradient through a store that ET drains in one day grows with it. The gradient (not the flow) uses the slope capped at the value at which that day's ET would empty the store's available water: $u_m(1 - w)/E$ for the bare-soil term on the upper zone, the root-weighted equivalent for the canopy term ($u_m$ the tension capacity, $w$ the wilting fraction, $E$ the term's potential ET). Without the cap one training run (a pack lasting into summer, little ground melt, a small upper zone) produced gradients of order $10^8$ in a few cells.

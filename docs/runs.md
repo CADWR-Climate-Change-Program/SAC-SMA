@@ -17,19 +17,19 @@ Median monthly KGE against CalSim3 on the held-out water years 1976–85:
 
 | Arcs | dPL-CalSim | Product |
 |---|---|---|
-| 139 share arcs | 0.712 | 0.847 |
-| 50 non-anchor arcs | 0.562 | 0.562 |
-| 7 single-arc systems | 0.896 | 0.896 |
-| All 196 | 0.688 | 0.818 |
+| 139 share arcs | 0.702 | 0.848 |
+| 50 non-anchor arcs | 0.563 | 0.563 |
+| 7 single-arc systems | 0.900 | 0.900 |
+| All 196 | 0.677 | 0.815 |
 
 On WY1922–1949, before any training year:
 
 | Arcs | dPL-CalSim | Product |
 |---|---|---|
-| 139 share arcs | 0.656 | 0.778 |
-| 50 non-anchor arcs | 0.433 | 0.433 |
-| 7 single-arc systems | 0.809 | 0.809 |
-| All 196 | 0.647 | 0.747 |
+| 139 share arcs | 0.659 | 0.784 |
+| 50 non-anchor arcs | 0.402 | 0.402 |
+| 7 single-arc systems | 0.816 | 0.816 |
+| All 196 | 0.647 | 0.754 |
 
 Source: `artifacts/product/calsim3/historical_livneh_unsplit/product_metrics.csv`; the fit's own scores,
 on its WY1950–2015 pass, are in `artifacts/product/calsim3/product_info.json`. `sacsma verify product`
@@ -41,8 +41,8 @@ which is held out of every family. Mean KGE by family:
 
 | | usgs | cdec | uf | arcs | Tier 1 mean | Tier 2 median |
 |---|---|---|---|---|---|---|
-| Training years (`metrics.csv`) | 0.660 | 0.881 | 0.923 | 0.704 | – | – |
-| WY1976–85 (`metrics_holdout.csv`, tier 1 and 2) | 0.638 | – | 0.874 | 0.706 | 0.897 | 0.688 |
+| Training years (`metrics.csv`) | 0.660 | 0.883 | 0.923 | 0.701 | – | – |
+| WY1976–85 (`metrics_holdout.csv`, tier 1 and 2) | 0.640 | – | 0.875 | 0.705 | 0.898 | 0.677 |
 
 Tier 1 is the mean over the 20 locations of `data/inputs/calsim3/tier1_sets.csv`, tier 2 the
 median over the 196 arcs (`artifacts/results/dpl/multifamily/7_calsim/`). The CDEC daily records are
@@ -75,8 +75,8 @@ CalSim3 catchment outlines of the `multifamily` domain, restricted to the 15 CDE
 | `3_pt` | Priestley–Taylor PET |
 | `4_noah` | soil-moisture-limited ET on observed vegetation, with the SAC-SMA exchange terms |
 | `5_px` | a learned rain/snow threshold |
-| `6_aef` | AlphaEarth embeddings (`aef_u`) in place of soil, vegetation and terrain |
-| `7_calsim` | dPL-CalSim: every family, every year but WY1976–85, family weights by footprint area with a fixed loss scale per family |
+| `6_aef` | AlphaEarth embeddings (`aef_u`) in place of every static input: soil, vegetation, terrain, elevation, position and flow length |
+| `7_calsim` | dPL-CalSim: every family, every year but WY1976–85, family weights by footprint area with a fixed loss scale per family, and wider ranges for `MBASE`, `NMF`, `Velo` and `zperc` |
 | `hybrid` | an LSTM on the forcing, `5_px`'s daily flow and 27 static attributes, 3 seeds |
 | `hybrid_dt` | `hybrid` fine-tuned to keep `5_px`'s response to climate, 3 seeds |
 | `lstm` | the LSTM without `5_px`'s flow (a control), 3 seeds |
@@ -95,22 +95,35 @@ dPL-CalSim together, the LSTM runs in a second read once their recipe was set.
 | `4_noah` | 0.858 | 0.844 | 0.850 |
 | `5_px` | 0.868 | 0.841 | 0.859 |
 | `6_aef` | 0.862 | 0.837 | 0.866 |
-| `7_calsim` | training | training | 0.899 |
+| `7_calsim` | training | training | 0.901 |
 | `hybrid` | 0.961 | 0.878 | 0.860 |
 | `hybrid_dt` | 0.942 | 0.873 | 0.880 |
 | `lstm` | 0.948 | 0.855 | 0.782 |
+
+A mean can rest on one or two records. `steps.csv` of the ladder study pairs each rung with the
+one before it record by record, with the number that gain and the median change. The GA to
+`1_hru` on WY2004–18 gains 0.071 in the mean with 7 of 15 outlets up (SCC −0.18 to 0.62);
+`6_aef` to `7_calsim` on the USGS gauges gains 0.104 in the mean with 27 of 49 up (median 0.02).
 
 The same read on the regional records outside the 15 watersheds (mean KGE; USGS gauges daily,
 unimpaired-flow subbasins and CalSim3 arcs monthly):
 
 | Run | 49 USGS gauges | 9 UF subbasins | 64 CalSim3 arcs |
 |---|---|---|---|
-| `2_grid` | 0.370 | 0.734 | 0.604 |
-| `3_pt` | 0.393 | 0.704 | 0.582 |
-| `4_noah` | 0.345 | 0.661 | 0.580 |
-| `5_px` | 0.352 | 0.710 | 0.591 |
-| `6_aef` | 0.532 | 0.864 | 0.658 |
-| `7_calsim` | 0.638 | 0.874 | 0.706 |
+| `2_grid` | 0.489 | 0.815 | 0.634 |
+| `3_pt` | 0.534 | 0.783 | 0.627 |
+| `4_noah` | 0.535 | 0.772 | 0.629 |
+| `5_px` | 0.522 | 0.803 | 0.630 |
+| `6_aef` | 0.536 | 0.865 | 0.659 |
+| `7_calsim` | 0.640 | 0.875 | 0.705 |
+
+Rungs 2 to 6 were read on these records a second time with `7_calsim`, on the grid statics
+in which every cell is a footprint mean ([the grid README](../data/inputs/grid/README.md)). The
+first read had a single point sample at each cell outside the 15-CDEC grid, with curvature,
+relief and slope on another scale: on it the four physical rungs scored 0.35 to 0.39 on the USGS
+gauges and 0.66 to 0.73 on the subbasins, and `6_aef`, whose inputs do not use these attributes,
+the same as now. Inside the 15-CDEC grid the means hold to 0.001
+(`read_WY1976-85_statics.csv` in `7_calsim`'s provenance).
 
 The response to a changed climate is the change in runoff against the run's own present climate,
 in percent, averaged over the 15 CDEC watersheds on WY1951–75, WY1986–88 and WY2004–18; the
@@ -126,7 +139,7 @@ precipitation columns are annual runoff (`sacsma dpl study ladder`,
 | `4_noah` | −2.9 | −29.3 | −17.9 | +18.8 |
 | `5_px` | −2.4 | −32.7 | −17.7 | +18.5 |
 | `6_aef` | −2.9 | −33.1 | −17.9 | +18.7 |
-| `7_calsim` | −1.2 | −30.4 | −17.6 | +18.3 |
+| `7_calsim` | −0.9 | −29.8 | −17.3 | +18.1 |
 | `hybrid` | 0.0 | −22.8 | −14.4 | +14.2 |
 | `hybrid_dt` | −1.5 | −29.4 | −16.2 | +16.8 |
 | `lstm` | +10.5 | −5.1 | −6.6 | +6.3 |
@@ -140,15 +153,16 @@ What the ladder shows (a step counts when the mean moves by 0.01 or more):
 - **The network generalizes better than the GA.** +0.07 on WY2004–18 and +0.09 on WY1976–85.
 - **The grid costs about 0.01 to 0.02** at the outlets in both test windows. It is the form that
   covers the CalSim3 catchments.
-- **Priestley–Taylor PET gains at the outlets** (+0.02 in both windows) and on the USGS gauges,
-  and loses on the unimpaired-flow subbasins and the arcs.
+- **Priestley–Taylor PET gains at the outlets** (+0.02 in both windows) and on the USGS gauges
+  (+0.04), and loses on the unimpaired-flow subbasins (−0.03).
 - **The Noah-type ET and the learned rain/snow threshold** leave the outlets unchanged in both
-  windows. Noah-type ET loses on the USGS gauges and subbasins; the threshold gains on the
-  subbasins (+0.05).
-- **AlphaEarth inputs transfer.** No change at the 15 outlets, and better on every regional
-  family (USGS +0.18, subbasins +0.15, arcs +0.07). On WY2004–18 they gain at MKM, FOL, PNF and
-  ORO and lose at NHG, TRM and NML.
-- **Training on every family** (`7_calsim`) gains at the outlets (+0.03) and in every family.
+  windows. Noah-type ET loses on the subbasins (−0.01); the threshold gains on the subbasins
+  (+0.03) and loses on the USGS gauges (−0.01).
+- **AlphaEarth inputs gain on the regional records**, most on the subbasins (+0.06, 7 of 9 up)
+  and the arcs (+0.03, 39 of 64); USGS +0.01. No change at the 15 outlets. On WY2004–18 they
+  gain at MKM, FOL, PNF and ORO and lose at NHG, TRM and NML.
+- **Training on every family** (`7_calsim`) gains at the outlets (+0.035), on the USGS gauges
+  (+0.10) and on the arcs (+0.05); the subbasins do not move.
 - **The hybrid adds skill** over its physics on WY2004–18 (+0.04) but not on WY1976–85, and
   loses its response to warming (0.0 % annual runoff at +3 °C against −2.4 % for `5_px`).
   `hybrid_dt` keeps most of the skill (+0.03 and +0.02) and about 60 % of the response
@@ -177,13 +191,20 @@ sacsma dpl calsim atlas <run> --score-holdout
 
 ## Known costs
 
-- **Unimpaired-flow subbasins in WY1976–85.** dPL-CalSim scores 0.874, below the run it was
-  adopted over (0.894), at each of the 9 subbasins.
+- **Unimpaired-flow subbasins in WY1976–85.** dPL-CalSim scores 0.875, below the multi-family
+  run that preceded the ladder (0.894), at each of the 9 subbasins.
 - **The benchmark.** On WGEN Product A scenario 1 against CDEC's monthly full natural flow,
-  WY1991–2018, dPL-CalSim's median KGE over the 12 sites is 0.925, against 0.949 for the run it
-  was adopted over. The loss is mostly in the Sierra (TLG, NML, CLE, YRS), with more volume in the
-  wrong month (0.063 against 0.045). These are training years: the check is the move to the
-  weather-generator forcing. See [Benchmark](benchmark.md).
+  WY1991–2018, dPL-CalSim's median KGE over the 12 sites is 0.927, against 0.949 for the
+  multi-family run that preceded the ladder. The loss is mostly in the Sierra (TLG, NML, CLE,
+  YRS), with more volume in the wrong month (0.060 against 0.045). These are training years:
+  the check is the move to the weather-generator forcing. See [Benchmark](benchmark.md).
+- **Snow-17 parameters outside the published ranges.** With `MBASE` free down to −2 °C and `NMF`
+  up to 0.5, dPL-CalSim puts `MBASE` below 0 °C in every cell (median −1.79; 17 % at −2) and
+  `NMF` above 0.3, the largest Anderson gives, in every cell (median 0.47; 12 % at 0.5). Daily
+  ground melt `DAYGM` is 0.018 mm/day at the median, against 0.24 with the range pinned, and below
+  0.01 in 32 % of the cells (inside its 0 to 0.3 range). The snowpack matches that of the same
+  recipe with these ranges pinned (regional mean peak 191 against 192 mm), as do the WY1976–85
+  scores. The values fit this structure to flow; they are not measured melt properties.
 - **Flood peaks.** The two-year gradient flattens the five largest annual peaks by about 4 points
   of their ratio to observed on WY1989–2003 (`2_grid` against a one-year control). Both
   under-predict them.
@@ -234,6 +255,12 @@ the time.
   the loss against a share of 0.22, because its records start earlier.
 - Training the USGS gauges on every year: no clean held-out reading of the CalSim3 checks.
 - Family shares by observed volume against by footprint area: not resolved on one seed.
+- Wider ranges also for `PLWHC` (to 0), `UADJ` (to 0) and `MFMIN` (to 0.01), and `NMF` to 0.6
+  (`7_calsim_fpb`): `PLWHC` and `UADJ` went below their published floors in every cell (medians
+  0.004 and 0.005) and `MFMIN` in 55 %, `NMF` above 0.5 in 82 %, and the Noah-lite ET's
+  slope at the wilting point drove one epoch's gradient to 5e8 (since capped,
+  [Model equations](equations.md#6-parameter-table)). Selection score 0.829 against dPL-CalSim's
+  0.831.
 - Building the model by fine-tuning earlier runs (a one-year base, then two-year fine-tunes): on
   WY1976–85 the run trained from scratch on one recipe is level on the arcs and outlets, better
   on the USGS gauges (+0.011) and the product (+0.012), worse on the subbasins (−0.020).
@@ -277,12 +304,7 @@ the time.
 - The share model's response is fitted on uniform climate changes. Under WGEN weather it is
   checked on scenario 12 only.
 - No warmed VIC run exists for a like-for-like comparison of the response.
-- The held-out decade WY1976–85 has been read six times.
 - A rain/snow partition that does not switch whole storm days (the candidate fix for ORO) has not
   been built.
-- **The Stanislaus' late summer is low**: dPL-CalSim's August–November flow at NML is 0.65 of
+- **The Stanislaus' late summer is low**: dPL-CalSim's August–November flow at NML is 0.66 of
   observed over its training years (SHA 0.92, ORO 0.97).
-- **`relief_m`** in the grid statics (`data/inputs/grid/soilveg_continuous.csv`) does not mean the
-  same thing on every cell. Against the 3DEP elevation spread of the whole 1/16° cell (1,357 cells
-  checked), it matches on the cells from the 15-CDEC grid and is 3.6 to 4.2 times smaller on those
-  from the other sources, which `sample_gis.py` takes over a 25-pixel window.

@@ -53,36 +53,36 @@ KGE / percent bias. The months column is the number scored.
 | Site | Months | dPL-CalSim | BCM | VIC-CalSim3 |
 |---|---|---|---|---|
 | SHA | 336 | 0.94 / +3 % | 0.85 / +1 % | 0.66 / +11 % |
-| CLE | 336 | 0.90 / 0 % | 0.80 / −1 % | 0.85 / −7 % |
-| BND | 336 | 0.97 / −2 % | 0.91 / +1 % | 0.70 / +6 % |
-| ORO | 336 | 0.97 / +1 % | 0.81 / −1 % | 0.67 / +16 % |
+| CLE | 336 | 0.90 / +1 % | 0.80 / −1 % | 0.85 / −7 % |
+| BND | 336 | 0.96 / −2 % | 0.91 / +1 % | 0.70 / +6 % |
+| ORO | 336 | 0.96 / +2 % | 0.81 / −1 % | 0.67 / +16 % |
 | FOL | 336 | 0.96 / +1 % | 0.90 / +1 % | 0.78 / +6 % |
-| YRS | 336 | 0.90 / −3 % | 0.89 / +1 % | 0.80 / +8 % |
+| YRS | 336 | 0.89 / −3 % | 0.89 / +1 % | 0.80 / +8 % |
 | CSN | 336 | 0.96 / 0 % | 0.91 / +1 % | 0.48 / +39 % |
-| MKM | 336 | 0.83 / −10 % | 0.83 / +1 % | 0.82 / 0 % |
-| NML | 217 | 0.91 / +3 % | 0.91 / 0 % | 0.56 / +19 % |
-| TLG | 336 | 0.86 / −7 % | 0.93 / +1 % | 0.86 / −3 % |
+| MKM | 336 | 0.82 / −11 % | 0.83 / +1 % | 0.82 / 0 % |
+| NML | 217 | 0.92 / +3 % | 0.91 / 0 % | 0.56 / +19 % |
+| TLG | 336 | 0.86 / −6 % | 0.93 / +1 % | 0.86 / −3 % |
 | MRC | 336 | 0.94 / +4 % | 0.91 / +1 % | 0.81 / +9 % |
-| MIL | 336 | 0.90 / −3 % | 0.95 / 0 % | 0.83 / −3 % |
+| MIL | 336 | 0.92 / −3 % | 0.95 / 0 % | 0.83 / −3 % |
 
 Pooled over the 12 sites (`summary.csv`). "Volume bias" is the bias of the summed mean
 volumes; "Highest KGE" counts the sites where the model scores best.
 
 | Model | Median KGE | Mean KGE | Median NSE | Median bias | Mean \|bias\| | Volume bias | Median seasonal mismatch | Highest KGE |
 |---|---|---|---|---|---|---|---|---|
-| dPL-CalSim | 0.925 | 0.919 | 0.929 | −0.04 % | 3.1 % | −0.5 % | 0.063 | 8 |
+| dPL-CalSim | 0.927 | 0.919 | 0.929 | +0.53 % | 3.2 % | −0.5 % | 0.060 | 8 |
 | BCM | 0.906 | 0.884 | 0.821 | +1.0 % | 0.8 % | +0.6 % | 0.076 | 4 |
 | VIC-CalSim3 | 0.791 | 0.735 | 0.793 | +6.9 % | 10.6 % | +7.8 % | 0.109 | 0 |
 
 What the table shows:
 
-- dPL-CalSim has the highest KGE at 8 of the 12 sites, is within about 4 % in volume
-  everywhere but MKM (−10 %) and TLG (−7 %), and has the smallest median seasonal mismatch. It
+- dPL-CalSim has the highest KGE at 8 of the 12 sites, is within about 5 % in volume
+  everywhere but MKM (−11 %) and TLG (−6 %), and has the smallest median seasonal mismatch. It
   was trained on these records (see below).
 - BCM, with its routing fitted here on the same records, has the second median KGE, is within
   about 1 % in volume at every site (the fit holds it there), and has the highest KGE at TLG
-  (0.93 against 0.86 for dPL-CalSim) and MIL (0.95 against 0.90), and by less than 0.005 at
-  MKM and NML.
+  (0.93 against 0.86 for dPL-CalSim) and MIL (0.95 against 0.92), and by less than 0.01 at
+  MKM and YRS.
 - VIC-CalSim3 has the lowest median KGE (0.79) and runs high at most sites, most at CSN
   (+39 %), NML (+19 %) and ORO (+16 %).
 

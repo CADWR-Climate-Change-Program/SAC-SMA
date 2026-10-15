@@ -46,3 +46,26 @@ sacsma verify product                                 # each tracked series repe
 ```
 
 After a refit, `apply` remakes the series of every forcing.
+
+## Arcs to use with care
+
+The 50 non-anchor arcs carry the model's own flow, with no share model and no scaling. On the
+training years (WY1950–2015 outside WY1976–85), 22 of them differ from CalSim3's volume by 30 % or
+more or score below 0 on WY1976–85 (`product_metrics.csv`). Those carrying 20 TAF a year or more:
+
+| Arc | CalSim3, TAF/yr | Volume against CalSim3 | KGE, WY1976–85 |
+|---|---|---|---|
+| `I_SCW008` South Fork Cottonwood Creek | 190 | +64 % | 0.20 |
+| `I_ELD027` Elder Creek | 72 | −34 % | 0.66 |
+| `I_CCH053` Cache Creek, Clear Lake Dam to Rumsey | 57 | +84 % | 0.57 |
+| `I_MERLC` Merle Collins Reservoir | 57 | +37 % | 0.24 |
+| `I_DHC021` Dry Creek and Hutchinson Creek | 55 | +34 % | 0.56 |
+| `I_LWSTN` Lewiston Lake local inflow | 43 | −40 % | 0.22 |
+| `I_MPS038` Mariposa Creek | 29 | −35 % | 0.39 |
+| `I_AMADR` Amador Reservoir | 29 | −31 % | 0.67 |
+
+CalSim3's own series is not a record on several of them: `I_SCW008` is proportioned from USGS
+11376000, `I_CCH053` and `I_MERLC` are mass balances or correlations with no gauge listed
+(`data/targets/calsim3/calsim3_arc_derivation.csv`). The west-side creeks `I_CAP000`, `I_LPC007` and
+`I_ORG000` (2 to 5 TAF a year) are 85 to 90 % low and score below 0; `I_SLUIS` is 3.6 times
+CalSim3's 5 TAF a year.

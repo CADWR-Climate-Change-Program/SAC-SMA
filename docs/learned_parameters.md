@@ -64,16 +64,20 @@ held-out decade WY1976–85 and the regional records, is in [Runs](runs.md#the-l
 
 What these runs show:
 
-- **The network generalizes better than the GA with the same physics.** +0.07 on WY2004–18
-  and +0.09 on WY1976–85.
+- **The network generalizes better than the GA with the same physics.** +0.09 on WY1976–85,
+  where 10 of the 13 outlets gain (median +0.03). The +0.07 on WY2004–18 is SCC's (−0.18 to
+  0.62): 7 of the 15 outlets gain and the median change is 0.00.
 - **The grid costs little.** About 0.01 to 0.02 at the outlets, and it is the form that covers
   the CalSim3 catchments.
 - **The physics options are even at the 15 outlets.** Priestley–Taylor PET gains about 0.02;
   the Noah-type ET and the learned threshold change the mean by less than 0.01. They are kept
   because PET then responds to radiation, ET to modeled soil moisture, and the snow line to a
   learned threshold.
-- **AlphaEarth inputs are even at the outlets and transfer better** to the records the run did
-  not train on (+0.18 on the USGS gauges in WY1976–85).
+- **AlphaEarth inputs are even at the outlets and transfer a little better** to the records the
+  run did not train on: on WY1976–85 the subbasins gain +0.06 (7 of 9 up) and the arcs +0.03 (39
+  of 64); the USGS gauges +0.01. Against the physical rungs read on point-sampled statics outside
+  the 15-CDEC grid, before those inputs were corrected, the gains looked larger (USGS +0.18,
+  subbasins +0.15) ([Runs](runs.md#the-ladder)).
 - **An LSTM on the physics adds skill and loses the response to warming** unless it is trained
   to keep it (`hybrid_dt`), which keeps most of the skill and about 60 % of the change in annual
   runoff. See below.
