@@ -180,7 +180,9 @@ USGS creek's footprint is extrapolated by construction while its cells were fitt
 regionalization test proper is the arcs at 0, which the summary and the atlas report apart.
 The tracing needs the HydroSHEDS tiles and `rasterio`, which lives only in the `sacsma-gis`
 environment, hence `--trace-python`; without it the extrapolated arcs fall back to
-straight-line flow lengths × 1.5, which the output records. `--components parts` adds the
+straight-line flow lengths × 1.5, which the output records. dPL-CalSim's traced lengths are
+tracked (`models/dpl/multifamily/7_calsim/tier2_extension_cells.csv`), and `product apply`
+reuses them, so applying the product needs no tracing. `--components parts` adds the
 routed runoff components each arc's flow is made of (quick and interflow, supplemental and
 primary baseflow), which the share model reads.
 

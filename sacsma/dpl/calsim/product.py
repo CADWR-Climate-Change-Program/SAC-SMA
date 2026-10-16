@@ -644,12 +644,12 @@ def run_pass(model: dict, forcing: str, data_dir: str | Path = "data",
              score_holdout: bool = False) -> Path:
     """The tier-2 pass with runoff parts of the share model's run on ``forcing`` over the whole
     record, in ``_local/product/calsim3/<forcing>/tier2`` (the extension cells' flow lengths of
-    the run's own tier-2 pass, when it has one).  The run is the folder the model was fitted
-    on (``run_dir``)."""
+    the run, :func:`sacsma.paths.extension_cells`, when it has them).  The run is the folder the
+    model was fitted on (``run_dir``)."""
     from .tier2 import main as tier2_main
     run_dir = Path(model["run_dir"])
     d = paths.local(name=f"product/calsim3/{forcing}") / "tier2"
-    ext = paths.run_roles(run_dir).local / "tier2" / "tier2_extension_cells.csv"
+    ext = paths.extension_cells(run_dir)
     tier2_main([str(run_dir), "--out", str(d), "--forcing", forcing, "--start", PASS_START,
                 "--components", "parts", "--no-maps"]
                + (["--extension-cells", str(ext)] if ext.exists() else [])

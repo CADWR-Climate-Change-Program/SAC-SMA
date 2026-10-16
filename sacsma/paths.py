@@ -413,6 +413,14 @@ def run_roles(run_dir, artifacts_dir="artifacts") -> RunDirs:
     return RunDirs(*(dpl_run(artifacts_dir, run, group, role).joinpath(*rest) for role in ROLES))
 
 
+def extension_cells(run_dir, artifacts_dir="artifacts") -> Path:
+    """The traced flow lengths of a run's extrapolated tier-2 arcs: the copy tracked in the
+    run's model folder (dPL-CalSim's), else the one its tier-2 pass wrote under ``_local/``."""
+    roles = run_roles(run_dir, artifacts_dir)
+    tracked = roles.model / "tier2_extension_cells.csv"
+    return tracked if tracked.exists() else roles.local / "tier2" / "tier2_extension_cells.csv"
+
+
 def dpl_study(artifacts_dir="artifacts", name: str = "climatology") -> Path:
     """Results of one ``sacsma dpl study``."""
     if name not in DPL_STUDIES:
