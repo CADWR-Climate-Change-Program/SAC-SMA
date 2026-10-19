@@ -14,7 +14,8 @@ asked (``score_holdout``).  A run on a ``train_window`` (the 15-CDEC rungs) is s
 Outputs (the parameter table in the run's model folder, the scores and the daily depth in its
 results folder, the figures in its local folder; :func:`sacsma.paths.run_roles`):
 
-* ``params_dpl.csv`` — the learned per-(entity, cell) parameter field.
+* ``params_dpl.csv`` — the learned per-(entity, cell) parameter field (``params_deep.csv``
+  beside it for a run with the deep store).
 * ``metrics.csv`` — one row per entity: family, timescale, KGE,
   NSE, pbias, r, alpha, beta, n days/months scored (asserted == the
   registry ``n_obs``).  A run with ``holdout_wy`` / ``uf_train_start`` adds
@@ -44,8 +45,14 @@ from .. import paths
 from .._figures import _period_stats, basin_diagnostics_fig, plt
 from ..io import MULTI_TIMESCALE_DOMAIN
 from ..metrics import kge, nse, pbias, pearson
-from .evaluate import export_canopy_params, export_params, load_net_from_checkpoint, simulate_field
-from .multi_timescale import EntityObs, load_entity_obs
+from .evaluate import (
+    export_canopy_params,
+    export_deep_params,
+    export_params,
+    load_net_from_checkpoint,
+    simulate_field,
+)
+from .multi_timescale import EntityObs, entity_obs_kwargs, load_entity_obs
 
 #: hydrograph families drawn by default (69 USGS figures on request only)
 _REVIEW_FAMILIES = ("cdec_daily", "uf_monthly")
@@ -354,15 +361,14 @@ def evaluate_checkpoint_mt(
     if cfg.et_mode == "noah":
         export_canopy_params(net, dom, x).to_csv(
             run.model / "params_canopy.csv", index=False)
+    if cfg.deep_store != "none":
+        export_deep_params(net, dom, x).to_csv(run.model / "params_deep.csv", index=False)
     print(f"wrote {run.model / 'params_dpl.csv'} ({len(dpl_df)} entity-cell rows, "
           f"sel cal KGE {ck['cal_kge']:.4f})", flush=True)
 
     # scored against the run's own training target (its obs_mask, water-year
     # holdout and uf back-extension, if any — all from the checkpoint's cfg)
-    eobs: EntityObs = load_entity_obs(dom, data_dir, obs_mask=cfg.obs_mask,
-                                      holdout_wy=cfg.holdout_wy or None,
-                                      uf_train_start=cfg.uf_train_start or None,
-                                      train_window=cfg.train_window or None)
+    eobs: EntityObs = load_entity_obs(dom, data_dir, **entity_obs_kwargs(cfg))
     # the holdout / back-extension counts are columns only for a run that used them
     ho_cols = bool(cfg.holdout_wy or cfg.uf_train_start)
     print(f"eval: the envelope on the engine ({dom.n_hru} HRUs, {len(dom.basins)} entities, "
@@ -420,6 +426,7 @@ def evaluate_checkpoint_mt(
             "n_obs": int(r["n_obs"]), "n_masked": int(eobs.n_masked[i]),
             **({"n_holdout": int(eobs.n_holdout[i]), "n_ext": int(eobs.n_ext[i])}
                if ho_cols else {}),
+            **({"n_screen": int(eobs.n_screen[i])} if cfg.target_mask else {}),
             "n_scored": int(fin.sum()),
             "kge": kge(sf, of), "nse": nse(sf, of), "pbias": pbias(sf, of),
             "r": pearson(sf, of), "alpha": alpha, "beta": beta, **reg_cols,
@@ -435,7 +442,8 @@ def evaluate_checkpoint_mt(
             figs.append((eid, m, unit, ts, pd.Timestamp(r["train_end"])))
 
     met = pd.DataFrame(rows)
-    want = met["n_obs"] - met["n_masked"] - np.array(eobs.n_out or [0] * len(met))
+    want = (met["n_obs"] - met["n_masked"] - np.array(eobs.n_out or [0] * len(met))
+            - np.array(eobs.n_screen or [0] * len(met)))
     if ho_cols:
         want = want - met["n_holdout"] + met["n_ext"]
     bad = met[met["n_scored"] != want]
@@ -443,8 +451,12 @@ def evaluate_checkpoint_mt(
         raise AssertionError(f"scored counts diverge from the registry "
                              f"n_obs: {bad['entity_id'].tolist()[:5]}")
     if ho_cols:
-        # registry window = the scored target minus the back-extension months
-        bad = met[met["n_reg"] != met["n_scored"] - met["n_ext"]]
+        # registry window = the scored target minus the back-extension months; a
+        # back-extension month the target_mask removed is in neither (n_ext counts it,
+        # n_screen too)
+        gap = met["n_reg"] - (met["n_scored"] - met["n_ext"])
+        scr = np.array(eobs.n_screen or [0] * len(met))
+        bad = met[(gap < 0) | (gap > scr)]
         if len(bad):
             raise AssertionError(f"registry-window counts diverge: "
                                  f"{bad['entity_id'].tolist()[:5]}")

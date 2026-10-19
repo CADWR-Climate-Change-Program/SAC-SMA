@@ -27,6 +27,13 @@ The runoff PARTS (``parts``, shape ``(6, T)``, or ``(0, 0)`` for none) are the n
 ``base`` of each day apportioned in proportion to their pre-deduction parts, in the order of
 ``sacsma.dpl.physics.sma.PART_NAMES``: impervious, ADIMP direct, surface, interflow (sum
 ``surf``), supplemental, primary (sum ``base``), each sum exact.
+
+``deep`` runs the deep store of the torch step (``Physics.deep == "cascade"``): a share
+``gdeep`` of the supplemental drainage into a store that drains at ``kdeep`` a day into the
+baseflow, outside the deficit, the percolation demand and the resupply; its outflow is in the
+supplemental part.  The state is the reference 6-vector and the store's content.  A ``parts``
+of shape ``(8, T)`` adds the store's two diagnostics (``sacsma.dpl.physics.sma.DEEP_PART_NAMES``):
+its outflow's share of the supplemental part and its content at the day's end.
 """
 
 from __future__ import annotations
@@ -74,16 +81,19 @@ def _split2(total, a, b):
 
 @njit
 def sac_learned(pet, pr_eff, par, state, et_noah, veg_frac, lai, soil_chi, n_inc, fracp_floor,
-                parts):
+                deep, dpar, parts):
     """One HRU over a window.  ``pet`` and ``pr_eff`` (T,) mm/day; ``par`` the 16 SAC-SMA
-    parameters; ``state`` the 6-vector; ``lai`` (T,) the observed LAI of each day (Noah-lite);
-    ``veg_frac`` and ``soil_chi`` scalars.  Returns ``(surf, base, tet, new_state)`` in mm/day
-    and fills ``parts`` when it has columns."""
+    parameters; ``state`` the 7-vector (the reference six, then the deep store); ``lai`` (T,)
+    the observed LAI of each day (Noah-lite); ``veg_frac`` and ``soil_chi`` scalars;
+    ``deep`` the deep store on ``dpar = (gdeep, kdeep)``.  Returns ``(surf, base,
+    tet, new_state)`` in mm/day and fills ``parts`` when it has columns."""
     uztwm, uzfwm, lztwm, lzfpm, lzfsm = par[0], par[1], par[2], par[3], par[4]
     uzk, lzpk, lzsk, zperc, rexp, pfree = par[5], par[6], par[7], par[8], par[9], par[10]
     pctim, adimp, riva, side, rserv = par[11], par[12], par[13], par[14], par[15]
     uztwc, uzfwc, lztwc, lzfsc, lzfpc, adimc = (state[0], state[1], state[2], state[3],
                                                 state[4], state[5])
+    gwc = state[6]
+    gdeep = dpar[0]
 
     n = pet.shape[0]
     want_parts = parts.shape[1] > 0
@@ -95,6 +105,8 @@ def sac_learned(pet, pr_eff, par, state, et_noah, veg_frac, lai, soil_chi, n_inc
     duz = 1.0 - (1.0 - uzk) ** dinc
     dlzp = 1.0 - (1.0 - lzpk) ** dinc
     dlzs = 1.0 - (1.0 - lzsk) ** dinc
+    ddeep = -np.expm1(dinc * np.log1p(-dpar[1]))      # 1 - (1 - kdeep)**dinc
+    diag = deep and parts.shape[0] > 6
     percm = lzfpm * dlzp + lzfsm * dlzs
     hpl = lzfpm / (lzfpm + lzfsm)
     floor = _mx(fracp_floor, 1e-12)
@@ -195,7 +207,7 @@ def sac_learned(pet, pr_eff, par, state, et_noah, veg_frac, lai, soil_chi, n_inc
 
         # ---- fixed substeps
         pinc = twx / n_inc
-        sbf = sbf_p = sbf_s = ssur = sif = sdro = 0.0
+        sbf = sbf_p = sbf_s = sbf_d = ssur = sif = sdro = 0.0
         for _s in range(n_inc):
             ratio = _mx((adimc - uztwc) / lztwm, 0.0)
             addro = pinc * ratio * ratio
@@ -209,6 +221,13 @@ def sac_learned(pet, pr_eff, par, state, et_noah, veg_frac, lai, soil_chi, n_inc
             if lzfsc <= _BF_EPS:
                 bf_s = bf_s + lzfsc
                 lzfsc = 0.0
+            if deep:
+                # the deep store drains, then takes its share of the supplemental drainage
+                bf_d = gwc * ddeep
+                into_d = gdeep * bf_s
+                gwc = (gwc - bf_d) + into_d
+                bf_s = (bf_s - into_d) + bf_d
+                sbf_d = sbf_d + bf_d
             adsur = 0.0
             if (pinc + uzfwc) <= 0.01:
                 # percolation short-circuit
@@ -293,6 +312,12 @@ def sac_learned(pet, pr_eff, par, state, et_noah, veg_frac, lai, soil_chi, n_inc
             parts[3, i] = sif_p
             parts[4, i] = sup_p
             parts[5, i] = pri_p
+            if diag:
+                # the store's diagnostics: its outflow's share of the supplemental part,
+                # and its content at the day's end
+                dpart, _rest = _split2(sup_p, _mx(sbf_d, 0.0), _mx(sbf_s - sbf_d, 0.0))
+                parts[6, i] = dpart
+                parts[7, i] = gwc
 
-    new_state = np.array([uztwc, uzfwc, lztwc, lzfsc, lzfpc, adimc])
+    new_state = np.array([uztwc, uzfwc, lztwc, lzfsc, lzfpc, adimc, gwc])
     return surf_o, base_o, tet_o, new_state

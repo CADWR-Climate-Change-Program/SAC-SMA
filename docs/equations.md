@@ -188,7 +188,7 @@ the percentage of annual volume placed in the wrong month. It is reported as a p
 
 ## 6. Parameter table
 
-The table lists the 31-parameter structure with the GA feasible ranges ([Wi & Steinschneider, 2023](references.md#wimemo)). The parameter network of the [learned-parameter model](learned_parameters.md) emits the same 28 free parameters into the same box (with the widenings noted below the table); `side` and `SCF` are fixed in both systems, and `PXTEMP` in both except `5_px`, `6_aef` and `7_calsim` (dPL-CalSim), which learn it between −1 and 3 °C.
+The table lists the 31-parameter structure with the GA feasible ranges ([Wi & Steinschneider, 2023](references.md#wimemo)). The parameter network of the [learned-parameter model](learned_parameters.md) emits the same 28 free parameters into the same box (with the widenings noted below the table); `side` and `SCF` are fixed in both systems, and `PXTEMP` in both except `5_px` to `8_calsim` (dPL-CalSim), which learn it between −1 and 3 °C. From `6_deep` on, the network also gives the deep store's share (0 to 0.5) and residence time (2 to 10 years), which the reference model does not have ([Learned parameters](learned_parameters.md#how-it-is-built)).
 
 | Process | Parameter | Description | Units | Lower | Upper |
 |---|---|---|---|---|---|

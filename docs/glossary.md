@@ -10,7 +10,7 @@ one thing.
 | **Domain** | What `--domain` selects: a group of watersheds with their modeling units. `15cdec`, `15cdec_grid`, `9unimp`, `11obs`, `12rim`, `multifamily`. |
 | **Calibration set** | One of the four GA calibrations: CDEC15 (`15cdec`), Rim12 (`12rim`), Observed11 (`11obs`), Unimpaired9 (`9unimp`). |
 | `15cdec_grid` | The 15 CDEC watersheds on 1/16° grid cells in place of the original HRUs. Its GA calibration is the starting field of every learned-parameter run; its forcing feeds the LSTM hybrids. |
-| `multifamily` | The grid cells and CalSim3 catchment outlines the learned-parameter runs train on: every entity of every family for dPL-CalSim, the 15 CDEC records for rungs 2 to 6 of the ladder. |
+| `multifamily` | The grid cells and CalSim3 catchment outlines the learned-parameter runs train on: every entity of every family for dPL-CalSim, the 15 CDEC records for rungs 2 to 7 of the ladder. |
 | **Entity** | One flow record together with the grid cells that drain to it. |
 | **Family** | The entities of one data source: `usgs_daily`, `cdec_daily`, `uf_monthly`, `calsim_monthly`. |
 | **HRU** | Hydrologic response unit: a grid cell intersected with a soil class, the original modeling unit. |
@@ -63,8 +63,9 @@ one thing.
 | **GA parameters** | The archived genetic-algorithm calibrations of Wi and Steinschneider (`artifacts/models/`, `ga_optimum.csv`). |
 | **Reference model** | The NumPy/Numba implementation that reproduces the MATLAB simulations. Called the "frozen" model in the code. |
 | **dPL** | Differentiable parameter learning: the network-trained parameters. |
-| **The ladder** | The learned-parameter runs, trained from scratch on one recipe with one change per rung, named for their rung: `1_hru`, `2_grid`, `3_pt`, `4_noah`, `5_px`, `6_aef`, `7_calsim` ([Runs](runs.md#the-ladder)). |
-| **dPL-CalSim** | The current learned model, the ladder's last rung (run folder `multifamily/7_calsim`): 159 entities of every family, 64 CalSim3 arcs among them, with WY1976–85 held out. |
+| **The ladder** | The learned-parameter runs, one recipe with one change per rung, named for their rung: `1_hru`, `2_grid`, `3_pt`, `4_noah`, `5_px`, `6_deep`, `7_aef`, `8_calsim`. Each is trained from scratch except `8_calsim`, a fine-tune of a run trained from scratch ([Runs](runs.md#the-ladder)). |
+| **dPL-CalSim** | The current learned model, the ladder's last rung (run folder `multifamily/8_calsim`): 159 entities of every family, 64 CalSim3 arcs among them, with WY1976–85 held out. |
+| **Deep store** | A slow store behind SAC-SMA's supplemental lower zone, in the learned model only: it takes a learned share of that zone's drainage and returns it as baseflow over a learned residence time of 2 to 10 years ([Learned parameters](learned_parameters.md#how-it-is-built)). From rung `6_deep`. |
 | `hybrid`, `hybrid_dt`, `lstm` | An LSTM on `5_px`'s daily flow; the same fine-tuned to keep `5_px`'s response to climate; an LSTM without it. |
 | **dPL-CalSim, BCM, VIC-CalSim3** | The three models of the [Benchmark](benchmark.md): the current learned model; the USGS Basin Characterization Model routed by its monthly post-processing, fitted per site on WY1991–2018; the VIC of the CalSim3 stochastic-input pipeline. |
 | **Product** | The CalSim3 rim-inflow product: dPL-CalSim's monthly flow on the 196 rim arcs with the share model on the share arcs, WY1916–2018, one series per forcing (`artifacts/product/calsim3/`). The calibrated models deliver two more, named by their application: the CalLite files (`product/callite/`) and the daily flow of the 15 CDEC watersheds (`product/15cdec/`). |

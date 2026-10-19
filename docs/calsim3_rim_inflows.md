@@ -1,6 +1,6 @@
 # CalSim3 rim inflows
 
-CalSim3 takes monthly inflows on 196 rim arcs. The current model, **dPL-CalSim** (`7_calsim`),
+CalSim3 takes monthly inflows on 196 rim arcs. The current model, **dPL-CalSim** (`8_calsim`),
 is a [learned-parameter](learned_parameters.md) SAC-SMA trained on four kinds of flow record at
 once, and the **CalSim3 rim-inflow product** is its monthly flow on those arcs, in TAF, from
 WY1916 to 2018, under the historical weather and two WGEN weather sequences. This page says what
@@ -15,7 +15,7 @@ grid cells that drain to it. Entities come in four *families*:
 | Family | Entities | Record | Loss |
 |---|---|---|---|
 | `usgs_daily` | 69 USGS gauges inside the CalSim3 domain | daily, from WY1950 | daily |
-| `cdec_daily` | 17 CDEC full-natural-flow stations | daily, from 1986 to 1988 (two from 1999) | daily |
+| `cdec_daily` | 17 CDEC full-natural-flow stations | daily, from 1986 to 1988 (two from 1999); with it CDEC's monthly full natural flow at 15 of them, from WY1950 | daily; monthly for the monthly record |
 | `uf_monthly` | 9 DWR unimpaired-flow subbasins | monthly | monthly |
 | `calsim_monthly` | 64 CalSim3 arcs with a record of their own (of 196 in the table) | monthly | monthly volume |
 
@@ -24,15 +24,37 @@ WY1950–2018; the unimpaired-flow subbasins over WY1985–2014, which dPL-CalSi
 WY1950. Family weights follow the area the families cover, and a fixed scale per family
 keeps one family's loss units from dominating the others.
 
-dPL-CalSim is the run `7_calsim` (`artifacts/models/dpl/multifamily/7_calsim/`,
-`artifacts/results/dpl/multifamily/7_calsim/`), the last rung of [the ladder](runs.md#the-ladder).
-It keeps the physics and inputs of the rung below it, `6_aef`: Priestley–Taylor PET, the
-soil-moisture-limited ET with the SAC-SMA exchange terms kept, a learned rain/snow threshold, and
-the AlphaEarth inputs (`aef_u`). It trains on all 159 entities of the four families, on every
-water year but WY1976–85, which is held out of every family, with wider ranges for four
-parameters the GA box pins (`MBASE`, `NMF`, `Velo`, `zperc`;
-[Model equations](equations.md#6-parameter-table)). The recipe and the scores of every rung are
-in [Runs](runs.md#the-ladder).
+dPL-CalSim is the run `8_calsim` (`artifacts/models/dpl/multifamily/8_calsim/`,
+`artifacts/results/dpl/multifamily/8_calsim/`), the last rung of [the ladder](runs.md#the-ladder).
+It keeps the physics and inputs of the rung below it, `7_aef`: Priestley–Taylor PET, the
+soil-moisture-limited ET with the SAC-SMA exchange terms kept, a learned rain/snow threshold, the
+deep store ([Learned parameters](learned_parameters.md#how-it-is-built)) and the AlphaEarth
+inputs (`aef_u`). It trains on all 159 entities of the four families, on every water year but
+WY1976–85, which is held out of every family, with wider ranges for four parameters the GA box
+pins (`MBASE`, `NMF`, `Velo`, `zperc`; [Model equations](equations.md#6-parameter-table)).
+
+It is trained in two stages:
+
+1. **The warm start:** that recipe without the deep store, from scratch, 120 epochs. Its network
+   is kept in the run's provenance (`provenance/warm_start.pt`).
+2. **The fine-tune:** 45 epochs from the warm start at a lower learning rate, with four additions:
+   - **The deep store,** its head new at the start.
+   - **Cleaned targets.** The days and months that an audit of the training records found
+     unreliable are left out: an unreliable dry season, the partners of CDEC's negative days,
+     impaired summers, records that a USGS gauge at the same place already trains, and forcing
+     eras the Livneh precipitation gets wrong. The tables are
+     [the CDEC screens](../data/targets/cdec/README.md#the-training-screens-of-dpl-calsim) and
+     [the location masks](../data/targets/usgs/README.md#the-location-mask). The Kings River
+     gauge trains on its record with the powerhouse flow added, and two arcs on a corrected depth.
+   - **CDEC's monthly full natural flow** at the CDEC sites, from WY1950, beside the daily
+     records. It covers the decades before the daily records and the late summers where the daily
+     record is screened out. The CDEC family's weight is split evenly between the two.
+   - **A dry-season term:** for each entity and scored water year,
+     $\lambda\,\big(\ln(V_{sim} + \epsilon) - \ln(V_{obs} + \epsilon)\big)^2$, with $V$ the
+     July–September volume, $\epsilon$ a tenth of the entity's median observed July–September
+     volume, and $\lambda = 0.113$, about a tenth of the objective at the warm start's field.
+
+The recipe and the scores of every rung are in [Runs](runs.md#the-ladder).
 
 ## How a run is checked against CalSim3
 
@@ -55,12 +77,12 @@ works for perturbed and stochastic climate. Each check's details are in
 dPL-CalSim holds WY1976–85 out of every family, so its checks are on that decade. The CDEC
 daily records start after it, so that family has no held-out score. From the run's tracked
 tables (`metrics_holdout.csv`, `tier1/tier1_metrics.csv`, `tier2/tier2_metrics.csv` in
-`artifacts/results/dpl/multifamily/7_calsim/`):
+`artifacts/results/dpl/multifamily/8_calsim/`):
 
 | | Median monthly KGE, WY1976–85 |
 |---|---|
-| Tier 1, 20 locations | 0.91 |
-| The 64 trained arcs | 0.71 |
+| Tier 1, 20 locations | 0.92 |
+| The 64 trained arcs | 0.73 |
 | The 9 unimpaired-flow subbasins | 0.89 |
 | All 196 arcs (tier 2) | 0.68 |
 
@@ -95,14 +117,14 @@ Skill on the held-out decade, median monthly KGE against CalSim3
 
 | Arcs | dPL-CalSim | Product |
 |---|---|---|
-| 139 share arcs | 0.70 | **0.85** |
-| 50 non-anchor arcs | 0.56 | 0.56 |
-| 7 single-arc systems | 0.90 | 0.90 |
+| 139 share arcs | 0.71 | **0.84** |
+| 50 non-anchor arcs | 0.58 | 0.58 |
+| 7 single-arc systems | 0.91 | 0.91 |
 | All 196 | 0.68 | **0.81** |
 
-Over all 196 arcs the product's mean is 0.73 and its 10th percentile 0.43; 5 arcs are below
-zero (12 for the model alone). At the five validation climate points the share arcs' response
-differs from the model's by at most 0.32 % in volume and 0.76 points in the April–July share at
+Over all 196 arcs the product's mean is 0.73 and its 10th percentile 0.48; 6 arcs are below
+zero (14 for the model alone). At the five validation climate points the share arcs' response
+differs from the model's by at most 0.32 % in volume and 0.73 points in the April–July share at
 the 90th percentile (`artifacts/product/calsim3/response_gate.csv`), inside the limits set beforehand
 (median 1, 90th percentile 3).
 
@@ -116,20 +138,20 @@ historical series scores (median monthly KGE):
 
 | Arcs | dPL-CalSim | Product |
 |---|---|---|
-| 139 share arcs | 0.66 | **0.78** |
-| 50 non-anchor arcs | 0.40 | 0.40 |
-| 7 single-arc systems | 0.82 | 0.82 |
-| All 196 | 0.65 | **0.75** |
+| 139 share arcs | 0.65 | **0.77** |
+| 50 non-anchor arcs | 0.42 | 0.42 |
+| 7 single-arc systems | 0.79 | 0.79 |
+| All 196 | 0.63 | **0.76** |
 
-**Under the WGEN weather.** Over WY1916–2018 the product carries 27,780 TAF a year under the
-historical weather, 28,050 under scenario 1 and 28,120 under scenario 12, and the April–July
-share of the year's flow falls from 40.8 % to 37.3 % and 29.1 %. The warmer early record of
+**Under the WGEN weather.** Over WY1916–2018 the product carries 28,140 TAF a year under the
+historical weather, 28,400 under scenario 1 and 28,420 under scenario 12, and the April–July
+share of the year's flow falls from 40.9 % to 37.3 % and 28.8 %. The warmer early record of
 scenario 1 (its temperature is detrended to 1991–2020) moves the melt earlier and leaves the
 volume within 1 %: the response the comparison of the calibrated sets finds in VIC, not in the
 Hamon-PET calibrations, which lose about 3 % ([Calibrated SAC-SMA](calibrated_sacsma.md)). On
 the share arcs the product keeps the model's own response. From scenario 1 to scenario 12 the
-model's arc volume changes by −0.1 % and its April–July share by −6.8 points at the median;
-the product differs from that by 0.05 % and 0.19 points at the median and by 0.16 % and 0.49
+model's arc volume changes by −0.3 % and its April–July share by −7.8 points at the median;
+the product differs from that by 0.05 % and 0.18 points at the median and by 0.13 % and 0.60
 points at the 90th percentile, within half the limits set for the fit's validation points.
 
 ## What was tried and not adopted
@@ -139,19 +161,20 @@ read, are listed in [Runs](runs.md#tried-and-not-adopted).
 
 ## Known costs
 
-- **Unimpaired-flow subbasins.** Their mean KGE is 0.92 over their training years (back to
-  WY1950) and 0.87 on the held-out WY1976–85, lowest at Chowchilla (0.79) and Putah Creek
-  (0.80). On their DWR record without the held-out WY1985 (WY1986–2014, `kge_reg` in
-  `metrics.csv`) it is 0.90.
+- **Unimpaired-flow subbasins.** Their mean KGE is 0.88 on the held-out WY1976–85, lowest at
+  Chowchilla (0.76) and Putah Creek (0.81). The cleaning leaves 5 of the 9 to train on (the
+  whole records of Cache Creek, Red Bluff, the Cosumnes and the Fresno are masked); those 5
+  score 0.94 over their training years (back to WY1950) and 0.88 on their DWR record without
+  the held-out WY1985 (WY1986–2014, `kge_reg` in `metrics.csv`).
 - **MKM and TLG in the [benchmark](benchmark.md).** On WGEN Product A scenario 1 against
-  CDEC's monthly full natural flow, WY1991–2018, the median KGE over the 12 sites is 0.93; the
-  lowest are MKM (0.82, volume −11 %) and TLG (0.86, −6 %).
+  CDEC's monthly full natural flow, WY1991–2018, the median KGE over the 12 sites is 0.94; the
+  lowest are MKM (0.86, volume −9 %), TLG (0.87, −6 %) and NML (0.87, +5 %).
 - **One seed.** dPL-CalSim is a single seed; no rung of the ladder has a second.
-- **The start is remembered for decades at Millerton and Hetch Hetchy.** In Millerton (San
-  Joaquin) and Hetch Hetchy (Tuolumne) the slow lower-zone store keeps its starting state for
-  decades. A run started in WY1950 instead of WY1916 differs by 12 TAF a year at the median at
-  Millerton (up to 6.7 %, WY1968) and 2 TAF at Hetch Hetchy (up to 5.8 %, WY1977). Over all arcs
-  the median difference is below 0.01 % from WY1953 on.
+- **The start is remembered for years.** The deep store drains over 8 to 9 years. A run
+  started in WY1950 (with the scoring spin-up, WY1950–59 looped) instead of WY1916 carries
+  8.7 % more water over all arcs in WY1950, 1.2 to 1.7 % in WY1951–55 and less than 1 % from
+  WY1956. The median arc differs by less than 0.1 % from WY1978 and less than 0.01 % from
+  WY1991. The training and the scores start in WY1950; the product starts in WY1916.
 
 ## Open
 
@@ -181,7 +204,7 @@ regionalization test proper is the arcs at 0, which the summary and the atlas re
 The tracing needs the HydroSHEDS tiles and `rasterio`, which lives only in the `sacsma-gis`
 environment, hence `--trace-python`; without it the extrapolated arcs fall back to
 straight-line flow lengths × 1.5, which the output records. dPL-CalSim's traced lengths are
-tracked (`models/dpl/multifamily/7_calsim/tier2_extension_cells.csv`), and `product apply`
+tracked (`models/dpl/multifamily/8_calsim/tier2_extension_cells.csv`), and `product apply`
 reuses them, so applying the product needs no tracing. `--components parts` adds the
 routed runoff components each arc's flow is made of (quick and interflow, supplemental and
 primary baseflow), which the share model reads.
@@ -219,8 +242,8 @@ sacsma dpl calsim product apply --forcing <name> --score-holdout   # -> artifact
 sacsma verify product                                               # apply repeats every tracked series
 ```
 
-`<run>` is any of the run's folders (`artifacts/models/dpl/multifamily/7_calsim`,
-`artifacts/results/dpl/multifamily/7_calsim` or its folder under `artifacts/_local/runs/`). The
+`<run>` is any of the run's folders (`artifacts/models/dpl/multifamily/8_calsim`,
+`artifacts/results/dpl/multifamily/8_calsim` or its folder under `artifacts/_local/runs/`). The
 full sequence, from the data to the product, is in
 [Reproduce](reproduce.md). The files each command writes are listed in
 [`artifacts/results/dpl/README.md`](../artifacts/results/dpl/README.md) and

@@ -35,7 +35,7 @@ from .physics.snow17 import Snow17State
 _STATE_FIELDS = (
     ("snow", "w_i"), ("snow", "ati"), ("snow", "w_q"), ("snow", "deficit"),
     ("sac", "uztwc"), ("sac", "uzfwc"), ("sac", "lztwc"),
-    ("sac", "lzfsc"), ("sac", "lzfpc"), ("sac", "adimc"),
+    ("sac", "lzfsc"), ("sac", "lzfpc"), ("sac", "adimc"), ("sac", "gwc"),
     (None, "hist_surf"), (None, "hist_base"),
 )
 _N_STATE = len(_STATE_FIELDS)
@@ -48,8 +48,8 @@ def _state_tensors(st: PipelineState) -> list[torch.Tensor]:
 
 def _unflatten_state(ts) -> PipelineState:
     """Inverse of :func:`_state_tensors`."""
-    return PipelineState(snow=Snow17State(*ts[0:4]), sac=SacState(*ts[4:10]),
-                         hist_surf=ts[10], hist_base=ts[11])
+    return PipelineState(snow=Snow17State(*ts[0:4]), sac=SacState(*ts[4:11]),
+                         hist_surf=ts[11], hist_base=ts[12])
 
 
 def _clone_state(st: PipelineState) -> PipelineState:

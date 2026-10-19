@@ -309,7 +309,7 @@ def stream(net, x, dom, cfg, W_arc: np.ndarray, *, spinup: str = "cycle",
     """The trained field over the envelope on the CPU engine (:func:`sacsma.dpl.evaluate.
     simulate_field`, the evaluator's spin-up): (arc depth (A, T), entity depth (B, T), t0, t1,
     bad_rows) in mm/day.  A row whose flow goes NaN (extrapolated parameters at their bounds) is
-    zeroed on those days and flagged in ``bad_rows``.
+    zeroed on every day and flagged in ``bad_rows``.
 
     ``components`` appends the arc depths of the routed fast and slow runoff components
     (``fast + slow`` = the arc depth) and after them the four routed runoff parts, quick
@@ -337,7 +337,7 @@ def stream(net, x, dom, cfg, W_arc: np.ndarray, *, spinup: str = "cycle",
 
 def _drop_bad_cells(sim: np.ndarray, W: np.ndarray, bad: np.ndarray, hrus: pd.DataFrame,
                     label: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Renormalise aggregates whose cells went NaN (those cells contributed zero) and
+    """Renormalise aggregates whose cells went NaN (those cells contributed zero on every day) and
     report them.  Returns (sim, n_bad_cells per aggregate, bad weight fraction per aggregate)."""
     n_bad = (W[:, bad] > 0).sum(axis=1)
     w_bad = W[:, bad].sum(axis=1)

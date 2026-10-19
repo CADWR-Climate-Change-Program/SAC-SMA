@@ -101,15 +101,12 @@ def _setup(ckpt: Path, data_dir: str) -> dict:
     from ..io import MULTI_TIMESCALE_DOMAIN
     from .data import load_cal_obs
     from .evaluate import load_net_from_checkpoint
-    from .multi_timescale import cut_entity_obs, load_entity_obs
+    from .multi_timescale import cut_entity_obs, entity_obs_kwargs, load_entity_obs
 
     net, x, dom, cfg, ck = load_net_from_checkpoint(ckpt, data_dir, device="cpu")
     s: dict = dict(net=net, x=x, dom=dom, cfg=cfg, eobs=None, midx=None, **ck["sel_setup"])
     if ck.get("domain") == MULTI_TIMESCALE_DOMAIN:
-        eobs = load_entity_obs(dom, data_dir, obs_mask=cfg.obs_mask,
-                               holdout_wy=cfg.holdout_wy or None,
-                               uf_train_start=cfg.uf_train_start or None,
-                               train_window=cfg.train_window or None)
+        eobs = load_entity_obs(dom, data_dir, **entity_obs_kwargs(cfg))
         if cfg.train_window:
             eobs = cut_entity_obs(eobs, dom.dates, cfg.train_window)
         obs = torch.full((len(dom.basins), eobs.t1 - eobs.t0), float("nan"),

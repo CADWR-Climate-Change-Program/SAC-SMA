@@ -212,6 +212,12 @@ def usgs_flow(data_dir="data") -> Path:
     return _root(data_dir) / T_USGS / "flow_daily.nc"
 
 
+def usgs_series(data_dir="data", site: str = "11218501") -> Path:
+    """A gauge's replacement record (``date,value_mm``, depth over the area of the gauge it
+    replaces in ``flow_daily.nc``), for ``DplConfig.target_series``."""
+    return _root(data_dir) / T_USGS / f"usgs_{site}_mm.csv"
+
+
 def usgs_gauges(data_dir="data") -> Path:
     return _root(data_dir) / T_USGS / "gauges.csv"
 
@@ -283,8 +289,8 @@ def dwr_swat(data_dir="data", name: str = "swat_monthly.csv") -> Path:
 # A learned-parameter run has one folder per role (:func:`run_roles`), each under the same
 # name: ``models/dpl/<group>/<run>``, ``results/dpl/<group>/<run>`` and
 # ``_local/runs/dpl/<group>/<run>``.  A run's group is what it trains on: ``15cdec`` holds the
-# ladder's rungs 1-6 and the hybrids (rungs 2-6 run on the multifamily domain restricted to the
-# 15 CDEC entities), ``multifamily`` holds ``7_calsim``.  Beside the groups, ``results/dpl/``
+# ladder's rungs 1-7 and the hybrids (rungs 2-7 run on the multifamily domain restricted to the
+# 15 CDEC entities), ``multifamily`` holds ``8_calsim``.  Beside the groups, ``results/dpl/``
 # holds ``fidelity`` (:func:`dpl_fidelity`) and ``studies`` (:func:`dpl_study`).  Every
 # function takes the output root (``artifacts_dir``, default ``"artifacts"``) and touches no
 # file, except :func:`run_roles`, which looks for a run's model folder.

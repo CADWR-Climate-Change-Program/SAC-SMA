@@ -18,8 +18,8 @@ attributes, LAI and forcing are not duplicated here: the loaders join them by ce
 Every target trains as an independent entity. The registry is the superset: a run chooses its entities
 at launch (`sacsma dpl train --basins`). Without `--basins` a run takes the 95 base entities; the arc
 family loads only when named (`--calsim-arcs train_default` adds the 64 `train_default` arcs, and a run
-with family shares names them `calsim=` in `--mt-family-weight`). The ladder's rungs `2_grid` to `6_aef`
-take the 15 `cdec_` entities of the original watersheds; dPL-CalSim (`7_calsim`) takes the 95 base
+with family shares names them `calsim=` in `--mt-family-weight`). The ladder's rungs `2_grid` to `7_aef`
+take the 15 `cdec_` entities of the original watersheds; dPL-CalSim (`8_calsim`) takes the 95 base
 entities and the 64 arcs.
 
 ## How it is built

@@ -159,4 +159,4 @@ python data/inputs/grid/gee_aef_region.py --assemble                 # -> aef_ce
 - `soilveg_continuous.csv`, `lai_climatology.csv`: `sacsma.io.soilveg_path` and `lai_climatology_path` for
   the `multifamily` domain, through them `sacsma.dpl.features` (attributes), `sacsma.io.load_hru_table`
   (`dem_elev` as cell elevation) and the canopy inputs of the Noah ET path (`EVC_cover_pct`, LAI).
-- `aef_cell_mean.npz`: `sacsma.dpl.features`, for the `aef_u` inputs only (`6_aef` and `7_calsim`).
+- `aef_cell_mean.npz`: `sacsma.dpl.features`, for the `aef_u` inputs only (`7_aef` and `8_calsim`).

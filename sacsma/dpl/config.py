@@ -73,6 +73,13 @@ BOUNDS: dict[str, tuple[float, float]] = {
 #: Held fixed (degenerate GA ranges) — never emitted by the parameter net.
 FIXED_PARAMS: dict[str, float] = {"side": 0.0, "SCF": 1.0, "PXTEMP": 0.0}
 
+#: The deep store (``DplConfig.deep_store``, not in the GA model): the share ``gdeep`` of the
+#: supplemental drainage it takes, its residence ``1 / kdeep`` in years (log-mapped), and the
+#: share a new head starts at (near 0, so a warm start begins close to its donor's field).
+DEEP_G_BOUNDS: tuple[float, float] = (0.0, 0.5)
+DEEP_TAU_YEARS: tuple[float, float] = (2.0, 10.0)
+DEEP_G_INIT: float = 0.01
+
 #: The 28 parameters the network learns, in PARAM_ORDER.
 FREE_PARAMS: tuple[str, ...] = tuple(p for p in PARAM_ORDER if p not in FIXED_PARAMS)
 
@@ -173,6 +180,50 @@ class DplConfig:
     #: entities, so a resume rebuilds the same order.  Multi-timescale domain only.
     #: "none" (default) = only the entities named or the 95 base entities.
     calsim_arcs: str = "none"
+    #: CDEC's reconciled monthly full natural flow (data/targets/cdec/fnf_monthly.csv, sensor
+    #: 65) as a monthly COMPANION target of the cdec_daily entities, from this first of the
+    #: month (e.g. "1949-10-01" = WY1950) to the envelope end: each entity's station (the
+    #: registry outlet_source) in depth over the area its daily depth was made with, as the
+    #: held-out outlet check reads it (evaluate_multi_timescale.outlet_scores); CLE takes TNL
+    #: brought to CLE's volume (multi_timescale.TNL_PER_CLE) over CLE's area.  NHG and NML
+    #: have no monthly record of their own.  The holdout and train_window apply before its
+    #: normalizers, cdec_monthly_mask after them.  It trains as its own
+    #: monthly term with family key "cdecm" in mt_family_weight / mt_loss_ref; selection and
+    #: scoring do not read it.  Multi-timescale domain only.  "" = off (default).
+    cdec_monthly: str = ""
+    #: the companion's months left out, as "cdec_<SITE>|YYYY-MM" (the CLI reads them from
+    #: CSVs with entity_id and month columns); the checkpoint carries the list.  () = none.
+    cdec_monthly_mask: tuple[str, ...] = ()
+    #: targets of ANY family left out AFTER the NNSE normalizers (which stay those of the
+    #: record without them, so a masked entity keeps its weight per kept value), as
+    #: "entity_id|YYYY-MM-DD" or "entity_id|YYYY-MM-DD..YYYY-MM-DD" for a daily entity and
+    #: the same with YYYY-MM for a monthly one (the CLI reads CSVs with entity_id and date,
+    #: month or start/end columns and joins consecutive days into ranges).  An entity masked
+    #: to nothing stays in the run (its cells, statistics and denominators unchanged) and
+    #: scores nothing.  The checkpoint carries the list; evaluation and selection score the
+    #: same targets.  Multi-timescale domain only.  () = none (default).
+    target_mask: tuple[str, ...] = ()
+    #: per-entity factors on the target as read, "entity_id=factor" (a depth-basis fix: a
+    #: series over another area than the entity's).  () = none (default).
+    target_scale: tuple[str, ...] = ()
+    #: per daily entity, a replacement record, "entity_id=path" (a CSV of date,value_mm in
+    #: depth over the entity's area, the path relative to the data directory), on the
+    #: store's observed days after the n_obs audit; a day it lacks is removed.  An entity
+    #: takes a target_scale factor or a series, not both.  () = none (default).
+    target_series: tuple[str, ...] = ()
+    #: the dry-season term: per entity and scored water year, dry_season_lambda x
+    #: (ln(V_sim + eps) - ln(V_obs + eps))^2 with V the Jul-Sep volume — of the valid days
+    #: of a daily target (at least 80 % of the 92), of the three months of a monthly one.
+    #: A cdec_daily outlet takes its companion's year where that is scored, its daily
+    #: record's otherwise.  eps = dry_season_eps x the entity's median observed Jul-Sep
+    #: volume; an entity with a zero Jul-Sep in more than 10 % of its scored years is left
+    #: out.  Each entity weighs its family's nominal share / the family's entity count in the
+    #: run, scored or not, so a masked or left-out entity drops its weight rather than handing
+    #: it to its siblings (the CDEC outlets carry the cdec and cdecm shares together).
+    #: Multi-timescale domain only.
+    #: 0 = off (default).
+    dry_season_lambda: float = 0.0
+    dry_season_eps: float = 0.1
 
     #: multi-timescale family weighting (multifamily domain only): "none" =
     #: every valid daily entity weighs equally in the chunk mean and the
@@ -265,6 +316,13 @@ class DplConfig:
     #: the PET of the SAC-SMA ET: "hamon" or "priestley_taylor" (the energy-based PET of
     #: physics.et_noah.potential_et_priestley_taylor; needs per-cell tmin/tmax)
     sac_pet: str = "hamon"
+    #: the deep store: "none", or "cascade" = a learned share ``gdeep`` of the supplemental
+    #: drainage through a slow store of learned residence (``DEEP_G_BOUNDS``,
+    #: ``DEEP_TAU_YEARS``; physics.sma.sacsma_step ``deep``), outside the lower-zone deficit
+    deep_store: str = "none"
+    #: the deep store head's learning rate as a multiple of ``lr``: the head starts at
+    #: gdeep 0.01, low on its sigmoid, where a step of the pre-activation moves gdeep little
+    deep_lr_mult: float = 1.0
     lr: float = 1e-3
     lr_min: float = 1e-5        # cosine-annealed floor
     lr_warmup_epochs: int = 4   # linear warmup protects the GA-prior init
@@ -301,6 +359,10 @@ class DplConfig:
     graph_recompute_days: int = 73
     eval_every: int = 2            # full-cal no-grad KGE selection cadence
     patience: int = 10              # early stop after this many stale selections
+    #: a warm start: the network of this checkpoint (same variant, domain, entities,
+    #: parameter mapping and input scaling) with a fresh optimizer and schedule — a fine-tune.
+    #: "" = the priors (default).
+    init_from: str = ""
     #: the selection scored EVERY epoch on the CPU engine by a separate process
     #: (:mod:`sacsma.dpl.select_cpu`) while the GPU trains, in place of the GPU selection
     #: pass: ``patience`` then counts stale epochs, and the decisions trail the training
@@ -328,6 +390,10 @@ class DplConfig:
             raise ValueError(f"noah_pet {self.noah_pet!r}")
         if self.sac_pet not in ("hamon", "priestley_taylor"):
             raise ValueError(f"sac_pet {self.sac_pet!r}")
+        if self.deep_store not in ("none", "cascade"):
+            raise ValueError(f"deep_store {self.deep_store!r}: 'none' or 'cascade'")
+        if self.deep_lr_mult <= 0.0:
+            raise ValueError(f"deep_lr_mult {self.deep_lr_mult}: > 0")
         if self.mt_family_weight != "none":
             family_shares(self.mt_family_weight)   # raises on a bad spec
         if self.mt_share_norm not in ("present", "all"):
@@ -443,6 +509,68 @@ class DplConfig:
                                  "cuts: use one or the other")
         if self.calsim_arcs not in ("none", "train_default"):
             raise ValueError(f"calsim_arcs {self.calsim_arcs!r}: 'none' or 'train_default'")
+        if self.cdec_monthly:
+            d = _date.fromisoformat(self.cdec_monthly)
+            if d.day != 1 or d < _date(1949, 10, 1):
+                raise ValueError(f"cdec_monthly {self.cdec_monthly!r}: a first of the month on "
+                                 "or after 1949-10-01 (the envelope start)")
+            self.cdec_monthly = d.isoformat()
+        if isinstance(self.cdec_monthly_mask, str):
+            self.cdec_monthly_mask = tuple(s for s in self.cdec_monthly_mask.split(",") if s)
+        self.cdec_monthly_mask = tuple(str(s) for s in self.cdec_monthly_mask)
+        for s in self.cdec_monthly_mask:
+            eid, sep, mon = s.partition("|")
+            try:
+                _date.fromisoformat(mon + "-01")
+            except ValueError:
+                sep = ""
+            if not (sep and eid.startswith("cdec_")):
+                raise ValueError(f"cdec_monthly_mask entry {s!r}: expected 'cdec_<SITE>|YYYY-MM'")
+        if len(set(self.cdec_monthly_mask)) != len(self.cdec_monthly_mask):
+            raise ValueError("cdec_monthly_mask has duplicate entries")
+        if self.cdec_monthly_mask and not self.cdec_monthly:
+            raise ValueError("cdec_monthly_mask needs cdec_monthly")
+        for name in ("target_mask", "target_scale", "target_series"):
+            v = getattr(self, name)
+            if isinstance(v, str):
+                v = tuple(s for s in v.split(",") if s)
+            setattr(self, name, tuple(str(s) for s in v))
+        for s in self.target_mask:
+            eid, sep, span = s.partition("|")
+            a, _, b = span.partition("..")
+            try:
+                for d in (a, b or a):
+                    _date.fromisoformat(d if len(d) == 10 else d + "-01")
+                ok = (len(a) in (7, 10) and len(b or a) == len(a) and (b or a) >= a)
+            except ValueError:
+                ok = False
+            if not (sep and eid and ok):
+                raise ValueError(f"target_mask entry {s!r}: expected 'entity_id|YYYY-MM-DD"
+                                 "[..YYYY-MM-DD]' or 'entity_id|YYYY-MM[..YYYY-MM]'")
+        for name in ("target_scale", "target_series"):
+            ids = [s.partition("=")[0] for s in getattr(self, name)]
+            if any(not e or "=" not in s for e, s in zip(ids, getattr(self, name), strict=True)):
+                raise ValueError(f"{name}: expected 'entity_id=value' entries")
+            if len(set(ids)) != len(ids):
+                raise ValueError(f"{name} names an entity twice")
+        both = ({s.partition("=")[0] for s in self.target_scale}
+                & {s.partition("=")[0] for s in self.target_series})
+        if both:
+            raise ValueError(f"target_scale and target_series both name {sorted(both)}: a "
+                             "replacement record is already a depth over the entity's area")
+        for s in self.target_series:
+            p = s.partition("=")[2].replace("\\", "/")
+            if not p or p.startswith("/") or ":" in p or ".." in p.split("/"):
+                raise ValueError(f"target_series {s!r}: expected the CSV's path relative to "
+                                 "the data directory")
+        for s in self.target_scale:
+            f = float(s.partition("=")[2])
+            if not (math.isfinite(f) and f > 0.0):
+                raise ValueError(f"target_scale {s!r}: the factor must be finite and > 0")
+        if not (math.isfinite(self.dry_season_lambda) and self.dry_season_lambda >= 0.0):
+            raise ValueError(f"dry_season_lambda {self.dry_season_lambda} must be finite, >= 0")
+        if not (math.isfinite(self.dry_season_eps) and self.dry_season_eps > 0.0):
+            raise ValueError(f"dry_season_eps {self.dry_season_eps} must be finite and > 0")
         from datetime import date
         if date.fromisoformat(self.spinup_start) >= \
                 date.fromisoformat(self.cal_start):
@@ -457,7 +585,8 @@ class DplConfig:
         noah = self.et_mode == "noah"
         return Physics(et="noah_lite" if noah else "sac",
                        pet=self.noah_pet if noah else self.sac_pet, learned=True,
-                       n_inc=self.n_inc, fracp_floor=self.fracp_floor)
+                       n_inc=self.n_inc, fracp_floor=self.fracp_floor,
+                       deep=self.deep_store)
 
 
 def _ensure_conda_dlls_on_path() -> None:
@@ -502,7 +631,9 @@ def pick_device(requested: str = "cuda"):
 
 
 FAMILY_KEYS = {"usgs": "usgs_daily", "cdec": "cdec_daily", "uf": "uf_monthly",
-               "calsim": "calsim_monthly"}
+               "calsim": "calsim_monthly", "cdecm": "cdec_monthly"}
+#: the CDEC monthly companion (DplConfig.cdec_monthly): a share key, not a registry family
+CDEC_MONTHLY = "cdec_monthly"
 #: the monthly families: each is its own monthly NNSE term (own rows, share, denominator
 #: and frozen scale) — the rest are daily
 MONTHLY_FAMILIES = ("uf_monthly", "calsim_monthly")
@@ -524,7 +655,7 @@ def family_shares(spec: str) -> dict[str, float] | None:
         fam = FAMILY_KEYS.get(key, key)
         if fam not in FAMILY_KEYS.values():
             raise ValueError(f"mt_family_weight {spec!r}: unknown family "
-                             f"{key!r} (usgs, cdec, uf, calsim)")
+                             f"{key!r} (usgs, cdec, uf, calsim, cdecm)")
         if fam in shares:
             raise ValueError(f"mt_family_weight {spec!r}: {key!r} repeated")
         try:
@@ -551,7 +682,7 @@ def family_loss_refs(spec: str) -> dict[str, float]:
         fam = FAMILY_KEYS.get(key, key)
         if fam not in FAMILY_KEYS.values():
             raise ValueError(f"mt_loss_ref {spec!r}: unknown family {key!r} "
-                             "(usgs, cdec, uf, calsim)")
+                             "(usgs, cdec, uf, calsim, cdecm)")
         if fam in refs:
             raise ValueError(f"mt_loss_ref {spec!r}: {key!r} repeated")
         try:

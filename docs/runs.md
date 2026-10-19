@@ -7,7 +7,7 @@ and what is still open. The method is in [Learned parameters](learned_parameters
 
 ## Current model and product
 
-**dPL-CalSim** (`multifamily/7_calsim`, the last rung of [the ladder](#the-ladder)) and the
+**dPL-CalSim** (`multifamily/8_calsim`, the last rung of [the ladder](#the-ladder)) and the
 **CalSim3 rim-inflow product** fitted on it
 ([`artifacts/product/calsim3/`](../artifacts/product/calsim3/README.md)): monthly flow on the 196
 rim arcs, TAF, WY1916–2018, one series per forcing (historical Livneh, WGEN Product A scenarios 1
@@ -17,19 +17,19 @@ Median monthly KGE against CalSim3 on the held-out water years 1976–85:
 
 | Arcs | dPL-CalSim | Product |
 |---|---|---|
-| 139 share arcs | 0.702 | 0.848 |
-| 50 non-anchor arcs | 0.563 | 0.563 |
-| 7 single-arc systems | 0.900 | 0.900 |
-| All 196 | 0.677 | 0.815 |
+| 139 share arcs | 0.708 | 0.843 |
+| 50 non-anchor arcs | 0.582 | 0.582 |
+| 7 single-arc systems | 0.909 | 0.909 |
+| All 196 | 0.685 | 0.810 |
 
 On WY1922–1949, before any training year:
 
 | Arcs | dPL-CalSim | Product |
 |---|---|---|
-| 139 share arcs | 0.659 | 0.784 |
-| 50 non-anchor arcs | 0.402 | 0.402 |
-| 7 single-arc systems | 0.816 | 0.816 |
-| All 196 | 0.647 | 0.754 |
+| 139 share arcs | 0.646 | 0.775 |
+| 50 non-anchor arcs | 0.415 | 0.415 |
+| 7 single-arc systems | 0.785 | 0.785 |
+| All 196 | 0.633 | 0.760 |
 
 Source: `artifacts/product/calsim3/historical_livneh_unsplit/product_metrics.csv`; the fit's own scores,
 on its WY1950–2015 pass, are in `artifacts/product/calsim3/product_info.json`. `sacsma verify product`
@@ -37,22 +37,24 @@ checks that `sacsma dpl calsim product apply` reproduces every tracked series.
 
 dPL-CalSim trains one network on 159 entities: 69 USGS gauges, 17 CDEC records, the 9
 unimpaired-flow subbasins (back to WY1950) and 64 CalSim3 arcs, on every year but WY1976–85,
-which is held out of every family. Mean KGE by family:
+which is held out of every family. Mean KGE by family; the training years are scored on the
+cleaned targets, which keep 60 of the USGS gauges, 5 of the subbasins and 60 of the arcs, and
+WY1976–85 on the records as they are:
 
 | | usgs | cdec | uf | arcs | Tier 1 mean | Tier 2 median |
 |---|---|---|---|---|---|---|
-| Training years (`metrics.csv`) | 0.660 | 0.883 | 0.923 | 0.701 | – | – |
-| WY1976–85 (`metrics_holdout.csv`, tier 1 and 2) | 0.640 | – | 0.875 | 0.705 | 0.898 | 0.677 |
+| Training years (`metrics.csv`) | 0.710 | 0.879 | 0.936 | 0.710 | – | – |
+| WY1976–85 (`metrics_holdout.csv`, tier 1 and 2) | 0.639 | – | 0.878 | 0.705 | 0.904 | 0.685 |
 
 Tier 1 is the mean over the 20 locations of `data/inputs/calsim3/tier1_sets.csv`, tier 2 the
-median over the 196 arcs (`artifacts/results/dpl/multifamily/7_calsim/`). The CDEC daily records are
+median over the 196 arcs (`artifacts/results/dpl/multifamily/8_calsim/`). The CDEC daily records are
 not scored on WY1976–85; [the ladder](#the-ladder) reads the outlets there on monthly full natural flow.
 
 ## The ladder
 
-The learned-parameter runs are one recipe trained from scratch, one change per rung. The rungs
-are named for their place on the ladder, not for what they train on
-([Conventions](conventions.md)).
+The learned-parameter runs are one recipe, one change per rung, each trained from scratch but
+the last, which fine-tunes a run trained from scratch. The rungs are named for their place on
+the ladder, not for what they train on ([Conventions](conventions.md)).
 
 Every rung uses the defaults of `sacsma dpl train`: the variance-normalized squared error with a
 log-flow term and the record-form variance term, each chunk weighted by its days, dropout 0, a
@@ -64,7 +66,7 @@ the starting field. On top of them, every rung selects its network on the CPU ev
 with `lzsk` down to 0.001, and adds a small penalty on the network's saturated outputs. The
 commands are in [Reproduce](reproduce.md).
 
-Rungs 1 to 6 train on the 15 CDEC watersheds, WY1989–2003. Rungs 2 to 6 run on the grid cells and
+Rungs 1 to 7 train on the 15 CDEC watersheds, WY1989–2003. Rungs 2 to 7 run on the grid cells and
 CalSim3 catchment outlines of the `multifamily` domain, restricted to the 15 CDEC records.
 
 | Rung | Change from the rung above |
@@ -75,16 +77,16 @@ CalSim3 catchment outlines of the `multifamily` domain, restricted to the 15 CDE
 | `3_pt` | Priestley–Taylor PET |
 | `4_noah` | soil-moisture-limited ET on observed vegetation, with the SAC-SMA exchange terms |
 | `5_px` | a learned rain/snow threshold |
-| `6_aef` | AlphaEarth embeddings (`aef_u`) in place of every static input: soil, vegetation, terrain, elevation, position and flow length |
-| `7_calsim` | dPL-CalSim: every family, every year but WY1976–85, family weights by footprint area with a fixed loss scale per family, and wider ranges for `MBASE`, `NMF`, `Velo` and `zperc` |
+| `6_deep` | the deep store: a slow store behind the supplemental lower zone, with a learned share and a residence time of 2 to 10 years ([Learned parameters](learned_parameters.md#how-it-is-built)) |
+| `7_aef` | AlphaEarth embeddings (`aef_u`) in place of every static input: soil, vegetation, terrain, elevation, position and flow length |
+| `8_calsim` | dPL-CalSim: every family, every year but WY1976–85, family weights by footprint area with a fixed loss scale per family, and wider ranges for `MBASE`, `NMF`, `Velo` and `zperc`, trained from scratch without the deep store; then a 45-epoch fine-tune with the deep store, the cleaned targets, CDEC's monthly records from WY1950 and a dry-season term ([CalSim3 rim inflows](calsim3_rim_inflows.md#what-the-model-trains-on)) |
 | `hybrid` | an LSTM on the forcing, `5_px`'s daily flow and 27 static attributes, 3 seeds |
 | `hybrid_dt` | `hybrid` fine-tuned to keep `5_px`'s response to climate, 3 seeds |
 | `lstm` | the LSTM without `5_px`'s flow (a control), 3 seeds |
 
 Mean KGE over the 15 CDEC watersheds. WY1989–2003 and WY2004–18 are daily, from each run's
 `metrics.csv` (the LSTM runs on the mean flow of their seeds). WY1976–85 is the held-out decade,
-monthly, at the 13 outlets with a monthly record then, read once per run: the rungs and
-dPL-CalSim together, the LSTM runs in a second read once their recipe was set.
+monthly, at the 13 outlets with a monthly record then, read once per run.
 
 | Run | WY1989–2003 (training) | WY2004–18 | WY1976–85 |
 |---|---|---|---|
@@ -94,8 +96,9 @@ dPL-CalSim together, the LSTM runs in a second read once their recipe was set.
 | `3_pt` | 0.847 | 0.843 | 0.852 |
 | `4_noah` | 0.858 | 0.844 | 0.850 |
 | `5_px` | 0.868 | 0.841 | 0.859 |
-| `6_aef` | 0.862 | 0.837 | 0.866 |
-| `7_calsim` | training | training | 0.901 |
+| `6_deep` | 0.865 | 0.841 | 0.858 |
+| `7_aef` | 0.859 | 0.839 | 0.853 |
+| `8_calsim` | training | training | 0.913 |
 | `hybrid` | 0.961 | 0.878 | 0.860 |
 | `hybrid_dt` | 0.942 | 0.873 | 0.880 |
 | `lstm` | 0.948 | 0.855 | 0.782 |
@@ -103,7 +106,7 @@ dPL-CalSim together, the LSTM runs in a second read once their recipe was set.
 A mean can rest on one or two records. `steps.csv` of the ladder study pairs each rung with the
 one before it record by record, with the number that gain and the median change. The GA to
 `1_hru` on WY2004–18 gains 0.071 in the mean with 7 of 15 outlets up (SCC −0.18 to 0.62);
-`6_aef` to `7_calsim` on the USGS gauges gains 0.104 in the mean with 27 of 49 up (median 0.02).
+`7_aef` to `8_calsim` on the USGS gauges gains 0.124 in the mean with 30 of 49 up (median 0.03).
 
 The same read on the regional records outside the 15 watersheds (mean KGE; USGS gauges daily,
 unimpaired-flow subbasins and CalSim3 arcs monthly):
@@ -114,16 +117,15 @@ unimpaired-flow subbasins and CalSim3 arcs monthly):
 | `3_pt` | 0.534 | 0.783 | 0.627 |
 | `4_noah` | 0.535 | 0.772 | 0.629 |
 | `5_px` | 0.522 | 0.803 | 0.630 |
-| `6_aef` | 0.536 | 0.865 | 0.659 |
-| `7_calsim` | 0.640 | 0.875 | 0.705 |
+| `6_deep` | 0.509 | 0.805 | 0.631 |
+| `7_aef` | 0.515 | 0.844 | 0.659 |
+| `8_calsim` | 0.639 | 0.878 | 0.705 |
 
-Rungs 2 to 6 were read on these records a second time with `7_calsim`, on the grid statics
-in which every cell is a footprint mean ([the grid README](../data/inputs/grid/README.md)). The
-first read had a single point sample at each cell outside the 15-CDEC grid, with curvature,
-relief and slope on another scale: on it the four physical rungs scored 0.35 to 0.39 on the USGS
-gauges and 0.66 to 0.73 on the subbasins, and `6_aef`, whose inputs do not use these attributes,
-the same as now. Inside the 15-CDEC grid the means hold to 0.001
-(`read_WY1976-85_statics.csv` in `7_calsim`'s provenance).
+Every rung is read on the grid statics in which every cell is a footprint mean ([the grid
+README](../data/inputs/grid/README.md)). An earlier read had a single point sample at each cell
+outside the 15-CDEC grid, with curvature, relief and slope on another scale: on it rungs 2 to 5
+scored 0.35 to 0.39 on the USGS gauges and 0.66 to 0.73 on the subbasins. Inside the 15-CDEC
+grid the means hold to 0.001 (`read_WY1976-85_statics.csv` in `8_calsim`'s provenance).
 
 The response to a changed climate is the change in runoff against the run's own present climate,
 in percent, averaged over the 15 CDEC watersheds on WY1951–75, WY1986–88 and WY2004–18; the
@@ -138,8 +140,9 @@ precipitation columns are annual runoff (`sacsma dpl study ladder`,
 | `3_pt` | −3.4 | −29.8 | −17.8 | +18.7 |
 | `4_noah` | −2.9 | −29.3 | −17.9 | +18.8 |
 | `5_px` | −2.4 | −32.7 | −17.7 | +18.5 |
-| `6_aef` | −2.9 | −33.1 | −17.9 | +18.7 |
-| `7_calsim` | −0.9 | −29.8 | −17.3 | +18.1 |
+| `6_deep` | −2.4 | −33.1 | −17.9 | +18.7 |
+| `7_aef` | −2.0 | −32.9 | −17.8 | +18.6 |
+| `8_calsim` | −1.2 | −30.4 | −17.4 | +18.1 |
 | `hybrid` | 0.0 | −22.8 | −14.4 | +14.2 |
 | `hybrid_dt` | −1.5 | −29.4 | −16.2 | +16.8 |
 | `lstm` | +10.5 | −5.1 | −6.6 | +6.3 |
@@ -158,11 +161,14 @@ What the ladder shows (a step counts when the mean moves by 0.01 or more):
 - **The Noah-type ET and the learned rain/snow threshold** leave the outlets unchanged in both
   windows. Noah-type ET loses on the subbasins (−0.01); the threshold gains on the subbasins
   (+0.03) and loses on the USGS gauges (−0.01).
-- **AlphaEarth inputs gain on the regional records**, most on the subbasins (+0.06, 7 of 9 up)
-  and the arcs (+0.03, 39 of 64); USGS +0.01. No change at the 15 outlets. On WY2004–18 they
-  gain at MKM, FOL, PNF and ORO and lose at NHG, TRM and NML.
-- **Training on every family** (`7_calsim`) gains at the outlets (+0.035), on the USGS gauges
-  (+0.10) and on the arcs (+0.05); the subbasins do not move.
+- **The deep store** moves only the USGS gauges (−0.013; the median −0.002, 24 of 49 up). The
+  outlets, subbasins and arcs stay within 0.005 in both test windows.
+- **AlphaEarth inputs gain on the regional records**, most on the subbasins (+0.04, 6 of 9 up)
+  and the arcs (+0.03, 40 of 64); USGS +0.006. No change at the 15 outlets in the mean
+  (WY2004–18 −0.002, WY1976–85 −0.005).
+- **dPL-CalSim's training** (`8_calsim`: every family, the cleaned targets, the dry-season
+  term) gains at the outlets (+0.06, 12 of 13 up), on the USGS gauges (+0.12, 30 of 49; median
+  +0.03), on the subbasins (+0.03, 4 of 9; median −0.004) and on the arcs (+0.05, 42 of 64).
 - **The hybrid adds skill** over its physics on WY2004–18 (+0.04) but not on WY1976–85, and
   loses its response to warming (0.0 % annual runoff at +3 °C against −2.4 % for `5_px`).
   `hybrid_dt` keeps most of the skill (+0.03 and +0.02) and about 60 % of the response
@@ -191,12 +197,13 @@ sacsma dpl calsim atlas <run> --score-holdout
 
 ## Known costs
 
-- **Unimpaired-flow subbasins in WY1976–85.** dPL-CalSim scores 0.875, below the multi-family
-  run that preceded the ladder (0.894), at each of the 9 subbasins.
+- **Unimpaired-flow subbasins in WY1976–85.** dPL-CalSim scores 0.878, below the multi-family
+  run that preceded the ladder (0.894), at 7 of the 9 subbasins, most at Chowchilla (0.76
+  against 0.83).
 - **The benchmark.** On WGEN Product A scenario 1 against CDEC's monthly full natural flow,
-  WY1991–2018, dPL-CalSim's median KGE over the 12 sites is 0.927, against 0.949 for the
-  multi-family run that preceded the ladder. The loss is mostly in the Sierra (TLG, NML, CLE,
-  YRS), with more volume in the wrong month (0.060 against 0.045). These are training years:
+  WY1991–2018, dPL-CalSim's median KGE over the 12 sites is 0.940, against 0.949 for the
+  multi-family run that preceded the ladder. The loss is mostly at NML (0.87 against 0.96),
+  TLG and CLE, with more volume in the wrong month (0.064 against 0.045). These are training years:
   the check is the move to the weather-generator forcing. See [Benchmark](benchmark.md).
 - **Snow-17 parameters outside the published ranges.** With `MBASE` free down to −2 °C and `NMF`
   up to 0.5, dPL-CalSim puts `MBASE` below 0 °C in every cell (median −1.79; 17 % at −2) and
@@ -264,6 +271,29 @@ the time.
 - Building the model by fine-tuning earlier runs (a one-year base, then two-year fine-tunes): on
   WY1976–85 the run trained from scratch on one recipe is level on the arcs and outlets, better
   on the USGS gauges (+0.011) and the product (+0.012), worse on the subbasins (−0.020).
+
+**The dry season** (October 2026; `8_calsim`'s fine-tune came out of these)
+
+- The cleaned targets, CDEC's monthly records, the dry-season term and a riparian ET
+  proportional to the channel flow, trained from scratch (`7_calsim_ds`): the late summer came
+  up (Sacramento four, driest third of the years, August–September −19 % against −31 %), but
+  the lower zone grew, the percolation deficit stayed high and the interflow went to zero. The
+  five largest annual peaks of four Sierra watersheds fell to 66.6 % of observed against 76.8 %,
+  and the CDEC daily KGE at ORO by 0.05.
+- The same recipe as a 15-epoch fine-tune of dPL-CalSim (`7_calsim_ft15_ds`): the wet years
+  moved (wettest third −1.5 %, against +9.3 % for a control fine-tune on the cleaned targets
+  alone), the dry ones did not (−30 % against −31 %).
+- The from-scratch run fine-tuned 15 epochs with twice the daily CDEC weight
+  (`7_calsim_ds_ft15_pk`): the peaks back to 69.0 %, the CDEC daily KGE not.
+- The deep store from scratch on the recipe, without the flow-proportional riparian ET
+  (`7_calsim_ds_deep`): no interflow from epoch 5 (Sierra peaks 63.6 % at epoch 40); stopped at
+  epoch 49.
+- The deep store fine-tune with the flow-proportional riparian ET (`7_calsim_ft45_deep`): every
+  bar but ORO's dry third (−27.5 % against ±25 %), but the network grew `riva` from about 0.04 to
+  0.30 at ORO and 0.47 at FOL, and the July–September flow of the extrapolated arcs to +235 % of
+  CalSim3's (−53 % without it).
+- The deep store fed from the primary drainage instead of the supplemental (a test on
+  dPL-CalSim's field): Sierra peaks 72–75 % against 76.5 %.
 
 **LSTM hybrids on the 15 CDEC watersheds**
 

@@ -1,7 +1,7 @@
 {
  "tool": "sacsma.dpl.calsim.tier2",
- "written_utc": "2026-10-14T22:01:38+00:00",
- "checkpoint": "artifacts/models/dpl/multifamily/7_calsim/checkpoints/best.pt",
+ "written_utc": "2026-10-19T19:11:02+00:00",
+ "checkpoint": "artifacts/models/dpl/multifamily/8_calsim/checkpoints/best.pt",
  "data_dir": "data",
  "forcing": "wgen_product_a",
  "envelope": [
@@ -21,7 +21,7 @@
   "total"
  ],
  "components_note": "routed runoff components, all NET of SAC-SMA's riparian et4 channel-ET deduction and dry-channel clamp",
- "extension_cells": "artifacts/_local/runs/dpl/multifamily/7_calsim/tier2/tier2_extension_cells.csv",
+ "extension_cells": "artifacts/models/dpl/multifamily/8_calsim/tier2_extension_cells.csv",
  "temp_delta_degC": 0.0,
  "precip_scale": 1.0,
  "perturbed": false,

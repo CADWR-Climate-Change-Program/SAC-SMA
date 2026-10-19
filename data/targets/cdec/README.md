@@ -20,6 +20,9 @@ computation.
 | `fnf_daily_mm.csv` | `station, date, depth_mm`: depth companion for the two stations with a defined depth area, CLE at 692.86 mi2 (the `I_TRNTY` arc area) and CSN at the UF 13 arc-sum area (539.1 mi2); negative-flow days dropped | `build_fnf_depth.py` |
 | `fnf_daily_mask.csv` | `entity_id, date, value_mm, kind, partner_date, partner_mm, evidence`: daily target values confirmed as computation artifacts (5 rows) | Hand-maintained, never generated |
 | `fnf_monthly.csv` | `date, station, flow_af, flag`: monthly FNF (sensor 65) of the 17 `cdec_daily` sites at 16 stations (below), acre-feet per month and CDEC's data flag exactly as CDEC serves them (`flag` empty when none), stamped at the month end, WY1922 (SCC from WY1931, KRI from WY1930) to 2025-09; a missing month would be an empty `flow_af` (none so far). 19,764 rows, 0.46 MB | `cdec_fnf.py monthly` |
+| `fnf_daily_screen.csv` | `entity_id, date, rule`: the days of the 17 `cdec_daily` records that dPL-CalSim does not train on, one rule per day ([below](#the-training-screens-of-dpl-calsim)). 44,858 rows, 1 MB | Kept by hand, never generated |
+| `fnf_monthly_screen.csv` | `entity_id, month, rule`: the months of `fnf_monthly.csv` that dPL-CalSim does not train on. 169 rows | Kept by hand, never generated |
+| `forcing_era_mask.csv` | `entity_id, month, rule`: the WY1950–75 months of `fnf_monthly.csv` whose forcing era is suspect. 1,104 rows | Kept by hand, never generated |
 
 The 29 stations of the survey:
 
@@ -38,6 +41,39 @@ The 17 `cdec_daily` sites and the station of their monthly FNF:
 | CLE | TNL (Trinity River at Lewiston) | CLE (Trinity Dam) has no monthly series. TNL is the Trinity's Bulletin 120 forecast point, about 7 mi downstream, at 719 mi2 against CLE's 692.86 |
 | NML | SNS (Stanislaus River at Goodwin Dam) | NML (New Melones) has no monthly series. SNS is the Stanislaus forecast point, below New Melones and Tulloch, at 996 mi2 (the area DWR normalises it by) against NML's 900 |
 | NHG | none | No Calaveras River station on CDEC carries sensor 65 |
+
+## The training screens of dPL-CalSim
+
+Three tables list the CDEC targets that dPL-CalSim does not train on. They come from an audit
+of the training records in October 2026: the forcing against PRISM by era, the daily records
+against the monthly ones, and an independent review of both. They are kept by hand: no script
+in the repository rebuilds them, and the audit's working files are not tracked. No statistic
+behind them reads WY1976–85.
+
+`fnf_daily_screen.csv` drops days of the daily records, one rule per day, applied in this order:
+
+| Rule | Days | Drops |
+|---|---|---|
+| `S` | 38,966 | The site's unreliable season, every year: July–November at CLE, FOL, MKM, YRS, TLG, NHG, NML and CSN, July–October at MRC and ORO. Their dry season trains on the monthly record instead |
+| `D1` | 784 | The compensating partner of a negative day (CDEC's daily computation nets a negative day against a neighbour), unless the day is a strong storm |
+| `D2` | 3,829 | A month whose daily sum is more than 25 % off a trusted monthly value |
+| `D3` | 852 | At the sites without `S`: a June–November month holding a negative day whose cleaned sum is more than 10 % off the monthly value, or that has none |
+| `F` | 427 | A day below 0.01 mm/day in a month whose monthly value is above a quarter of its calendar-month median |
+
+`fnf_monthly_screen.csv` drops months of the monthly records: `M1z` (103) zero or negative;
+`M1r` (43) below 10 % of the calendar-month median and below a quarter of what the neighbouring
+sites predict; `D2m` (23) months the review found wrong where the daily record is right.
+
+`forcing_era_mask.csv` drops the outlet-eras of WY1950–75 where the forcing is the suspect: the
+Livneh precipitation drifts from PRISM's by more than 5 % against WY1986–2018, and it moves the
+observed runoff ratio further from its later value than PRISM does. Masked: CLE, ISB and SCC in
+WY1950–61 and WY1962–75, MIL in WY1962–75 (CLE's second era on a weak call).
+
+    sacsma dpl train ... --target-mask data/targets/cdec/fnf_daily_screen.csv,... \
+        --cdec-monthly-mask data/targets/cdec/fnf_monthly_screen.csv,data/targets/cdec/forcing_era_mask.csv
+
+The checkpoint keeps the masked entries, so a trained run is scored on the same targets without
+these files.
 
 ## How it is built
 
@@ -214,6 +250,9 @@ and WHI have none. A station added there comes with its own depth area.
 - `fnf_daily_mm.csv`: `sacsma.dpl.multi_timescale` and `sacsma.dpl.evaluate_multi_timescale`
   (the `cdec_CLE` and `cdec_CSN` entities, through the registry's `obs_store` column).
 - `fnf_daily_mask.csv`: `sacsma dpl train --obs-mask`.
+- `fnf_daily_screen.csv`: `sacsma dpl train --target-mask`; `fnf_monthly_screen.csv` and
+  `forcing_era_mask.csv`: `sacsma dpl train --cdec-monthly-mask` (dPL-CalSim's command in
+  [Reproduce](../../../docs/reproduce.md)).
 - `fnf_monthly.csv`: `sacsma.benchmark.flows` (`sacsma benchmark`: the observed monthly
   volume of the 10 benchmark sites whose own station carries it, and of CLE from TNL scaled to
   CLE's daily volume, read through `paths.cdec_fnf(data_dir, name="fnf_monthly.csv")`; SNS and

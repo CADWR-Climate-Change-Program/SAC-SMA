@@ -11,19 +11,20 @@ by ``calsim.compare.build_anchor_long`` (rim systems vs FLOW-UNIMPAIRED,
 Mokelumne/Calaveras vs summed CalSim3 inflow arcs).  The 4 Tulare basins
 (PNF/TRM/SCC/ISB) have no CalSim3 counterpart and are dropped.
 
-Seven figures, each an 11-basin (north->south) grid contrasting one ladder step against
+Eight figures, each an 11-basin (north->south) grid contrasting one ladder step against
 CalSim3 FNF:
   a  GA      vs  1_hru    (the network in place of the GA)
   b  1_hru   vs  2_grid   (grid cells + CalSim3 outlines)
   c  2_grid  vs  3_pt     (Priestley-Taylor PET)
   d  3_pt    vs  4_noah   (Noah-type ET with the SAC exchanges)
   e  4_noah  vs  5_px     (learned rain/snow threshold)
-  f  5_px    vs  6_aef    (aef_u inputs)
-  g  5_px -> hybrid -> hybrid_dt, and lstm   (the LSTM step on 5_px)
+  f  5_px    vs  6_deep   (the deep store)
+  g  6_deep  vs  7_aef    (aef_u inputs)
+  h  5_px -> hybrid -> hybrid_dt, and lstm   (the LSTM step on 5_px)
 
 The learned runs are run as trained (:func:`sacsma.dpl.evaluate.basin_daily`); the hybrids
 are the seed ENSEMBLES (mean of member daily flows).
-Output: ``artifacts/results/dpl/studies/climatology/climatology_{a..g}.png``.
+Output: ``artifacts/results/dpl/studies/climatology/climatology_{a..h}.png``.
 
 A dPL-side artifact (needs torch for the hybrids) that reads the lightweight
 CalSim3-FNF loader from ``calsim.compare``; it never makes calsim depend on torch.
@@ -51,7 +52,7 @@ _WY_LABELS = ["O", "N", "D", "J", "F", "M", "A", "M", "J", "J", "A", "S"]
 #: the physics runs: label -> the ladder run (None: the GA calibration)
 RUNS: dict[str, str | None] = {
     "GA": None, "1_hru": "1_hru", "2_grid": "2_grid", "3_pt": "3_pt", "4_noah": "4_noah",
-    "5_px": "5_px", "6_aef": "6_aef",
+    "5_px": "5_px", "6_deep": "6_deep", "7_aef": "7_aef",
 }
 #: the LSTM ensembles on 5_px: label -> ensemble dir (seed*/checkpoints/best.pt averaged)
 HYBRID: dict[str, Path] = {
@@ -69,7 +70,8 @@ STYLE: dict[str, dict] = {
     "3_pt":           dict(color="#ff7f0e", lw=1.1),
     "4_noah":         dict(color="#bcbd22", lw=1.1),
     "5_px":           dict(color="#2ca02c", lw=1.1),
-    "6_aef":          dict(color="#e377c2", lw=1.1),
+    "6_deep":         dict(color="#d62728", lw=1.1),
+    "7_aef":          dict(color="#e377c2", lw=1.1),
     "hybrid":         dict(color="#9467bd", lw=1.1),
     "hybrid_dt":      dict(color="#17becf", lw=1.1),
     "lstm":           dict(color="#7f7f7f", lw=1.1),
@@ -82,8 +84,9 @@ COMPARISONS: list[tuple[str, str, list[str]]] = [
     ("c", "Priestley–Taylor PET", ["2_grid", "3_pt"]),
     ("d", "Noah-type ET", ["3_pt", "4_noah"]),
     ("e", "Learned rain/snow threshold", ["4_noah", "5_px"]),
-    ("f", "aef_u inputs", ["5_px", "6_aef"]),
-    ("g", "LSTM models on 5_px", ["5_px", "hybrid", "hybrid_dt", "lstm"]),
+    ("f", "Deep store", ["5_px", "6_deep"]),
+    ("g", "aef_u inputs", ["6_deep", "7_aef"]),
+    ("h", "LSTM models on 5_px", ["5_px", "hybrid", "hybrid_dt", "lstm"]),
 ]
 #: the rows of the all-series skill figures: (axis label, value from a (KGE, NSE, pbias,
 #: seasonal mismatch) tuple)

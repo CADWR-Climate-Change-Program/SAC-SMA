@@ -119,6 +119,22 @@ def masked_basin_loss(
     return (per_basin * valid).sum() / valid.sum().clamp_min(1.0)
 
 
+def dry_season_loss(
+    v_sim: torch.Tensor,      # (E,) simulated Jul-Sep volume
+    v_obs: torch.Tensor,      # (E,) observed Jul-Sep volume (0 where not scored)
+    ok: torch.Tensor,         # (E,) 1.0 where the entity's Jul-Sep is scored this chunk
+    eps: torch.Tensor,        # (E,) the entity's offset (a share of its median volume)
+    weight: torch.Tensor,     # (E,) the entity's weight (its family share / count)
+) -> torch.Tensor:
+    """The dry-season term of one chunk: ``sum_e weight_e ok_e (ln(v_sim + eps) - ln(v_obs +
+    eps))^2`` over the entities whose Jul-Sep the chunk scores (DplConfig.dry_season_lambda).
+    One squared log ratio per entity and year, so a dry year weighs as much as a wet one,
+    unlike the NNSE, where the low-flow season of a dry year is a small part of the
+    variance.  Branch-free (CUDA-graph capturable)."""
+    d = (torch.log(v_sim.clamp_min(0.0) + eps) - torch.log(v_obs.clamp_min(0.0) + eps)) * ok
+    return (weight * d * d).sum()
+
+
 def kge_torch(sim: torch.Tensor, obs: torch.Tensor) -> torch.Tensor:
     """Differentiable KGE over finite-obs pairs, per basin: (B, T) -> (B,).
 

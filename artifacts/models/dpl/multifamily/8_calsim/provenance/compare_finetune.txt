@@ -1,0 +1,62 @@
+D = D, S = 7_calsim_ft45_deep, X = 7_calsim_ds_deep_e045, F = 7_calsim_ft45_deep_ref
+  selected epoch / selection KGE: D 120 / 0.8310  S 45 / 0.8429  X 45 / 0.8036  F 45 / 0.8427
+
+Primary bars (on F; D, S and X reported)
+  Sacramento-4 Aug-Sep elasticity <= 1.0       D +1.202  S +0.777  X +0.980  F +0.802   PASS
+  Sacramento-4 dry-third Aug-Sep bias +-20 %   D -31.428  S -19.863  X -17.863  F -18.123   PASS
+  SHA dry-third Aug-Sep bias +-25 %            D -30.974  S -21.031  X -22.758  F -20.011   PASS
+  ORO dry-third Aug-Sep bias +-25 %            D -44.035  S -27.453  X -14.142  F -22.879   PASS
+  San Joaquin-4 Sep/Jun <= 0.06                D +0.071  S +0.068  X +0.070  F +0.072   FAIL
+  (observed: elasticity 0.510, Sep/Jun 0.040)
+
+Guards (F - D, paired over entities on the cleaned targets; F rescored vs its metrics.csv, largest |diff| KGE 9.8e-08)
+  CDEC daily KGE paired median (n 17) >= -0.005 +0.0068   HOLDS
+  cdec_SHA KGE >= -0.02                        -0.0069   HOLDS
+  cdec_ORO KGE >= -0.02                        -0.0010   HOLDS
+  usgs_daily KGE paired median (n 60) >= -0.005 +0.0130   HOLDS
+  uf_monthly KGE paired median (n 5) >= -0.005 -0.0003   HOLDS
+  calsim_monthly KGE paired median (n 60) >= -0.005 +0.0118   HOLDS
+  Sierra-4 top-5 median, points (D 76.8, F 77.6) within 3 +0.7746   HOLDS
+  lztwm F/D median over 2715 cells <= 1.4      +0.8931   HOLDS
+  +3 C annual change (D -0.91 %) within 1 point -0.3065   HOLDS
+  +3 C Apr-Jul change (D -29.79 %) within 2 points -0.6090   HOLDS
+
+  primary bars NOT ALL PASS; guards ALL HOLD
+
+F's rule (BARS items 1-3; the San Joaquin Sep/Jun is reported only)
+  peaks: Sierra-4 >= D - 3 (73.8)                      PASS
+  peaks: CDEC daily paired median >= -0.005            PASS
+  peaks: SHA and ORO each >= -0.02                     PASS
+  dry: Sacramento-4 elasticity <= 1.0                  PASS
+  dry: Sacramento-4 dry third +-20 %                   PASS
+  dry: SHA and ORO dry third each +-25 %               PASS
+  kept: usgs_daily paired median >= -0.005             PASS
+  kept: uf_monthly paired median >= -0.005             PASS
+  kept: calsim_monthly paired median >= -0.005         PASS
+  kept: lztwm F/D median <= 1.4                        PASS
+  kept: +3 C annual within 1 point of D                PASS
+  kept: +3 C Apr-Jul within 2 points of D              PASS
+  kept: Sacramento-4 monthly KGE >= 0.919 (0.954)      PASS
+  F SUCCEEDS
+
+Reported
+  KGE, cleaned targets      n       D       S       X       F      F-D      F-S      F-X  (medians)
+  cdec_daily               17   0.887   0.883   0.840   0.886  +0.0068  +0.0012  +0.0303
+  usgs_daily               60   0.717   0.742   0.679   0.740  +0.0130  +0.0014  +0.0324
+  uf_monthly                5   0.934   0.939   0.923   0.935  -0.0003  -0.0026  +0.0180
+  calsim_monthly           60   0.721   0.711   0.725   0.720  +0.0118  -0.0030  +0.0245
+  lztwm median over cells (mm): D 256.7  S 330.9  X 432.5  F 227.7
+  peaks Sierra-4: D {'ORO': 75.9809669493942, 'FOL': 78.84418262939627, 'YRS': 67.9121387581538, 'MKM': 77.61990079617918, 'median': 76.8004338727867}  S {'ORO': 76.2134517556453, 'FOL': 79.38266072708232, 'YRS': 72.93779019833734, 'MKM': 77.48499999168173, 'median': 76.84922587366351}  X {'ORO': 62.953260038603915, 'FOL': 64.79920831150612, 'YRS': 56.103386420635175, 'MKM': 68.55127078040582, 'median': 63.87623417505502}  F {'ORO': 77.55969574694564, 'FOL': 79.40772969419503, 'YRS': 74.40431513229427, 'MKM': 77.59042750936774, 'median': 77.57506162815669}
+  response: D -0.91 / -29.79 %  S -0.75 / -30.27 %  X -1.77 / -30.47 %  F -1.21 / -30.40 %
+  D Aug-Sep bias by tercile {'sac4_dry': -31.42764795438582, 'n_dry': 20, 'SHA_dry': -30.974061522700858, 'ORO_dry': -44.034877268151845, 'sac4_mid': -12.875403976049649, 'n_mid': 19, 'SHA_mid': -13.425316836669188, 'ORO_mid': -26.68948590721085, 'sac4_wet': 3.9924663827483275, 'n_wet': 20, 'SHA_wet': 1.59062963251706, 'ORO_wet': -1.1813919998952649}
+  S Aug-Sep bias by tercile {'sac4_dry': -19.862674801127422, 'n_dry': 20, 'SHA_dry': -21.030650592423083, 'ORO_dry': -27.45284827761961, 'sac4_mid': -9.126096400905915, 'n_mid': 19, 'SHA_mid': -8.555961342356289, 'ORO_mid': -21.71087180277077, 'sac4_wet': -4.610298050278261, 'n_wet': 20, 'SHA_wet': -3.251393249996598, 'ORO_wet': -3.6124249580751724}
+  X Aug-Sep bias by tercile {'sac4_dry': -17.862800767845236, 'n_dry': 20, 'SHA_dry': -22.75787437384969, 'ORO_dry': -14.141651084340563, 'sac4_mid': -0.08464529781162522, 'n_mid': 19, 'SHA_mid': -8.420123670987145, 'ORO_mid': -1.7782317595121055, 'sac4_wet': 10.55624194915965, 'n_wet': 20, 'SHA_wet': 3.856578748390971, 'ORO_wet': 21.657400994823895}
+  F Aug-Sep bias by tercile {'sac4_dry': -18.12259224353004, 'n_dry': 20, 'SHA_dry': -20.010565024409726, 'ORO_dry': -22.8785023002004, 'sac4_mid': -7.811338027959803, 'n_mid': 19, 'SHA_mid': -7.900381038860427, 'ORO_mid': -16.823539991221903, 'sac4_wet': -1.9408446880137986, 'n_wet': 20, 'SHA_wet': -1.8793385202999946, 'ORO_wet': 0.1608417845472443}
+  D monthly KGE in sample SHA 0.961 ORO 0.936 YRS 0.847 FOL 0.962 MIL 0.951 TLG 0.857 MRC 0.896 NML 0.914 sac4 0.939 sj4 0.955
+  S monthly KGE in sample SHA 0.962 ORO 0.939 YRS 0.924 FOL 0.970 MIL 0.939 TLG 0.864 MRC 0.914 NML 0.872 sac4 0.956 sj4 0.961
+  X monthly KGE in sample SHA 0.910 ORO 0.876 YRS 0.844 FOL 0.887 MIL 0.928 TLG 0.848 MRC 0.964 NML 0.889 sac4 0.884 sj4 0.942
+  F monthly KGE in sample SHA 0.967 ORO 0.937 YRS 0.920 FOL 0.967 MIL 0.938 TLG 0.868 MRC 0.908 NML 0.876 sac4 0.954 sj4 0.960
+  D pre-1950 Sacramento-4 bias (annual / Aug-Sep %) 1924 -30 / -63; 1931 -28 / -60; 1929-1934 -25 / -45; 1922-1949 -14 / -24
+  S pre-1950 Sacramento-4 bias (annual / Aug-Sep %) 1924 -18 / -38; 1931 -16 / -37; 1929-1934 -18 / -29; 1922-1949 -12 / -20
+  X pre-1950 Sacramento-4 bias (annual / Aug-Sep %) 1924 -21 / -41; 1931 -23 / -40; 1929-1934 -24 / -27; 1922-1949 -15 / -13
+  F pre-1950 Sacramento-4 bias (annual / Aug-Sep %) 1924 -18 / -42; 1931 -17 / -40; 1929-1934 -18 / -32; 1922-1949 -12 / -21

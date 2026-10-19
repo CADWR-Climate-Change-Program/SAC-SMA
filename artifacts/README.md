@@ -14,8 +14,8 @@ method behind each result is in the [guide](../docs/README.md), the state of the
 A learned-parameter run has the same name in each part: `models/dpl/<group>/<run>/`,
 `results/dpl/<group>/<run>/` and `_local/runs/dpl/<group>/<run>/`. Runs are grouped by what
 they train on: `15cdec` holds the runs fitted to the 15 CDEC watersheds (the ladder's rungs
-`1_hru` to `6_aef`, of which `2_grid` to `6_aef` run on the `multifamily` domain restricted to
-the 15 CDEC entities, and the LSTM ensembles), `multifamily` holds dPL-CalSim (`7_calsim`),
+`1_hru` to `7_aef`, of which `2_grid` to `7_aef` run on the `multifamily` domain restricted to
+the 15 CDEC entities, and the LSTM ensembles), `multifamily` holds dPL-CalSim (`8_calsim`),
 fitted to every family of flow record. Every command that takes a run accepts any of the
 three. Beside the two groups, `results/dpl/` holds the fidelity check (`fidelity/`) and the
 studies (`studies/`). `sacsma verify artifacts` checks this layout: nothing tracked outside

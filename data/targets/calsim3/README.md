@@ -18,6 +18,7 @@ by any model in this repository is a target, so they are kept here.
 | `arc_hierarchy.csv` | The rim-arc target set, 203 rows (every `CalSim3_Merged` polygon plus every derivation arc): area, anchors, closure group, record and tier of each arc (columns below). 0.03 MB | `build_calsim_arcs.py` |
 | `arc_obs_mask.csv` | `arc, date` (month-end): every arc-month that is the arc's own observed record inside the training water years WY1950 to 1975 and WY1986 to 2015. 42,010 rows on 95 arcs, 25,523 of them on the 64 tier-A arcs. 0.9 MB (LFS) | `build_calsim_arcs.py` |
 | `calsim3_inflow_monthly_mm.csv` | `arc, date, depth_mm`: the 196 rim `INFLOW` series as mm/month over each arc's `SQ_MI`, full record WY1922 to 2021. 8.8 MB (LFS) | `build_calsim_arcs.py` |
+| `location_mask.csv` | `entity_id, start, end, reason` (months, `YYYY-MM`): the arc-months that dPL-CalSim does not train on ([below](#the-location-mask)). 6,506 ranges, 0.36 MB | Kept by hand, never generated |
 
 Columns of `arc_hierarchy.csv`: `sq_mi` (the `CalSim3_Merged` `SQ_MI`); `status` (196
 `rim_arc`, the series-less `I_SRBB_VAL`, 3 without a polygon, 3 excluded below the rim);
@@ -28,6 +29,17 @@ Columns of `arc_hierarchy.csv`: `sq_mi` (the `CalSim3_Merged` `SQ_MI`); `status`
 the training water years, extension years carved out) and `record_months_listed` (the listed
 gauge period alone); `tier`, `tier_listed`, `tier_note`; `train_default` (tier A and not a
 duplicate: 64 arcs).
+
+## The location mask
+
+The arc-months dPL-CalSim leaves out after the October 2026 audit of its training records:
+2,419 July–September ranges of impaired summers, 4,084 months that a USGS gauge at the same
+place already trains (`train once`), 2 whole records (`I_SLYCK`, `I_WBR001`) and `I_SFY048` in
+WY1995–2014. The reasons and the training command are in
+[the USGS README](../usgs/README.md#the-location-mask), which describes the three files
+together. Two arcs also train on a corrected depth, through `--target-scale` rather than a file:
+`I_MFM008` × 1.387203 and `I_SFM005` × 0.854863, the arc's `SQ_MI` over the area of the gauge
+its record comes from (USGS 11317000 at 68.4 mi², and `usgs_11318500`).
 
 ## How it is built
 
@@ -122,4 +134,5 @@ WY1950.
   `sacsma.dpl.train`; `data/inputs/domains/multifamily/build_entities.py --calsim-arcs`;
   `sacsma.benchmark.flows` (`sq_mi`: the VIC catchment area of CLE, CSN and YRS).
 - `calsim3_arc_derivation.csv`: `sacsma.dpl.calsim.arcs`, `sacsma.dpl.calsim.atlas`.
+- `location_mask.csv`: `sacsma dpl train --target-mask`.
 - Both raw series: `data/targets/dwr_unimpaired/check_uf_locations.py`.
