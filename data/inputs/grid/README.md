@@ -147,7 +147,7 @@ python data/inputs/grid/gee_aef_region.py --assemble                 # -> aef_ce
 - AlphaEarth layers are calendar years, not water years, and all post-date the WY1989-2003 calibration
   window. `dataset_version` is 1.1 for 2017 and 2025, 1.0 for 2018 to 2024. Per-year cell means exist only
   in the local partials.
-- What the embedding carries: PC1 (44 % of variance) tracks elevation (r -0.88), PC3 tracks LAI (+0.70).
+- In the embedding, PC1 (44 % of variance) tracks elevation (r -0.88) and PC3 tracks LAI (+0.70).
   The cosine between east neighbours is 0.96, between random pairs 0.47.
 - AlphaEarth licence, CC-BY 4.0: "The AlphaEarth Foundations Satellite Embedding dataset is produced by
   Google and Google DeepMind." Reference: Brown et al. (2025), arXiv:2507.22291.

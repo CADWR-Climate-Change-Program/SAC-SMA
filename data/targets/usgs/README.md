@@ -33,9 +33,9 @@ site service; `--no-nwis` skips that and leaves those columns blank.
 
 Selection: a gauge is kept when at least 90 % (`--min-frac`) of its delineated watershed
 area lies inside the union of layer `CalSim3_And_GooseLake` of
-`data/inputs/calsim3/calsim3.gpkg`, measured in EPSG:3310. The rule matters: 42 gauges are
-fully inside, 69 clear 90 %, 95 merely touch. Nothing falls between 50 % and 90 %, so those
-two thresholds pick the same set. The source's 14 synthetic `99xxxxxxx` ids are SAC-SMA / CDEC
+`data/inputs/calsim3/calsim3.gpkg`, measured in EPSG:3310. The threshold decides the set: 42
+gauges are fully inside, 69 clear 90 % and 95 touch the union. Nothing falls between 50 % and 90 %, so
+those two thresholds pick the same set. The source's 14 synthetic `99xxxxxxx` ids are SAC-SMA / CDEC
 watershed footprints injected into that training set; they are excluded
 (`--include-synthetic` keeps them), since those basins are already in this repository under
 their own names.
@@ -85,7 +85,7 @@ and physics:
 - `flow_mm` back to cfs through the published area: maximum relative error 1.65e-07 (float32).
 - No negative discharge.
 - Mean annual runoff depth inside the California band: observed 10 to 1386 mm/yr. This is
-  the real check on units and areas, since a wrong factor throws it orders of magnitude out.
+  the check that catches a wrong unit or area: a wrong factor throws it orders of magnitude out.
   The driest gauges are Coast Range and Tehachapi creeks (Caliente, Cantua, Avenal), the
   wettest are high-Sierra snow basins (S Yuba near Cisco, Duncan Canyon near French Meadows).
   The snow-regime median (806 mm/yr) is about twice that of rain and mixed (about 425), which

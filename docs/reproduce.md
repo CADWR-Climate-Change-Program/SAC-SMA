@@ -6,7 +6,7 @@ rebuild.
 
 ## 1. Environments
 
-There are three. Only the first is needed to run the models.
+There are three environments; only the first is needed to run the models.
 
 | Environment | File | Used for |
 |---|---|---|
@@ -70,9 +70,9 @@ sacsma product 15cdec                  # the daily flow of the 15 watersheds -> 
 All of it runs on CPU in minutes. `sacsma benchmark` also runs dPL-CalSim (section 6) on the
 CPU, so it needs PyTorch. It caches both of its runs under `artifacts/_local/cache/benchmark/`,
 keyed by the parameters and the engine's code but not by the forcing: clear that folder after a
-forcing store changes. [`artifacts/results/README.md`](../artifacts/results/README.md) lists every file
-these commands write. Regenerated tables can differ from the tracked ones in the last digits,
-and the row order of `monthly_calsets.csv` is not fixed; compare before committing.
+forcing store changes. [`artifacts/results/README.md`](../artifacts/results/README.md) lists
+every file these commands write. Regenerated tables can differ from the tracked ones in the
+last digits, and the row order of `monthly_calsets.csv` is not fixed; compare before committing.
 
 ## 5. The ladder and the hybrids on the 15 CDEC watersheds
 
@@ -157,7 +157,7 @@ sacsma dpl study ladder            # skill and climate response of every run, CP
 checkpoints), `artifacts/results/dpl/multifamily/8_calsim/` (the scores) or
 `artifacts/_local/runs/dpl/multifamily/8_calsim/` (the large local files); every command finds
 the other two. The tracked folders hold the selected checkpoint and the scores, and
-`artifacts/product/calsim3/` the product, so steps can be entered anywhere.
+`artifacts/product/calsim3/` the product, so any step can start from the tracked files.
 
 **Train.** dPL-CalSim is rung 8 of the ladder, trained in two stages
 ([CalSim3 rim inflows](calsim3_rim_inflows.md#what-the-model-trains-on)). Both use the recipe of
@@ -167,8 +167,9 @@ to WY1950, the families weighted by footprint area and a fixed loss scale per fa
 `--param-bounds` replaces the one in `R`: it keeps `lzsk` down to 0.001 and widens the ranges of
 `MBASE`, `NMF`, `Velo` and `zperc` that the GA box pins ([Runs](runs.md#the-ladder)).
 
-The warm start, from scratch (about 20 hours on an 8 GB laptop GPU: 120 epochs of about 10
-minutes). The tracked run's warm start is `artifacts/models/dpl/multifamily/8_calsim/provenance/warm_start.pt`:
+The warm start trains from scratch (about 20 hours on an 8 GB laptop GPU: 120 epochs of about
+10 minutes). The tracked run's warm start is
+`artifacts/models/dpl/multifamily/8_calsim/provenance/warm_start.pt`:
 
 ```bash
 B=lzsk=0.001:0.5,MBASE=-2:5,NMF=0.05:0.5,Velo=0.5:10,zperc=1:1000
@@ -181,9 +182,9 @@ sacsma dpl train aef_u $R $ALL \
     --out $L/8_calsim_warm_start
 ```
 
-The fine-tune from it (about 6 hours: 45 epochs of about 8 minutes), with the deep store, the
-cleaned targets of `data/targets/`, CDEC's monthly records and the dry-season term. Its loss
-scales and dry-season weight were measured at the warm start's field
+The fine-tune starts from it (about 6 hours: 45 epochs of about 8 minutes) and adds the deep
+store, the cleaned targets of `data/targets/`, CDEC's monthly records and the dry-season term.
+Its loss scales and dry-season weight were measured at the warm start's field
 (`provenance/levels_finetune.json`); `--shape-min-days 180` lets the variance term score the
 outlets whose screened records leave fewer than 300 days in a water year:
 
@@ -254,27 +255,28 @@ done                                                      # -> artifacts/product
 sacsma verify product                                     # each tracked series repeats
 ```
 
-The pass each series was made from is kept beside it (`artifacts/product/calsim3/<forcing>/tier2/`), so
-that `sacsma verify product` can repeat it. After a refit, `apply` remakes every series. The
-files each command writes are listed in the READMEs under [`artifacts/`](../artifacts/README.md).
+The pass each series was made from is kept beside it
+(`artifacts/product/calsim3/<forcing>/tier2/`), so that `sacsma verify product` can repeat it.
+After a refit, `apply` remakes every series. The files each command writes are listed in the
+READMEs under [`artifacts/`](../artifacts/README.md).
 
 ## 7. Rebuilding data
 
-Not needed for any result above. Each folder's README gives the commands, the inputs and the
-checks. What depends on what:
+No result above needs it. Each folder's README gives the commands, the inputs and the checks.
+What depends on what:
 
-1. **Forcing** (`data/inputs/forcing/`). `wgen_forcing.py --build-master` packs the raw
+1. Forcing (`data/inputs/forcing/`). `wgen_forcing.py --build-master` packs the raw
    per-cell files into a local master; `build_region_forcing.py` writes the three historical
    stores from it and from the release folder; `wgen_product_a_scenarios.py` and
    `aorc_region.py` add the scenario and AORC stores. All need sources outside the repository.
-2. **Grid** (`data/inputs/grid/`). `build_region_grid.py` writes the cell list from the domain
+2. Grid (`data/inputs/grid/`). `build_region_grid.py` writes the cell list from the domain
    tables and the CalSim3 polygons. `download_gis.py` stages the raw rasters and
    `sample_gis.py region` samples every cell over its footprint (`sacsma-gis`);
    `build_region_statics.py` then checks the sample against the `15cdec_grid` sidecars and writes
    the per-cell attributes. `gee_aef_region.py` builds the embeddings.
-3. **Targets.** `cdec_fnf.py`, `dwr_unimpaired.py --pdf <report>`, `usgs_flows.py` ingest their
+3. Targets. `cdec_fnf.py`, `dwr_unimpaired.py --pdf <report>`, `usgs_flows.py` ingest their
    sources. Then `build_uf_depth.py`, then `build_fnf_depth.py` (it checks against the first).
-4. **The registry** (`data/inputs/domains/multifamily/`), in this order:
+4. The registry (`data/inputs/domains/multifamily/`), in this order:
    `build_entities.py` (once without the flag if there is no registry yet),
    `data/targets/calsim3/build_calsim_arcs.py`, `build_entities.py --calsim-arcs`,
    `build_entity_cells.py --calsim-arcs`, `build_flowlens.py --calsim-arcs` (`sacsma-gis`).

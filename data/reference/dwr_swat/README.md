@@ -47,7 +47,7 @@ python data/targets/dwr_unimpaired/dwr_unimpaired.py --verify
 
 ## Know before using
 
-- At the rim, natural and unimpaired are the same quantity. Appendix C is not a different
+- At the rim, natural and unimpaired are the same quantity: Appendix C is not a different
   physical variable from Appendix B. The SWAT models were calibrated to the unimpaired series,
   so `swat_monthly.csv` is a model estimate of what
   `data/targets/dwr_unimpaired/uf_monthly.csv` measures, and the two differ by calibration

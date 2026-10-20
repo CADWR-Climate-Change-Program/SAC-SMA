@@ -1,7 +1,7 @@
 # `artifacts/`: what the commands write
 
-Four parts, by what a file is. Every path is set in [`sacsma/paths.py`](../sacsma/paths.py); the
-method behind each result is in the [guide](../docs/README.md), the state of the runs in
+Four parts, one per kind of file. Every path is set in [`sacsma/paths.py`](../sacsma/paths.py);
+the method behind each result is in the [guide](../docs/README.md), the state of the runs in
 [Runs](../docs/runs.md).
 
 | Folder | What it holds | Written by | If it is lost |

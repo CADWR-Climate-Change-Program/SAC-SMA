@@ -31,19 +31,19 @@ area-weighted median of the `15cdec_grid` GA parameters, so training starts from
 | `physical` | elevation, position, flow length, POLARIS soil properties ([Chaney et al., 2019](references.md#chaney2019)), LANDFIRE vegetation, 3DEP terrain, MODIS leaf-area statistics |
 | `aef_u` | AlphaEarth satellite embeddings: 16 principal components of the unit embedding direction and its length |
 
-**The physics.** PyTorch, all units in one batch, the reference model's equations
-([The model](model.md)) with the percolation sub-steps fixed at ten a day: the reference takes a
-number that varies with the state, which cannot be batched. Options on top of the reference
-chain:
-Priestley–Taylor PET ([Priestley & Taylor, 1972](references.md#priestleytaylor1972)) with
-radiation from the daily temperature range
+**The physics.** The reference model's equations ([The model](model.md)) run in PyTorch, all
+units in one batch, with the percolation sub-steps fixed at ten a day: the reference takes a
+number that varies with the state, which cannot be batched. The options on top of the
+reference chain are Priestley–Taylor PET
+([Priestley & Taylor, 1972](references.md#priestleytaylor1972)) with radiation from the daily
+temperature range
 ([Bristow & Campbell, 1984](references.md#bristowcampbell1984); [Allen et al., 1998](references.md#allen1998)),
 a soil-moisture-limited ET on observed vegetation in the manner of the Noah model
 ([Ek et al., 2003](references.md#ek2003); [Koren et al., 2010](references.md#koren2010)) with
 the SAC-SMA exchange terms kept around it, a learned rain/snow threshold, and a deep store.
 
-**The deep store** (`--deep-store cascade`, from rung `6_deep`). A second slow reservoir behind
-the supplemental lower-zone store. In each percolation sub-step it takes a share $g$ of the
+**The deep store** (`--deep-store cascade`, from rung `6_deep`) is a second slow reservoir
+behind the supplemental lower-zone store. In each percolation sub-step it takes a share $g$ of the
 supplemental drainage, after that water has left the lower zone, and drains into the baseflow:
 
 ```math
@@ -63,19 +63,19 @@ decaying with it to the same final rate. The store is outside the lower-zone def
 percolation demand and the resupply of the tension water, and it has no ET, so the soil states
 are those of the same field without it; it only re-times part of the baseflow.
 
-Why a separate store rather than a slower SAC-SMA lower zone:
+The reasons for a separate store rather than a slower SAC-SMA lower zone:
 
-- **The slow store is already at its limit.** In the trained fields the supplemental store
-  drains at 0.0043 a day at the median (about 8 months), and the network pressed `lzsk` against
-  every floor it was given: 0.01 in the GA box, then 0.003, then 0.001, with a quarter of
+- The slow store is already at its limit. In the trained fields the supplemental store drains
+  at 0.0043 a day at the median (about 8 months), and the network pressed `lzsk` against every
+  floor it was given: 0.01 in the GA box, then 0.003, then 0.001, with a quarter of
   dPL-CalSim's cells below 0.002.
-- **A larger or slower lower zone changes how storms split.** The lower zone's free stores set
+- A larger or slower lower zone changes how storms split. The lower zone's free stores set
   the percolation demand, $(lzfpm\,dlzp + lzfsm\,dlzs)(1 + zperc\cdot defr^{rexp})$. A store that
   stays in deficit for years keeps that demand high, the upper zone holds less free water on
   storm days, and the interflow that makes the flood peaks goes. A retrain that grew Oroville's
   free lower-zone capacity from 3.3 to 6.5 m lost its interflow and 10 points of its Sierra
   flood peaks ([Runs](runs.md#tried-and-not-adopted)).
-- **The literature asks for this structure.** Common conceptual models empty on a seasonal cycle
+- Published studies point to this structure. Common conceptual models empty on a seasonal cycle
   and cannot carry a deficit from one dry year to the next
   ([Fowler et al., 2020](references.md#fowler2020)), and they lose skill in multi-year droughts
   ([Trotter et al., 2023](references.md#trotter2023)). In the Feather River headwaters a model
@@ -88,21 +88,21 @@ Why a separate store rather than a slower SAC-SMA lower zone:
   Mountain baseflow is years old: 3 to 12 years in a snow-dominated headwater basin
   ([Carroll et al., 2020](references.md#carroll2020)), with water held in weathered rock 10 to
   20 m deep in the southern Sierra ([Klos et al., 2018](references.md#klos2018)).
-- **Fed from the supplemental drainage, in series.** The store lengthens the slowest recession
-  rather than splitting percolation in parallel. In a test on dPL-CalSim's field, a store fed
-  from the primary drainage instead brought the five largest annual peaks of four Sierra
-  watersheds to 72–75 % of observed, against 76.5 % fed from the supplemental drainage.
+- The store is fed from the supplemental drainage, in series: it lengthens the slowest
+  recession rather than splitting percolation in parallel. In a test on dPL-CalSim's field, a
+  store fed from the primary drainage instead brought the five largest annual peaks of four
+  Sierra watersheds to 72–75 % of observed, against 76.5 % fed from the supplemental drainage.
 
-Two limits. The store has no loss: all of its water returns to the channel, while the models
-that worked in [Zhang et al. (2026)](references.md#zhang2026) lose some. And $g$ and $\tau$ are
-identified from streamflow alone, which gave a bedrock store implausible parameters in
+The store has two limits. It has no loss: all of its water returns to the channel, while the
+models that worked in [Zhang et al. (2026)](references.md#zhang2026) lose some. And $g$ and
+$\tau$ are identified from streamflow alone, which gave a bedrock store implausible parameters in
 [La Follette et al. (2022)](references.md#lafollette2022). In dPL-CalSim's field $g$ is 0.28 at
 the median (20 % of the cells at 0.45 or more) and $\tau$ 8.4 years; in `6_deep`, trained on
 the 15 watersheds alone, $g$ is 0.42 (43 % at 0.45 or more) and $\tau$ spreads over the whole
 range (2.1 to 9.6 years from the 10th to the 90th percentile).
 
-**Training.** One recipe for every run ([the ladder](runs.md#the-ladder)). The loss is a squared
-error normalized by each watershed's observed variance, plus a log-flow term and a term that
+**Training.** Every run uses one recipe ([the ladder](runs.md#the-ladder)). The loss is a
+squared error normalized by each watershed's observed variance, plus a log-flow term and a term that
 matches the variance over the record, each chunk weighted by its days. Optimization is AdamW
 over water-year chunks, with the model state carried from chunk to chunk and the gradient carried
 through two water years: with one, the gradient on the slow lower-zone drainage and on `Kpet` at
@@ -136,27 +136,27 @@ KGE over the 15 watersheds on WY2004–18 goes 0.768 (GA), 0.838, 0.826, 0.843, 
 
 What these runs show:
 
-- **The network generalizes better than the GA with the same physics.** +0.09 on WY1976–85,
-  where 10 of the 13 outlets gain (median +0.03). The +0.07 on WY2004–18 is SCC's (−0.18 to
-  0.62): 7 of the 15 outlets gain and the median change is 0.00.
-- **The grid costs little.** About 0.01 to 0.02 at the outlets, and it is the form that covers
-  the CalSim3 catchments.
-- **The physics options are even at the 15 outlets.** Priestley–Taylor PET gains about 0.02;
-  the Noah-type ET and the learned threshold change the mean by less than 0.01. They are kept
+- The network generalizes better than the GA with the same physics: +0.09 on WY1976–85, where
+  10 of the 13 outlets gain (median +0.03). The +0.07 on WY2004–18 is SCC's (−0.18 to 0.62): 7
+  of the 15 outlets gain and the median change is 0.00.
+- The grid costs little, about 0.01 to 0.02 at the outlets, and it is the form that covers the
+  CalSim3 catchments.
+- The physics options are even at the 15 outlets. Priestley–Taylor PET gains about 0.02; the
+  Noah-type ET and the learned threshold change the mean by less than 0.01. They are kept
   because PET then responds to radiation, ET to modeled soil moisture, and the snow line to a
   learned threshold.
-- **The deep store leaves the 15 watersheds as they were.** The means move by less than 0.005
+- The deep store leaves the 15 watersheds as they were. The means move by less than 0.005
   except on the USGS gauges on WY1976–85 (−0.013, the median −0.002).
-- **AlphaEarth inputs are even at the outlets and transfer a little better** to the records the
+- AlphaEarth inputs are even at the outlets and transfer a little better to the records the
   run did not train on: on WY1976–85 the subbasins gain +0.04 (6 of 9 up) and the arcs +0.03 (40
   of 64); the USGS gauges +0.006. Against the physical rungs read on point-sampled statics
   outside the 15-CDEC grid, before those inputs were corrected, the gains looked larger
   ([Runs](runs.md#the-ladder)).
-- **An LSTM on the physics adds skill and loses the response to warming** unless it is trained
-  to keep it (`hybrid_dt`), which keeps most of the skill and about 60 % of the change in annual
+- An LSTM on the physics adds skill and loses the response to warming unless it is trained to
+  keep it (`hybrid_dt`), which keeps most of the skill and about 60 % of the change in annual
   runoff. See below.
-- **Weaknesses that stayed.** SCC has the lowest WY2004–18 score in every rung (0.45 to 0.62)
-  and in `hybrid` and `hybrid_dt`.
+- Weaknesses that stayed: SCC has the lowest WY2004–18 score in every rung (0.45 to 0.62) and
+  in `hybrid` and `hybrid_dt`.
 
 ## The LSTM hybrids and their response to warming
 
@@ -169,7 +169,7 @@ network's change in flow under 14 combinations of precipitation change (−20 to
 warming (0, +2, +4 °C) toward the change `5_px` gives. `lstm` drops the simulated flow from the
 inputs. Each network (hidden size 64) trains for 60 epochs with Adam at a learning rate of 1e-3,
 without dropout, input noise, weight decay or a log-flow term, and keeps the epoch with the best
-training-period KGE. With 15 watersheds the statics can serve as a label for each one; in
+training-period KGE. With 15 watersheds the statics can act as a label for each one; in
 single-seed tests a one-hot label in their place did about as well.
 
 | | WY1989–2003 (training) | WY2004–18 | WY1976–85 (monthly, 13 outlets) |
@@ -180,7 +180,8 @@ single-seed tests a one-hot label in their place did about as well.
 | `lstm` | 0.948 | 0.855 | 0.782 |
 
 `hybrid`'s gain on WY2004–18 does not reach the older held-out decade, where it is level with
-`5_px`. `hybrid_dt`'s response term holds it there: it keeps most of the skill in both windows.
+`5_px`. `hybrid_dt`, trained to keep `5_px`'s response, keeps most of the gain on WY2004–18
+(0.873 against 0.878) and scores 0.880 on WY1976–85.
 
 Change at +3 °C with precipitation unchanged, over the 15 watersheds
 (`artifacts/results/dpl/studies/hybrids/hybrids_metrics.csv`):

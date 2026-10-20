@@ -80,7 +80,7 @@ includes `pypdf`.
   structural condition.
 - Paynes Creek: `I_PYN001` overlaps the NLDI-delineated Bend Bridge watershed (USGS 11377100)
   by 0.4 % of its area, against 99.9 % for a true member, so the creek joins below the gauge
-  and is rightly left out of UF 6.
+  and leaving it out of UF 6 is correct.
 
 ## Know before using
 

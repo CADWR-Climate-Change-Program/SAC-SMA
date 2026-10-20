@@ -78,8 +78,8 @@ the four peak at lag 0, so `pck` needs no shift.
 | `terraclimate` | 0.641 | 0.896 | 0.805 | 18.6 mm |
 | `daymet` | 0.673 | 0.561 | 0.302 | 19.0 mm |
 
-BCM's regional mean is 37.8 mm, above every product, as expected: 270 m resolves high-elevation
-snow that an 11-km product smooths away. Daymet is not a usable referee here: its climatology
+BCM's regional mean is 37.8 mm, above every product: 270 m resolves high-elevation snow that an
+11-km product smooths away. Daymet is not a usable referee here: its climatology
 peaks in April and never melts out.
 
 Total discharge (`run` + `rch`) against the `11obs` full-natural-flow targets, area-weighted
@@ -167,7 +167,7 @@ American and Tuolumne sheets. Raising the ShallowExp bound to 0.99999 changes th
 The fit's NSE (0.859) is within the range of the ten well-wired sheets (0.746–0.889). The
 `params_for` prefers a refit over a sheet. The benchmark does not cover the Kings.
 
-How the three tables are built (the workbook and `openpyxl`, in the `sacsma` environment):
+The three tables are built with the workbook and `openpyxl`, in the `sacsma` environment:
 
 ```bash
 python data/reference/bcm/bcm_routing_params.py           # extract, refit, write, check (needs the workbook)

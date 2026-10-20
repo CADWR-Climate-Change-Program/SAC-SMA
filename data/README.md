@@ -10,10 +10,10 @@ The store has three parts, by the role the data plays.
 
 Two rules go with the layout.
 
-1. **Nothing under `sacsma/` writes into `targets/` or `reference/`.** Those folders change only
+1. Nothing under `sacsma/` writes into `targets/` or `reference/`. Those folders change only
    through the ingest script that sits in them. The package writes two generated input tables
    (the canonical areas and the screened footprints in `inputs/calsim3/`) and nothing else.
-2. **A series that any model here is fitted to is a target**, even if another model only scores
+2. A series that any model here is fitted to is a target, even if another model only scores
    against it. The CalSim3 inflows are the case: dPL-CalSim trains on them, the calibrated
    SAC-SMA comparison only scores against them.
 
@@ -43,18 +43,18 @@ it. The README is the provenance record of that folder.
 
 ## Conventions
 
-- **Join key.** `key = "<lat>_<lon>"` links an HRU to its parameters and to its forcing cell.
+- The join key `key = "<lat>_<lon>"` links an HRU to its parameters and to its forcing cell.
   On the 1/16° grid the key is the cell centre to five decimals.
-- **Forcing is by grid cell, not by watershed.** A store has dimensions `(key, time)`. One cell
+- Forcing is by grid cell, not by watershed. A store has dimensions `(key, time)`. One cell
   can feed several HRUs; what belongs to an HRU (elevation, flow length, area weight, watershed)
   is in the domain's `hruinfo.csv`.
-- **Units.** Flow is mm/day over the watershed area; the `basin_area.csv` tables convert to
-  cfs. Monthly CalSim3 and VIC series are TAF per month. The USGS store keeps cfs as delivered
-  and a derived mm/day.
-- **Watershed codes** differ by domain: CDEC codes for `15cdec` and `11obs` (SHA, BND, and so
+- Flow is mm/day over the watershed area; the `basin_area.csv` tables convert to cfs. Monthly
+  CalSim3 and VIC series are TAF per month. The USGS store keeps cfs as delivered and a derived
+  mm/day.
+- Watershed codes differ by domain: CDEC codes for `15cdec` and `11obs` (SHA, BND, and so
   on); names for `9unimp` (CacheCreek, StonyCreek, and so on); codes of its own for `12rim`
   (SHAST, OROVI, and so on). The same river can carry different codes in different domains.
-- **Formats.** Tables are plain CSV. Gridded stores are NetCDF or npz, tracked with git-LFS
+- Tables are plain CSV. Gridded stores are NetCDF or npz, tracked with git-LFS
   (`.gitattributes`); so are the largest CSV tables, which `.gitattributes` names.
 
 ## Files kept by hand
@@ -88,16 +88,16 @@ A script is run by its path from the repository root, for example
 [`_paths.py`](_paths.py), which gives it the repository root, the data layout, and the places
 where this machine keeps inputs that are not in the repository.
 
-- **The layout is one module**, [`sacsma/paths.py`](../sacsma/paths.py). The package and the
+- The layout is one module, [`sacsma/paths.py`](../sacsma/paths.py). The package and the
   scripts ask it for every path under `data/`. To move a folder, change it there.
-- **Inputs outside the repository** (the raw raster stage, the forcing master, the weather
+- Inputs outside the repository (the raw raster stage, the forcing master, the weather
   generator releases, the observation downloads) are named by key in `local_paths.toml`, which
   is not tracked. Copy [`local_paths.example.toml`](local_paths.example.toml) and fill in the
   keys you need. A key can also be set as the environment variable `SACSMA_<KEY>`.
-- **Environments.** Most scripts run in the `sacsma` environment. The raster and Earth Engine
-  scripts (`sample_gis.py`, `reitz_et.py`, `build_flowlens.py`, `gee_obs_region.py`,
-  `gee_aef_region.py`) run in `sacsma-gis` (`environment-gis.yml`). `usgs_flows.py` needs the
-  environment of the neuralhyd-ca repository.
+- Most scripts run in the `sacsma` environment. The raster and Earth Engine scripts
+  (`sample_gis.py`, `reitz_et.py`, `build_flowlens.py`, `gee_obs_region.py`, `gee_aef_region.py`)
+  run in `sacsma-gis` (`environment-gis.yml`). `usgs_flows.py` needs the environment of the
+  neuralhyd-ca repository.
 
 The order in which the tables depend on each other, and what a clone cannot rebuild, are in
 [`docs/reproduce.md`](../docs/reproduce.md).

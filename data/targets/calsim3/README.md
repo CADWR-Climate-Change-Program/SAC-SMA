@@ -76,8 +76,8 @@ WY1950.
   gauges, a reservoir mass balance and others. Only the months of `arc_obs_mask.csv` are an
   arc's own gauge record: the listed gauge period minus every water year the report lists as
   a correlation extension.
-- The mask covers every own-record arc (tiers A, B, C and the gauged D and X arcs). Which
-  arcs train is the registry's choice; `train_default` is tier A.
+- The mask covers every own-record arc (tiers A, B, C and the gauged D and X arcs). The
+  registry chooses which arcs train; `train_default` is tier A.
 - Tiers (`tier` = with the extension years carved out, `tier_listed` = the listed gauge
   period alone): A own gauge with a record in the training water years, passes the
   naturalness screen; B the same, fails it; C by difference of own gauges with a record,
@@ -118,7 +118,7 @@ WY1950.
   and `I_MFA023`).
 - caution: printed errors are kept. `I_BCN010`'s extension `1922 - 1966` overlaps its own
   10/59 to 09/67 gauge record. The printed regression reproduces the CalSim3 series exactly
-  in WY1922 to 1959 and WY1968 to 2015 but not in WY1960 to 1967, so the period is really
+  in WY1922 to 1959 and WY1968 to 2015 but not in WY1960 to 1967, so the true period is
   1922 - 1959.
 
 ## Read by

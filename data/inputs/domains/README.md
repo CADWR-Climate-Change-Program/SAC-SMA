@@ -74,8 +74,8 @@ encodings and the sampling conventions are in
 - caution: the `15cdec_grid` footprints over-reach the true catchments by 9 to 66 % in 11 of the 15
   watersheds. The learned-parameter runs from `2_grid` on train on the cells of the `multifamily`
   registry instead (CalSim3 catchment outlines); the hybrids' precipitation input is a mean over the
-  `15cdec_grid` footprints. What the coarse grid loses against `15cdec` is the orographic downscaling of
-  HRU meteorology, an upstream CADWR product that is not in the repository.
+  `15cdec_grid` footprints. Against `15cdec`, the coarse grid loses the orographic downscaling of HRU
+  meteorology, an upstream CADWR product that is not in the repository.
 - The `15cdec_grid` sidecars, like the region store, are means over the cell footprint. The sidecars of
   the HRU domains are point samples at the HRU point.
 - The sidecars are the soil, vegetation, terrain and LAI inputs of the `physical` feature variant of

@@ -23,8 +23,8 @@ The reference model (`sacsma.model`) runs them with the HRU tables of
 ## The learned-parameter runs
 
 One folder per run, under the name it was trained with; its large local files are in
-`_local/runs/`. Which run is current, what each scores and what was tried and not adopted:
-[Runs](../../docs/runs.md).
+`_local/runs/`. [Runs](../../docs/runs.md) says which run is current, what each scores and what
+was tried and not adopted.
 
 ```
 dpl/15cdec/        runs fitted to the 15 CDEC watersheds
@@ -37,8 +37,8 @@ dpl/multifamily/   runs fitted to every family of flow record
 
 `1_hru` runs on the HRUs of `15cdec`; `2_grid` to `7_aef` run on the `multifamily` domain
 restricted to the 15 CDEC entities. The hybrids take the daily flow of `5_px` as an input
-(`lstm` does not). What each rung changes and what it scores:
-[Runs](../../docs/runs.md#the-ladder).
+(`lstm` does not). [Runs](../../docs/runs.md#the-ladder) says what each rung changes and what
+it scores.
 
 | File | What | Written by |
 |---|---|---|
@@ -49,7 +49,7 @@ restricted to the 15 CDEC entities. The hybrids take the daily flow of `5_px` as
 | `params_canopy.csv` | The learned evapotranspiration parameters of the Noah-type runs (`4_noah` to `8_calsim`) | `sacsma dpl evaluate` |
 | `params_deep.csv` | The deep store's share (`gdeep`), drainage rate (`kdeep`) and residence time in years per modeling unit, for the runs that have it (`6_deep`, `7_aef`, `8_calsim`) | `sacsma dpl evaluate` |
 | `tier2_extension_cells.csv` | `8_calsim` only: the traced flow lengths of the 32 extrapolated tier-2 arcs (402 cells), which `product apply` reuses so that a pass needs no tracing and no `sacsma-gis` environment | by hand, from the run's tier-2 pass (`sacsma dpl calsim tier2 --trace-python`) |
-| `provenance/` | `8_calsim` (dPL-CalSim): what it was adopted on. `BARS_FINETUNE.md` holds the bars of its fine-tune on the training years, written before the run, with the result appended (scored in `compare_finetune.txt`); `BARS_READ.md` the pass and fail levels of the WY1976–85 read, written before the read, with its result and the read of the rungs `6_deep` and `7_aef` appended; `read_WY1976-85_*.csv` the read's tables (labels, outlets, region, product, the late-summer volume bias in `dry_season`, and the regional records of rungs 2 to 6 on both grid statics in `statics`); `read_footprint.csv` and `read_monthly_ceiling.csv` its observation-only inputs; `readout_2004_2018_retrained.csv` the WY2004–18 readout; `levels_ref.json` and `levels_finetune.json` the loss-reference measurements behind `--mt-loss-ref` of the warm start and of the fine-tune; `warm_start.pt` the network the fine-tune started from. `hybrid`, `hybrid_dt`, `lstm`: `read_WY1976-85.csv`, the read of the held-out WY1976–85 at the 13 outlets (monthly, on the mean flow of the three seeds). Never edited; it keeps the names of its day. | by hand |
+| `provenance/` | `8_calsim` (dPL-CalSim): what it was adopted on. `BARS_FINETUNE.md` holds the bars of its fine-tune on the training years, written before the run, with the result appended (scored in `compare_finetune.txt`); `BARS_READ.md` the pass and fail levels of the WY1976–85 read, written before the read, with its result and the read of the rungs `6_deep` and `7_aef` appended; `read_WY1976-85_*.csv` the read's tables (labels, outlets, region, product, the late-summer volume bias in `dry_season`, and the regional records of rungs 2 to 6 on both grid statics in `statics`); `read_footprint.csv` and `read_monthly_ceiling.csv` its observation-only inputs; `readout_2004_2018_retrained.csv` the WY2004–18 readout; `levels_ref.json` and `levels_finetune.json` the loss-reference measurements behind `--mt-loss-ref` of the warm start and of the fine-tune; `warm_start.pt` the network the fine-tune started from. `hybrid`, `hybrid_dt`, `lstm`: `read_WY1976-85.csv`, the read of the held-out WY1976–85 at the 13 outlets (monthly, on the mean flow of the three seeds). Never edited; it keeps the names in use when it was written. | by hand |
 
 A retrained run differs from the tracked one in the last digits (GPU arithmetic), so these
 files are the record the results were made from. The per-epoch snapshots and the training

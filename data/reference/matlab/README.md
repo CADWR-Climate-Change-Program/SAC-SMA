@@ -50,7 +50,8 @@ is not known.
   the CalLite optima put the rain/snow threshold `PXTEMP` at 0, so a wet day at exactly 0.00 °C
   here is snow and at 0.005 °C there is rain, and rain on snow starts above 6 mm a day.
   On the shared forcing store the CalLite watersheds differ from MATLAB by up to 0.61 mm/day
-  on a day (MokelumneRiver), 1.6 mm in a month and 0.007 % in long-term volume. `15cdec` keeps its own store.
+  on a day (MokelumneRiver), 1.6 mm in a month and 0.007 % in long-term volume. `15cdec` keeps
+  its own store.
 - The MATLAB monthly simulation printed in the calibration logs is a separate table,
   `data/targets/callite/calib_<domain>_monthly.csv` (see the
   [CalLite targets](../../targets/callite/README.md)).

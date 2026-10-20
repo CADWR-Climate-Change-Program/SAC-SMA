@@ -82,8 +82,8 @@ The registry holds no series. `obs_store` points at each entity's target:
 | `uf_monthly` | `targets/dwr_unimpaired/uf_monthly_mm.csv:depth_mm` | TAF to mm/month at the CalSim arc-sum areas, all 18 arc-mapped UFs, full WY1922-2014 record; built by `data/targets/dwr_unimpaired/build_uf_depth.py` |
 | `calsim_monthly` | `targets/calsim3/calsim3_inflow_monthly_mm.csv:depth_mm` | Kept only on the months of `data/targets/calsim3/arc_obs_mask.csv` |
 
-Training windows are never baked into a series: `record_start`, `train_start` and `train_end` own the
-windowing at load time.
+No series has a training window built in: `record_start`, `train_start` and `train_end` set the window
+at load time.
 
 De-duplication, applied at build time. A watershed does not train at both daily and monthly timescales
 unless its daily record is short (starts about 2000 or later). Eleven monthly twins of long-record CDEC
@@ -94,7 +94,7 @@ in `DEDUP_DROPS` of the builder; record completeness was verified against `gage_
 `fnf_daily.csv` of `data/targets/cdec/`. A second list, `TARGET_DROPS`, drops for target validity and is
 empty.
 
-Flags are annotations for readers: no code branches on them. Footprint and target choices live in the
+Flags are annotations for readers: no code branches on them. Footprint and target choices are in the
 builder (`EXTRA_ARCS`, `TRIM_ARCS`, `TARGET_DROPS`).
 
 | Flag | On | Meaning |
@@ -159,8 +159,8 @@ attributes are complete: the grid tables cover all 4,410 cells.
   water than the watershed cannot drain to its outlet). `center` marks a start at the cell centre (159
   base rows). The within-cell hillslope delay belongs to the cell's runoff response, not to routing.
 - Outlet snap. The outlet moves to the nearest pixel (within about 2 km) whose implied upstream area is
-  within 0.2 to 5 times the registry `area_mi2`. Nearest in band, not the patch maximum: below a dam the
-  maximum sits on the same river a few km downstream.
+  within 0.2 to 5 times the registry `area_mi2`. The snap takes the nearest pixel in that band, not the
+  patch maximum, because below a dam the maximum sits on the same river a few km downstream.
 - `uf_07` (a composite with one outlet per creek) traces each cell to where its path leaves the entity
   footprint. The arcs have no outlet coordinate and are traced the same way, which is also tier 2's
   convention for arcs.
