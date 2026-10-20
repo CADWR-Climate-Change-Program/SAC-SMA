@@ -1,5 +1,5 @@
 """Skill and climate response of every rung of the ladder (the GA parameters, ``1_hru`` to
-``7_calsim``) and of the three LSTM models (``hybrid``, ``hybrid_dt``, ``lstm``).
+``8_calsim``) and of the three LSTM models (``hybrid``, ``hybrid_dt``, ``lstm``).
 
 Skill is the mean KGE over the 15 CDEC watersheds on the training years WY1989-2003 and the
 test years WY2004-18 (daily, each run's ``metrics.csv``; the GA's from the ladder's read of the
@@ -35,7 +35,7 @@ from .climatology import _basin_order
 from .surfaces import metrics_from_daily
 
 DOMAIN = paths.CDEC15
-RUNGS = ("GA", "1_hru", "2_grid", "3_pt", "4_noah", "5_px", "6_aef", "7_calsim")
+RUNGS = ("GA", "1_hru", "2_grid", "3_pt", "4_noah", "5_px", "6_deep", "7_aef", "8_calsim")
 LSTMS = ("hybrid", "hybrid_dt", "lstm")
 RUNS = RUNGS + LSTMS
 #: (dp, dt): present climate, +3 degC, precipitation -10 % and +10 %
@@ -46,7 +46,7 @@ FAMILIES = (("usgs", "49 USGS gauges, daily"), ("uf", "9 UF subbasins, monthly")
 #: the name of a run in the ladder's read records, where it differs
 _READ_NAME = {"GA": "0_ga"}
 #: the rung that trains on every record family, set apart in the figures
-_ALL_FAMILIES = "7_calsim"
+_ALL_FAMILIES = "8_calsim"
 #: the hybrids study's label of each LSTM model
 _HYBRIDS_LABEL = {"hybrid": "Hybrid", "hybrid_dt": "Hybrid DT", "lstm": "LSTM"}
 _WINDOWS = (("kge_training", "WY1989–2003 (training), daily", "tab:blue"),
@@ -63,7 +63,7 @@ def _out(out_dir: str | Path | None) -> Path:
 def skill() -> pd.DataFrame:
     """One row per run (:data:`RUNS`): mean KGE on the training, test and held-out windows,
     and on the held-out regional records (``kge_<family>``); NaN where a run has no score."""
-    prov = paths.dpl_run(run="7_calsim", domain=paths.MULTIFAMILY) / "provenance"
+    prov = paths.dpl_run(run=_ALL_FAMILIES, domain=paths.MULTIFAMILY) / "provenance"
     readout = (pd.read_csv(prov / "readout_2004_2018_retrained.csv")
                .groupby(["run", "window"])["kge"].mean())
     outlets = pd.read_csv(prov / "read_WY1976-85_outlets.csv").groupby("run")["kge"].mean()
@@ -75,7 +75,7 @@ def skill() -> pd.DataFrame:
         if run == "GA":
             row["kge_training"] = readout[(name, "WY1989-2003")]
             row["kge_test"] = readout[(name, "WY2004-18")]
-        elif run != "7_calsim":
+        elif run != _ALL_FAMILIES:
             m = pd.read_csv(paths.dpl_metrics(run=run))
             row["kge_training"], row["kge_test"] = m["cal_kge"].mean(), m["val_kge"].mean()
         if run in LSTMS:
@@ -95,7 +95,7 @@ def steps() -> pd.DataFrame:
     and each regional family), the number of records ``n``, how many gain (``up``), and the
     median and mean change of KGE. The mean is the step of :func:`skill`; the median and the
     count show whether a few records carry it."""
-    prov = paths.dpl_run(run="7_calsim", domain=paths.MULTIFAMILY) / "provenance"
+    prov = paths.dpl_run(run=_ALL_FAMILIES, domain=paths.MULTIFAMILY) / "provenance"
     ro = pd.read_csv(prov / "readout_2004_2018_retrained.csv")
     outlets = pd.read_csv(prov / "read_WY1976-85_outlets.csv")
     region = pd.read_csv(prov / "read_WY1976-85_region.csv")
@@ -106,7 +106,7 @@ def steps() -> pd.DataFrame:
             if run == "GA":
                 s = ro[(ro["run"] == name) & (ro["window"] == "WY2004-18")]
                 return s.set_index("basin")["kge"]
-            if run == "7_calsim":
+            if run == _ALL_FAMILIES:
                 return None
             return pd.read_csv(paths.dpl_metrics(run=run)).set_index("basin")["val_kge"]
         if rec == "outlets":
@@ -323,7 +323,7 @@ def skill_response_fig(tbl: pd.DataFrame, path: Path) -> None:
     ms = 5
     ax.axvline(0, color="0.85", lw=0.8, zorder=0)
     for runs, label, kw in ((RUNGS[:-1], "Rungs", dict(marker="o", color="0.2")),
-                            ((_ALL_FAMILIES,), "7_calsim (every record family)",
+                            ((_ALL_FAMILIES,), f"{_ALL_FAMILIES} (every record family)",
                              dict(marker="D", mfc="0.65", mec="0.2")),
                             (LSTMS, "LSTM models", dict(marker="s", mfc="white", mec="0.2"))):
         s = tbl[tbl["run"].isin(runs)]

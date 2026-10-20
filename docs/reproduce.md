@@ -80,7 +80,7 @@ The runs of [Learned parameters](learned_parameters.md) are tracked with their s
 checkpoints, so scoring needs no training:
 
 ```bash
-sacsma dpl evaluate artifacts/models/dpl/15cdec/5_px/checkpoints/best.pt   # likewise 1_hru to 6_aef
+sacsma dpl evaluate artifacts/models/dpl/15cdec/5_px/checkpoints/best.pt   # likewise 1_hru to 7_aef
 sacsma dpl fidelity        # the learned numerics vs the reference model -> artifacts/results/dpl/fidelity/
 ```
 
@@ -100,17 +100,19 @@ CDEC15=cdec_BND,cdec_FOL,cdec_ISB,cdec_MIL,cdec_MKM,cdec_MRC,cdec_NHG,cdec_NML,c
 MF="--domain multifamily --basins $CDEC15 --train-window 1988-10-01:2003-09-30"
 NOAH="--et noah --noah-pet priestley_taylor"
 PX="--learn-pxtemp --pxtemp-tau 1.0"
+DEEP="--deep-store cascade --deep-lr-mult 10"
 L=artifacts/_local/runs/dpl
 sacsma dpl train physical $R --domain 15cdec --et sac --sac-pet hamon --out $L/1_hru
 sacsma dpl train physical $R $MF --et sac --sac-pet hamon --out $L/2_grid
 sacsma dpl train physical $R $MF --et sac --sac-pet priestley_taylor --out $L/3_pt
 sacsma dpl train physical $R $MF $NOAH --out $L/4_noah
 sacsma dpl train physical $R $MF $NOAH $PX --out $L/5_px
-sacsma dpl train aef_u $R $MF $NOAH $PX --out $L/6_aef
+sacsma dpl train physical $R $MF $NOAH $PX $DEEP --out $L/6_deep
+sacsma dpl train aef_u $R $MF $NOAH $PX $DEEP --out $L/7_aef
 sacsma dpl evaluate $L/5_px/checkpoints/best.pt   # a retrained rung is scored in its own folder
 ```
 
-`1_hru` trains on the HRUs of the `15cdec` domain. Rungs 2 to 6 run on the `multifamily` domain
+`1_hru` trains on the HRUs of the `15cdec` domain. Rungs 2 to 7 run on the `multifamily` domain
 (1/16° grid cells and the CalSim3 catchment outlines) restricted to the 15 CDEC entities, and
 train on WY1989–2003. Each rung takes about 3 to 6 hours on an 8 GB laptop GPU (the `epoch_s`
 column of its `train_log.csv`). Train one run at a time: the daily graph takes most of the memory.
@@ -151,28 +153,58 @@ sacsma dpl study ladder            # skill and climate response of every run, CP
 
 ## 6. dPL-CalSim and the rim-inflow product
 
-`<run>` below is any folder of dPL-CalSim: `artifacts/models/dpl/multifamily/7_calsim/` (the
-checkpoints), `artifacts/results/dpl/multifamily/7_calsim/` (the scores) or
-`artifacts/_local/runs/dpl/multifamily/7_calsim/` (the large local files); every command finds
+`<run>` below is any folder of dPL-CalSim: `artifacts/models/dpl/multifamily/8_calsim/` (the
+checkpoints), `artifacts/results/dpl/multifamily/8_calsim/` (the scores) or
+`artifacts/_local/runs/dpl/multifamily/8_calsim/` (the large local files); every command finds
 the other two. The tracked folders hold the selected checkpoint and the scores, and
 `artifacts/product/calsim3/` the product, so steps can be entered anywhere.
 
-**Train** (about 20 hours on an 8 GB laptop GPU: 120 epochs of about 10 minutes, from the
-`epoch_s` column of its `train_log.csv`). dPL-CalSim is rung 7 of the ladder: the recipe of
+**Train.** dPL-CalSim is rung 8 of the ladder, trained in two stages
+([CalSim3 rim inflows](calsim3_rim_inflows.md#what-the-model-trains-on)). Both use the recipe of
 section 5 on 159 entities of every family (69 USGS gauges, 17 CDEC records, 9 unimpaired-flow
 subbasins, 64 CalSim3 arcs) and every year but WY1976–85, with the unimpaired-flow targets back
-to WY1950, the families weighted by footprint area and a fixed loss scale per family. Its
+to WY1950, the families weighted by footprint area and a fixed loss scale per family. Their
 `--param-bounds` replaces the one in `R`: it keeps `lzsk` down to 0.001 and widens the ranges of
 `MBASE`, `NMF`, `Velo` and `zperc` that the GA box pins ([Runs](runs.md#the-ladder)).
 
+The warm start, from scratch (about 20 hours on an 8 GB laptop GPU: 120 epochs of about 10
+minutes). The tracked run's warm start is `artifacts/models/dpl/multifamily/8_calsim/provenance/warm_start.pt`:
+
 ```bash
-sacsma dpl train aef_u $R --param-bounds lzsk=0.001:0.5,MBASE=-2:5,NMF=0.05:0.5,Velo=0.5:10,zperc=1:1000 \
-    --domain multifamily --holdout-wy 1976-1985 $NOAH $PX \
-    --uf-train-start 1949-10-01 --calsim-arcs train_default --mt-select-weight area \
-    --mt-family-weight usgs=0.2366,cdec=0.5508,uf=0.1226,calsim=0.0900 --mt-share-norm all \
-    --mt-loss-ref usgs=0.6374,cdec=0.3511,uf=0.1140,calsim=0.3548 --mt-loss-ref-power 0.5 \
-    --out $L/7_calsim
+B=lzsk=0.001:0.5,MBASE=-2:5,NMF=0.05:0.5,Velo=0.5:10,zperc=1:1000
+ALL="--domain multifamily --holdout-wy 1976-1985 $NOAH $PX --param-bounds $B \
+    --uf-train-start 1949-10-01 --calsim-arcs train_default --mt-select-weight area --mt-share-norm all \
+    --mt-loss-ref-power 0.5"
+sacsma dpl train aef_u $R $ALL \
+    --mt-family-weight usgs=0.2366,cdec=0.5508,uf=0.1226,calsim=0.0900 \
+    --mt-loss-ref usgs=0.6374,cdec=0.3511,uf=0.1140,calsim=0.3548 \
+    --out $L/8_calsim_warm_start
 ```
+
+The fine-tune from it (about 6 hours: 45 epochs of about 8 minutes), with the deep store, the
+cleaned targets of `data/targets/`, CDEC's monthly records and the dry-season term. Its loss
+scales and dry-season weight were measured at the warm start's field
+(`provenance/levels_finetune.json`); `--shape-min-days 180` lets the variance term score the
+outlets whose screened records leave fewer than 300 days in a water year:
+
+```bash
+T=data/targets
+sacsma dpl train aef_u $R $ALL \
+    --mt-family-weight usgs=0.2366,cdec=0.2754,cdecm=0.2754,uf=0.1226,calsim=0.0900 \
+    --mt-loss-ref usgs=0.6006,cdec=0.2827,cdecm=0.1173,uf=0.1088,calsim=0.3221 \
+    --target-mask $T/cdec/fnf_daily_screen.csv,$T/usgs/location_mask.csv,$T/calsim3/location_mask.csv,$T/dwr_unimpaired/location_mask.csv \
+    --target-scale cs_I_MFM008=1.387203,cs_I_SFM005=0.854863 \
+    --target-series usgs_11218500=$T/usgs/usgs_11218501_mm.csv \
+    --cdec-monthly 1949-10-01 --cdec-monthly-mask $T/cdec/fnf_monthly_screen.csv,$T/cdec/forcing_era_mask.csv \
+    --dry-season-lambda 0.1132 --deep-store cascade --deep-lr-mult 10 --shape-min-days 180 \
+    --init-from $L/8_calsim_warm_start/checkpoints/best.pt \
+    --lr 3e-4 --warmup-epochs 1 --epochs 45 --patience 45 --graph-recompute-days 73 \
+    --out $L/8_calsim
+```
+
+The tracked fine-tune ran with `--patience 20`, stopped at epoch 23 because its selection score
+had peaked at epoch 1, and was resumed with `--patience 45` (`provenance/BARS_FINETUNE.md`); the
+command above runs the same 45 epochs at once.
 
 A retrained run will not match the tracked one digit for digit: GPU arithmetic is not
 reproducible across drivers. Two epochs of the same command on the same machine do repeat.

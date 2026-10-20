@@ -317,15 +317,18 @@ def _load_percell_tminmax(data_dir: str, domain: str, forcing, product: str = DE
     """Per-cell (n_cells, T) Tmin/Tmax aligned to ``forcing`` cell order, from
     the unified region forcing store of ``product`` (``data/inputs/forcing``; a WGEN
     scenario store is decoded against its base) — or (None, None) for non-grid domains
-    (the Noah/PT paths then RAISE at run time; there is no tavg fallback)."""
+    (the Noah/PT paths then RAISE at run time; there is no tavg fallback).  Gaps are
+    persistence-filled as :func:`sacsma.io.load_forcing` fills them, so tmin / tmax match the
+    tavg the model gets."""
     from .. import wgen_scenarios
-    from ..io import REGION_DOMAINS, forcing_path, norm_grid_key
+    from ..io import REGION_DOMAINS, fill_missing_days, forcing_path, norm_grid_key
 
     if domain not in REGION_DOMAINS:
         return None, None
     if wgen_scenarios.scenario_of(product) is not None:
         want = [norm_grid_key(k) for k in forcing.pos]
-        ds = wgen_scenarios.load_region_subset(data_dir, product, want, ("tmin", "tmax"))
+        ds = fill_missing_days(
+            wgen_scenarios.load_region_subset(data_dir, product, want, ("tmin", "tmax")))
         return (ds["tmin"].values.astype(np.float32), ds["tmax"].values.astype(np.float32))
     path = forcing_path(data_dir, domain, product)
     if not path.exists():
@@ -336,7 +339,8 @@ def _load_percell_tminmax(data_dir: str, domain: str, forcing, product: str = DE
     key_row = {str(k): i for i, k in enumerate(ds["key"].values)}
     order = np.array([key_row[norm_grid_key(k)] for k in forcing.pos],
                      dtype=np.int64)  # forcing order
-    tmin = ds["tmin"].values[order].astype(np.float32)
-    tmax = ds["tmax"].values[order].astype(np.float32)
+    dims = ds["tmin"].dims
+    tt = xr.Dataset({v: (dims, ds[v].values[order]) for v in ("tmin", "tmax")})
     ds.close()
-    return tmin, tmax
+    tt = fill_missing_days(tt)
+    return tt["tmin"].values.astype(np.float32), tt["tmax"].values.astype(np.float32)

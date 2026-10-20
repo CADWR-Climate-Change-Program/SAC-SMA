@@ -23,7 +23,7 @@ CALSIM_TOOLS: dict[str, tuple[str, str]] = {
 STUDIES: dict[str, tuple[str, str, str]] = {
     "climatology": ("climatology", "make_cdec15_climatology",
                     "per-watershed mean-monthly TAF regime vs the observed CalSim3 FNF, one "
-                    "figure per ladder step (7: GA -> 1_hru ... 6_aef, then the hybrids on "
+                    "figure per ladder step (8: GA -> 1_hru ... 7_aef, then the hybrids on "
                     "5_px) + all-series metric bars"),
     "hybrids": ("hybrids", "make_hybrids",
                 "the hybrid family (hybrid, hybrid_dt, lstm) response surfaces and skill summary"),
@@ -58,16 +58,101 @@ def _param_bounds(spec: str | None) -> dict[str, tuple[float, float]]:
 
 
 def _obs_mask(path: str | None) -> tuple[str, ...]:
-    """Hand-edited mask CSV (``entity_id,date,...``) -> ``("entity_id|YYYY-MM-DD", ...)``."""
+    """Mask CSV(s) (``entity_id,date,...``; several joined by commas) ->
+    ``("entity_id|YYYY-MM-DD", ...)``, a day named twice kept once."""
     if not path:
         return ()
     import pandas as pd
 
-    m = pd.read_csv(path, dtype=str, comment="#")
-    if not {"entity_id", "date"} <= set(m.columns):
-        raise SystemExit(f"--obs-mask {path}: needs entity_id and date columns")
-    return tuple(f"{e.strip()}|{pd.Timestamp(d).date().isoformat()}"
-                 for e, d in zip(m["entity_id"], m["date"], strict=True))
+    out: dict[str, None] = {}
+    for p in path.split(","):
+        m = pd.read_csv(p, dtype=str, comment="#")
+        if not {"entity_id", "date"} <= set(m.columns):
+            raise SystemExit(f"--obs-mask {p}: needs entity_id and date columns")
+        for e, d in zip(m["entity_id"], m["date"], strict=True):
+            out[f"{e.strip()}|{pd.Timestamp(d).date().isoformat()}"] = None
+    return tuple(out)
+
+
+def _cdec_monthly_mask(path: str | None) -> tuple[str, ...]:
+    """Mask CSV(s) (``entity_id,month,...``, month YYYY-MM; several joined by commas) ->
+    ``("cdec_<SITE>|YYYY-MM", ...)``, a month named twice kept once."""
+    if not path:
+        return ()
+    import pandas as pd
+
+    out: dict[str, None] = {}
+    for p in path.split(","):
+        m = pd.read_csv(p, dtype=str, comment="#")
+        if not {"entity_id", "month"} <= set(m.columns):
+            raise SystemExit(f"--cdec-monthly-mask {p}: needs entity_id and month columns")
+        for e, mo in zip(m["entity_id"], m["month"], strict=True):
+            out[f"{e.strip()}|{pd.Period(mo, freq='M')}"] = None
+    return tuple(out)
+
+
+def _target_mask(path: str | None) -> tuple[str, ...]:
+    """Mask CSV(s) (``entity_id`` with ``date``, ``month`` or ``start``/``end`` columns;
+    several joined by commas) -> ``target_mask`` entries, each entity's consecutive days
+    (months) joined into ``"entity_id|first..last"`` ranges."""
+    if not path:
+        return ()
+    import pandas as pd
+
+    days: dict[str, set] = {}
+    mons: dict[str, set] = {}
+    for p in path.split(","):
+        m = pd.read_csv(p, dtype=str, comment="#")
+        if "entity_id" not in m.columns or not ({"date"} <= set(m.columns)
+                                                or {"month"} <= set(m.columns)
+                                                or {"start", "end"} <= set(m.columns)):
+            raise SystemExit(f"--target-mask {p}: needs entity_id and date, month or "
+                             "start,end columns")
+        if "start" in m.columns:
+            spans = zip(m["entity_id"], m["start"], m["end"], strict=True)
+        else:
+            col = m["date"] if "date" in m.columns else m["month"]
+            spans = zip(m["entity_id"], col, col, strict=True)
+        for e, a, b in spans:
+            e, a, b = e.strip(), a.strip(), b.strip()
+            if len(a) == 10:
+                days.setdefault(e, set()).update(pd.date_range(a, b, freq="D"))
+            else:
+                mons.setdefault(e, set()).update(pd.period_range(a, b, freq="M"))
+    out = []
+    for store, step, fmt in ((days, pd.Timedelta(days=1), lambda d: d.date().isoformat()),
+                             (mons, 1, str)):
+        for e in sorted(store):
+            xs = sorted(store[e])
+            a = prev = xs[0]
+            for x in xs[1:] + [None]:
+                if x is not None and x == prev + step:
+                    prev = x
+                    continue
+                out.append(f"{e}|{fmt(a)}" + (f"..{fmt(prev)}" if prev != a else ""))
+                if x is not None:
+                    a = prev = x
+    return tuple(out)
+
+
+def _target_series(spec: str | None, data_dir: str) -> tuple[str, ...]:
+    """``--target-series ID=CSV[,ID=CSV]`` -> ``target_series`` entries, each CSV's path
+    relative to the data directory (the trainer and the evaluator read it under theirs)."""
+    from pathlib import Path
+
+    root = Path(data_dir).resolve()
+    out = []
+    for v in (spec or "").split(","):
+        if not v:
+            continue
+        eid, _, p = v.partition("=")
+        try:
+            rel = Path(p).resolve().relative_to(root)
+        except ValueError:
+            raise ValueError(f"--target-series {v!r}: the CSV must lie under the data "
+                             f"directory ({data_dir})") from None
+        out.append(f"{eid}={rel.as_posix()}")
+    return tuple(out)
 
 
 def _holdout_wy(text: str) -> tuple[int, ...]:
@@ -94,6 +179,14 @@ def _dpl_train(args: argparse.Namespace) -> int:
         log_loss_lambda=args.log_lambda, var_loss_lambda=args.var_lambda,
         var_huber_cap=args.var_huber_cap, shape_min_days=args.shape_min_days,
         obs_mask=_obs_mask(args.obs_mask),
+        cdec_monthly=args.cdec_monthly,
+        cdec_monthly_mask=_cdec_monthly_mask(args.cdec_monthly_mask),
+        target_mask=_target_mask(args.target_mask),
+        target_scale=tuple(v for v in (args.target_scale or "").split(",") if v),
+        target_series=_target_series(args.target_series, args.data_dir),
+        dry_season_lambda=args.dry_season_lambda, dry_season_eps=args.dry_season_eps,
+        deep_store=args.deep_store, deep_lr_mult=args.deep_lr_mult,
+        init_from=args.init_from,
         holdout_wy=_holdout_wy(args.holdout_wy),
         uf_train_start=args.uf_train_start, calsim_arcs=args.calsim_arcs,
         train_window=tuple(args.train_window.split(":")) if args.train_window else (),
@@ -351,11 +444,40 @@ def register(sub) -> None:
     tr.add_argument("--pxtemp-tau", type=float, default=1.0,
                     help="width (degC) of the sigmoid surrogate that carries the "
                          "PXTEMP gradient; the forward split stays hard")
-    tr.add_argument("--obs-mask", default=None, metavar="CSV",
+    tr.add_argument("--obs-mask", default=None, metavar="CSV[,CSV]",
                     help="hand-edited CSV (entity_id,date,...) of daily observations "
                          "to mask out of training and scoring, e.g. "
                          "data/targets/cdec/fnf_daily_mask.csv; the checkpoint carries the "
                          "list")
+    tr.add_argument("--cdec-monthly", default="", metavar="YYYY-MM-01",
+                    help="train CDEC's monthly full natural flow as a monthly companion of the "
+                         "cdec_daily entities from this month (multifamily), e.g. 1949-10-01; "
+                         "its own share key 'cdecm' in --mt-family-weight and --mt-loss-ref. "
+                         "'' = off")
+    tr.add_argument("--cdec-monthly-mask", default=None, metavar="CSV[,CSV]",
+                    help="months (entity_id,month YYYY-MM) left out of the companion")
+    tr.add_argument("--target-mask", default=None, metavar="CSV[,CSV]",
+                    help="targets of any family left out after the normalizers: CSVs with "
+                         "entity_id and date, month or start,end columns (multifamily)")
+    tr.add_argument("--target-scale", default=None, metavar="ID=F[,ID=F]",
+                    help="per-entity factors on the target as read (a depth-basis fix)")
+    tr.add_argument("--target-series", default=None, metavar="ID=CSV[,ID=CSV]",
+                    help="a daily entity's replacement record (date,value_mm), a CSV under "
+                         "the data directory (the checkpoint keeps its path relative to it)")
+    tr.add_argument("--dry-season-lambda", type=float, default=0.0,
+                    help="weight of the per-year Jul-Sep log-volume term (multifamily); 0 = off")
+    tr.add_argument("--dry-season-eps", type=float, default=DplConfig.dry_season_eps,
+                    help="its offset, as a share of each entity's median Jul-Sep volume")
+    tr.add_argument("--deep-store", default="none", choices=["none", "cascade"],
+                    help="'cascade' = a learned share of the supplemental drainage through a "
+                         "slow store of learned residence (2-10 years), outside the lower-zone "
+                         "deficit")
+    tr.add_argument("--deep-lr-mult", type=float, default=1.0,
+                    help="the deep store head's learning rate as a multiple of --lr")
+    tr.add_argument("--init-from", default="", metavar="CKPT",
+                    help="warm start (a fine-tune) from this checkpoint's net: same variant, "
+                         "domain, entities, parameter mapping and input scaling; fresh "
+                         "optimizer and schedule")
     tr.add_argument("--holdout-wy", default="", metavar="FIRST-LAST",
                     help="water years held out of EVERY family (multifamily), e.g. "
                          "1976-1985: their targets are blanked after the registry n_obs "

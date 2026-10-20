@@ -15,6 +15,9 @@ The state at ``start`` is the reference cold start (snow empty, SAC-SMA ``[0, 0,
 0]``, routing empty) under ``spinup="cold"``; under ``"cycle"`` it is the cold start looped
 ``passes`` times over the first ``years`` years from ``start`` (``sacsma.dpl.spinup``); under
 ``"window"`` the run starts cold at ``window_start`` and the days before ``start`` are dropped.
+A learned field with the deep store (``Physics.deep``) starts the store empty; under ``"window"``
+its content at ``start`` is divided by ``1 - (1 - kdeep)**days``, the level a constant feed
+reaches from empty, so the window starts near the store's steady state as the trainer's does.
 """
 
 from __future__ import annotations
@@ -47,6 +50,9 @@ N_HIST = N_TAPS - 1
 #: the routed outputs: flow (= fast + slow), the routed direct and base inflow, and the four
 #: runoff parts (quick + interflow = fast, supplemental + primary = slow)
 OUTPUTS = ("flow", "fast", "slow", "quick", "interflow", "supplemental", "primary")
+#: the deep store's diagnostics (a field with it): ``deep``, its outflow's share of the
+#: supplemental part, routed as it; ``gwc``, its content (mm, not routed)
+DEEP_OUTPUTS = ("deep", "gwc")
 
 
 @dataclass(frozen=True)
@@ -56,6 +62,7 @@ class Physics:
     learned: bool = False                # sma_learned instead of the reference sma
     n_inc: int = 10                      # learned: substeps a day
     fracp_floor: float = 1e-3            # learned
+    deep: str = "none"                   # learned: "none" | "cascade" (the deep store)
 
 
 @dataclass
@@ -70,23 +77,27 @@ class Field:
     veg: np.ndarray         # (U,) observed green-vegetation fraction (Noah-lite)
     chi: np.ndarray         # (U,) soil_chi (Noah-lite)
     lai: np.ndarray         # (U, 366) observed LAI by day of year (Noah-lite)
+    deep: np.ndarray        # (U, 2) gdeep, kdeep (the deep store; zeros without it)
     unit: np.ndarray        # (R,) unit of each routed row
     flowlen: np.ndarray     # (R,)
     route: np.ndarray       # (R, 4) Nres, Kres, Velo, Diff
 
     @classmethod
     def from_rows(cls, physics: Physics, cell, lat_rad, elev, flowlen, kpet, snow, sma, route,
-                  veg=None, chi=None, lai=None) -> Field:
+                  veg=None, chi=None, lai=None, deep=None) -> Field:
         """One row per routed row; rows with the same cell and the same physics inputs become
-        one unit (``lai`` is ``(R, 366)``)."""
+        one unit (``lai`` is ``(R, 366)``, ``deep`` ``(R, 2)``)."""
         f64 = lambda a: np.ascontiguousarray(a, dtype=np.float64)  # noqa: E731
         R = len(cell)
         noah = physics.et == "noah_lite"
+        if physics.deep == "cascade" and deep is None:
+            raise ValueError("a field with the deep store needs deep (R, 2): gdeep, kdeep")
         veg = f64(veg if noah else np.zeros(R))
         chi = f64(chi if noah else np.zeros(R))
         lai = f64(lai if noah else np.zeros((R, 1)))
+        deep = f64(deep if physics.deep == "cascade" else np.zeros((R, 2)))
         cols = [np.asarray(cell, np.float64)[:, None], f64(lat_rad)[:, None], f64(elev)[:, None],
-                f64(kpet)[:, None], f64(snow), f64(sma), veg[:, None], chi[:, None], lai]
+                f64(kpet)[:, None], f64(snow), f64(sma), veg[:, None], chi[:, None], lai, deep]
         key = np.ascontiguousarray(np.hstack(cols))
         _, first, unit = np.unique(key.view(np.dtype((np.void, key.shape[1] * 8))).ravel(),
                                    return_index=True, return_inverse=True)
@@ -95,7 +106,7 @@ class Field:
         pick = lambda a: np.ascontiguousarray(a[u])  # noqa: E731
         return cls(physics, pick(np.asarray(cell, np.int64)), pick(f64(lat_rad)), pick(f64(elev)),
                    pick(f64(kpet)), pick(f64(snow)), pick(f64(sma)), pick(veg), pick(chi),
-                   pick(lai), unit.astype(np.int64), f64(flowlen), f64(route))
+                   pick(lai), pick(deep), unit.astype(np.int64), f64(flowlen), f64(route))
 
 
 def block_end(dates: pd.DatetimeIndex, t0: int, years: int) -> int:
@@ -113,13 +124,15 @@ def year_index(dates: pd.DatetimeIndex, t0: int, t1: int) -> np.ndarray:
 
 @njit(parallel=True, cache=False)
 def _units(prcp, tavg, tmin, tmax, doy_f, doy_i, leap, cell, lat_rad, elev, kpet, snow, sma,
-           veg, chi, lai, et_noah, pt, learned, n_inc, floor,
+           veg, chi, lai, et_noah, pt, learned, n_inc, floor, deep_on, deep,
            a, t0, te, passes, yidx, tfield, pscale, out, annual):
     """Units ``0..len(cell)``: the cycle spin-up over ``[t0, te)`` (``passes`` times), then the
-    run over ``[a, t1)``.  ``out`` (U, S, N_HIST + t1 - t0): surf, base [, the four parts],
-    the first N_HIST days the inflow before ``t0``; ``annual`` (U, 2, Y): surf + base by block
+    run over ``[a, t1)``.  ``out`` (U, S, N_HIST + t1 - t0): surf, base [, the four parts
+    [, the deep store's outflow and content]], the first N_HIST days the inflow before
+    ``t0``; ``annual`` (U, 2, Y): surf + base by block
     year over the last two spin-up passes.  ``tfield`` (1, 1) or (cells, days): the degC added
-    to the temperatures."""
+    to the temperatures.  ``deep_on``: the learned step's deep store on ``deep`` (U, 2), its
+    content brought to steady state at ``t0`` after a window spin-up (module docstring)."""
     U, S, L = out.shape
     T = L - N_HIST
     t1 = t0 + T
@@ -142,7 +155,11 @@ def _units(prcp, tavg, tmin, tmax, doy_f, doy_i, leap, cell, lat_rad, elev, kpet
                 tn[t] = tn[t] + d
                 tx[t] = tx[t] + d
         snow_st = np.zeros(4)
-        sac_st = DEFAULT_INIT_STATE.copy()
+        if learned:                             # the reference six, then the deep store
+            sac_st = np.zeros(7)
+            sac_st[:6] = DEFAULT_INIT_STATE
+        else:
+            sac_st = DEFAULT_INIT_STATE.copy()
         for k in range(passes + 1):
             s0 = t0 - a if k < passes else 0
             s1 = te - a if k < passes else n
@@ -155,13 +172,28 @@ def _units(prcp, tavg, tmin, tmax, doy_f, doy_i, leap, cell, lat_rad, elev, kpet
                 pet = kpet[u] * _hamon_core(ta[s0:s1], doy_f[a + s0:a + s1], lat_rad[u], 1.0)
             else:
                 pet = _hamon_core(ta[s0:s1], doy_f[a + s0:a + s1], lat_rad[u], kpet[u])
-            parts = np.empty((6, s1 - s0)) if S > 2 else np.empty((0, 0))
+            parts = np.empty((max(S, 6), s1 - s0)) if S > 2 else np.empty((0, 0))
             if learned:
                 lai_d = np.empty(s1 - s0)
                 for t in range(s1 - s0):
                     lai_d[t] = lai[u, doy_i[a + s0 + t] - 1] if et_noah else 0.0
-                surf, base, _t, sac_st = sac_learned(pet, eff, sma[u], sac_st, et_noah, veg[u],
-                                                     lai_d, chi[u], n_inc, floor, parts)
+                m = t0 - a if (deep_on and k == passes) else 0    # a window spin-up's days
+                if m > 0:
+                    sf1, bs1, _t, sac_st = sac_learned(pet[:m], eff[:m], sma[u], sac_st, et_noah,
+                                                       veg[u], lai_d[:m], chi[u], n_inc, floor,
+                                                       deep_on, deep[u], parts[:, :m])
+                    fill = -np.expm1(m * np.log1p(-deep[u, 1]))   # 1 - (1 - kdeep)**m
+                    if fill > 0.0:
+                        sac_st[6] = sac_st[6] / fill
+                    sf2, bs2, _t, sac_st = sac_learned(pet[m:], eff[m:], sma[u], sac_st, et_noah,
+                                                       veg[u], lai_d[m:], chi[u], n_inc, floor,
+                                                       deep_on, deep[u], parts[:, m:])
+                    surf = np.concatenate((sf1, sf2))
+                    base = np.concatenate((bs1, bs2))
+                else:
+                    surf, base, _t, sac_st = sac_learned(pet, eff, sma[u], sac_st, et_noah,
+                                                         veg[u], lai_d, chi[u], n_inc, floor,
+                                                         deep_on, deep[u], parts)
             else:
                 surf, base, _t, sac_st = _sacsma_core(pet, eff, sma[u], sac_st)
             if k < passes:
@@ -180,6 +212,9 @@ def _units(prcp, tavg, tmin, tmax, doy_f, doy_i, leap, cell, lat_rad, elev, kpet
                             out[u, 3, j] = parts[3, i]
                             out[u, 4, j] = parts[4, i]
                             out[u, 5, j] = parts[5, i]
+                        if S > 6:
+                            out[u, 6, j] = parts[6, i]
+                            out[u, 7, j] = parts[7, i]
                 continue
             # the run: [a, t0) is the inflow history of a window spin-up, [t0, t1) the output
             for i in range(n):
@@ -193,6 +228,9 @@ def _units(prcp, tavg, tmin, tmax, doy_f, doy_i, leap, cell, lat_rad, elev, kpet
                     out[u, 3, j] = parts[3, i]
                     out[u, 4, j] = parts[4, i]
                     out[u, 5, j] = parts[5, i]
+                if S > 6:
+                    out[u, 6, j] = parts[6, i]
+                    out[u, 7, j] = parts[7, i]
 
 
 @njit(parallel=True, cache=False)
@@ -215,7 +253,7 @@ def _uh(flowlen, route):
 def _route(series, unit_of, uh, out):
     """Rows ``r`` of a block, unit ``unit_of[r]`` of ``series``: ``out[r, 0]`` the flow (one
     accumulator per day, the direct convolution then the base one), then as many of
-    :data:`OUTPUTS` as ``out`` has room for."""
+    :data:`OUTPUTS` and the deep store's ``deep`` as ``out`` has room for."""
     R = unit_of.shape[0]
     T = out.shape[2]
     for r in prange(R):
@@ -229,8 +267,8 @@ def _route(series, unit_of, uh, out):
             for j in range(N_TAPS):
                 acc += ub[j] * x[1, N_HIST + t - j]
             out[r, 0, t] = acc
-        for k in range(1, out.shape[1]):     # fast, slow, quick, interflow, supplemental, primary
-            w = ud if (k == 1 or k == 3 or k == 4) else ub
+        for k in range(1, out.shape[1]):     # fast, slow, quick, interflow, supplemental,
+            w = ud if (k == 1 or k == 3 or k == 4) else ub    # primary, deep
             for t in range(T):
                 acc = 0.0
                 for j in range(N_TAPS):
@@ -245,9 +283,11 @@ def simulate(field: Field, forcing, start, end, weights: np.ndarray, *, spinup: 
     """Run ``field`` over ``forcing`` (a :class:`sacsma.model.DomainForcing`, with ``tmin`` /
     ``tmax`` for the Priestley-Taylor PET) from ``start`` to ``end`` (dates, inclusive) and
     return ``{output: weights @ routed rows}``, each ``(K, T)`` mm/day, for the names in
-    ``outputs`` (:data:`OUTPUTS`, and ``"runoff"``: surf + base, not routed), plus ``"bad"`` (R,),
-    the rows whose flow went NaN, and ``"spinup"``, a line on the spin-up.  A row that goes NaN
-    raises, unless ``zero_nan``: then it counts as zero on its NaN days.  ``temp_delta`` (degC on
+    ``outputs`` (:data:`OUTPUTS`, ``"runoff"``: surf + base, not routed, and for a field with the
+    deep store :data:`DEEP_OUTPUTS`), plus ``"bad"`` (R,), the rows whose flow went NaN, and
+    ``"spinup"``, a line on the spin-up.  A row that goes NaN
+    raises, unless ``zero_nan``: then it counts as zero on every day, so that a caller can
+    renormalise by the weight of the rows left (``bad``).  ``temp_delta`` (degC on
     tavg / tmin / tmax: a number, or a field on the forcing's rows and days) and
     ``precip_scale`` perturb the forcing, the spin-up included."""
     ph = field.physics
@@ -257,12 +297,15 @@ def simulate(field: Field, forcing, start, end, weights: np.ndarray, *, spinup: 
     if t0 >= t1 or t1 > len(dates) or dates[t0] != pd.Timestamp(start):
         raise ValueError(f"{start} .. {end} is outside the forcing {dates[0].date()} .. "
                          f"{dates[-1].date()}")
-    bad_out = [o for o in outputs if o not in (*OUTPUTS, "runoff")]
+    bad_out = [o for o in outputs if o not in (*OUTPUTS, *DEEP_OUTPUTS, "runoff")]
     if bad_out:
-        raise ValueError(f"outputs {bad_out} (of {OUTPUTS} and runoff)")
-    parts = any(o in OUTPUTS[3:] for o in outputs)
+        raise ValueError(f"outputs {bad_out} (of {OUTPUTS}, {DEEP_OUTPUTS} and runoff)")
+    diag = any(o in DEEP_OUTPUTS for o in outputs)
+    parts = diag or any(o in OUTPUTS[3:] for o in outputs)
     if not ph.learned and (parts or ph.et != "sac"):
         raise ValueError("the reference model has the SAC ET and no runoff parts")
+    if diag and ph.deep != "cascade":
+        raise ValueError(f"outputs {DEEP_OUTPUTS} need a field with the deep store")
     a, te, P = t0, t0, 0
     if spinup == "cycle":
         te, P = block_end(dates, t0, years), passes
@@ -274,13 +317,16 @@ def simulate(field: Field, forcing, start, end, weights: np.ndarray, *, spinup: 
     if pt and (forcing.tmin is None or forcing.tmax is None):
         raise ValueError("the Priestley-Taylor PET needs the per-cell tmin / tmax")
     yidx = year_index(dates, t0, te) if P else np.zeros(0, np.int64)
-    T, S = t1 - t0, 6 if parts else 2
+    T, S = t1 - t0, 8 if diag else 6 if parts else 2
     W = np.asarray(weights, np.float64)
     K, R = W.shape
-    routed_out = set(outputs) - {"runoff"}
-    nout = len(OUTPUTS) if parts else (3 if routed_out - {"flow"} else len(routed_out))
-    res: dict = {o: np.zeros((K, T)) for o in OUTPUTS[:nout]}
+    routed_out = set(outputs) - {"runoff", "gwc"}
+    names = (*OUTPUTS, "deep")          # the routed outputs, in _route's order
+    nout = (len(names) if diag else len(OUTPUTS) if parts else
+            (3 if routed_out - {"flow"} else len(routed_out)))
+    res: dict = {o: np.zeros((K, T)) for o in names[:nout]}
     runoff = np.zeros((K, T)) if "runoff" in outputs else None
+    gwc = np.zeros((K, T)) if "gwc" in outputs else None
     bad = np.zeros(R, bool)
     uh = _uh(field.flowlen, field.route)
     rows_of = np.argsort(field.unit, kind="stable")
@@ -303,30 +349,36 @@ def simulate(field: Field, forcing, start, end, weights: np.ndarray, *, spinup: 
                np.asarray(forcing.is_leap, np.int64), field.cell[sl], field.lat_rad[sl],
                field.elev[sl], field.kpet[sl], field.snow[sl], field.sma[sl], field.veg[sl],
                field.chi[sl], field.lai[sl], ph.et == "noah_lite", pt, ph.learned, ph.n_inc,
-               ph.fracp_floor, a, t0, te, P, yidx, tfield, float(precip_scale), out, annual[sl])
+               ph.fracp_floor, ph.learned and ph.deep == "cascade",
+               field.deep[sl], a, t0, te, P, yidx, tfield, float(precip_scale), out, annual[sl])
         rows = rows_of[bounds[u0]:bounds[u1]]
         loc = field.unit[rows] - u0
         if runoff is not None:
             q = out[loc, 0, N_HIST:] + out[loc, 1, N_HIST:]
-            nan = np.isnan(q)
-            bad[rows] |= nan.any(axis=1)
-            q[nan] = 0.0
+            failed = np.isnan(q).any(axis=1)
+            bad[rows] |= failed
+            q[failed] = 0.0
             runoff += W[:, rows] @ q
+        if gwc is not None:
+            g = out[loc, 7, N_HIST:]
+            gwc += W[:, rows] @ np.where(np.isnan(g).any(axis=1)[:, None], 0.0, g)
         if not nout:
             continue
         routed = np.empty((len(rows), nout, T))
         _route(out, loc, uh[rows], routed)
-        nan = np.isnan(routed[:, 0])
-        if nan.any():
-            bad[rows] |= nan.any(axis=1)
-            routed[np.broadcast_to(nan[:, None], routed.shape)] = 0.0
+        failed = np.isnan(routed[:, 0]).any(axis=1)
+        if failed.any():
+            bad[rows] |= failed
+            routed[failed] = 0.0
         for k, o in enumerate(res):
             res[o] += W[:, rows] @ routed[:, k]
-    for o in OUTPUTS[:nout]:
+    for o in names[:nout]:
         if o not in outputs:
             del res[o]
     if runoff is not None:
         res["runoff"] = runoff
+    if gwc is not None:
+        res["gwc"] = gwc
     if bad.any() and not zero_nan:
         raise FloatingPointError(f"{int(bad.sum())} of {R} rows went NaN")
     res["bad"] = bad

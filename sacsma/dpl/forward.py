@@ -35,7 +35,8 @@ class PipelineState:
     hist_surf: torch.Tensor   # (N, N_TAPS-1) unrouted direct-inflow history
     hist_base: torch.Tensor   # (N, N_TAPS-1) unrouted baseflow history
     # (4, N, N_TAPS-1) unrouted history of the runoff parts (quick, interflow,
-    # supplemental, primary) -- carried only by run_window(return_parts=True)
+    # supplemental, primary [, the deep store's outflow: 5]) -- carried only by
+    # run_window(return_parts=True)
     hist_parts: torch.Tensor | None = None
 
     def detach(self) -> PipelineState:
@@ -80,6 +81,8 @@ def run_window(
     ``interflow``, each routed through the hillslope x channel UH (``quick + interflow =
     fast``), and ``supplemental`` / ``primary`` baseflow through the channel UH
     (``supplemental + primary = slow``), equal up to the rounding of the linear routing.
+    With the deep store two follow (``sacsma.engine.DEEP_OUTPUTS``): ``deep``, the store's
+    outflow share of ``supplemental``, routed as it, and ``gwc``, its content (not routed).
     Their routing history travels in ``state.hist_parts``; a state without it is accepted
     only with an empty routing history (a cold start), so a parts run streams its spin-up
     with ``return_parts`` too.
@@ -114,20 +117,23 @@ def run_window(
 
     hist_parts = None
     if return_parts:
-        roimp, sdro, ssur, sif, bf_sup, bf_pri = sac_out[4]
-        # (4, N, T) unrouted quick / interflow / supplemental / primary; quick is
-        # summed in the order that reproduces the exact split (sma._apportion_parts)
-        series = torch.stack([roimp + sdro + ssur, sif, bf_sup, bf_pri])
+        roimp, sdro, ssur, sif, bf_sup, bf_pri = sac_out[4][:6]
+        deep = sac_out[4][6:]           # the deep store's outflow and content, with it
+        # (4, N, T) unrouted quick / interflow / supplemental / primary [, the store's
+        # outflow]; quick is summed in the order that reproduces the exact split
+        # (sma._apportion_parts)
+        series = torch.stack([roimp + sdro + ssur, sif, bf_sup, bf_pri, *deep[:1]])
         hp = state.hist_parts
         if hp is None:
             if bool(state.hist_surf.any()) or bool(state.hist_base.any()):
                 raise ValueError("return_parts needs the parts' routing history "
                                  "(state.hist_parts): stream the spinup with "
                                  "return_parts too, or start from an empty history")
-            hp = torch.zeros((4,) + tuple(state.hist_surf.shape),
+            hp = torch.zeros((len(series),) + tuple(state.hist_surf.shape),
                              device=surf.device, dtype=surf.dtype)
-        uhs = (uh_direct, uh_direct, uh_base, uh_base)
-        parts = tuple(route(series[k], uhs[k], hp[k]) for k in range(4))
+        uhs = (uh_direct, uh_direct, uh_base, uh_base, uh_base)
+        parts = tuple(route(series[k], uhs[k], hp[k]) for k in range(len(series)))
+        parts = (*parts, *deep[1:])     # the store's content, not routed
         hist_parts = torch.cat([hp, series], dim=-1)[..., -(N_TAPS - 1):]
 
     # carry the last N_TAPS-1 inflow days for the next window's convolution

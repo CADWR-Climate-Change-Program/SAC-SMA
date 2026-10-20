@@ -487,14 +487,16 @@ def apply(model: dict, tier2_dir: str | Path, data_dir: str | Path = "data",
           wy: tuple[int, int] | None = None) -> pd.DataFrame:
     """The product for one tier-2 pass (with runoff parts) under a fitted share model
     (``share_model.pt`` as loaded by ``torch.load``): ``[arc, month, taf, dpl_taf, kind]`` over
-    the water years ``wy`` (default: every complete water year of the pass)."""
+    the water years ``wy`` (default: every complete water year of the pass).  The share model's
+    inputs are built on the whole pass whatever ``wy`` is, so a narrower ``wy`` only selects
+    rows of the same series."""
     wy = tuple(wy) if wy else pass_wy(tier2_dir)
     units = load_units(data_dir)
     hm = units[units.kind == "share"]
     arcs, systems = model["arcs"], model["systems"]
     if sorted(arcs) != sorted(hm.index):
         raise ValueError("the share arcs of data/targets/calsim3/arc_hierarchy.csv differ from the model's")
-    D = load_pass(tier2_dir, arcs, wy)
+    D = load_pass(tier2_dir, arcs, pass_wy(tier2_dir))
     D["system"] = D.arc.map(hm.system)
     as_s = lambda v: pd.Series(v, index=arcs)   # noqa: E731
     f = share_features(D, as_s(model["eps"]))
@@ -650,11 +652,25 @@ def run_pass(model: dict, forcing: str, data_dir: str | Path = "data",
     run_dir = Path(model["run_dir"])
     d = paths.local(name=f"product/calsim3/{forcing}") / "tier2"
     ext = paths.extension_cells(run_dir)
-    tier2_main([str(run_dir), "--out", str(d), "--forcing", forcing, "--start", PASS_START,
-                "--components", "parts", "--no-maps"]
+    tier2_main([str(run_dir), "--out", str(d), "--data-dir", str(data_dir), "--forcing", forcing,
+                "--start", PASS_START, "--components", "parts", "--no-maps"]
                + (["--extension-cells", str(ext)] if ext.exists() else [])
                + (["--score-holdout"] if score_holdout else []))
     return d
+
+
+def _same_run(tier2_dir: str | Path, model: dict) -> None:
+    """Refuse a pass of another run than the one the share model was fitted on (the run
+    folder's name among the parts of the checkpoint the pass records)."""
+    import json
+
+    rec = Path(tier2_dir) / PASS_RECORD
+    if not rec.exists() or not model.get("run"):
+        return
+    ckpt = Path(json.loads(rec.read_text(encoding="utf-8"))["checkpoint"])
+    if model["run"] not in ckpt.parts:
+        raise ValueError(f"{tier2_dir} is a pass of {ckpt.as_posix()}; the share model was "
+                         f"fitted on {model['run']} (--share-model)")
 
 
 def apply_product(tier2_dir: str | Path | None, forcing: str,
@@ -670,6 +686,7 @@ def apply_product(tier2_dir: str | Path | None, forcing: str,
     model = torch.load(share_model, weights_only=False)
     if tier2_dir is None:
         tier2_dir = run_pass(model, forcing, data_dir, score_holdout)
+    _same_run(tier2_dir, model)
     out = Path(out) if out else share_model.parent / forcing
     out.mkdir(parents=True, exist_ok=True)
     wy = tuple(wy) if wy else pass_wy(tier2_dir)

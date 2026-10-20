@@ -26,7 +26,9 @@ The repository has no test suite; the model is verified by running it.  The chec
 ``learned``
     the learned model's step on the CPU engine (``sacsma.sma_learned``) against the torch step it
     mirrors, one tracked run per physics (:data:`LEARNED_RUNS`): 32 rows, two years from the
-    cold start, the flow and its six routed components within 1e-9 mm/day
+    cold start, the flow and its six routed components within 1e-9 mm/day (with the deep
+    store's outflow and content where the run has it); then, on the first run without the
+    store, the store at a zero share bitwise equal to the field without it
 ``product``
     the share model applied to the tier-2 pass kept beside each forcing's series
     (``artifacts/product/calsim3/<forcing>/tier2/``) reproduces the tracked
@@ -54,10 +56,11 @@ from . import paths
 PARITY_DOMAINS = (paths.CDEC15, *paths.CALLITE)
 PARITY_KGE = 0.9999
 PARITY_MAX_MM = 0.1
-#: one tracked run per physics of the learned step: Noah-lite with the SAC exchanges and a
-#: learned PXTEMP (dPL-CalSim), Noah-lite with the SAC exchanges, SAC ET with the
-#: Priestley-Taylor PET, SAC ET with Hamon on the HRUs (the ladder's rungs, docs/runs.md)
-LEARNED_RUNS = (("multifamily", "7_calsim"), ("15cdec", "4_noah"), ("15cdec", "3_pt"),
+#: one tracked run per physics of the learned step: Noah-lite with the SAC exchanges, a
+#: learned PXTEMP and the deep store (dPL-CalSim), Noah-lite with the SAC exchanges, SAC ET
+#: with the Priestley-Taylor PET, SAC ET with Hamon on the HRUs (the ladder's rungs,
+#: docs/runs.md)
+LEARNED_RUNS = (("multifamily", "8_calsim"), ("15cdec", "4_noah"), ("15cdec", "3_pt"),
                 ("15cdec", "1_hru"))
 LEARNED_MAX_MM = 1e-9
 #: relative tolerance of the product check (the fit and ``apply`` agree to about 3e-7)
@@ -295,40 +298,79 @@ def check_parity(data_dir: str = "data", **_) -> tuple[bool, str]:
 
 
 # ------------------------------------------------------------------------------- learned
+def _learned_rows(dom):
+    """32 rows spread over the domain, and the weights that pick each alone."""
+    import numpy as np
+
+    pick = np.unique(np.linspace(0, dom.n_hru - 1, 32).astype(int))
+    W = np.zeros((len(pick), dom.n_hru))
+    W[np.arange(len(pick)), pick] = 1.0
+    return pick, W
+
+
+def _learned_diff(net, x, dom, cfg, outputs, T: int = 730) -> float:
+    """The largest |difference| over ``outputs`` between the engine's learned step and the
+    torch step on :func:`_learned_rows`, ``T`` days from the cold start."""
+    import numpy as np
+    import torch
+
+    from .dpl.evaluate import simulate_field
+    from .dpl.forward import initial_state, routing_uh, run_window
+
+    pick, W = _learned_rows(dom)
+    got = simulate_field(net, x, dom, cfg, dom.dates[0], dom.dates[T - 1], W, spinup="cold",
+                         outputs=outputs)
+    rt = torch.as_tensor(pick)
+    with torch.no_grad():
+        p = {k: v[rt] for k, v in net(x).items()}
+        res = run_window(
+            dom.window(0, T).rows(rt), dom.lat_rad[rt], dom.elev[rt], p,
+            routing_uh(p, dom.flowlen[rt]), initial_state(len(pick), dom.device, dom.dtype),
+            cfg.physics(), veg_frac=None if dom.veg_frac is None else dom.veg_frac[rt],
+            return_components=True, return_parts=True)
+    ref = dict(zip(outputs, [res[0], *res[2], *res[3]], strict=True))
+    return max(float(np.abs(got[o] - ref[o].numpy()).max()) for o in outputs)
+
+
 def check_learned(data_dir: str = "data", artifacts_dir: str = "artifacts",
                   **_) -> tuple[bool | None, str]:
     if not _has_torch():
         return None, "torch is not installed"
+    import dataclasses
+
     import numpy as np
-    import torch
 
-    from .dpl.evaluate import load_net_from_checkpoint, simulate_field
-    from .dpl.forward import initial_state, routing_uh, run_window
-    from .engine import OUTPUTS
+    from .dpl.evaluate import learned_field, load_net_from_checkpoint
+    from .engine import DEEP_OUTPUTS, OUTPUTS, simulate
 
-    ok, rows, T = True, [], 730
+    ok, rows, zero_share = True, [], False
     for group, run in LEARNED_RUNS:
         ck = paths.dpl_checkpoint(artifacts_dir, run, group)
-        net, x, dom, cfg, _ = load_net_from_checkpoint(ck, data_dir, device="cpu")
-        pick = np.unique(np.linspace(0, dom.n_hru - 1, 32).astype(int))
-        W = np.zeros((len(pick), dom.n_hru))
-        W[np.arange(len(pick)), pick] = 1.0
-        got = simulate_field(net, x, dom, cfg, dom.dates[0], dom.dates[T - 1], W, spinup="cold",
-                             outputs=OUTPUTS)
-        rt = torch.as_tensor(pick)
-        with torch.no_grad():
-            p = {k: v[rt] for k, v in net(x).items()}
-            res = run_window(
-                dom.window(0, T).rows(rt), dom.lat_rad[rt], dom.elev[rt], p,
-                routing_uh(p, dom.flowlen[rt]), initial_state(len(pick), dom.device, dom.dtype),
-                cfg.physics(), veg_frac=None if dom.veg_frac is None else dom.veg_frac[rt],
-                return_components=True, return_parts=True)
-        ref = dict(zip(OUTPUTS, [res[0], *res[2], *res[3]], strict=True))
-        d = max(float(np.abs(got[o] - ref[o].numpy()).max()) for o in OUTPUTS)
+        net, x, dom, cfg, _raw = load_net_from_checkpoint(ck, data_dir, device="cpu")
+        deep = cfg.deep_store != "none"
+        d = _learned_diff(net, x, dom, cfg, (*OUTPUTS, *DEEP_OUTPUTS) if deep else OUTPUTS)
         good = d < LEARNED_MAX_MM
         ok &= good
         rows.append(f"\n    {group}/{run[:40]:40s} max |d| {d:.1e} mm/day"
-                    + ("" if good else "   FAIL"))
+                    + (" (with the deep store)" if deep else "") + ("" if good else "   FAIL"))
+        if deep or zero_share:
+            continue
+        zero_share = True
+        # the store at gdeep 0 against the field without it, bitwise, through the engine's
+        # window spin-up (the run split at its start)
+        cfgd = dataclasses.replace(cfg, deep_store="cascade")
+        f0 = learned_field(net, x, dom, cfg)
+        fz = dataclasses.replace(f0, physics=cfgd.physics(), deep=np.column_stack(
+            [np.zeros(len(f0.cell)), np.full(len(f0.cell), 5e-4)]))
+        forcing = dataclasses.replace(dom.forcing, tmin=dom.tmin, tmax=dom.tmax)
+        _pick, W = _learned_rows(dom)
+        a, b = (simulate(f, forcing, dom.dates[365], dom.dates[365 + 729], W, spinup="window",
+                         window_start=dom.dates[0], outputs=OUTPUTS)    # a 365-day spin-up
+                for f in (f0, fz))
+        same = all(np.array_equal(a[o], b[o]) for o in OUTPUTS)
+        ok &= same
+        rows.append(f"\n    {'  + the deep store at gdeep 0 == without it':46s} "
+                    + ("bitwise" if same else "DIFFERENT   FAIL"))
     return ok, (f"the engine's learned step against torch within {LEARNED_MAX_MM:g} mm/day"
                 + "".join(rows))
 

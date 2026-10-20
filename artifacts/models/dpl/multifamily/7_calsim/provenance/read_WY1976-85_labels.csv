@@ -1,7 +1,0 @@
-item,n,mean,median,up,label
-usgs 7_calsim vs 7_calsim_point,49,0.0023631188912545,0.0046416895288693,28,no change
-uf 7_calsim vs 7_calsim_point,9,0.0004764525717681,-0.0015519487645568,4,no change
-arcs 7_calsim vs 7_calsim_point,64,-0.0010677352865664,-0.001251631669319,28,no change
-outlets 7_calsim vs 7_calsim_point,13,0.0025822165067213,0.0038470906149851,8,no change
-product kge_product_holdout 7_calsim vs 7_calsim_point,196,-0.0010799108922546,-0.0008400584368332,94,no change
-product kge_product_early 7_calsim vs 7_calsim_point,196,-0.0019939063365622,-0.0015153789534875,88,no change

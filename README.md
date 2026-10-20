@@ -13,7 +13,7 @@ are by Sungwook Wi and Scott Steinschneider (Cornell / UMass Amherst) for Califo
 
 The CalSim3 rim-inflow product of the learned-parameter model dPL-CalSim:
 monthly flow on the 196 rim arcs, WY1916–2018, under the historical weather and two WGEN
-sequences. On WY1976–85, held out of training, its median monthly KGE against CalSim3 is 0.815.
+sequences. On WY1976–85, held out of training, its median monthly KGE against CalSim3 is 0.810.
 See [CalSim3 rim inflows](docs/calsim3_rim_inflows.md).
 
 The guide starts at [`docs/README.md`](docs/README.md).
@@ -78,11 +78,11 @@ flow = run_basins(domain="9unimp")   # a whole set in one run: date x watershed,
 ### dPL-Calibrated
 
 The trained runs are in `artifacts/models/dpl/`, grouped by what they train on. The
-learned-parameter runs form [the ladder](docs/runs.md#the-ladder): each trained from scratch on
-one recipe, one change per rung, from the GA parameters to dPL-CalSim. `15cdec/` holds the
-rungs trained on the 15 watersheds (`1_hru`, `2_grid`, `3_pt`, `4_noah`, `5_px`, `6_aef`) and
+learned-parameter runs form [the ladder](docs/runs.md#the-ladder): one recipe, one change per
+rung, from the GA parameters to dPL-CalSim. `15cdec/` holds the
+rungs trained on the 15 watersheds (`1_hru`, `2_grid`, `3_pt`, `4_noah`, `5_px`, `6_deep`, `7_aef`) and
 the LSTM models (`hybrid`, `hybrid_dt`, and `lstm` without physics; three seeds each);
-`multifamily/` holds dPL-CalSim (`7_calsim`), trained on 159 sites of four kinds: USGS gauges,
+`multifamily/` holds dPL-CalSim (`8_calsim`), trained on 159 sites of four kinds: USGS gauges,
 CDEC records, unimpaired-flow subbasins and CalSim3 arcs. `evaluate` takes a run's checkpoint,
 the CalSim3 tools any of its folders; scores and figures go to the run's folder under
 `artifacts/results/dpl/`.
@@ -92,7 +92,7 @@ the CalSim3 tools any of its folders; scores and figures go to the run's folder 
 sacsma dpl evaluate artifacts/models/dpl/15cdec/5_px/checkpoints/best.pt
 
 # the CalSim3 run, dPL-CalSim
-RUN=artifacts/models/dpl/multifamily/7_calsim
+RUN=artifacts/models/dpl/multifamily/8_calsim
 sacsma dpl evaluate $RUN/checkpoints/best.pt --score-holdout   # skill at its gauges and unimpaired-flow sites, and on its held-out years
 sacsma dpl calsim tier1 $RUN --score-holdout       # vs CalSim3 at the anchor sets
 sacsma dpl calsim tier2 $RUN --score-holdout --trace-python <python of the sacsma-gis environment>   # every rim arc

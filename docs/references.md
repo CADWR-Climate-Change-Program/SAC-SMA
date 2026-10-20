@@ -8,11 +8,17 @@ The sources the guide cites, in alphabetical order. Each entry has an anchor (`r
 
 <a id="anderson2006"></a>Anderson, E. A. (2006). Snow Accumulation and Ablation Model—SNOW-17. NOAA National Weather Service.
 
+<a id="avanzi2020"></a>Avanzi, F., Rungee, J., Maurer, T., Bales, R., Ma, Q., Glaser, S., and Conklin, M. (2020). Climate elasticity of evapotranspiration shifts the water balance of Mediterranean climates during multi-year droughts. *Hydrology and Earth System Sciences*, 24(9), 4317–4337. <https://doi.org/10.5194/hess-24-4317-2020>
+
 <a id="bristowcampbell1984"></a>Bristow, K. L., and Campbell, G. S. (1984). On the relationship between incoming solar radiation and daily maximum air temperature. *Agricultural and Forest Meteorology*, 31, 159–166.
 
 <a id="burnash1973"></a>Burnash, R. J. C., Ferral, R. L., and McGuire, R. A. (1973). A Generalized Streamflow Simulation System—Conceptual Modeling for Digital Computers. United States Department of Commerce, National Weather Service, and State of California, Department of Water Resources, Sacramento.
 
 <a id="burnash1995"></a>Burnash, R. J. C. (1995). The NWS River Forecast System—catchment modeling. In Singh, V. P. (Ed.), *Computer Models of Watershed Hydrology* (pp. 311–366). Water Resources Publications.
+
+<a id="carroll2020"></a>Carroll, R. W. H., Manning, A. H., Niswonger, R., Marchetti, D., and Williams, K. H. (2020). Baseflow age distributions and depth of active groundwater flow in a snow-dominated mountain headwater basin. *Water Resources Research*, 56(12), e2020WR028161. <https://doi.org/10.1029/2020WR028161>
+
+<a id="cenobiocruz2023"></a>Cenobio-Cruz, O., Quintana-Seguí, P., Barella-Ortiz, A., Zabaleta, A., Garrote, L., Clavera-Gispert, R., Habets, F., and Beguería, S. (2023). Improvement of low flows simulation in the SASER hydrological modeling chain. *Journal of Hydrology X*, 18, 100147. <https://doi.org/10.1016/j.hydroa.2022.100147>
 
 <a id="chaney2019"></a>Chaney, N. W., Minasny, B., Herman, J. D., Nauman, T. W., Brungard, C. W., Morgan, C. L. S., McBratney, A. B., Wood, E. F., and Yimam, Y. (2019). POLARIS soil properties: 30-m probabilistic maps of soil properties over the contiguous United States. *Water Resources Research*, 55, 2916–2938.
 
@@ -21,6 +27,8 @@ The sources the guide cites, in alphabetical order. Each entry has an anchor (`r
 <a id="feng2022"></a>Feng, D., Liu, J., Lawson, K., and Shen, C. (2022). Differentiable, learnable, regionalized process-based models with multiphysical outputs can approach state-of-the-art hydrologic prediction accuracy. *Water Resources Research*, 58, e2022WR032404.
 
 <a id="forsythe1995"></a>Forsythe, W. C., Rykiel, E. J., Stahl, R. S., Wu, H., and Schoolfield, R. M. (1995). A model comparison for daylength as a function of latitude and day of year. *Ecological Modelling*, 80, 87–95.
+
+<a id="fowler2020"></a>Fowler, K., Knoben, W., Peel, M., Peterson, T., Ryu, D., Saft, M., Seo, K., and Western, A. (2020). Many commonly used rainfall-runoff models lack long, slow dynamics: Implications for runoff projections. *Water Resources Research*, 56(5), e2019WR025286. <https://doi.org/10.1029/2019WR025286>
 
 <a id="gupta2009"></a>Gupta, H. V., Kling, H., Yilmaz, K. K., and Martinez, G. F. (2009). Decomposition of the mean squared error and NSE performance criteria: Implications for improving hydrological modelling. *Journal of Hydrology*, 377, 80–91.
 
@@ -32,9 +40,13 @@ The sources the guide cites, in alphabetical order. Each entry has an anchor (`r
 
 <a id="jarvis2008"></a>Jarvis, A., Reuter, H. I., Nelson, A., and Guevara, E. (2008). Hole-filled SRTM for the globe, Version 4. CGIAR-CSI SRTM 90m Database.
 
+<a id="klos2018"></a>Klos, P. Z., Goulden, M. L., Riebe, C. S., Tague, C. L., O'Geen, A. T., Flinchum, B. A., Safeeq, M., Conklin, M. H., Hart, S. C., Berhe, A. A., Hartsough, P. C., Holbrook, W. S., and Bales, R. C. (2018). Subsurface plant-accessible water in mountain ecosystems with a Mediterranean climate. *WIREs Water*, 5(3), e1277. <https://doi.org/10.1002/wat2.1277>
+
 <a id="koren2010"></a>Koren, V., Smith, M., Cui, Z., Cosgrove, B., Werner, K., and Zamora, R. (2010). Modification of Sacramento Soil Moisture Accounting Heat Transfer Component (SAC-HT) for enhanced evapotranspiration. *NOAA Technical Report NWS 53*. National Weather Service, Silver Spring, MD.
 
 <a id="kratzert2019"></a>Kratzert, F., Klotz, D., Shalev, G., Klambauer, G., Hochreiter, S., and Nearing, G. (2019). Towards learning universal, regional, and local hydrological behaviors via machine learning applied to large-sample datasets. *Hydrology and Earth System Sciences*, 23, 5089–5110.
+
+<a id="lafollette2022"></a>La Follette, P. T., Hahm, W. J., Rempe, D. M., Dietrich, W. E., Brauer, C. C., Weerts, A. H., and Dralle, D. N. (2022). Multicriteria analysis on rock moisture and streamflow in a rainfall-runoff model improves accuracy of model results. *Hydrological Processes*, 36(3), e14536. <https://doi.org/10.1002/hyp.14536>
 
 <a id="hydrosheds2"></a>Lehner, B., et al. (2026). HydroSHEDS v2 Technical Documentation, Version 2.0. World Wildlife Fund and McGill University. TanDEM-X-based global hydrography; 1-arcsec flow-direction and flow-accumulation rasters, Americas release. <https://www.hydrosheds.org>
 
@@ -54,6 +66,8 @@ The sources the guide cites, in alphabetical order. Each entry has an anchor (`r
 
 <a id="reed2003"></a>Reed, S. M. (2003). Deriving flow directions for coarse-resolution (1–4 km) gridded hydrologic modeling. *Water Resources Research*, 39(9), 1238. <https://doi.org/10.1029/2003WR001989>
 
+<a id="trotter2023"></a>Trotter, L., Saft, M., Peel, M. C., and Fowler, K. J. A. (2023). Symptoms of performance degradation during multi-annual drought: A large-sample, multi-model study. *Water Resources Research*, 59(2), e2021WR031845. <https://doi.org/10.1029/2021WR031845>
+
 <a id="tsai2021"></a>Tsai, W.-P., Feng, D., Pan, M., Beck, H., Lawson, K., Yang, Y., Liu, J., and Shen, C. (2021). From calibration to parameter learning: Harnessing the scaling effects of big data in geoscientific modeling. *Nature Communications*, 12, 5988.
 
 <a id="wan2014"></a>Wan, Z. (2014). New refinements and validation of the collection-6 MODIS land-surface temperature/emissivity product. *Remote Sensing of Environment*, 140, 36–45.
@@ -67,3 +81,5 @@ The sources the guide cites, in alphabetical order. Each entry has an anchor (`r
 <a id="wimemo"></a>Wi, S., and Steinschneider, S. (2023). Development of hydrological models in support of the California Department of Water Resources San Joaquin Watershed Studies. Technical Memorandum, Cornell University, submitted to the California Department of Water Resources.
 
 <a id="wu2011drt"></a>Wu, H., Kimball, J. S., Mantua, N., and Stanford, J. (2011). Automated upscaling of river networks for macroscale hydrological modeling. *Water Resources Research*, 47, W03517. <https://doi.org/10.1029/2009WR008871>
+
+<a id="zhang2026"></a>Zhang, Z., Fowler, K., and Peel, M. (2026). Can conceptual rainfall-runoff models capture multi-annual storage dynamics? *Water Resources Research*, 62(3), e2025WR042226. <https://doi.org/10.1029/2025WR042226>

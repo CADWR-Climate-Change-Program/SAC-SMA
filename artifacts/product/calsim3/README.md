@@ -2,7 +2,7 @@
 
 Monthly flow, in TAF, on the 196 CalSim3 rim arcs: the points where runoff from a mountain
 watershed enters the CalSim3 network. It is the flow of the current model, dPL-CalSim (the run
-`7_calsim`, `artifacts/models/dpl/multifamily/7_calsim/`), with the share model dividing each
+`8_calsim`, `artifacts/models/dpl/multifamily/8_calsim/`), with the share model dividing each
 multi-arc system's flow among its arcs. Method and scores:
 [CalSim3 rim inflows](../../../docs/calsim3_rim_inflows.md); state of the runs:
 [Runs](../../../docs/runs.md).
@@ -33,7 +33,7 @@ The forcings are described in [`data/inputs/forcing/`](../../../data/inputs/forc
 # the fit, on the run's passes on the training forcing (WY1950-2018 envelope): the base tier 2
 # with runoff parts, and the same at the 11 training and 5 validation climate points
 # (sacsma.dpl.calsim.product.scenario_spec() lists them; one pass each, about a minute);
-# <run> is any folder of 7_calsim, e.g. artifacts/models/dpl/multifamily/7_calsim
+# <run> is any folder of 8_calsim, e.g. artifacts/models/dpl/multifamily/8_calsim
 sacsma dpl calsim tier2 <run> --components parts --score-holdout --trace-python <python of sacsma-gis>
 sacsma dpl calsim tier2 <run> --components parts --scenarios t1=1:1,t3=3:1,...
 sacsma dpl calsim product fit <run> --score-holdout   # CPU, about 30 min; --mu 0.03 skips the selection
@@ -50,22 +50,21 @@ After a refit, `apply` remakes the series of every forcing.
 ## Arcs to use with care
 
 The 50 non-anchor arcs carry the model's own flow, with no share model and no scaling. On the
-training years (WY1950–2015 outside WY1976–85), 22 of them differ from CalSim3's volume by 30 % or
+training years (WY1950–2015 outside WY1976–85), 21 of them differ from CalSim3's volume by 30 % or
 more or score below 0 on WY1976–85 (`product_metrics.csv`). Those carrying 20 TAF a year or more:
 
 | Arc | CalSim3, TAF/yr | Volume against CalSim3 | KGE, WY1976–85 |
 |---|---|---|---|
-| `I_SCW008` South Fork Cottonwood Creek | 190 | +64 % | 0.20 |
-| `I_ELD027` Elder Creek | 72 | −34 % | 0.66 |
-| `I_CCH053` Cache Creek, Clear Lake Dam to Rumsey | 57 | +84 % | 0.57 |
-| `I_MERLC` Merle Collins Reservoir | 57 | +37 % | 0.24 |
-| `I_DHC021` Dry Creek and Hutchinson Creek | 55 | +34 % | 0.56 |
-| `I_LWSTN` Lewiston Lake local inflow | 43 | −40 % | 0.22 |
-| `I_MPS038` Mariposa Creek | 29 | −35 % | 0.39 |
-| `I_AMADR` Amador Reservoir | 29 | −31 % | 0.67 |
+| `I_SCW008` South Fork Cottonwood Creek | 190 | +65 % | 0.21 |
+| `I_ELD027` Elder Creek | 72 | −33 % | 0.68 |
+| `I_CCH053` Cache Creek, Clear Lake Dam to Rumsey | 57 | +90 % | 0.53 |
+| `I_MERLC` Merle Collins Reservoir | 57 | +37 % | 0.21 |
+| `I_DHC021` Dry Creek and Hutchinson Creek | 55 | +36 % | 0.58 |
+| `I_LWSTN` Lewiston Lake local inflow | 43 | −44 % | 0.20 |
+| `I_MPS038` Mariposa Creek | 29 | −34 % | 0.40 |
 
 CalSim3's own series is not a record on several of them: `I_SCW008` is proportioned from USGS
 11376000, `I_CCH053` and `I_MERLC` are mass balances or correlations with no gauge listed
 (`data/targets/calsim3/calsim3_arc_derivation.csv`). The west-side creeks `I_CAP000`, `I_LPC007` and
-`I_ORG000` (2 to 5 TAF a year) are 85 to 90 % low and score below 0; `I_SLUIS` is 3.6 times
+`I_ORG000` (2 to 5 TAF a year) are 83 to 90 % low and score below 0; `I_SLUIS` is 4.0 times
 CalSim3's 5 TAF a year.

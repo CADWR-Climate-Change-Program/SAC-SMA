@@ -33,7 +33,7 @@ Every entity's finite in-window count is asserted against the registry's
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import numpy as np
@@ -49,6 +49,11 @@ ENVELOPE_START = "1949-10-01"
 ENVELOPE_END = "2018-12-31"
 #: the CalSim3 arc family (registry rows from ``build_entities.py --calsim-arcs``)
 CALSIM_FAMILY = "calsim_monthly"
+#: CLE's monthly companion is TNL (Trinity River at Lewiston, 719 mi2), brought to CLE's
+#: volume (TNL / CLE on the months with no negative CLE day: the 26 mi2 below the dam yield
+#: little) and then put in depth over CLE's own area like the other outlets
+TNL_PER_CLE = 1.0154
+M3_PER_AF, M2_PER_MI2 = 1233.48183754752, 2589988.110336
 
 
 def _calsim_store(data_dir: str, obs_store: str) -> tuple[pd.DataFrame, dict]:
@@ -96,6 +101,18 @@ class EntityObs:
     #: per dom.basins entry: observations outside the training window (``train_window``;
     #: 0 without one) — scored = n_obs - n_masked - n_holdout + n_ext - n_out
     n_out: tuple[int, ...] = ()
+    #: the CDEC monthly companion (``cdec_monthly``): its rows (indices into dom.basins,
+    #: cdec_daily entities), their targets over the same month columns as
+    #: ``obs_monthly`` (mm/month, NaN-masked), their NNSE variances, and per row the months
+    #: kept / removed by ``cdec_monthly_mask``.  Empty without it.
+    cm_rows: np.ndarray = field(default_factory=lambda: np.zeros(0, np.int64))
+    obs_cm: torch.Tensor | None = None
+    var_cm: torch.Tensor | None = None
+    n_cm: tuple[int, ...] = ()
+    n_cm_masked: tuple[int, ...] = ()
+    #: per dom.basins entry: targets removed by ``target_mask`` after the normalizers (0
+    #: without one) — scored = n_obs - n_masked - n_holdout + n_ext - n_out - n_screen
+    n_screen: tuple[int, ...] = ()
 
 
 def load_entity_obs(
@@ -108,6 +125,11 @@ def load_entity_obs(
     holdout_wy: tuple[int, int] | None = None,
     uf_train_start: str | None = None,
     train_window: tuple[str, str] | None = None,
+    cdec_monthly: str | None = None,
+    cdec_monthly_mask: tuple[str, ...] = (),
+    target_mask: tuple[str, ...] = (),
+    target_scale: tuple[str, ...] = (),
+    target_series: tuple[str, ...] = (),
 ) -> EntityObs:
     """``obs_mask`` (``DplConfig.obs_mask``, ``"entity_id|YYYY-MM-DD"``) drops those
     daily observations.  An entry for a registry entity outside this run's basins
@@ -124,10 +146,30 @@ def load_entity_obs(
     date to its registry train_start (minus the holdout) from the same store,
     after the audit; every one must be observed (``n_ext``).  ``train_window``
     (``DplConfig.train_window``) then blanks every target outside it (``n_out``); the
-    arrays still span the envelope (:func:`cut_entity_obs` cuts them to the window)."""
+    arrays still span the envelope (:func:`cut_entity_obs` cuts them to the window).
+
+    ``cdec_monthly`` (``DplConfig.cdec_monthly``) adds the CDEC monthly companion of the
+    cdec_daily entities from that month on (:attr:`EntityObs.obs_cm`), the holdout and the
+    training window out; ``cdec_monthly_mask`` (``"cdec_<SITE>|YYYY-MM"``) removes months
+    from it, after the companion's normalizers.  A mask entry for an entity outside this run is
+    skipped; one for an entity without a companion, or for a month the companion does not
+    hold, raises.
+
+    ``target_scale`` (``"entity_id=factor"``) multiplies an entity's target as read (a depth
+    basis fix); ``target_series`` (``"entity_id=path"``, a CSV of ``date,value_mm`` at that
+    path under ``data_dir``) replaces a daily entity's values on the store's observed days,
+    after the n_obs audit (a day the series lacks is removed and counted in ``n_masked``).
+    An entity takes a factor or a series, not both.  ``target_mask`` (``DplConfig.
+    target_mask``) removes targets of any family AFTER the NNSE normalizers, which stay those
+    of the record without it (counted per entity in ``n_screen``)."""
+    scale = {e: float(f) for e, _, f in (s.partition("=") for s in target_scale)}
+    series = {e: p for e, _, p in (s.partition("=") for s in target_series)}
     reg = pd.read_csv(paths.entities(data_dir), dtype={"site_id": str},
                       parse_dates=["train_start", "train_end"])
     known_ids = set(reg["entity_id"])
+    for eid in (*scale, *series):
+        if eid not in known_ids:
+            raise ValueError(f"target_scale / target_series: unknown entity {eid!r}")
     reg = reg.set_index("entity_id").loc[list(dom.basins)]
 
     t0 = int(dom.dates.searchsorted(pd.Timestamp(cal_start)))
@@ -165,7 +207,7 @@ def load_entity_obs(
             g = gage[gage["basin"] == r["site_id"]]
             s = pd.Series(g["flow"].to_numpy(),
                           index=pd.DatetimeIndex(g["date"]))
-        arr = s.reindex(window).to_numpy(np.float64, copy=True)
+        arr = s.reindex(window).to_numpy(np.float64, copy=True) * scale.get(eid, 1.0)
         mask = (window >= r["train_start"]) & (window <= r["train_end"])
         arr[~mask] = np.nan
         daily_arrs.append(arr)
@@ -179,10 +221,23 @@ def load_entity_obs(
                for j in np.flatnonzero(n_fin != want)]
         raise ValueError(f"daily obs counts diverge from the registry n_obs: "
                          f"{bad[:5]}")
-    # hand-confirmed bad observations — applied after the n_obs check, which
-    # verifies the stores themselves
     daily_ids = [dom.basins[i] for i in daily_rows]
     n_masked = [0] * len(dom.basins)
+    # a replacement record — after the n_obs check, on the store's observed days only
+    for eid, p in series.items():
+        if eid not in dom.basins:
+            continue
+        if eid not in daily_ids:
+            raise ValueError(f"target_series: {eid} is not a daily entity of this run")
+        t = pd.read_csv(Path(data_dir) / p, parse_dates=["date"])
+        new = (pd.Series(t["value_mm"].to_numpy(np.float64), index=t["date"]).reindex(window)
+               .to_numpy())
+        j = daily_ids.index(eid)
+        had = np.isfinite(obs_d[j])
+        obs_d[j] = np.where(had, new, np.nan)
+        n_masked[daily_rows[j]] += int((had & ~np.isfinite(new)).sum())
+    # hand-confirmed bad observations — applied after the n_obs check, which
+    # verifies the stores themselves
     for s in obs_mask:
         eid, _, day = s.partition("|")
         if eid not in known_ids:
@@ -244,7 +299,8 @@ def load_entity_obs(
             keep = ((months.start_time >= r["train_start"])
                     & (months.end_time <= r["train_end"] + pd.Timedelta(days=1))
                     & months.isin(arc_mask.get(arc, pd.PeriodIndex([], freq="M"))))
-            vals = depth[arc].reindex(months).to_numpy(np.float64, copy=True)
+            vals = depth[arc].reindex(months).to_numpy(np.float64, copy=True) \
+                * scale.get(eid, 1.0)
             vals[~keep] = np.nan
             if not np.isfinite(vals).any():
                 raise ValueError(f"{eid}: no observed arc-month under the arc mask "
@@ -252,7 +308,7 @@ def load_entity_obs(
         else:
             g = ufmm[ufmm["uf"] == int(r["site_id"].split()[1])]
             per = pd.PeriodIndex(g["date"], freq="M")
-            s = pd.Series(g["depth_mm"].to_numpy(), index=per)
+            s = pd.Series(g["depth_mm"].to_numpy() * scale.get(eid, 1.0), index=per)
             # months fully inside the entity window
             keep = (months.start_time >= r["train_start"]) \
                 & (months.end_time <= r["train_end"] + pd.Timedelta(days=1))
@@ -289,10 +345,83 @@ def load_entity_obs(
     var_m = (np.nanvar(obs_m, axis=1) if len(monthly_rows)
              else np.zeros(0))
 
-    if (np.concatenate([var_d, var_m]) <= 0).any():
+    # ---- the CDEC monthly companion of the cdec_daily entities ------------
+    cm_rows, cm_vals, cm_mk = [], [], []
+    n_cm, n_cmm = [0] * len(dom.basins), [0] * len(dom.basins)
+    if cdec_monthly:
+        fnf = pd.read_csv(paths.cdec_fnf(data_dir, "fnf_monthly.csv"), parse_dates=["date"])
+        fw = fnf.pivot(index="date", columns="station", values="flow_af")
+        fw.index = pd.PeriodIndex(fw.index, freq="M")
+        masked: dict[str, set] = {}
+        for s in cdec_monthly_mask:
+            eid, _, mon = s.partition("|")
+            if eid not in known_ids:
+                raise ValueError(f"cdec_monthly_mask {s!r}: unknown entity {eid!r}")
+            masked.setdefault(eid, set()).add(pd.Period(mon, freq="M"))
+        from_cm = np.asarray(months.start_time >= pd.Timestamp(cdec_monthly))
+        for i, eid in enumerate(dom.basins):
+            r = reg.loc[eid]
+            if r["family"] != "cdec_daily":
+                continue
+            st, area, vol = str(r["outlet_source"]).split(":")[-1], float(r["area_mi2"]), 1.0
+            if st == "CLE":
+                st, vol = "TNL", 1.0 / TNL_PER_CLE
+            if st not in fw.columns:            # NHG, NML: no monthly record of their own
+                if eid in masked:
+                    raise ValueError(f"cdec_monthly_mask: {eid} has no monthly companion")
+                continue
+            vals = fw[st].reindex(months).to_numpy(np.float64) * vol * M3_PER_AF \
+                / (area * M2_PER_MI2) * 1e3
+            vals[~from_cm] = np.nan
+            # the mask is checked against the record from cdec_monthly on, then applied; the
+            # holdout and the training window cut after it (as for the daily obs_mask)
+            mk = np.asarray(months.isin(sorted(masked.get(eid, ()))))
+            if (mk & ~np.isfinite(vals)).any():
+                bad = [str(p) for p in months[mk & ~np.isfinite(vals)]][:5]
+                raise ValueError(f"cdec_monthly_mask: {eid} month(s) {bad} not in its "
+                                 "companion (before its start or unobserved)")
+            if mk.sum() != len(masked.get(eid, ())):
+                raise ValueError(f"cdec_monthly_mask: {eid} names month(s) outside the envelope")
+            vals[ho_m | out_m] = np.nan
+            cm_rows.append(i)
+            cm_vals.append(vals)
+            cm_mk.append(mk & np.isfinite(vals))
+    obs_cm = np.stack(cm_vals, 0) if cm_vals else np.zeros((0, len(months)))
+    # the normalizers from the companion before its mask, which applies after them (as
+    # target_mask below)
+    var_cm = np.nanvar(obs_cm, axis=1) if cm_vals else np.zeros(0)
+    for j, i in enumerate(cm_rows):
+        obs_cm[j, cm_mk[j]] = np.nan
+        n_cmm[i], n_cm[i] = int(cm_mk[j].sum()), int(np.isfinite(obs_cm[j]).sum())
+
+    if (np.concatenate([var_d, var_m, var_cm]) <= 0).any():
         raise ValueError("zero observed variance for at least one entity")
     if train_window and not np.isfinite(np.concatenate([var_d, var_m])).all():
         raise ValueError(f"an entity has no target inside train_window {train_window}")
+
+    # target_mask — after the normalizers, so an entity keeps the weight of its whole record
+    # (one masked to nothing keeps its finite normalizer and simply scores nothing)
+    n_screen = [0] * len(dom.basins)
+    m_ids = [dom.basins[i] for i in monthly_rows]
+    for eid, a, b, by_day in _mask_ranges(target_mask):
+        if eid not in known_ids:
+            raise ValueError(f"target_mask: unknown entity {eid!r}")
+        if eid not in dom.basins:
+            continue                            # the mask covers other runs too
+        if by_day != (eid in daily_ids):
+            raise ValueError(f"target_mask: {eid} is a {'monthly' if by_day else 'daily'} "
+                             f"entity — give {'months' if by_day else 'days'} (YYYY-MM"
+                             f"{'' if by_day else '-DD'})")
+        if by_day:
+            j = daily_ids.index(eid)
+            k0, k1 = window.searchsorted(a), window.searchsorted(b, side="right")
+            n_screen[daily_rows[j]] += int(np.isfinite(obs_d[j, k0:k1]).sum())
+            obs_d[j, k0:k1] = np.nan
+        else:
+            j = m_ids.index(eid)
+            k0, k1 = months.searchsorted(a), months.searchsorted(b, side="right")
+            n_screen[monthly_rows[j]] += int(np.isfinite(obs_m[j, k0:k1]).sum())
+            obs_m[j, k0:k1] = np.nan
 
     return EntityObs(
         t0=t0, t1=t1, family=tuple(reg["family"]),
@@ -307,7 +436,38 @@ def load_entity_obs(
         n_holdout=tuple(n_holdout),
         n_ext=tuple(n_ext),
         n_out=tuple(n_out),
+        cm_rows=np.array(cm_rows, dtype=np.int64),
+        obs_cm=torch.as_tensor(obs_cm).to(dom.device, dom.dtype),
+        var_cm=torch.as_tensor(var_cm).to(dom.device, dom.dtype),
+        n_cm=tuple(n_cm),
+        n_cm_masked=tuple(n_cmm),
+        n_screen=tuple(n_screen),
     )
+
+
+def _mask_ranges(entries: tuple[str, ...]):
+    """``target_mask`` entries -> ``(entity_id, first, last, by_day)``: ``"eid|YYYY-MM-DD"``,
+    ``"eid|YYYY-MM-DD..YYYY-MM-DD"`` (days, inclusive) or the same with ``YYYY-MM`` (months)."""
+    for s in entries:
+        eid, _, span = s.partition("|")
+        a, _, b = span.partition("..")
+        b = b or a
+        by_day = len(a) == 10
+        if by_day:
+            yield eid, pd.Timestamp(a), pd.Timestamp(b), True
+        else:
+            yield eid, pd.Period(a, freq="M"), pd.Period(b, freq="M"), False
+
+
+def entity_obs_kwargs(cfg) -> dict:
+    """The :func:`load_entity_obs` keywords a run's config sets — one place, so the trainer,
+    CPU selection and evaluation read the identical targets."""
+    return dict(obs_mask=cfg.obs_mask, holdout_wy=cfg.holdout_wy or None,
+                uf_train_start=cfg.uf_train_start or None,
+                train_window=cfg.train_window or None,
+                cdec_monthly=cfg.cdec_monthly or None, cdec_monthly_mask=cfg.cdec_monthly_mask,
+                target_mask=cfg.target_mask, target_scale=cfg.target_scale,
+                target_series=cfg.target_series)
 
 
 def cut_entity_obs(eobs: EntityObs, dates: pd.DatetimeIndex,
@@ -321,11 +481,12 @@ def cut_entity_obs(eobs: EntityObs, dates: pd.DatetimeIndex,
         raise ValueError(f"train_window {train_window} outside the envelope")
     m = ((eobs.month_code >= wa.year * 12 + wa.month - 1)
          & (eobs.month_code <= wb.year * 12 + wb.month - 1))
+    mt = torch.as_tensor(m, device=eobs.obs_monthly.device)
     return replace(eobs, t0=t0, t1=t1,
                    obs_daily=eobs.obs_daily[:, t0 - eobs.t0:t1 - eobs.t0],
                    month_code=eobs.month_code[m],
-                   obs_monthly=eobs.obs_monthly[:, torch.as_tensor(
-                       m, device=eobs.obs_monthly.device)])
+                   obs_monthly=eobs.obs_monthly[:, mt],
+                   obs_cm=None if eobs.obs_cm is None else eobs.obs_cm[:, mt])
 
 
 def monthly_chunk_target(

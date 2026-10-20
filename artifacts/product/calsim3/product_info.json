@@ -1,5 +1,5 @@
 {
- "run": "7_calsim",
+ "run": "8_calsim",
  "forcing": "historical_livneh_unsplit",
  "mu": 0.03,
  "epochs": 300,
@@ -108,61 +108,61 @@
  "kge_dpl_holdout": {
   "non-anchor": {
    "n": 50,
-   "median": 0.563,
-   "mean": 0.4988,
-   "p10": 0.0428,
-   "below_0": 4
+   "median": 0.5828,
+   "mean": 0.4912,
+   "p10": 0.0009,
+   "below_0": 5
   },
   "share": {
    "n": 139,
-   "median": 0.7023,
-   "mean": 0.6229,
-   "p10": 0.2622,
-   "below_0": 8
+   "median": 0.7078,
+   "mean": 0.6171,
+   "p10": 0.2253,
+   "below_0": 9
   },
   "single-arc system": {
    "n": 7,
-   "median": 0.9,
-   "mean": 0.8825,
-   "p10": 0.833,
+   "median": 0.9086,
+   "mean": 0.8793,
+   "p10": 0.8178,
    "below_0": 0
   },
   "all rim arcs": {
    "n": 196,
-   "median": 0.6773,
-   "mean": 0.6005,
-   "p10": 0.1668,
-   "below_0": 12
+   "median": 0.6849,
+   "mean": 0.5944,
+   "p10": 0.1805,
+   "below_0": 14
   }
  },
  "kge_product_holdout": {
   "non-anchor": {
    "n": 50,
-   "median": 0.563,
-   "mean": 0.4988,
-   "p10": 0.0428,
-   "below_0": 4
+   "median": 0.5828,
+   "mean": 0.4912,
+   "p10": 0.0009,
+   "below_0": 5
   },
   "share": {
    "n": 139,
-   "median": 0.8489,
-   "mean": 0.8113,
-   "p10": 0.6419,
+   "median": 0.8424,
+   "mean": 0.811,
+   "p10": 0.6452,
    "below_0": 1
   },
   "single-arc system": {
    "n": 7,
-   "median": 0.9,
-   "mean": 0.8825,
-   "p10": 0.833,
+   "median": 0.9086,
+   "mean": 0.8793,
+   "p10": 0.8178,
    "below_0": 0
   },
   "all rim arcs": {
    "n": 196,
-   "median": 0.814,
-   "mean": 0.7341,
-   "p10": 0.4262,
-   "below_0": 5
+   "median": 0.8091,
+   "mean": 0.7318,
+   "p10": 0.479,
+   "below_0": 6
   }
  },
  "validation_full_gate": true

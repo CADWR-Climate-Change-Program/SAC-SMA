@@ -128,7 +128,7 @@ tables only.
   used to be called. Earlier text is in git.
 - **The one exception is a run's `provenance/` folder.** Its files are evidence of what was
   fixed before a run's held-out numbers were read, so they are never edited and keep the names
-  of their day. dPL-CalSim's (`models/dpl/multifamily/7_calsim/provenance/`) holds the pass and
+  of their day. dPL-CalSim's (`models/dpl/multifamily/8_calsim/provenance/`) holds the pass and
   fail levels of its WY1976–85 read, written before the read, and the check tables it was
   adopted on.
 
@@ -142,8 +142,9 @@ The layout and the source of every file are in [`data/README.md`](../data/README
 - **Targets and references come from outside this repository.** Nothing in the `sacsma`
   package writes them; they change only through the script that sits in their folder.
 - **Hand-maintained tables are never overwritten by a script:** the CalSim3 crosswalk, the
-  tier-1 location table, the arc derivation table, the unimpaired-flow gauge table and the
-  mask of bad observation days.
+  tier-1 location table, the arc derivation table, the unimpaired-flow gauge table, the
+  mask of bad observation days, and the training screens and location masks of dPL-CalSim
+  ([`data/README.md`](../data/README.md#files-kept-by-hand)).
 - **No evapotranspiration product enters a loss, a selection rule or a prior.** The ET and
   snow products in the repository are references.
 - **No machine paths in tracked files.** Locations outside the repository are read from an
@@ -165,7 +166,7 @@ The output tree is described in [`artifacts/README.md`](../artifacts/README.md).
 - **A run has one name in every part:** `models/dpl/<group>/<run>/`,
   `results/dpl/<group>/<run>/`, `_local/runs/dpl/<group>/<run>/`. A command that takes a run
   accepts any of the three.
-- **Runs are grouped by what they train on,** not by the domain their code runs on. Rungs 2 to 6
+- **Runs are grouped by what they train on,** not by the domain their code runs on. Rungs 2 to 7
   of the ladder run on the `multifamily` domain restricted to the 15 CDEC entities and sit in
   the `15cdec` group.
 - **Tracked folders hold only tracked files.** A command writes there the files that are
@@ -182,7 +183,7 @@ The output tree is described in [`artifacts/README.md`](../artifacts/README.md).
 - Run folders keep the names they were made with; the files in a run's `provenance/` are the
   record of the run as it was made, including names and module paths of that time.
 - Runs are named for what they train on. The ladder is the exception: its rungs are named for
-  the one change each makes (`1_hru`, `2_grid`, `3_pt`, `4_noah`, `5_px`, `6_aef`, `7_calsim`),
+  the one change each makes (`1_hru`, `2_grid`, `3_pt`, `4_noah`, `5_px`, `6_deep`, `7_aef`, `8_calsim`),
   and every rung trains on one shared recipe ([Runs](runs.md#the-ladder)). dPL-CalSim is the
-  name the pages use for `multifamily/7_calsim`.
+  name the pages use for `multifamily/8_calsim`.
 - What is not adopted stays local (`artifacts/_local/`, `tmp/`) and is not committed.

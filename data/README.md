@@ -32,7 +32,7 @@ it. The README is the provenance record of that folder.
 | [`targets/cdec/`](targets/cdec/README.md) | CDEC full natural flow: daily for the 15 watersheds of the original study and the later pulls; monthly for the 17 `cdec_daily` sites of the registry. | CDEC | `cdec_fnf.py`, `build_fnf_depth.py` | 7 MB |
 | [`targets/callite/`](targets/callite/README.md) | Monthly full-natural-flow targets of the `9unimp`, `11obs` and `12rim` sets. | study archive | delivered | 3 MB |
 | [`targets/dwr_unimpaired/`](targets/dwr_unimpaired/README.md) | DWR's published unimpaired flows, 24 Central Valley subbasins, water years 1922 to 2014. | DWR (2016) report | `dwr_unimpaired.py`, `build_uf_depth.py`, `check_uf_locations.py` (its checks in `verification/`) | 3 MB |
-| [`targets/usgs/`](targets/usgs/README.md) | Daily flow at 69 USGS gauges inside the CalSim3 domain. | USGS, through the neuralhyd-ca cleaned set | `usgs_flows.py` | 6 MB |
+| [`targets/usgs/`](targets/usgs/README.md) | Daily flow at 69 USGS gauges inside the CalSim3 domain, and the replacement record of one of them (Kings River, 11218501). | USGS, through the neuralhyd-ca cleaned set; NWIS | `usgs_flows.py`, `usgs_11218501.py` | 6 MB |
 | [`targets/calsim3/`](targets/calsim3/README.md) | CalSim3 monthly inflows on the rim arcs, the unimpaired series of the rim systems, and the tables that say which arc-months are an arc's own record. | CalSim3; DWR hydrology report | `build_calsim_arcs.py` | 20 MB |
 | [`reference/matlab/`](reference/matlab/README.md) | The archived MATLAB simulations and the forcing the CalLite ones ran on: the parity baseline. | study archive | delivered | 585 MB |
 | [`reference/vic/`](reference/vic/README.md) | VIC routed monthly flows under three climates, and the VIC routing grids. | CalSim3 stochastic-input pipeline | delivered | 31 MB |
@@ -68,6 +68,8 @@ These are sources of truth. No script overwrites them.
 | `targets/calsim3/calsim3_arc_derivation.csv` | How CalSim3 built each rim inflow series, transcribed from the DWR hydrology report. |
 | `targets/dwr_unimpaired/uf_gauges.csv` | Pour point and report area of each unimpaired-flow subbasin. |
 | `targets/cdec/fnf_daily_mask.csv` | Daily target values confirmed to be wrong, masked in training. |
+| `targets/cdec/fnf_daily_screen.csv`, `fnf_monthly_screen.csv`, `forcing_era_mask.csv` | The CDEC days and months dPL-CalSim does not train on, from the October 2026 audit of its training records. |
+| `targets/usgs/location_mask.csv`, `targets/calsim3/location_mask.csv`, `targets/dwr_unimpaired/location_mask.csv` | The USGS days, arc-months and subbasin-months dPL-CalSim does not train on, from the same audit. |
 
 Three more files need care.
 

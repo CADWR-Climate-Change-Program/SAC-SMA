@@ -28,6 +28,9 @@ import torch.nn as nn
 
 from .config import (
     BOUNDS,
+    DEEP_G_BOUNDS,
+    DEEP_G_INIT,
+    DEEP_TAU_YEARS,
     FIXED_PARAMS,
     FREE_PARAMS,
     LOG_SPACE_PARAMS,
@@ -61,8 +64,8 @@ def logit_penalty(pre: torch.Tensor) -> torch.Tensor:
 class ParameterNet(nn.Module):
     """(N, F) static features -> dict of (N,) physical parameters: a two-layer encoder
     and one linear head over the free parameters, plus the zero-init heads of the
-    learned PXTEMP (``pxtemp_learn``) and of the Noah-lite ``soil_chi`` (``canopy``)
-    off the same trunk."""
+    learned PXTEMP (``pxtemp_learn``), of the Noah-lite ``soil_chi`` (``canopy``) and of
+    the deep store's ``gdeep`` / ``kdeep`` (``deep``) off the same trunk."""
 
     def __init__(self, n_features: int, *, hidden: int = 64, embed: int = 32,
                  dropout: float = 0.1,
@@ -71,7 +74,8 @@ class ParameterNet(nn.Module):
                  pxtemp_box: tuple[float, float] = (-1.0, 3.0),
                  pxtemp_tau: float = 1.0,
                  log_params: tuple[str, ...] = (),
-                 bounds: dict[str, tuple[float, float]] | None = None):
+                 bounds: dict[str, tuple[float, float]] | None = None,
+                 deep: bool = False):
         super().__init__()
         self.canopy = bool(canopy)
         self.log_params = tuple(log_params)
@@ -117,6 +121,24 @@ class ParameterNet(nn.Module):
             self.register_buffer("_px_tau", torch.tensor(float(pxtemp_tau),
                                                          dtype=torch.float64))
 
+        # The deep store: two outputs off the trunk, zero weights, built last under a
+        # forked RNG (as the PXTEMP head).  gdeep = its box's top x sigmoid, starting at
+        # DEEP_G_INIT; kdeep = 1 / (365.25 tau), log-mapped over DEEP_TAU_YEARS, starting at
+        # the box's log midpoint.
+        self.deep = bool(deep)
+        if self.deep:
+            with torch.random.fork_rng(devices=[]):
+                self.deep_head = nn.Linear(embed, 2)
+            with torch.no_grad():
+                self.deep_head.weight.zero_()
+                self.deep_head.bias.zero_()
+                pos = (DEEP_G_INIT - DEEP_G_BOUNDS[0]) / (DEEP_G_BOUNDS[1] - DEEP_G_BOUNDS[0])
+                self.deep_head.bias[0] = math.log(pos / (1.0 - pos))
+            k_lo, k_hi = (1.0 / (365.25 * t) for t in DEEP_TAU_YEARS[::-1])
+            self.register_buffer("_deep_box", torch.tensor(
+                [DEEP_G_BOUNDS[0], DEEP_G_BOUNDS[1], math.log(k_lo), math.log(k_hi)],
+                dtype=torch.float64))
+
     @classmethod
     def from_checkpoint(cls, ck: dict, n_features: int) -> ParameterNet:
         """The network of the training checkpoint ``ck``, weights loaded (its parameter
@@ -125,7 +147,8 @@ class ParameterNet(nn.Module):
         net = cls(n_features, hidden=nc["hidden"], embed=nc["embed"], dropout=nc["dropout"],
                   canopy=nc["canopy"], pxtemp_learn=nc["pxtemp_learn"],
                   pxtemp_box=tuple(nc["pxtemp_box"]), pxtemp_tau=nc["pxtemp_tau"],
-                  log_params=tuple(nc["log_params"]), bounds=nc["bounds"])
+                  log_params=tuple(nc["log_params"]), bounds=nc["bounds"],
+                  deep=nc.get("deep", False))
         net.load_state_dict(ck["net"])
         return net
 
@@ -157,8 +180,8 @@ class ParameterNet(nn.Module):
 
     def forward(self, x: torch.Tensor, *, logits: bool = False):
         """The parameter dict; with ``logits`` also the (N, K) pre-activations in sigmoid
-        units (the free parameters, then 2u of the PXTEMP tanh head, then soil_chi's) that
-        the logit penalty reads."""
+        units (the free parameters, then 2u of the PXTEMP tanh head, then soil_chi's, then
+        the deep store's two) that the logit penalty reads."""
         z = self.encoder(x)
         raw = self.head(z)
         pre = [raw]
@@ -190,6 +213,13 @@ class ParameterNet(nn.Module):
             cs = torch.sigmoid(c)[:, 0]
             lo, hi = self._c_lo.to(cs.dtype), self._c_hi.to(cs.dtype)
             out["soil_chi"] = lo[0] + cs * (hi[0] - lo[0])
+        if self.deep:
+            d = self.deep_head(z)
+            pre.append(d)
+            ds = torch.sigmoid(d)
+            box = self._deep_box.to(ds.dtype)
+            out["gdeep"] = box[0] + ds[:, 0] * (box[1] - box[0])
+            out["kdeep"] = (box[2] + ds[:, 1] * (box[3] - box[2])).exp()
         if logits:
             return out, torch.cat(pre, dim=-1)
         return out

@@ -53,7 +53,7 @@ FORCING = "wgen_product_a"
 #: the scoring window, water years (inclusive): the WGEN temperature detrending is small here
 WY = (1991, 2018)
 #: dPL-CalSim, the learned-parameter run of the multifamily domain
-DPL_RUN = "7_calsim"
+DPL_RUN = "8_calsim"
 #: the sites of the 15-CDEC set whose VIC is the sum of the per-node series of their registry
 #: arcs, not the basin-level series of the ``sacsma calsim`` 15-CDEC track: that series reaches
 #: below the gauge (the Yuba's ``8RI_SMART`` holds Deer Creek, ``I_DER001`` and ``I_DER004``)
@@ -251,12 +251,13 @@ def dpl_daily(forcing: str = FORCING, data_dir: str | Path = "data",
     """dPL-CalSim's daily flow (mm/day, date x site) on ``forcing`` over the multifamily
     envelope, as the run is scored (:mod:`sacsma.dpl.evaluate_multi_timescale`): its trained
     field on the CPU engine, the state at 1949-10-01 from the cycle spin-up (cached)."""
-    from ..dpl.evaluate import simulate_field
+    from ..dpl.evaluate import simulate_field, statics_files
     from ..dpl.multi_timescale import ENVELOPE_END, ENVELOPE_START
 
     code, key_of = _engine_code()
     ckpt = paths.dpl_checkpoint(artifacts_dir, run, paths.MULTIFAMILY)
-    key = key_of(ckpt, paths.entity_cells(data_dir), paths.flowlens(data_dir), *code)
+    key = key_of(ckpt, paths.entity_cells(data_dir), paths.flowlens(data_dir), *code,
+                 *statics_files(data_dir))
 
     def go() -> pd.DataFrame:
         net, x, dom, cfg = dpl_field(forcing, data_dir, artifacts_dir, run)

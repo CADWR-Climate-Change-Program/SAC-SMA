@@ -11,7 +11,14 @@ lower-zone deficit (``sacsma.sma_learned``, its Numba copy, lists the difference
 
 Parameter keys are the ga_optimum names (lowercase SMA names); the bounds (config.BOUNDS) keep
 every capacity >= 1, so the divisions are unguarded as in the reference.  State order is the
-reference vector [uztwc, uzfwc, lztwc, lzfsc, lzfpc, adimc], cold start [0, 0, 100, 100, 100, 0].
+reference vector [uztwc, uzfwc, lztwc, lzfsc, lzfpc, adimc], cold start [0, 0, 100, 100, 100, 0],
+then the deep store ``gwc`` (cold start 0; it stays 0 without the deep store).
+
+The deep store (``deep``, ``Physics.deep == "cascade"``) is not in the reference: a share
+``gdeep`` of each substep's supplemental drainage goes into it, and it drains at ``kdeep`` a day
+into the baseflow.  It is outside the lower-zone deficit, the percolation demand and the
+resupply, and has no ET, so the soil states are those of the same field without it.  Its outflow
+is reported in the supplemental part.
 """
 
 from __future__ import annotations
@@ -29,6 +36,9 @@ _BF_EPS = 1e-4   # reference baseflow depletion snap (0.0001 — a DIFFERENT con
 #: surface-side parts (impervious, ADIMP direct, surface, interflow) that sum to
 #: ``surf`` and the two baseflow parts (supplemental, primary) that sum to ``base``.
 PART_NAMES = ("roimp", "sdro", "ssur", "sif", "supplemental", "primary")
+#: with the deep store, two diagnostics follow the parts: ``deep``, the store's outflow
+#: share of the supplemental part, and ``gwc``, the store's content at the day's end (mm)
+DEEP_PART_NAMES = ("deep", "gwc")
 
 
 def _split2(total: torch.Tensor, a: torch.Tensor, b: torch.Tensor):
@@ -85,18 +95,19 @@ class SacState:
     lzfsc: torch.Tensor
     lzfpc: torch.Tensor
     adimc: torch.Tensor
+    gwc: torch.Tensor       # the deep store (0 without it)
 
     @classmethod
     def reference_init(cls, n: int, device, dtype) -> SacState:
-        """The frozen cold start [0, 0, 100, 100, 100, 0]."""
+        """The frozen cold start [0, 0, 100, 100, 100, 0], the deep store empty."""
         z = torch.zeros(n, device=device, dtype=dtype)
         h = torch.full((n,), 100.0, device=device, dtype=dtype)
         return cls(uztwc=z.clone(), uzfwc=z.clone(), lztwc=h.clone(),
-                   lzfsc=h.clone(), lzfpc=h.clone(), adimc=z.clone())
+                   lzfsc=h.clone(), lzfpc=h.clone(), adimc=z.clone(), gwc=z.clone())
 
     def detach(self) -> SacState:
         return SacState(*(getattr(self, f).detach() for f in
-                          ("uztwc", "uzfwc", "lztwc", "lzfsc", "lzfpc", "adimc")))
+                          ("uztwc", "uzfwc", "lztwc", "lzfsc", "lzfpc", "adimc", "gwc")))
 
 
 def _snap(x: torch.Tensor, thres: float = _THRES) -> torch.Tensor:
@@ -115,15 +126,23 @@ def sacsma_step(
     eused_ext: torch.Tensor | None = None,
     uztwc_pre: torch.Tensor | None = None,
     return_parts: bool = False,
+    deep: bool = False,
 ) -> tuple[SacState, torch.Tensor, torch.Tensor, torch.Tensor]:
     """One daily step; returns (new_state, surf, base, tet) in mm/day.
+
+    ``deep`` runs the deep store (module docstring) on ``p["gdeep"]`` and ``p["kdeep"]``: per
+    substep it drains ``gwc * ddeep`` (``ddeep = 1 - (1 - kdeep)**(1 / n_inc)``, computed as
+    ``-expm1(log1p(-kdeep) / n_inc)``), then takes
+    ``gdeep`` of the supplemental drainage; the supplemental baseflow that reaches the channel
+    is the drainage less that share plus the store's outflow.
 
     ``return_parts`` appends the runoff parts in :data:`PART_NAMES` order: ``roimp``
     (impervious), ``sdro`` (ADIMP direct), ``ssur`` (surface), ``sif`` (interflow) of
     ``surf`` and ``supplemental`` / ``primary`` baseflow of ``base`` -- the final ``surf`` /
     ``base`` (after the et4 channel-ET deduction and the dry-channel clamp) apportioned in
     proportion to the parts' pre-deduction values (:func:`_apportion_parts`), so the sums are
-    exact.
+    exact.  With ``deep`` the store's two diagnostics follow (:data:`DEEP_PART_NAMES`): its
+    outflow's share of ``supplemental``, split the same way, and its content.
 
     Without ``eused_ext`` the reference ET cascade E1-E5 runs.  With it the ET was withdrawn
     upstream (Noah-lite, :func:`run_sacsma`): ``eused_ext`` is the soil ET taken, which feeds
@@ -140,6 +159,7 @@ def sacsma_step(
 
     uztwc, uzfwc, lztwc = state.uztwc, state.uzfwc, state.lztwc
     lzfsc, lzfpc, adimc = state.lzfsc, state.lzfpc, state.adimc
+    gwc = state.gwc
     dtype = pr_t.dtype
     zero = torch.zeros_like(uztwc)
 
@@ -243,6 +263,7 @@ def sacsma_step(
     if return_parts:   # primary / supplemental baseflow kept apart (sbf is unchanged)
         sbf_p = torch.zeros_like(uztwc)
         sbf_s = torch.zeros_like(uztwc)
+        sbf_d = torch.zeros_like(uztwc)   # the deep store's outflow (in sbf_s)
 
     dinc = 1.0 / n_inc
     pinc = twx / n_inc
@@ -250,6 +271,10 @@ def sacsma_step(
     dlzp = 1.0 - (1.0 - lzpk) ** dinc
     dlzs = 1.0 - (1.0 - lzsk) ** dinc
     percm = lzfpm * dlzp + lzfsm * dlzs
+    if deep:
+        gdeep = p["gdeep"]
+        # 1 - (1 - kdeep)**dinc without the cancellation (kdeep ~1e-3) in float32
+        ddeep = -torch.expm1(dinc * torch.log1p(-p["kdeep"]))
 
     for _ in range(n_inc):
         # ADIMP direct runoff (hardcoded ratio**2, as the reference)
@@ -268,6 +293,13 @@ def sacsma_step(
         snap_s = (lzfsc_raw <= _BF_EPS).to(dtype)
         bf_s = bf_s + snap_s * lzfsc_raw
         lzfsc_s = (1.0 - snap_s) * lzfsc_raw
+
+        if deep:
+            # the deep store drains, then takes its share of the supplemental drainage
+            bf_d = gwc * ddeep
+            into_d = gdeep * bf_s
+            gwc = (gwc - bf_d) + into_d
+            bf_s = (bf_s - into_d) + bf_d
 
         # percolation short-circuit: (pinc + uzfwc) <= 0.01 skips the whole block
         skip = ((pinc + uzfwc) <= 0.01).to(dtype)
@@ -328,6 +360,8 @@ def sacsma_step(
         if return_parts:
             sbf_p = sbf_p + bf_p
             sbf_s = sbf_s + bf_s
+            if deep:
+                sbf_d = sbf_d + bf_d
         sif = sif + act * dele_if
         ssur = ssur + act * (sur * parea + adsur * adimp)
         sdro = sdro + addro * adimp
@@ -357,13 +391,20 @@ def sacsma_step(
     tet = eused * parea + et4 + et5
 
     new_state = SacState(uztwc=uztwc, uzfwc=uzfwc, lztwc=lztwc,
-                         lzfsc=lzfsc, lzfpc=lzfpc, adimc=adimc)
+                         lzfsc=lzfsc, lzfpc=lzfpc, adimc=adimc, gwc=gwc)
     if return_parts:
         # roimp/sdro/ssur/sif above are the pre-deduction surface parts; the
         # baseflow parts get the same parea / (1 + side) factor as bfcc
         parts = _apportion_parts(surf, base, roimp, sdro, ssur, sif,
                                  sbf_s * parea / (1.0 + side),
                                  sbf_p * parea / (1.0 + side))
+        if deep:
+            # the store's diagnostics (DEEP_PART_NAMES): its share of the supplemental part
+            # (the outflow in sbf_s, the rest the lower zone's drainage less the share
+            # taken), and its content at the day's end
+            dpart, _rest = _split2(parts[4], sbf_d.clamp_min(0.0),
+                                   (sbf_s - sbf_d).clamp_min(0.0))
+            parts = (*parts, dpart, gwc)
         return new_state, surf, base, tet, parts
     return new_state, surf, base, tet
 
@@ -382,7 +423,8 @@ def run_sacsma(
     """Run SAC-SMA over a window; returns (surf, base, tet, final_state).
 
     ``return_parts`` appends the per-day runoff parts of :func:`sacsma_step`, six (N, T)
-    tensors in :data:`PART_NAMES` order.
+    tensors in :data:`PART_NAMES` order, then with the deep store its two diagnostics
+    (:data:`DEEP_PART_NAMES`).
 
     ``physics.et == "noah_lite"`` withdraws the Noah-lite ET (:func:`.et_noah.noah_lite_et`,
     exponent ``params["soil_chi"]``) ahead of each day's water balance and keeps the reference
@@ -391,7 +433,8 @@ def run_sacsma(
     t_len = pet.shape[1]
     noah = physics.et == "noah_lite"
     step_kw = {"n_inc": physics.n_inc, "fracp_floor": physics.fracp_floor,
-               "return_parts": return_parts}
+               "return_parts": return_parts,
+               "deep": physics.deep == "cascade"}
     grad = torch.is_grad_enabled() and (
         pet.requires_grad or pr_eff.requires_grad
         or any(v.requires_grad for v in params.values()))
@@ -412,7 +455,7 @@ def run_sacsma(
                 state.uztwc, state.uzfwc, state.lztwc, pet[:, t], params, params["soil_chi"],
                 veg_frac, lai[:, t])
             state = SacState(uztwc=uztwc, uzfwc=uzfwc, lztwc=lztwc, lzfsc=state.lzfsc,
-                             lzfpc=state.lzfpc, adimc=state.adimc)
+                             lzfpc=state.lzfpc, adimc=state.adimc, gwc=state.gwc)
             # the Noah ET is the step's eused, so its eused*parea term reports it (no double
             # count): te = tet_noah*parea + et4 + et5
             step = sacsma_step(state, pr_eff[:, t], pet[:, t], params, eused_ext=et_soil,
@@ -435,7 +478,8 @@ def run_sacsma(
         base = torch.stack(base_s, dim=-1)
         tet = torch.stack(tet_s, dim=-1)
     if return_parts:
+        n_parts = len(PART_NAMES) + (len(DEEP_PART_NAMES) if step_kw["deep"] else 0)
         parts = tuple(torch.stack([p[k] for p in parts_s], dim=-1)
-                      for k in range(len(PART_NAMES)))
+                      for k in range(n_parts))
         return surf, base, tet, state, parts
     return surf, base, tet, state

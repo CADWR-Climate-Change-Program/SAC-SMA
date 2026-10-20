@@ -44,6 +44,21 @@ def export_params(net: torch.nn.Module, dom: DomainTensors,
     return df
 
 
+def export_deep_params(net: torch.nn.Module, dom: DomainTensors,
+                       x: torch.Tensor) -> pd.DataFrame:
+    """The deep store's learned share ``gdeep`` and drainage ``kdeep`` (a day) per HRU keyed by
+    key/basin, with its residence in years.  Kept apart from :func:`export_params`: the
+    reference model has no deep store."""
+    net.eval()
+    with torch.no_grad():
+        out = net(x)
+    df = dom.hrus[["basin", "key", "lat", "lon"]].copy()
+    df["gdeep"] = out["gdeep"].double().cpu().numpy()
+    df["kdeep"] = out["kdeep"].double().cpu().numpy()
+    df["tau_years"] = 1.0 / (365.25 * df["kdeep"])
+    return df
+
+
 def export_canopy_params(net: torch.nn.Module, dom: DomainTensors,
                          x: torch.Tensor) -> pd.DataFrame:
     """The learned Noah-lite exponent ``soil_chi`` per HRU keyed by key/basin, with the
@@ -213,7 +228,8 @@ def learned_field(net: torch.nn.Module, x: torch.Tensor, dom: DomainTensors, cfg
                            a(out["Kpet"]), cols(P._SNOW_COLS), cols(P._SMA_COLS),
                            cols(P._ROUT_COLS), veg=a(dom.veg_frac) if noah else None,
                            chi=a(out["soil_chi"]) if noah else None,
-                           lai=dom.lai_lut[cell] if noah else None)
+                           lai=dom.lai_lut[cell] if noah else None,
+                           deep=cols(("gdeep", "kdeep")) if "gdeep" in out else None)
 
 
 def simulate_field(net: torch.nn.Module, x: torch.Tensor, dom: DomainTensors, cfg: DplConfig,
@@ -314,8 +330,9 @@ def basin_daily(run: str | Path, *, data_dir: str = "data", dp: float = 0.0,
 
 def evaluate_checkpoint(ckpt_path: str | Path, data_dir: str = "data",
                         out_dir: str | Path | None = None) -> pd.DataFrame:
-    """A 15-CDEC run: its parameter tables (``params_dpl.csv``, and ``params_canopy.csv`` for a
-    Noah-ET field) to the model folder, then its daily flow as trained (:func:`basin_daily`)
+    """A 15-CDEC run: its parameter tables (``params_dpl.csv``, ``params_canopy.csv`` for a
+    Noah-ET field, ``params_deep.csv`` for one with the deep store) to the model folder, then
+    its daily flow as trained (:func:`basin_daily`)
     scored against the gauges (:func:`score_basins`) into the results folder."""
     # the run's folders: by default the run of the checkpoint (<run>/checkpoints/x.pt)
     ckp = Path(ckpt_path).resolve()
@@ -326,10 +343,12 @@ def evaluate_checkpoint(ckpt_path: str | Path, data_dir: str = "data",
     export_params(net, dom, x).to_csv(run.model / "params_dpl.csv", index=False)
     if cfg.et_mode == "noah":
         export_canopy_params(net, dom, x).to_csv(run.model / "params_canopy.csv", index=False)
+    if cfg.deep_store != "none":
+        export_deep_params(net, dom, x).to_csv(run.model / "params_deep.csv", index=False)
     print(f"wrote the parameter tables -> {run.model}", flush=True)
     daily = basin_daily(ckp, data_dir=data_dir)
     return score_basins(daily.to_numpy().T, list(daily.columns), daily.index, run.results,
-                        data_dir=data_dir)
+                        data_dir=data_dir, obs_mask=tuple(cfg.obs_mask))
 
 
 #: the substeps a day the benchmark runs the learned numerics with
