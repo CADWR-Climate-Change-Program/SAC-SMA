@@ -1,9 +1,9 @@
 # `artifacts/results/benchmark/`: three models against CDEC full natural flow
 
 Three models at 12 CDEC full-natural-flow (FNF) watersheds of the learned-parameter registry
-(its 17 CDEC sites less the four Tulare basins and New Hogan), scored against the observed CDEC FNF, monthly,
-WY1991–2018. Every model runs on the same climate, WGEN Product A scenario 1. WY1991–2018 is
-where the WGEN temperature detrending is small.
+(its 17 CDEC sites less the four Tulare basins and New Hogan), scored against the observed CDEC
+FNF, monthly, WY1991–2018. Every model runs on the same climate, WGEN Product A scenario 1.
+WY1991–2018 is where the WGEN temperature detrending is small.
 
 ```bash
 sacsma benchmark          # -> artifacts/results/benchmark/; about 2 min on CPU (the BCM fit), 10 s once cached
@@ -73,8 +73,6 @@ volumes; "Highest KGE" counts the sites where the model scores best.
 | dPL-CalSim | 0.940 | 0.923 | 0.934 | +0.70 % | 3.5 % | +1.0 % | 0.064 | 9 |
 | BCM | 0.906 | 0.884 | 0.821 | +1.0 % | 0.8 % | +0.6 % | 0.076 | 3 |
 | VIC-CalSim3 | 0.791 | 0.735 | 0.793 | +6.9 % | 10.6 % | +7.8 % | 0.109 | 0 |
-
-What the table shows:
 
 - dPL-CalSim has the highest KGE at 9 of the 12 sites, is within about 5 % in volume
   everywhere but MKM (−9 %) and TLG (−6 %), and has the smallest median seasonal mismatch. It
@@ -169,7 +167,7 @@ after a forcing store changes. The BCM fit is keyed by its inputs and code.
   - BCM's routing was fitted here to the same observations over the same window; fitted on
     one half and scored on the other, its median KGE is 0.90 (above). The BCM water balance
     itself was not fitted.
-  - VIC-CalSim3: how it was calibrated is not documented in the repository.
+  - VIC-CalSim3: its calibration is not documented in the repository.
 - BCM's relation to the observations is not constant. Scenario 1's `run + rch` against the
   observed volume moves by 5 to 10 % from decade to decade within WY1991–2018, and runs 10 to
   15 % lower in WY1961–1990 at SHA and MIL, where the WGEN detrending warms the record. The
@@ -177,9 +175,8 @@ after a forcing store changes. The BCM fit is keyed by its inputs and code.
   is −12 to +9 % off the observed (MKM −12 % in WY2001–2010, MIL +9 %), a median spread of 10
   points between the decades of a site.
 - NML is scored on complete months of its daily record, which drops dry-season months with a
-  negative or missing day: it keeps 217 of 336. CLE's
-  daily record would keep 233, mostly missing July to November, so CLE is scored on TNL's
-  monthly series instead (above).
+  negative or missing day: it keeps 217 of 336. CLE's daily record would keep 233, mostly
+  missing July to November, so CLE is scored on TNL's monthly series instead (above).
 - VIC-CalSim3 is the flow of its CalSim3 node, whose catchment can differ from the site: BND
   +2.1 %, MRC −2.3 %, MIL −2.2 % (`sites.csv`). It is not rescaled. At YRS the basin-level
   series `8RI_SMART` includes Deer Creek below the gauge, so the site sums the 16 arc series

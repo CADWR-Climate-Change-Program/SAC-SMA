@@ -7,11 +7,11 @@ and what is still open. The method is in [Learned parameters](learned_parameters
 
 ## Current model and product
 
-**dPL-CalSim** (`multifamily/8_calsim`, the last rung of [the ladder](#the-ladder)) and the
-**CalSim3 rim-inflow product** fitted on it
-([`artifacts/product/calsim3/`](../artifacts/product/calsim3/README.md)): monthly flow on the 196
-rim arcs, TAF, WY1916–2018, one series per forcing (historical Livneh, WGEN Product A scenarios 1
-and 12).
+The current model is dPL-CalSim (`multifamily/8_calsim`, the last rung of
+[the ladder](#the-ladder)), and the current product is the CalSim3 rim-inflow product fitted on
+it ([`artifacts/product/calsim3/`](../artifacts/product/calsim3/README.md)): monthly flow on the
+196 rim arcs, TAF, WY1916–2018, one series per forcing (historical Livneh, WGEN Product A
+scenarios 1 and 12).
 
 Median monthly KGE against CalSim3 on the held-out water years 1976–85:
 
@@ -31,9 +31,10 @@ On WY1922–1949, before any training year:
 | 7 single-arc systems | 0.785 | 0.785 |
 | All 196 | 0.633 | 0.762 |
 
-Source: `artifacts/product/calsim3/historical_livneh_unsplit/product_metrics.csv`; the fit's own scores,
-on its WY1950–2015 pass, are in `artifacts/product/calsim3/product_info.json`. `sacsma verify product`
-checks that `sacsma dpl calsim product apply` reproduces every tracked series.
+Source: `artifacts/product/calsim3/historical_livneh_unsplit/product_metrics.csv`; the fit's own
+scores, on its WY1950–2015 pass, are in `artifacts/product/calsim3/product_info.json`.
+`sacsma verify product` checks that `sacsma dpl calsim product apply` reproduces every tracked
+series.
 
 dPL-CalSim trains one network on 159 entities: 69 USGS gauges, 17 CDEC records, the 9
 unimpaired-flow subbasins (back to WY1950) and 64 CalSim3 arcs, on every year but WY1976–85,
@@ -47,8 +48,9 @@ WY1976–85 on the records as they are:
 | WY1976–85 (`metrics_holdout.csv`, tier 1 and 2) | 0.639 | – | 0.878 | 0.705 | 0.904 | 0.685 |
 
 Tier 1 is the mean over the 20 locations of `data/inputs/calsim3/tier1_sets.csv`, tier 2 the
-median over the 196 arcs (`artifacts/results/dpl/multifamily/8_calsim/`). The CDEC daily records are
-not scored on WY1976–85; [the ladder](#the-ladder) reads the outlets there on monthly full natural flow.
+median over the 196 arcs (`artifacts/results/dpl/multifamily/8_calsim/`). The CDEC daily
+records are not scored on WY1976–85; [the ladder](#the-ladder) reads the outlets there on
+monthly full natural flow.
 
 ## The ladder
 
@@ -66,8 +68,8 @@ the starting field. On top of them, every rung selects its network on the CPU ev
 with `lzsk` down to 0.001, and adds a small penalty on the network's saturated outputs. The
 commands are in [Reproduce](reproduce.md).
 
-Rungs 1 to 7 train on the 15 CDEC watersheds, WY1989–2003. Rungs 2 to 7 run on the grid cells and
-CalSim3 catchment outlines of the `multifamily` domain, restricted to the 15 CDEC records.
+Rungs 1 to 7 train on the 15 CDEC watersheds, WY1989–2003. Rungs 2 to 7 run on the grid cells
+and CalSim3 catchment outlines of the `multifamily` domain, restricted to the 15 CDEC records.
 
 | Rung | Change from the rung above |
 |---|---|
@@ -153,23 +155,23 @@ rung.
 
 What the ladder shows (a step counts when the mean moves by 0.01 or more):
 
-- **The network generalizes better than the GA.** +0.07 on WY2004–18 and +0.09 on WY1976–85.
-- **The grid costs about 0.01 to 0.02** at the outlets in both test windows. It is the form that
+- The network generalizes better than the GA: +0.07 on WY2004–18 and +0.09 on WY1976–85.
+- The grid costs about 0.01 to 0.02 at the outlets in both test windows. It is the form that
   covers the CalSim3 catchments.
-- **Priestley–Taylor PET gains at the outlets** (+0.02 in both windows) and on the USGS gauges
+- Priestley–Taylor PET gains at the outlets (+0.02 in both windows) and on the USGS gauges
   (+0.04), and loses on the unimpaired-flow subbasins (−0.03).
-- **The Noah-type ET and the learned rain/snow threshold** leave the outlets unchanged in both
+- The Noah-type ET and the learned rain/snow threshold leave the outlets unchanged in both
   windows. Noah-type ET loses on the subbasins (−0.01); the threshold gains on the subbasins
   (+0.03) and loses on the USGS gauges (−0.01).
-- **The deep store** moves only the USGS gauges (−0.013; the median −0.002, 24 of 49 up). The
+- The deep store moves only the USGS gauges (−0.013; the median −0.002, 24 of 49 up). The
   outlets, subbasins and arcs stay within 0.005 in both test windows.
-- **AlphaEarth inputs gain on the regional records**, most on the subbasins (+0.04, 6 of 9 up)
-  and the arcs (+0.03, 40 of 64); USGS +0.006. No change at the 15 outlets in the mean
-  (WY2004–18 −0.002, WY1976–85 −0.005).
-- **dPL-CalSim's training** (`8_calsim`: every family, the cleaned targets, the dry-season
-  term) gains at the outlets (+0.06, 12 of 13 up), on the USGS gauges (+0.12, 30 of 49; median
+- AlphaEarth inputs gain on the regional records, most on the subbasins (+0.04, 6 of 9 up) and
+  the arcs (+0.03, 40 of 64); USGS +0.006. The 15 outlets do not change in the mean (WY2004–18
+  −0.002, WY1976–85 −0.005).
+- dPL-CalSim's training (`8_calsim`: every family, the cleaned targets, the dry-season term)
+  gains at the outlets (+0.06, 12 of 13 up), on the USGS gauges (+0.12, 30 of 49; median
   +0.03), on the subbasins (+0.03, 4 of 9; median −0.004) and on the arcs (+0.05, 42 of 64).
-- **The hybrid adds skill** over its physics on WY2004–18 (+0.04) but not on WY1976–85, and
+- The hybrid adds skill over its physics on WY2004–18 (+0.04) but not on WY1976–85, and
   loses its response to warming (0.0 % annual runoff at +3 °C against −2.4 % for `5_px`).
   `hybrid_dt` keeps most of the skill (+0.03 and +0.02) and about 60 % of the response
   ([Learned parameters](learned_parameters.md#the-lstm-hybrids-and-their-response-to-warming)).
@@ -179,8 +181,8 @@ What the ladder shows (a step counts when the mean moves by 0.01 or more):
 
 Each tracked run has a folder under `artifacts/models/` (checkpoints, training log, parameter
 tables) and one under `artifacts/results/` (scores, figures; for dPL-CalSim also the simulated
-series, the CalSim3 checks and the atlas). Everything else a command writes for the run goes to the
-run's folder under `artifacts/_local/runs/`, which git ignores, as it ignores the caches
+series, the CalSim3 checks and the atlas). Everything else a command writes for the run goes to
+the run's folder under `artifacts/_local/runs/`, which git ignores, as it ignores the caches
 (`_local/cache/`), the scratch runs (`_local/testing/`) and the runs that were not adopted.
 
 ## Regenerating a run's outputs
@@ -197,26 +199,26 @@ sacsma dpl calsim atlas <run> --score-holdout
 
 ## Known costs
 
-- **Unimpaired-flow subbasins in WY1976–85.** dPL-CalSim scores 0.878, below the multi-family
-  run that preceded the ladder (0.894), at 7 of the 9 subbasins, most at Chowchilla (0.76
-  against 0.83).
-- **The benchmark.** On WGEN Product A scenario 1 against CDEC's monthly full natural flow,
+- Unimpaired-flow subbasins in WY1976–85: dPL-CalSim's mean KGE is 0.878 against 0.894 for the
+  multi-family run that preceded the ladder. It is lower at 7 of the 9 subbasins, most at
+  Chowchilla (0.76 against 0.83).
+- The benchmark: on WGEN Product A scenario 1 against CDEC's monthly full natural flow,
   WY1991–2018, dPL-CalSim's median KGE over the 12 sites is 0.940, against 0.949 for the
   multi-family run that preceded the ladder. The loss is mostly at NML (0.87 against 0.96),
-  TLG and CLE, with more volume in the wrong month (0.064 against 0.045). These are training years:
-  the check is the move to the weather-generator forcing. See [Benchmark](benchmark.md).
-- **Snow-17 parameters outside the published ranges.** With `MBASE` free down to −2 °C and `NMF`
-  up to 0.5, dPL-CalSim puts `MBASE` below 0 °C in every cell (median −1.79; 17 % at −2) and
-  `NMF` above 0.3, the largest Anderson gives, in every cell (median 0.47; 12 % at 0.5). Daily
-  ground melt `DAYGM` is 0.018 mm/day at the median, against 0.24 with the range pinned, and below
-  0.01 in 32 % of the cells (inside its 0 to 0.3 range). The snowpack matches that of the same
-  recipe with these ranges pinned (regional mean peak 191 against 192 mm), as do the WY1976–85
-  scores. The values fit this structure to flow; they are not measured melt properties.
-- **Flood peaks.** The two-year gradient flattens the five largest annual peaks by about 4 points
+  TLG and CLE, with more volume in the wrong month (0.064 against 0.045). These are training
+  years: the check is the move to the weather-generator forcing. See [Benchmark](benchmark.md).
+- Snow-17 parameters fall outside the published ranges. With `MBASE` free down to −2 °C and
+  `NMF` up to 0.5, dPL-CalSim puts `MBASE` below 0 °C in every cell (median −1.79; 17 % at −2)
+  and `NMF` above 0.3, the largest Anderson gives, in every cell (median 0.47; 12 % at 0.5).
+  Daily ground melt `DAYGM` is 0.018 mm/day at the median, against 0.24 with the range pinned,
+  and below 0.01 in 32 % of the cells (inside its 0 to 0.3 range). The snowpack matches that of
+  the same recipe with these ranges pinned (regional mean peak 191 against 192 mm), as do the
+  WY1976–85 scores. The values fit this structure to flow; they are not measured melt properties.
+- Flood peaks: the two-year gradient flattens the five largest annual peaks by about 4 points
   of their ratio to observed on WY1989–2003 (`2_grid` against a one-year control). Both
   under-predict them.
-- **Single seed.** No rung has a second seed.
-- **`hybrid` on WY1976–85.** Level with `5_px` on the mean (0.860 against 0.859) and below it
+- Single seed: no rung has a second seed.
+- `hybrid` on WY1976–85: level with `5_px` on the mean (0.860 against 0.859) and below it
   at 7 of the 13 outlets, most at MRC (0.784 against 0.937). On WY2004–18 `5_px` is ahead of
   it at SHA, BND and MRC.
 
@@ -336,5 +338,5 @@ the time.
 - No warmed VIC run exists for a like-for-like comparison of the response.
 - A rain/snow partition that does not switch whole storm days (the candidate fix for ORO) has not
   been built.
-- **The Stanislaus' late summer is low**: dPL-CalSim's August–November flow at NML is 0.66 of
+- The Stanislaus' late summer is low: dPL-CalSim's August–November flow at NML is 0.66 of
   observed over its training years (SHA 0.92, ORO 0.97).

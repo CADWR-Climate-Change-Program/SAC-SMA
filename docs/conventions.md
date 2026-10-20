@@ -43,9 +43,8 @@ sacsma verify --quick    # the checks that need no model run
 
 Run `parity` after any change that touches the model or the path the data takes into it, and
 `learned` after any change to the torch physics or to `sacsma/sma_learned.py`: the two are
-changed together.
-Regenerated tables can differ from the tracked ones by about 1e-13 through floating-point
-order; compare before committing and do not commit noise.
+changed together. Regenerated tables can differ from the tracked ones by about 1e-13 through
+floating-point order; compare before committing and do not commit noise.
 
 `sacsma dpl fidelity` runs the archived GA optimum through the learned numerics (the fixed
 sub-steps the learned-parameter runs train with) and compares it with the reference model.
@@ -86,12 +85,12 @@ would change the depth the calibration was fitted on without correcting anything
 
 The effect, on the full record (`anchor_screened_vs_full.csv`):
 
-| Watershed | Volume bias, full → screened | KGE, full → screened |
+| Watershed | Volume bias, full to screened | KGE, full to screened |
 |---|---|---|
-| SHA | −8.9 % → +0.1 % | 0.869 → 0.939 |
-| SNS | −7.8 % → −0.8 % | 0.878 → 0.958 |
-| ChowchillaRiver | −14.3 % → −4.3 % | 0.790 → 0.921 |
-| BND | −1.9 % → +4.8 % | 0.958 → 0.887 |
+| SHA | −8.9 % to +0.1 % | 0.869 to 0.939 |
+| SNS | −7.8 % to −0.8 % | 0.878 to 0.958 |
+| ChowchillaRiver | −14.3 % to −4.3 % | 0.790 to 0.921 |
+| BND | −1.9 % to +4.8 % | 0.958 to 0.887 |
 
 BND gets worse because the units that were removed had been hiding an over-prediction in its
 foothill tributaries. The screened number is the honest one. The unscreened scores are kept
@@ -122,13 +121,13 @@ tables only.
 
 ## Names
 
-- **One set of names, the current one.** Pages, data, scripts, file names and code comments
-  use the same names. A rename is applied everywhere in one change.
-- **No record of old names is kept in the tree.** No alias tables, no notes on what something
-  used to be called. Earlier text is in git.
-- **The one exception is a run's `provenance/` folder.** Its files are evidence of what was
-  fixed before a run's held-out numbers were read, so they are never edited and keep the names
-  of their day. dPL-CalSim's (`models/dpl/multifamily/8_calsim/provenance/`) holds the pass and
+- Pages, data, scripts, file names and code comments use one set of names, the current one. A
+  rename is applied everywhere in one change.
+- The tree keeps no record of old names: no alias tables and no notes on what something used
+  to be called. Earlier text is in git.
+- The one exception is a run's `provenance/` folder. Its files are evidence of what was fixed
+  before a run's held-out numbers were read, so they are never edited and keep the names of
+  their day. dPL-CalSim's (`models/dpl/multifamily/8_calsim/provenance/`) holds the pass and
   fail levels of its WY1976–85 read, written before the read, and the check tables it was
   adopted on.
 
@@ -136,42 +135,40 @@ tables only.
 
 The layout and the source of every file are in [`data/README.md`](../data/README.md).
 
-- **Inputs, targets and references are kept apart.** Inputs are what a run reads to produce
-  flow. Targets are the flow records a model is fitted to. References are series that results
-  are only compared with.
-- **Targets and references come from outside this repository.** Nothing in the `sacsma`
-  package writes them; they change only through the script that sits in their folder.
-- **Hand-maintained tables are never overwritten by a script:** the CalSim3 crosswalk, the
-  tier-1 location table, the arc derivation table, the unimpaired-flow gauge table, the
-  mask of bad observation days, and the training screens and location masks of dPL-CalSim
+- Inputs, targets and references are kept apart. Inputs are what a run reads to produce flow.
+  Targets are the flow records a model is fitted to. References are series that results are
+  only compared with.
+- Targets and references come from outside this repository. Nothing in the `sacsma` package
+  writes them; they change only through the script that sits in their folder.
+- No script overwrites the hand-maintained tables: the CalSim3 crosswalk, the tier-1 location
+  table, the arc derivation table, the unimpaired-flow gauge table, the mask of bad observation
+  days, and the training screens and location masks of dPL-CalSim
   ([`data/README.md`](../data/README.md#files-kept-by-hand)).
-- **No evapotranspiration product enters a loss, a selection rule or a prior.** The ET and
-  snow products in the repository are references.
-- **No machine paths in tracked files.** Locations outside the repository are read from an
+- No evapotranspiration product enters a loss, a selection rule or a prior. The ET and snow
+  products in the repository are references.
+- Tracked files hold no machine paths. Locations outside the repository are read from an
   untracked local configuration file.
 
 ## Outputs
 
 The output tree is described in [`artifacts/README.md`](../artifacts/README.md).
 
-- **Every path under `data/` and `artifacts/` comes from `sacsma/paths.py`.** No path literal
-  in the code.
-- **Outputs are kept by role.** `product/` is what is delivered (one folder per application
-  and forcing), `models/` every model (the archived calibrations and what training made),
+- Every path under `data/` and `artifacts/` comes from `sacsma/paths.py`. The code holds no
+  path literal.
+- Outputs are kept by role. `product/` is what is delivered (one folder per application and
+  forcing), `models/` every model (the archived calibrations and what training made),
   `results/` what a command redraws from them, `_local/` what is not tracked.
-- **The archived calibrations are kept by hand.** The five `ga_optimum.csv` tables under
-  `models/` (`15cdec`, `15cdec_grid`, `callite/9unimp`, `callite/11obs`, `callite/12rim`) are
-  the study's GA optima; no command writes them, and `sacsma verify parity` checks them
-  against the MATLAB simulation.
-- **A run has one name in every part:** `models/dpl/<group>/<run>/`,
-  `results/dpl/<group>/<run>/`, `_local/runs/dpl/<group>/<run>/`. A command that takes a run
-  accepts any of the three.
-- **Runs are grouped by what they train on,** not by the domain their code runs on. Rungs 2 to 7
-  of the ladder run on the `multifamily` domain restricted to the 15 CDEC entities and sit in
-  the `15cdec` group.
-- **Tracked folders hold only tracked files.** A command writes there the files that are
-  tracked and everything else to the same path under `_local/`; `sacsma verify artifacts`
-  checks it.
+- The archived calibrations are kept by hand. The five `ga_optimum.csv` tables under `models/`
+  (`15cdec`, `15cdec_grid`, `callite/9unimp`, `callite/11obs`, `callite/12rim`) are the study's
+  GA optima; no command writes them, and `sacsma verify parity` checks them against the MATLAB
+  simulation.
+- A run has one name in every part: `models/dpl/<group>/<run>/`, `results/dpl/<group>/<run>/`,
+  `_local/runs/dpl/<group>/<run>/`. A command that takes a run accepts any of the three.
+- Runs are grouped by what they train on, not by the domain their code runs on. Rungs 2 to 7 of
+  the ladder run on the `multifamily` domain restricted to the 15 CDEC entities and sit in the
+  `15cdec` group.
+- Tracked folders hold only tracked files. A command writes there the files that are tracked
+  and everything else to the same path under `_local/`; `sacsma verify artifacts` checks it.
 
 ## Learned-parameter runs
 
@@ -183,7 +180,7 @@ The output tree is described in [`artifacts/README.md`](../artifacts/README.md).
 - Run folders keep the names they were made with; the files in a run's `provenance/` are the
   record of the run as it was made, including names and module paths of that time.
 - Runs are named for what they train on. The ladder is the exception: its rungs are named for
-  the one change each makes (`1_hru`, `2_grid`, `3_pt`, `4_noah`, `5_px`, `6_deep`, `7_aef`, `8_calsim`),
-  and every rung trains on one shared recipe ([Runs](runs.md#the-ladder)). dPL-CalSim is the
-  name the pages use for `multifamily/8_calsim`.
+  the one change each makes (`1_hru`, `2_grid`, `3_pt`, `4_noah`, `5_px`, `6_deep`, `7_aef`,
+  `8_calsim`), and every rung trains on one shared recipe ([Runs](runs.md#the-ladder)).
+  dPL-CalSim is the name the pages use for `multifamily/8_calsim`.
 - What is not adopted stays local (`artifacts/_local/`, `tmp/`) and is not committed.

@@ -1,6 +1,6 @@
 # Model equations
 
-The equations below are transcribed from the Python implementation, which reproduces the original MATLAB codes exactly ([Calibrated SAC-SMA](calibrated_sacsma.md)). Notation: $P$ precipitation (mm/day), $T$ daily mean air temperature (°C), $d$ day of year, $\varphi$ latitude (radians), $z$ HRU elevation (m). Deliberately preserved idiosyncrasies of the original implementation are marked ★.
+The equations below are transcribed from the Python implementation, which reproduces the original MATLAB codes exactly ([Calibrated SAC-SMA](calibrated_sacsma.md)). Notation: $P$ precipitation (mm/day), $T$ daily mean air temperature (°C), $d$ day of year, $\varphi$ latitude (radians), $z$ HRU elevation (m). Quirks of the original implementation kept on purpose are marked ★.
 
 ## 1. Hamon potential evapotranspiration
 
@@ -27,7 +27,7 @@ PET = K_{pet} \cdot 29.8\, D\, \frac{e_{sat}(T)}{T + 273.2} \;\text{mm/day}
 
 ## 2. Snow-17
 
-The implementation is the `_fix` variant of Snow-17 ([Anderson, 1973](references.md#anderson1973)): a **hard rain/snow split at `PXTEMP`** ★ (the transition-interval mixture of the standard model is intentionally disabled). States: ice water equivalent $W_i$, liquid water held $W_q$, antecedent temperature index $ATI$, heat deficit $D_f$. Time steps $\Delta t_t = \Delta t_p = 24$ h.
+The implementation is the `_fix` variant of Snow-17 ([Anderson, 1973](references.md#anderson1973)): a hard rain/snow split at `PXTEMP` ★ (the transition-interval mixture of the standard model is disabled on purpose). States: ice water equivalent $W_i$, liquid water held $W_q$, antecedent temperature index $ATI$, heat deficit $D_f$. Time steps $\Delta t_t = \Delta t_p = 24$ h.
 
 **Form and accumulation.**
 
@@ -180,11 +180,12 @@ KGE = 1 - \sqrt{(r - 1)^2 + (\alpha - 1)^2 + (\beta - 1)^2}, \qquad
 Nash–Sutcliffe efficiency $NSE = 1 - \sum(q_{sim} - q_{obs})^2 / \sum(q_{obs} - \bar{q}_{obs})^2$; percent bias $pbias = 100\,(\sum q_{sim} - \sum q_{obs})/\sum q_{obs}$. The seasonal-mismatch diagnostic is the total-variation distance between the normalized mean-monthly regimes. With $p_m$ and $q_m$ the simulated and observed fractions of mean-annual volume falling in calendar month $m$,
 
 ```math
-SM = 100 \times \tfrac{1}{2}\sum_{m=1}^{12}\left|p_m - q_m\right|
-\;=\; 100 \times \left(1 - \sum_{m=1}^{12}\min(p_m, q_m)\right),
+SM = \tfrac{1}{2}\sum_{m=1}^{12}\left|p_m - q_m\right|
+\;=\; 1 - \sum_{m=1}^{12}\min(p_m, q_m),
 ```
 
-the percentage of annual volume placed in the wrong month. It is reported as a percentage throughout.
+the fraction of annual volume placed in the wrong month, from 0 to 1
+(`sacsma.metrics.seasonal_mismatch`; the climatology study's figures show it in percent).
 
 ## 6. Parameter table
 

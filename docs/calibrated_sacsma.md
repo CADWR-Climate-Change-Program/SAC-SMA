@@ -22,8 +22,8 @@ take one value per landscape class, and one set of snow and routing parameters i
 across a calibration. In the archived 15-watershed table the 15 soil-moisture parameters are
 constant within each class of the `veg_class` column (12 classes) and `Kpet` within each class
 of `soil_class` (11 classes), which leaves about 200 free parameters for the whole domain.
-HRUs of the same class share parameters wherever they are, which is what lets the calibration
-transfer to ungauged places. The study's description ties the soil-moisture parameters to the
+HRUs of the same class share parameters wherever they are, so the calibration transfers to
+ungauged places. The study's description ties the soil-moisture parameters to the
 STATSGO soil class; the class codes in the delivered tables carry no legend, so the column
 names here are those of the files.
 
@@ -107,21 +107,22 @@ bias a perfect fit to the target would still show against CalSim3. They are left
 Maps and figures show skill at the level of the whole watershed: every catchment polygon
 carries its watershed's anchor score, never its own arc score, which stays in the tables. The
 footprint screening of SHA, BND, SNS and Chowchilla (only those four watersheds over-reach
-their CalSim3 catchment materially) is shown in `artifacts/results/footprints/`, with the HRU attribute
-maps; both are illustrations of the method and the inputs, not part of the scoring. The
+their CalSim3 catchment materially) is shown in `artifacts/results/footprints/`, with the HRU
+attribute maps; both illustrate the method and the inputs and are not part of the scoring. The
 unscreened scores and the difference are in `anchor_metrics_full.csv` and
 `anchor_screened_vs_full.csv`.
 
-More figures: [`artifacts/results/calsim3/figures/`](../artifacts/results/calsim3/figures/); the file tables are in
-[`artifacts/results/README.md`](../artifacts/results/README.md).
+More figures are in
+[`artifacts/results/calsim3/figures/`](../artifacts/results/calsim3/figures/); the file tables
+are in [`artifacts/results/README.md`](../artifacts/results/README.md).
 
 ## Sensitivity to the forcing
 
 **Temperature detrending.** `wgen_product_a` has the same precipitation and a warmed early
 record: over the Observed11 watersheds the daily mean is about 1.3 °C higher in the 1910s
 (2.1 °C in the daily minimum, 0.4 °C in the maximum), and the shift tapers to zero by the
-2010s. Under it the CalLite watersheds lose 1 to 7 % of their long-term runoff,
-about 3 % at the median, because Hamon PET rises with temperature. VIC, an energy-budget model,
+2010s. Under it the CalLite watersheds lose 1 to 7 % of their long-term runoff, about 3 % at
+the median, because Hamon PET rises with temperature. VIC, an energy-budget model,
 loses far less volume and shifts the melt season earlier instead. This is the main limitation
 of a temperature-only PET, and the reason the learned-parameter model moves to Priestley–Taylor
 PET.
@@ -129,12 +130,14 @@ PET.
 **Split and unsplit precipitation.** Under `historical_lto` the anchor skill over the full
 record changes little (median KGE 0.93 for both), but it moves between watersheds before
 WY1950: Trinity rises from 0.40 to 0.83, and the Fresno River falls from 0.86 to 0.48 and the
-Cosumnes from 0.96 to 0.81 (`artifacts/results/forcing/split_unsplit_anchor_skill.csv`). Some of the disagreement
-with CalSim3 before 1950 therefore comes from the precipitation data and not from the model.
+Cosumnes from 0.96 to 0.81 (`artifacts/results/forcing/split_unsplit_anchor_skill.csv`). Some
+of the disagreement with CalSim3 before 1950 therefore comes from the precipitation data and
+not from the model.
 
-Figures for both: [`artifacts/results/forcing/figures/`](../artifacts/results/forcing/figures/), each product against the
-Livneh baseline on both models, split at WY1950. The comparison simulates the daily runs of
-the three CalLite sets under each product when it needs them and caches them in
+Figures for both are in
+[`artifacts/results/forcing/figures/`](../artifacts/results/forcing/figures/): each product
+against the Livneh baseline on both models, split at WY1950. The comparison simulates the daily
+runs of the three CalLite sets under each product when it needs them and caches them in
 `artifacts/_local/cache/forcing/`.
 
 ## Products
@@ -143,13 +146,13 @@ The calibrated models deliver two products (`sacsma product`), each run from a c
 1915-01-01, the first day of the forcing record, and kept from October 1921, CalLite's first
 month, to September 2018:
 
-- **CalLite** ([`artifacts/product/callite/`](../artifacts/product/callite/README.md)): the
-  three inflow files the original study's MATLAB wrapper wrote for CalLite, in its formats and
-  units (`9unimp` and `11obs` in mm per month, `12rim` in CFS or TAF per CalLite node), under
+- CalLite ([`artifacts/product/callite/`](../artifacts/product/callite/README.md)): the three
+  inflow files the original study's MATLAB wrapper wrote for CalLite, in its formats and units
+  (`9unimp` and `11obs` in mm per month, `12rim` in CFS or TAF per CalLite node), under
   historical Livneh and WGEN Product A scenarios 1 and 12.
-- **15 CDEC** ([`artifacts/product/15cdec/`](../artifacts/product/15cdec/README.md)): the daily
-  flow of the 15 watersheds in mm and cfs, under historical Livneh only, the one forcing that
-  reaches the calibration's off-grid units.
+- 15 CDEC ([`artifacts/product/15cdec/`](../artifacts/product/15cdec/README.md)): the daily flow
+  of the 15 watersheds in mm and cfs, under historical Livneh only, the one forcing that reaches
+  the calibration's off-grid units.
 
 The parameters are the archived optima in [`artifacts/models/`](../artifacts/models/README.md).
 

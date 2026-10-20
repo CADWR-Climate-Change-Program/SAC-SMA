@@ -54,8 +54,8 @@ share the UF6 and UF13 sets. `ref_kind` is `anchor` (the rim system's `FLOW-UNIM
 
 ## Know before using
 
-- caution: `calsim_crosswalk.csv` drives everything downstream. Which sub-arcs are scored for a
-  calibration set is decided by it alone: an arc is scored for a set when `basin_<set>` assigns it and
+- caution: `calsim_crosswalk.csv` drives everything downstream. It alone decides which sub-arcs are
+  scored for a calibration set: an arc is scored for a set when `basin_<set>` assigns it and
   `in_calsim3` is true. There is no automatic coverage threshold. `catchments.COVERED_FRAC` only labels a
   catchment covered or partial for diagnostics, and `coverage_by_set.csv` of the cross-compare reports
   each set's `cov_frac` and `n_hru` per catchment: curate the crosswalk from those.
@@ -71,8 +71,8 @@ share the UF6 and UF13 sets. `ref_kind` is `anchor` (the rim system's `FLOW-UNIM
   of the calibration (`sacsma.model.run_basin`) or the calibration targets.
 - `12rim` has no column in the crosswalk and no area table: it is not in the cross-compare.
 - `SQ_MI` is an attribute, not the polygon's geometric area. It is the area the CalSim3 volumes and depths
-  are computed on; how far it departs from the geometry is in
-  [the registry README](../domains/multifamily/README.md).
+  are computed on; [the registry README](../domains/multifamily/README.md) says how far it departs from
+  the geometry.
 - `I_SRBB_VAL` has polygons and is simulated, but has no CalSim3 series to score against. `I_RUB002` has a
   series but no polygon in the merged layer.
 - The package recomputes the screened footprint on each call; the tracked CSV is the record of the result.

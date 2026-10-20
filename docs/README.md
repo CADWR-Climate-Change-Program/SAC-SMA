@@ -1,6 +1,7 @@
 # Guide
 
-Eleven short pages. Read the first four in order for the whole picture; the rest are reference.
+The guide has eleven short pages. Read the first four in order for the whole picture; the rest
+are reference.
 
 | Page | What it answers |
 |---|---|
@@ -36,8 +37,8 @@ Beside the guide:
 
 - The reference model and the four calibrated sets are complete and unchanged.
 - The comparison of the calibrated sets with CalSim3 and VIC is complete.
-- The benchmark of three models against observed CDEC full natural flow is in place; what to
-  keep in mind when reading it is in [Benchmark](benchmark.md).
+- The benchmark of three models against observed CDEC full natural flow is in place;
+  [Benchmark](benchmark.md) says what to keep in mind when reading it.
 - The learned-parameter runs form one ladder, trained from scratch on one recipe with one
   change per rung, from the GA parameters to dPL-CalSim ([Runs](runs.md#the-ladder)).
 - dPL-CalSim (`8_calsim`) is the current learned-parameter model and its rim-inflow product is

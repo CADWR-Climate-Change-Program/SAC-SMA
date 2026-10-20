@@ -6,9 +6,8 @@ monthly duration). Role: target. `gage_15cdec.csv` is the daily calibration targ
 15cdec domain (pooled calibration, WY1989 to 2003) and of the `cdec_daily` family of the
 learned-parameter (dPL) models. The other daily files are pulls of daily FNF for stations
 outside those 15 watersheds. `fnf_monthly.csv` is the monthly FNF, the reconciled month-end
-volume, at the 17 `cdec_daily` sites of the learned-parameter registry (`sacsma benchmark` scores
-13 of them). Every series is CDEC's own
-computation.
+volume, at the 17 `cdec_daily` sites of the learned-parameter registry (`sacsma benchmark`
+scores 12 of them, all but NML on this file). Every series is CDEC's own computation.
 
 ## Files
 
@@ -91,9 +90,9 @@ servlet), and no local inputs:
 The monthly pull is one call to the CSV servlet (`SensorNums=65`, `dur_code=M`) for the 16
 stations of `MONTHLY` in the script. Its checks read `gage_15cdec.csv`, `fnf_daily.csv`,
 `fnf_daily_mask.csv`, `data/inputs/domains/15cdec/basin_area.csv` and, for the identity check,
-`data/targets/callite/fnf_11obs_monthly.csv`. How the stations were found: CDEC's station
-search for sensor 65 at monthly duration lists 80 stations, with 14 of the 17 daily stations
-but not CLE, NML or NHG. The station pages of those three list only daily sensor-8 FNF, and the
+`data/targets/callite/fnf_11obs_monthly.csv`. The stations were found with CDEC's station
+search: for sensor 65 at monthly duration it lists 80 stations, with 14 of the 17 daily
+stations but not CLE, NML or NHG. The station pages of those three list only daily sensor-8 FNF, and the
 servlet returns no rows for them. TNL and SNS are in the search, each with sensor 65 from
 before 1922. The same search restricted to the Calaveras River basin returns no station (the
 basin has 21, NHG among them). Two pulls on 2026-10-06 were byte-identical.
@@ -156,9 +155,10 @@ and WHI have none. A station added there comes with its own depth area.
   Nine sites agree within 1 % in volume and ORO within 1.2 %. Where the records part (the
   script also prints the ratio by season: December to March, April to July, August to
   November):
-  - NML (SNS) +9.2 %, r 0.984: not the same point. SNS drains 10.7 % more area than NML, and
-    NML's daily series is USBR's New Melones computation. The ratio moves with the season
-    (April to July 1.173, August to November 0.471), so it is not an area factor alone.
+  - NML (SNS) +9.2 %, r 0.984: the two stations are not the same point. SNS drains 10.7 % more
+    area than NML, and NML's daily series is USBR's New Melones computation. The ratio moves
+    with the season (April to July 1.173, August to November 0.471), so it is not an area
+    factor alone.
   - YRS +5.9 % and CSN +6.0 %: the daily product misses water in the wet and the melt months
     (YRS 1.069 and 1.066, CSN 1.063 and 1.041). It is not an area or unit effect: both sides
     are volumes of CDEC's own series (CSN's daily is CDEC's cfs; YRS's daily depth goes back
@@ -167,7 +167,7 @@ and WHI have none. A station added there comes with its own depth area.
     established here.
   - MRC +3.5 % and MKM +2.8 %: smaller deficits of the same kind. MRC's is in every season,
     largest in the low-flow months (1.014, 1.033, 1.274); MKM's is in the melt months (April
-    to July 1.043). Not explained here.
+    to July 1.043). Neither is explained here.
   - CLE (TNL) +1.6 %: the footprint. TNL drains 3.8 % more area, the reach from Trinity Dam
     to Lewiston. The CLE row of the table above (0.988 against the 11obs TNL target, over
     other months) shows the same difference.
@@ -203,8 +203,8 @@ and WHI have none. A station added there comes with its own depth area.
 - caution: the mask does not fix the upward bias of low-flow targets that comes from dropping
   negatives (August to September, stored against raw: CLE +40 %, FOL +48 %, NHG +97 %).
 - CLE: the FNF is computed at Trinity Dam (692 mi2), while the monthly target basin TNL is
-  defined at Lewiston, about 7 mi downstream (719 mi2); hence the ratio 0.988. Harmless in
-  training, where each series is a depth over its own footprint.
+  defined at Lewiston, about 7 mi downstream (719 mi2); hence the ratio 0.988. The difference
+  is harmless in training, where each series is a depth over its own footprint.
 - caution: CSN's daily FNF misses about 6% of the river's water (about 19,400 AF/yr). It is
   not a footprint or unit issue: CDEC's own monthly FNF (sensor 65) for the station matches
   the DWR unimpaired series within about 1%, so the deficit is specific to the daily

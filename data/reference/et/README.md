@@ -98,16 +98,16 @@ mean over the cell rectangle (cos-latitude row weights). All three scripts take 
   cell means.
 - Earth Engine assets drift. A new export will not reproduce these files exactly; `meta`
   records the export date, the collection and band, and the scale.
-- Reitz annual, what it is: a five-equation BMA ensemble (Schreiber, Budyko, Fu-Zhang with
-  Hamon PET, Reitz-2017, Brutsaert-Stricker) whose weights were trained on annual
+- Reitz annual is a five-equation BMA ensemble (Schreiber, Budyko, Fu-Zhang with Hamon
+  PET, Reitz-2017, Brutsaert-Stricker) whose weights were trained on annual
   `P − Q + ΔS_gw` at 1,858 Gages-II watersheds and spread by random forest. It is informed by
   the water balance, not closed on it, and is driven by PRISM.
 - Caution (Reitz annual): irrigation supply enters only from WY1980. The 1,930 cells that are
   only in the CalSim3 footprint (valley) step +104 % at 1980 (257 to 523 mm/yr) while the 2,480
   modeling-domain cells move +3 %. Never difference across 1980 on the valley floor.
 - Caution (Reitz): 18 of the 69 gauges of `data/targets/usgs/` are in its training set.
-- Reitz monthly, what it is: the month-to-month pattern of one equation (Fu-Zhang with Hamon
-  PET on same-month precipitation, no storage carry-over) rescaled to the annual ensemble. It
+- Reitz monthly is the month-to-month pattern of one equation (Fu-Zhang with Hamon PET on
+  same-month precipitation, no storage carry-over), rescaled to the annual ensemble. It
   carries no observed seasonal signal. Values are the rasters' mm/day × days in month (29-day
   leap Februaries). Only the three 1990–2018 monthly zips were fetched; the nine earlier ones,
   back to October 1895, were not. WY1990 is partial (January to September).

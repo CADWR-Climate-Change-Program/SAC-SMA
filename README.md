@@ -1,20 +1,20 @@
 # SAC-SMA for California water systems
 
-A distributed, daily SAC-SMA model of California watersheds in Python: PET → Snow-17 →
-Sacramento Soil Moisture Accounting → Lohmann routing for each modeling unit, area-weighted to
-the watershed outlet. The model and its original genetic algorithm-based calibrations 
-are by Sungwook Wi and Scott Steinschneider (Cornell / UMass Amherst) for California DWR.
+A distributed, daily SAC-SMA model of California watersheds in Python. Each modeling unit runs
+PET, Snow-17, the Sacramento Soil Moisture Accounting model and Lohmann routing, and the units are
+area-weighted to the watershed outlet. Sungwook Wi and Scott Steinschneider (Cornell / UMass
+Amherst) developed the model and its original genetic-algorithm calibrations for California DWR.
 
 | Model | Description | Doc |
 |---|---|---|
-| **SAC-SMA** | The reference implementation, which reproduces the original MATLAB simulations, and the CPU engine that runs every parameter field. | [The model](docs/model.md) |
-| **SAC-SMA GA-Calibrated** | The original genetic-algorithm calibrations of four watershed sets, compared with CalSim3's historical inflows. | [Calibrated SAC-SMA](docs/calibrated_sacsma.md) |
-| **SAC-SMA dPL-Calibrated** | Parameters from a neural network trained on flow records, in PyTorch. | [Learned parameters](docs/learned_parameters.md) |
+| SAC-SMA | The reference implementation, which reproduces the original MATLAB simulations, and the CPU engine that runs every parameter field. | [The model](docs/model.md) |
+| SAC-SMA GA-Calibrated | The original genetic-algorithm calibrations of four watershed sets, compared with CalSim3's historical inflows. | [Calibrated SAC-SMA](docs/calibrated_sacsma.md) |
+| SAC-SMA dPL-Calibrated | Parameters from a neural network trained on flow records, in PyTorch. | [Learned parameters](docs/learned_parameters.md) |
 
-The CalSim3 rim-inflow product of the learned-parameter model dPL-CalSim:
-monthly flow on the 196 rim arcs, WY1916–2018, under the historical weather and two WGEN
-sequences. On WY1976–85, held out of training, its median monthly KGE against CalSim3 is 0.809.
-See [CalSim3 rim inflows](docs/calsim3_rim_inflows.md).
+The learned-parameter model dPL-CalSim makes the CalSim3 rim-inflow product: monthly flow on the
+196 rim arcs for WY1916–2018, under the historical weather and two WGEN sequences. On WY1976–85,
+held out of training, its median monthly KGE against CalSim3 is 0.809
+([CalSim3 rim inflows](docs/calsim3_rim_inflows.md)).
 
 The guide starts at [`docs/README.md`](docs/README.md).
 
@@ -29,14 +29,15 @@ mamba activate sacsma
 pip install -e .
 ```
 
-`environment.yml` covers the model and the learned-parameter code (PyTorch with CUDA). The few
-scripts that read rasters or use Earth Engine need `environment-gis.yml`; see
-[Reproduce](docs/reproduce.md).
+`environment.yml` covers the model and the learned-parameter code (PyTorch with CUDA). The five
+scripts that read rasters or pull from Earth Engine need `environment-gis.yml`
+([Reproduce](docs/reproduce.md)).
 
 ## Run
 
-The model runs on the CPU; only training needs a CUDA GPU. Every command writes under
-`artifacts/`, and `--help` on a command lists its options.
+Training and the climatology, hybrids and forcing studies default to a CUDA GPU (`--device cpu`
+runs them on the CPU); everything else runs on the CPU. Every command writes under `artifacts/`,
+and `--help` lists a command's options.
 
 ### GA-Calibrated
 
@@ -49,9 +50,9 @@ One archived calibration per watershed set, chosen with `--domain`:
 | `11obs` | `AMF BLB BND FTO MRC SHA SJF SNS TLG TNL YRS` |
 | `12rim` | `DPR_I FOL_I LK_MC MILLE N_HOG N_MEL OROVI PRD_C SHAST SMART TRINI WKYTN` |
 
-The forcing is historical (unsplit) Livneh (non-temperature-detrended). 
-The three CalLite sets (`9unimp`, `11obs`, `12rim`) also take `--forcing wgen_product_a`, 
-`wgen_product_a_s12` or `historical_lto`.
+The sets run on the historical Livneh forcing, unsplit and not detrended. The three CalLite sets
+(`9unimp`, `11obs`, `12rim`) also take `--forcing wgen_product_a`, `wgen_product_a_s12` or
+`historical_lto`.
 
 ```bash
 # daily flow (mm/day)
@@ -77,15 +78,17 @@ flow = run_basins(domain="9unimp")   # a whole set in one run: date x watershed,
 
 ### dPL-Calibrated
 
-The trained runs are in `artifacts/models/dpl/`, grouped by what they train on. The
-learned-parameter runs form [the ladder](docs/runs.md#the-ladder): one recipe, one change per
-rung, from the GA parameters to dPL-CalSim. `15cdec/` holds the
-rungs trained on the 15 watersheds (`1_hru`, `2_grid`, `3_pt`, `4_noah`, `5_px`, `6_deep`, `7_aef`) and
-the LSTM models (`hybrid`, `hybrid_dt`, and `lstm` without physics; three seeds each);
-`multifamily/` holds dPL-CalSim (`8_calsim`), trained on 159 sites of four kinds: USGS gauges,
-CDEC records, unimpaired-flow subbasins and CalSim3 arcs. `evaluate` takes a run's checkpoint,
-the CalSim3 tools any of its folders; scores and figures go to the run's folder under
-`artifacts/results/dpl/`.
+The trained runs are in `artifacts/models/dpl/`, grouped by what they train on. Their rungs form
+[the ladder](docs/runs.md#the-ladder): one recipe, one change per rung, from the GA parameters to
+dPL-CalSim.
+
+| Folder | Runs |
+|---|---|
+| `15cdec/` | The rungs trained on the 15 watersheds (`1_hru`, `2_grid`, `3_pt`, `4_noah`, `5_px`, `6_deep`, `7_aef`) and the LSTM models (`hybrid`, `hybrid_dt`, and `lstm` without physics; three seeds each) |
+| `multifamily/` | dPL-CalSim (`8_calsim`), trained on 159 sites of four kinds: USGS gauges, CDEC records, unimpaired-flow subbasins and CalSim3 arcs |
+
+`evaluate` takes a run's checkpoint and the CalSim3 commands take the run's folder. Scores and
+figures go to `artifacts/results/dpl/<group>/<run>/`.
 
 ```bash
 # a 15-watershed run: parameter tables, then skill vs the gauges
@@ -104,8 +107,8 @@ sacsma dpl study hybrids          # also: climatology, forcing, ladder
 sacsma dpl fidelity               # the learned numerics vs the reference model -> artifacts/results/dpl/fidelity/
 ```
 
-Training: `sacsma dpl train --help`, [Learned parameters](docs/learned_parameters.md), and the
-command of every run in [Reproduce](docs/reproduce.md).
+To train a run, see `sacsma dpl train --help` and [Learned parameters](docs/learned_parameters.md);
+[Reproduce](docs/reproduce.md) has the command of every run.
 
 ### Check
 
@@ -127,5 +130,4 @@ The rules a change has to respect are in [Conventions](docs/conventions.md).
 
 ## License
 
-MIT (see [`LICENSE`](LICENSE)). SAC-SMA model and calibrations by Wi & Steinschneider for
-California DWR.
+MIT ([`LICENSE`](LICENSE)).

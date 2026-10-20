@@ -7,17 +7,17 @@ units' routed runoff. The model and its original calibrations are by Wi and Stei
 
 ## The chain
 
-1. **Potential evapotranspiration.** Hamon PET ([Hamon, 1961](references.md#hamon1961)) scaled
+1. Potential evapotranspiration is Hamon PET ([Hamon, 1961](references.md#hamon1961)) scaled
    by a coefficient `Kpet`, with daylength from the CBM model
    ([Forsythe et al., 1995](references.md#forsythe1995)).
-2. **Snow-17.** Snow accumulation and melt
+2. Snow-17 accumulates and melts snow
    ([Anderson, 1973](references.md#anderson1973); [2006](references.md#anderson2006)), with a
    hard rain/snow split at the temperature `PXTEMP`.
-3. **SAC-SMA.** Soil-moisture accounting
+3. SAC-SMA does the soil-moisture accounting
    ([Burnash et al., 1973](references.md#burnash1973); [Burnash, 1995](references.md#burnash1995)):
-   16 parameters, six storages, five evapotranspiration terms. Rain plus melt from Snow-17 is
-   its input.
-4. **Lohmann routing.** A gamma hillslope unit hydrograph, then a linearized Saint-Venant
+   16 parameters, six storages, five evapotranspiration terms. Its input is rain plus melt from
+   Snow-17.
+4. Lohmann routing applies a gamma hillslope unit hydrograph, then a linearized Saint-Venant
    channel response along the flow path to the outlet
    ([Lohmann et al., 1996](references.md#lohmann1996); [1998](references.md#lohmann1998)).
    Baseflow skips the hillslope step.
@@ -99,10 +99,10 @@ day and its own forms of the percolation and storage clamps, which differ from t
 over-full states. Run with the archived GA optimum and ten sub-steps, these numerics keep a
 daily KGE of 0.98 or more against the reference model on all 15 CDEC watersheds and move the
 calibration and validation KGE against the gauges by about 0.01 at most; with 1, 2, 5 or 20
-sub-steps they depart further (`artifacts/results/dpl/fidelity/fidelity_benchmark.csv`).
-It adds
-three options the reference chain does not have: Priestley–Taylor PET, a soil-moisture-limited
-ET on observed vegetation ("Noah-lite"), and a learned rain/snow threshold.
+sub-steps they depart further (`artifacts/results/dpl/fidelity/fidelity_benchmark.csv`). It
+adds three options the reference chain does not have: Priestley–Taylor PET, a
+soil-moisture-limited ET on observed vegetation ("Noah-lite"), and a learned rain/snow
+threshold.
 
 **The engine** (`sacsma/engine.py`) runs every parameter field that is not being trained, on the
 CPU: the GA optima through the reference model, a trained field through the step it was trained

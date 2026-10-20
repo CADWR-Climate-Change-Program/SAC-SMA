@@ -35,21 +35,22 @@ pins (`MBASE`, `NMF`, `Velo`, `zperc`; [Model equations](equations.md#6-paramete
 
 It is trained in two stages:
 
-1. **The warm start:** that recipe without the deep store, from scratch, 120 epochs. Its network
-   is kept in the run's provenance (`provenance/warm_start.pt`).
-2. **The fine-tune:** 45 epochs from the warm start at a lower learning rate, with four additions:
-   - **The deep store,** its head new at the start.
-   - **Cleaned targets.** The days and months that an audit of the training records found
+1. The warm start trains that recipe without the deep store, from scratch, for 120 epochs. Its
+   network is kept in the run's provenance (`provenance/warm_start.pt`).
+2. The fine-tune runs 45 epochs from the warm start at a lower learning rate, with four
+   additions:
+   - The deep store, with its head new at the start.
+   - Cleaned targets. The days and months that an audit of the training records found
      unreliable are left out: an unreliable dry season, the partners of CDEC's negative days,
      impaired summers, records that a USGS gauge at the same place already trains, and forcing
      eras the Livneh precipitation gets wrong. The tables are
      [the CDEC screens](../data/targets/cdec/README.md#the-training-screens-of-dpl-calsim) and
      [the location masks](../data/targets/usgs/README.md#the-location-mask). The Kings River
      gauge trains on its record with the powerhouse flow added, and two arcs on a corrected depth.
-   - **CDEC's monthly full natural flow** at the CDEC sites, from WY1950, beside the daily
+   - CDEC's monthly full natural flow at the CDEC sites, from WY1950, beside the daily
      records. It covers the decades before the daily records and the late summers where the daily
      record is screened out. The CDEC family's weight is split evenly between the two.
-   - **A dry-season term:** for each entity and scored water year,
+   - A dry-season term: for each entity and scored water year,
      $\lambda\,\big(\ln(V_{sim} + \epsilon) - \ln(V_{obs} + \epsilon)\big)^2$, with $V$ the
      July–September volume, $\epsilon$ a tenth of the entity's median observed July–September
      volume, and $\lambda = 0.113$, about a tenth of the objective at the warm start's field.
@@ -89,8 +90,8 @@ tables (`metrics_holdout.csv`, `tier1/tier1_metrics.csv`, `tier2/tier2_metrics.c
 The means, with the 49 USGS gauges (daily), are in [Runs](runs.md#current-model-and-product).
 
 The whole-watershed flows are good. Single arcs inside a multi-arc watershed are weaker,
-because the model's split of a watershed's flow among its arcs is poorer than the total. That
-is what the product corrects.
+because the model's split of a watershed's flow among its arcs is poorer than the total. The
+product corrects that split.
 
 ## The product
 
@@ -125,8 +126,8 @@ Skill on the held-out decade, median monthly KGE against CalSim3
 Over all 196 arcs the product's mean is 0.73 and its 10th percentile 0.48; 6 arcs are below
 zero (14 for the model alone). At the five validation climate points the share arcs' response
 differs from the model's by at most 0.32 % in volume and 0.73 points in the April–July share at
-the 90th percentile (`artifacts/product/calsim3/response_gate.csv`), inside the limits set beforehand
-(median 1, 90th percentile 3).
+the 90th percentile (`artifacts/product/calsim3/response_gate.csv`), inside the limits set
+beforehand (median 1, 90th percentile 3).
 
 **One series per forcing.** Each series is one continuous run over the whole forcing record:
 the spin-up loops WY1916–1925 twenty times from the cold start, the run goes on from October
@@ -161,16 +162,16 @@ read, are listed in [Runs](runs.md#tried-and-not-adopted).
 
 ## Known costs
 
-- **Unimpaired-flow subbasins.** Their mean KGE is 0.88 on the held-out WY1976–85, lowest at
+- The unimpaired-flow subbasins have a mean KGE of 0.88 on the held-out WY1976–85, lowest at
   Chowchilla (0.76) and Putah Creek (0.81). The cleaning leaves 5 of the 9 to train on (the
   whole records of Cache Creek, Red Bluff, the Cosumnes and the Fresno are masked); those 5
   score 0.94 over their training years (back to WY1950) and 0.88 on their DWR record without
   the held-out WY1985 (WY1986–2014, `kge_reg` in `metrics.csv`).
-- **MKM and TLG in the [benchmark](benchmark.md).** On WGEN Product A scenario 1 against
-  CDEC's monthly full natural flow, WY1991–2018, the median KGE over the 12 sites is 0.94; the
-  lowest are MKM (0.86, volume −9 %), TLG (0.87, −6 %) and NML (0.87, +5 %).
-- **One seed.** dPL-CalSim is a single seed; no rung of the ladder has a second.
-- **The start is remembered for years.** The deep store drains over 8 to 9 years. A run
+- MKM and TLG in the [benchmark](benchmark.md): on WGEN Product A scenario 1 against CDEC's
+  monthly full natural flow, WY1991–2018, the median KGE over the 12 sites is 0.94; the lowest
+  are MKM (0.86, volume −9 %), TLG (0.87, −6 %) and NML (0.87, +5 %).
+- dPL-CalSim is a single seed; no rung of the ladder has a second.
+- The model remembers its start for years: the deep store drains over 8 to 9 years. A run
   started in WY1950 (with the scoring spin-up, WY1950–59 looped) instead of WY1916 carries
   8.7 % more water over all arcs in WY1950, 1.2 to 1.7 % in WY1951–55 and less than 1 % from
   WY1956. The median arc differs by less than 0.1 % from WY1978 and less than 0.01 % from
@@ -244,7 +245,7 @@ sacsma verify product                                               # apply repe
 
 `<run>` is any of the run's folders (`artifacts/models/dpl/multifamily/8_calsim`,
 `artifacts/results/dpl/multifamily/8_calsim` or its folder under `artifacts/_local/runs/`). The
-full sequence, from the data to the product, is in
-[Reproduce](reproduce.md). The files each command writes are listed in
+full sequence, from the data to the product, is in [Reproduce](reproduce.md). The files each
+command writes are listed in
 [`artifacts/results/dpl/README.md`](../artifacts/results/dpl/README.md) and
 [`artifacts/product/calsim3/README.md`](../artifacts/product/calsim3/README.md).
