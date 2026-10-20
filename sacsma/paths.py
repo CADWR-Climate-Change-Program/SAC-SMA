@@ -451,7 +451,8 @@ def product(artifacts_dir="artifacts", forcing: str | None = None, app: str = "c
 
 def local(artifacts_dir="artifacts", name: str = "") -> Path:
     """A folder under the untracked part: ``cache/<what>``, ``testing/<run>``, ``eval``,
-    ``product/calsim3/<forcing>`` (the large files of a product pass)."""
+    ``product/calsim3/<forcing>/<run>`` (the large files of a product pass), ``benchmark/<run>``
+    (the benchmark of a run other than dPL-CalSim)."""
     root = _art(artifacts_dir) / "_local"
     return root / name if name else root
 

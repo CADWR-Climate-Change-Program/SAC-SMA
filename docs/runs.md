@@ -17,19 +17,19 @@ Median monthly KGE against CalSim3 on the held-out water years 1976–85:
 
 | Arcs | dPL-CalSim | Product |
 |---|---|---|
-| 139 share arcs | 0.708 | 0.843 |
+| 139 share arcs | 0.708 | 0.842 |
 | 50 non-anchor arcs | 0.582 | 0.582 |
 | 7 single-arc systems | 0.909 | 0.909 |
-| All 196 | 0.685 | 0.810 |
+| All 196 | 0.685 | 0.809 |
 
 On WY1922–1949, before any training year:
 
 | Arcs | dPL-CalSim | Product |
 |---|---|---|
-| 139 share arcs | 0.646 | 0.775 |
+| 139 share arcs | 0.646 | 0.776 |
 | 50 non-anchor arcs | 0.415 | 0.415 |
 | 7 single-arc systems | 0.785 | 0.785 |
-| All 196 | 0.633 | 0.760 |
+| All 196 | 0.633 | 0.762 |
 
 Source: `artifacts/product/calsim3/historical_livneh_unsplit/product_metrics.csv`; the fit's own scores,
 on its WY1950–2015 pass, are in `artifacts/product/calsim3/product_info.json`. `sacsma verify product`

@@ -110,8 +110,19 @@ Shasta has the wrong sign. The network kept is the one with the best training-pe
 on the CPU after every epoch.
 
 **Scoring.** A run is scored as it was trained: its field runs on the engine with the numerics
-and the basin weights of its training, over the whole record from the cold start
-(`sacsma dpl evaluate <checkpoint>`). Test years are never read in training or selection.
+and the basin weights of its training (`sacsma dpl evaluate <checkpoint>`). Test years are
+never read in training or selection. Each use starts the stores its own way:
+
+- the trainer and its selection: cold, ten water years before the training window
+  (`--spinup-start`), with the deep store then raised to its steady state;
+- the evaluator of the 15-CDEC runs: cold, at the start of the record (October 1915);
+- the evaluator of the multi-family runs (`metrics.csv` and the held-out reads): WY1950–59
+  looped twenty times from cold;
+- the tier-2 passes and the product: WY1916–25 looped twenty times;
+- the response studies: cold in October 1915, read from WY1951.
+
+The deep store keeps its start for years, so with it these differ a little more than
+without ([CalSim3 rim inflows](calsim3_rim_inflows.md#known-costs)).
 
 ## Results on the 15 CDEC watersheds
 

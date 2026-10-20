@@ -322,8 +322,8 @@ def simulate(field: Field, forcing, start, end, weights: np.ndarray, *, spinup: 
     K, R = W.shape
     routed_out = set(outputs) - {"runoff", "gwc"}
     names = (*OUTPUTS, "deep")          # the routed outputs, in _route's order
-    nout = (len(names) if diag else len(OUTPUTS) if parts else
-            (3 if routed_out - {"flow"} else len(routed_out)))
+    # _route fills the first nout of them: route up to the last one asked for
+    nout = max((names.index(o) + 1 for o in routed_out), default=0)
     res: dict = {o: np.zeros((K, T)) for o in names[:nout]}
     runoff = np.zeros((K, T)) if "runoff" in outputs else None
     gwc = np.zeros((K, T)) if "gwc" in outputs else None
@@ -361,7 +361,9 @@ def simulate(field: Field, forcing, start, end, weights: np.ndarray, *, spinup: 
             runoff += W[:, rows] @ q
         if gwc is not None:
             g = out[loc, 7, N_HIST:]
-            gwc += W[:, rows] @ np.where(np.isnan(g).any(axis=1)[:, None], 0.0, g)
+            failed = np.isnan(g).any(axis=1)
+            bad[rows] |= failed              # (the flow may not be routed)
+            gwc += W[:, rows] @ np.where(failed[:, None], 0.0, g)
         if not nout:
             continue
         routed = np.empty((len(rows), nout, T))

@@ -13,7 +13,7 @@ are by Sungwook Wi and Scott Steinschneider (Cornell / UMass Amherst) for Califo
 
 The CalSim3 rim-inflow product of the learned-parameter model dPL-CalSim:
 monthly flow on the 196 rim arcs, WY1916–2018, under the historical weather and two WGEN
-sequences. On WY1976–85, held out of training, its median monthly KGE against CalSim3 is 0.810.
+sequences. On WY1976–85, held out of training, its median monthly KGE against CalSim3 is 0.809.
 See [CalSim3 rim inflows](docs/calsim3_rim_inflows.md).
 
 The guide starts at [`docs/README.md`](docs/README.md).

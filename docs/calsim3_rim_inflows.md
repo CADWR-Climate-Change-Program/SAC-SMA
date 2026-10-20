@@ -138,7 +138,7 @@ historical series scores (median monthly KGE):
 
 | Arcs | dPL-CalSim | Product |
 |---|---|---|
-| 139 share arcs | 0.65 | **0.77** |
+| 139 share arcs | 0.65 | **0.78** |
 | 50 non-anchor arcs | 0.42 | 0.42 |
 | 7 single-arc systems | 0.79 | 0.79 |
 | All 196 | 0.63 | **0.76** |
@@ -151,7 +151,7 @@ volume within 1 %: the response the comparison of the calibrated sets finds in V
 Hamon-PET calibrations, which lose about 3 % ([Calibrated SAC-SMA](calibrated_sacsma.md)). On
 the share arcs the product keeps the model's own response. From scenario 1 to scenario 12 the
 model's arc volume changes by −0.3 % and its April–July share by −7.8 points at the median;
-the product differs from that by 0.05 % and 0.18 points at the median and by 0.13 % and 0.60
+the product differs from that by 0.05 % and 0.20 points at the median and by 0.13 % and 0.59
 points at the 90th percentile, within half the limits set for the fit's validation points.
 
 ## What was tried and not adopted

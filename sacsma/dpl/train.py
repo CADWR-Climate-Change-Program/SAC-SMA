@@ -156,6 +156,14 @@ def _stream_nograd(
     return (torch.cat(outs, dim=1) if collect else None), state
 
 
+def _steady_fill(gwc: torch.Tensor, kdeep: torch.Tensor, days: int) -> torch.Tensor:
+    """The deep store's content after a spin-up of ``days`` from empty, brought to its steady
+    state as the engine's window spin-up does (:mod:`sacsma.engine`; ``verify learned``
+    compares the two): a constant feed fills the store to ``1 - (1 - kdeep)**days`` of its
+    level."""
+    return gwc / -torch.expm1(days * torch.log1p(-kdeep))
+
+
 def _relative_carry(state: PipelineState, params: dict[str, torch.Tensor]) -> PipelineState:
     """The state carried into a TBPTT chunk with each SAC content ``c`` rewritten as
     ``c * (cap / cap.detach())``: the value is unchanged (x / x == 1 exactly for the
@@ -895,10 +903,8 @@ def train(
         st0 = initial_state(dom.n_hru, dev, dtype)
         _, st = _stream_nograd(dom, cfg, pe, ue, spin_t0, calobs.t0, st0, graph=nograd_g)
         if "kdeep" in pe and calobs.t0 > spin_t0:
-            # the deep store at its steady state (as the engine's window spin-up): from
-            # empty, a constant feed fills it to 1 - (1 - kdeep)^days of its level
-            fill = -torch.expm1((calobs.t0 - spin_t0) * torch.log1p(-pe["kdeep"]))
-            st.sac.gwc = st.sac.gwc / fill
+            # the deep store at its steady state (as the engine's window spin-up)
+            st.sac.gwc = _steady_fill(st.sac.gwc, pe["kdeep"], calobs.t0 - spin_t0)
         pooled = float("nan")
         if do_eval:
             sim, _ = _stream_nograd(dom, cfg, pe, ue, calobs.t0, calobs.t1, st,

@@ -344,15 +344,17 @@ def _tidy(wide: pd.DataFrame, model: str, months: pd.DatetimeIndex) -> pd.DataFr
 
 def monthly_flows(forcing: str = FORCING, data_dir: str | Path = "data",
                   artifacts_dir: str | Path = "artifacts", *, wy=WY, models=MODELS,
-                  log=print) -> pd.DataFrame:
+                  run: str = DPL_RUN, log=print) -> pd.DataFrame:
     """The monthly flow of ``models`` at the sites on ``forcing`` (``obs`` is the same for every
     forcing): tidy ``[date, site, model, flow_taf]``, every month end of water years
     ``wy[0]..wy[1]`` x site x model, NaN where a model has no value (a month of observations
-    with an invalid day, a site a model does not cover).  Sites north to south."""
+    with an invalid day, a site a model does not cover).  Sites north to south.  ``dpl`` is
+    the learned-parameter run ``run``."""
     months = _water_months(wy)
     make = {
         "obs": lambda: observed_monthly(data_dir),
-        "dpl": lambda: _taf(_monthly_sum(dpl_daily(forcing, data_dir, artifacts_dir)), data_dir),
+        "dpl": lambda: _taf(_monthly_sum(dpl_daily(forcing, data_dir, artifacts_dir, run)),
+                            data_dir),
         "vic_calsim3": lambda: vic_monthly(forcing, data_dir),
     }
     parts = []

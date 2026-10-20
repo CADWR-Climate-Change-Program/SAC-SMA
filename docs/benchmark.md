@@ -81,3 +81,7 @@ KGE of 0.90. The workbook routing is kept beside it for comparison.
 ```bash
 sacsma benchmark      # -> artifacts/results/benchmark/; about 2 min on CPU, 10 s once cached
 ```
+
+`--run <run>` puts another learned-parameter run in dPL-CalSim's place (a run name, run folder
+or checkpoint) and writes its tables, without the figures, to
+`artifacts/_local/benchmark/<run>/`.

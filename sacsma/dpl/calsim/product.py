@@ -210,12 +210,19 @@ def find_pass(name: str, run_dir: Path, scenario_dirs) -> Path | None:
 
 # --------------------------------------------------------------------------------- the model
 def share_features(D: pd.DataFrame, eps: pd.Series) -> pd.DataFrame:
-    """The share model's inputs for one pass (``D`` sorted by arc and month, with ``system``).
-    Shares and the system flow are centred on the pass's own arc / system means."""
+    """The share model's inputs for one pass (``D`` sorted by arc and month, with ``system``
+    and ``wy``).  Shares and the system flow are centred on the pass's own arc / system means
+    over :data:`PRODUCT_WY`, the water years the model is fitted on, whatever years the pass
+    spans: the fit and every pass the model is applied to centre alike."""
+    wy = D.wy.to_numpy()
+    if wy.min() > PRODUCT_WY[0] or wy.max() < PRODUCT_WY[1]:
+        raise ValueError(f"the pass spans WY{wy.min()}-{wy.max()}; its features are centred "
+                         f"on WY{PRODUCT_WY[0]}-{PRODUCT_WY[1]}")
+    fit = (wy >= PRODUCT_WY[0]) & (wy <= PRODUCT_WY[1])
     f = pd.DataFrame(index=D.index)
     tot = D.groupby(["system", "month"]).sim.transform("sum")
     sh = np.log((D.sim + D.arc.map(eps)) / (tot + 1e-9))
-    f["lshare"] = sh - sh.groupby(D.arc).transform("mean")
+    f["lshare"] = sh - sh.where(fit).groupby(D.arc).transform("mean")
     g = f.lshare.groupby(D.arc)
     for k in LAGS:
         f[f"lshare_l{k}"] = g.shift(k)
@@ -223,7 +230,7 @@ def share_features(D: pd.DataFrame, eps: pd.Series) -> pd.DataFrame:
     for c in PARTS:
         f[f"frac_{c}"] = D[c] / ptot
     lsys = np.log(tot + 1e-9)
-    f["lsys"] = lsys - lsys.groupby(D.system).transform("mean")
+    f["lsys"] = lsys - lsys.where(fit).groupby(D.system).transform("mean")
     f["msin"], f["mcos"] = np.sin(2 * np.pi * D.moy / 12), np.cos(2 * np.pi * D.moy / 12)
     return f
 
@@ -488,8 +495,9 @@ def apply(model: dict, tier2_dir: str | Path, data_dir: str | Path = "data",
     """The product for one tier-2 pass (with runoff parts) under a fitted share model
     (``share_model.pt`` as loaded by ``torch.load``): ``[arc, month, taf, dpl_taf, kind]`` over
     the water years ``wy`` (default: every complete water year of the pass).  The share model's
-    inputs are built on the whole pass whatever ``wy`` is, so a narrower ``wy`` only selects
-    rows of the same series."""
+    inputs are built on the whole pass whatever ``wy`` is (centred on its WY1950-2015 means, as
+    in the fit: :func:`share_features`), so a narrower ``wy`` only selects rows of the same
+    series."""
     wy = tuple(wy) if wy else pass_wy(tier2_dir)
     units = load_units(data_dir)
     hm = units[units.kind == "share"]
@@ -645,12 +653,12 @@ def fit_product(run_dir: str | Path, scenario_dirs=None, out: str | Path | None 
 def run_pass(model: dict, forcing: str, data_dir: str | Path = "data",
              score_holdout: bool = False) -> Path:
     """The tier-2 pass with runoff parts of the share model's run on ``forcing`` over the whole
-    record, in ``_local/product/calsim3/<forcing>/tier2`` (the extension cells' flow lengths of
-    the run, :func:`sacsma.paths.extension_cells`, when it has them).  The run is the folder the
-    model was fitted on (``run_dir``)."""
+    record, in ``_local/product/calsim3/<forcing>/<run>/tier2`` (the extension cells' flow
+    lengths of the run, :func:`sacsma.paths.extension_cells`, when it has them).  The run is the
+    folder the model was fitted on (``run_dir``)."""
     from .tier2 import main as tier2_main
     run_dir = Path(model["run_dir"])
-    d = paths.local(name=f"product/calsim3/{forcing}") / "tier2"
+    d = paths.local(name=f"product/calsim3/{forcing}/{run_dir.name}") / "tier2"
     ext = paths.extension_cells(run_dir)
     tier2_main([str(run_dir), "--out", str(d), "--data-dir", str(data_dir), "--forcing", forcing,
                 "--start", PASS_START, "--components", "parts", "--no-maps"]
