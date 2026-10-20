@@ -59,13 +59,15 @@ _WY_MONTHS = (10, 11, 12, 1, 2, 3, 4, 5, 6, 7, 8, 9)
 
 # ------------------------------------------------------------------------------ flows
 def monthly(data_dir: str | Path = "data", artifacts_dir: str | Path = "artifacts", *,
-            wy=WY, log=print, bcm_depth=None, bcm_params=None) -> pd.DataFrame:
+            wy=WY, log=print, bcm_depth=None, bcm_params=None,
+            run: str = flows.DPL_RUN) -> pd.DataFrame:
     """``[date, site, model, flow_taf]``: the observation and the three models, every month end
     of the window x site x model, NaN where there is no value.  ``site`` and ``model`` are
-    ordered categoricals (north to south; ``obs`` then :data:`MODELS`)."""
+    ordered categoricals (north to south; ``obs`` then :data:`MODELS`).  ``dpl`` is the
+    learned-parameter run ``run``."""
     months = flows._water_months(wy)
     base = flows.monthly_flows(FORCING, data_dir, artifacts_dir, wy=wy,
-                               models=("obs", "dpl", "vic_calsim3"), log=log)
+                               models=("obs", "dpl", "vic_calsim3"), run=run, log=log)
     t = time.perf_counter()
     bcm = flows._tidy(gridded.bcm_routed(data_dir, BCM_SCENARIO, bcm_depth, bcm_params), "bcm",
                       months)
@@ -348,21 +350,29 @@ def climatology_fig(long: pd.DataFrame, met: pd.DataFrame, path: Path) -> None:
 
 
 # ------------------------------------------------------------------------------ the run
-def make_all(data_dir: str | Path = "data", artifacts_dir: str | Path = "artifacts") -> Path:
+def make_all(data_dir: str | Path = "data", artifacts_dir: str | Path = "artifacts",
+             run: str = flows.DPL_RUN) -> Path:
     """Build the benchmark into ``<artifacts_dir>/results/benchmark/``: ``monthly.csv`` (the
     flows of the window, TAF), ``metrics.csv`` (per site and model), ``summary.csv`` (pooled),
     ``sites.csv``, ``bcm_routing_fit.csv`` (the fitted routing parameters),
-    ``bcm_routing_effect.csv`` and three figures."""
+    ``bcm_routing_effect.csv`` and three figures.  ``run``: another learned-parameter run in
+    dPL-CalSim's place (a name, run folder or checkpoint, :func:`sacsma.paths.dpl_checkpoint`),
+    its tables only, into ``_local/benchmark/<run>/``."""
     t0 = time.perf_counter()
+    other = run != flows.DPL_RUN
     out = paths.calibrated(artifacts_dir, RESULT)
+    if other:                           # named by its run folder, or by the file
+        ck = paths.dpl_checkpoint(artifacts_dir, run, paths.MULTIFAMILY)
+        out = paths.local(artifacts_dir, "benchmark/" + (
+            ck.parents[1].name if ck.parent.name == "checkpoints" else ck.stem))
     figs = out / "figures"
-    figs.mkdir(parents=True, exist_ok=True)
+    (out if other else figs).mkdir(parents=True, exist_ok=True)
 
     depth = gridded.bcm_depth(data_dir, BCM_SCENARIO)
     t = time.perf_counter()
     fit = gridded.bcm_fit(data_dir, artifacts_dir, BCM_SCENARIO, depth)
     print(f"benchmark BCM fit: {len(fit)} sites ({time.perf_counter() - t:.0f} s)")
-    long = monthly(data_dir, artifacts_dir, bcm_depth=depth, bcm_params=fit)
+    long = monthly(data_dir, artifacts_dir, bcm_depth=depth, bcm_params=fit, run=run)
     met = metrics(long)
     summ = summary(met)
     effect = bcm_routing_effect(long, gridded.bcm_unrouted(data_dir, BCM_SCENARIO, depth),
@@ -375,11 +385,12 @@ def make_all(data_dir: str | Path = "data", artifacts_dir: str | Path = "artifac
                      (effect, "bcm_routing_effect.csv")):
         df.to_csv(out / name, index=False)
     fit.reset_index().to_csv(out / "bcm_routing_fit.csv", index=False)
-    skill_fig(met, figs / "skill.png")
-    hydrograph_fig(long, figs / "hydrographs.png",
-                   {s: f"{RIVERS.get(s, '')} (CDEC {c})" for s, c in
-                    zip(sites["site"], sites["cdec_id"], strict=True)})
-    climatology_fig(long, met, figs / "climatology.png")
+    if not other:                       # the figures name the model dPL-CalSim
+        skill_fig(met, figs / "skill.png")
+        hydrograph_fig(long, figs / "hydrographs.png",
+                       {s: f"{RIVERS.get(s, '')} (CDEC {c})" for s, c in
+                        zip(sites["site"], sites["cdec_id"], strict=True)})
+        climatology_fig(long, met, figs / "climatology.png")
 
     print(f"benchmark: {met['site'].nunique()} sites, {len(MODELS)} models, WY{WY[0]}-{WY[1]} "
           f"-> {out} ({time.perf_counter() - t0:.0f} s)")

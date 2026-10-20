@@ -27,8 +27,9 @@ The repository has no test suite; the model is verified by running it.  The chec
     the learned model's step on the CPU engine (``sacsma.sma_learned``) against the torch step it
     mirrors, one tracked run per physics (:data:`LEARNED_RUNS`): 32 rows, two years from the
     cold start, the flow and its six routed components within 1e-9 mm/day (with the deep
-    store's outflow and content where the run has it); then, on the first run without the
-    store, the store at a zero share bitwise equal to the field without it
+    store's outflow and content where the run has it, and there the trainer's window spin-up,
+    the store brought to its steady state, against the engine's); then, on the first run
+    without the store, the store at a zero share bitwise equal to the field without it
 ``product``
     the share model applied to the tier-2 pass kept beside each forcing's series
     (``artifacts/product/calsim3/<forcing>/tier2/``) reproduces the tracked
@@ -332,6 +333,42 @@ def _learned_diff(net, x, dom, cfg, outputs, T: int = 730) -> float:
     return max(float(np.abs(got[o] - ref[o].numpy()).max()) for o in outputs)
 
 
+def _window_diff(net, x, dom, cfg, years: int = 3, T: int = 365) -> float:
+    """The trainer's window spin-up against the engine's (``spinup="window"``), the deep
+    store brought to its steady state in both: :func:`sacsma.dpl.train._stream_nograd` from
+    the cold start over ``years`` years, :func:`sacsma.dpl.train._steady_fill`, then ``T``
+    days; the largest |difference| in flow on :func:`_learned_rows`."""
+    import dataclasses
+
+    import numpy as np
+    import pandas as pd
+    import torch
+
+    from .dpl.evaluate import simulate_field
+    from .dpl.forward import initial_state, routing_uh
+    from .dpl.train import _steady_fill, _stream_nograd
+
+    pick, W = _learned_rows(dom)
+    rt = torch.as_tensor(pick)
+    t0 = int(dom.dates.searchsorted(dom.dates[0] + pd.DateOffset(years=years)))
+    cfgw = dataclasses.replace(cfg, spinup_start=str(dom.dates[0].date()))
+    got = simulate_field(net, x, dom, cfgw, dom.dates[t0], dom.dates[t0 + T - 1], W,
+                         spinup="window")
+    sub = dataclasses.replace(
+        dom, hrus=dom.hrus.iloc[pick].reset_index(drop=True), cell_idx=dom.cell_idx[pick],
+        lat_rad=dom.lat_rad[rt], elev=dom.elev[rt], flowlen=dom.flowlen[rt],
+        veg_frac=None if dom.veg_frac is None else dom.veg_frac[rt],
+        W=torch.eye(len(pick), dtype=dom.dtype), basins=tuple(f"r{i}" for i in pick))
+    with torch.no_grad():
+        p = {k: v[rt] for k, v in net(x).items()}
+        uh = routing_uh(p, sub.flowlen)
+        _, st = _stream_nograd(sub, cfgw, p, uh, 0, t0,
+                               initial_state(len(pick), dom.device, dom.dtype))
+        st.sac.gwc = _steady_fill(st.sac.gwc, p["kdeep"], t0)
+        sim, _ = _stream_nograd(sub, cfgw, p, uh, t0, t0 + T, st, collect=True)
+    return float(np.abs(got["flow"] - sim.numpy()).max())
+
+
 def check_learned(data_dir: str = "data", artifacts_dir: str = "artifacts",
                   **_) -> tuple[bool | None, str]:
     if not _has_torch():
@@ -353,6 +390,12 @@ def check_learned(data_dir: str = "data", artifacts_dir: str = "artifacts",
         ok &= good
         rows.append(f"\n    {group}/{run[:40]:40s} max |d| {d:.1e} mm/day"
                     + (" (with the deep store)" if deep else "") + ("" if good else "   FAIL"))
+        if deep:
+            w = _window_diff(net, x, dom, cfg)
+            good = w < LEARNED_MAX_MM
+            ok &= good
+            rows.append(f"\n    {'  + the window spin-up, trainer against engine':46s} "
+                        f"max |d| {w:.1e} mm/day" + ("" if good else "   FAIL"))
         if deep or zero_share:
             continue
         zero_share = True

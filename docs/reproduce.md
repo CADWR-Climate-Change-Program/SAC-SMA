@@ -244,7 +244,7 @@ local.
 
 **The product** is one series per forcing: a tier-2 pass over the whole forcing record
 (spin-up on its first ten water years, then October 1915 to December 2018, into
-`artifacts/_local/product/calsim3/<forcing>/tier2`), with the share model applied over its
+`artifacts/_local/product/calsim3/<forcing>/<run>/tier2`), with the share model applied over its
 complete water years:
 
 ```bash

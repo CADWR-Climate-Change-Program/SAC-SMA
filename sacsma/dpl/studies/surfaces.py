@@ -78,7 +78,8 @@ def metrics_from_daily(daily: pd.DataFrame, areas: dict[str, float]) -> pd.DataF
     baseline, so the mm/day unit is immaterial (the area cancels).
 
     Reduced over the out-of-sample, spin-up-free window :func:`eval_mask`
-    (WY1951-1988 + WY2004-2018; excludes the CAL window + the 1915-1950 lead-in)."""
+    (:data:`EVAL_WY`: WY1951-75, WY1986-88 and WY2004-18; the CAL window, the held-out
+    WY1976-85 and the 1915-1950 lead-in left out)."""
     daily = daily[eval_mask(daily.index)]                # OOS + spin-up-free window
     m = _monthly_taf(daily, areas)                       # date x basin monthly TAF
     out = {}

@@ -84,7 +84,7 @@ def _calsim(args: argparse.Namespace) -> int:
 def _benchmark(args: argparse.Namespace) -> int:
     from .benchmark.report import make_all
 
-    make_all(args.data_dir, args.artifacts_dir)
+    make_all(args.data_dir, args.artifacts_dir, *([args.run] if args.run else []))
     return 0
 
 
@@ -167,6 +167,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     bm.add_argument("--data-dir", default="data", help="organized data/ store")
     bm.add_argument("--artifacts-dir", default="artifacts", help="output root")
+    bm.add_argument("--run", default=None,
+                    help="another learned-parameter run in dPL-CalSim's place (a name, run "
+                         "folder or checkpoint): its tables, into "
+                         "artifacts/_local/benchmark/<run>/")
     bm.set_defaults(func=_benchmark)
 
     pr = sub.add_parser(
