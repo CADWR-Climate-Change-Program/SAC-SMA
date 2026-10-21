@@ -15,6 +15,9 @@ The state at ``start`` is the reference cold start (snow empty, SAC-SMA ``[0, 0,
 0]``, routing empty) under ``spinup="cold"``; under ``"cycle"`` it is the cold start looped
 ``passes`` times over the first ``years`` years from ``start`` (``sacsma.dpl.spinup``); under
 ``"window"`` the run starts cold at ``window_start`` and the days before ``start`` are dropped.
+Under ``"state"`` it is the state a run of the same field that ended the day before left
+(``keep_state``): the snow, the SAC-SMA stores and the routing history of every unit, all the
+state there is, so a run split in two gives the flow of the run unsplit.
 A learned field with the deep store (``Physics.deep``) starts the store empty; under ``"window"``
 its content at ``start`` is divided by ``1 - (1 - kdeep)**days``, the level a constant feed
 reaches from empty, so the window starts near the store's steady state as the trainer's does.
@@ -125,14 +128,16 @@ def year_index(dates: pd.DatetimeIndex, t0: int, t1: int) -> np.ndarray:
 @njit(parallel=True, cache=False)
 def _units(prcp, tavg, tmin, tmax, doy_f, doy_i, leap, cell, lat_rad, elev, kpet, snow, sma,
            veg, chi, lai, et_noah, pt, learned, n_inc, floor, deep_on, deep,
-           a, t0, te, passes, yidx, tfield, pscale, out, annual):
+           a, t0, te, passes, yidx, tfield, pscale, st_in, warm, st_out, out, annual):
     """Units ``0..len(cell)``: the cycle spin-up over ``[t0, te)`` (``passes`` times), then the
     run over ``[a, t1)``.  ``out`` (U, S, N_HIST + t1 - t0): surf, base [, the four parts
     [, the deep store's outflow and content]], the first N_HIST days the inflow before
     ``t0``; ``annual`` (U, 2, Y): surf + base by block
     year over the last two spin-up passes.  ``tfield`` (1, 1) or (cells, days): the degC added
     to the temperatures.  ``deep_on``: the learned step's deep store on ``deep`` (U, 2), its
-    content brought to steady state at ``t0`` after a window spin-up (module docstring)."""
+    content brought to steady state at ``t0`` after a window spin-up (module docstring).
+    ``warm``: the snow and SAC-SMA state at ``t0`` is ``st_in`` (U, 4 + 6 or 7) instead of the
+    cold start; ``st_out`` gets the state at ``t1``."""
     U, S, L = out.shape
     T = L - N_HIST
     t1 = t0 + T
@@ -160,6 +165,9 @@ def _units(prcp, tavg, tmin, tmax, doy_f, doy_i, leap, cell, lat_rad, elev, kpet
             sac_st[:6] = DEFAULT_INIT_STATE
         else:
             sac_st = DEFAULT_INIT_STATE.copy()
+        if warm:
+            snow_st[:] = st_in[u, :4]
+            sac_st[:] = st_in[u, 4:4 + sac_st.shape[0]]
         for k in range(passes + 1):
             s0 = t0 - a if k < passes else 0
             s1 = te - a if k < passes else n
@@ -231,6 +239,8 @@ def _units(prcp, tavg, tmin, tmax, doy_f, doy_i, leap, cell, lat_rad, elev, kpet
                 if S > 6:
                     out[u, 6, j] = parts[6, i]
                     out[u, 7, j] = parts[7, i]
+        st_out[u, :4] = snow_st
+        st_out[u, 4:4 + sac_st.shape[0]] = sac_st
 
 
 @njit(parallel=True, cache=False)
@@ -279,7 +289,8 @@ def _route(series, unit_of, uh, out):
 def simulate(field: Field, forcing, start, end, weights: np.ndarray, *, spinup: str = "cycle",
              years: int = 10, passes: int = 20, window_start=None, outputs=("flow",),
              temp_delta=0.0, precip_scale: float = 1.0, zero_nan: bool = False,
-             block_bytes: float = 2e9) -> dict:
+             block_bytes: float = 2e9, state: dict | None = None,
+             keep_state: bool = False) -> dict:
     """Run ``field`` over ``forcing`` (a :class:`sacsma.model.DomainForcing`, with ``tmin`` /
     ``tmax`` for the Priestley-Taylor PET) from ``start`` to ``end`` (dates, inclusive) and
     return ``{output: weights @ routed rows}``, each ``(K, T)`` mm/day, for the names in
@@ -289,7 +300,9 @@ def simulate(field: Field, forcing, start, end, weights: np.ndarray, *, spinup: 
     raises, unless ``zero_nan``: then it counts as zero on every day, so that a caller can
     renormalise by the weight of the rows left (``bad``).  ``temp_delta`` (degC on
     tavg / tmin / tmax: a number, or a field on the forcing's rows and days) and
-    ``precip_scale`` perturb the forcing, the spin-up included."""
+    ``precip_scale`` perturb the forcing, the spin-up included.  ``keep_state`` adds
+    ``"state"``, the state at the end (:data:`STATE_KEYS`), from which ``spinup="state"`` with
+    ``state`` continues a run of the same field and outputs on the next day."""
     ph = field.physics
     dates = pd.DatetimeIndex(forcing.dates)
     t0 = int(dates.searchsorted(pd.Timestamp(start)))
@@ -311,6 +324,9 @@ def simulate(field: Field, forcing, start, end, weights: np.ndarray, *, spinup: 
         te, P = block_end(dates, t0, years), passes
     elif spinup == "window":
         a = int(dates.searchsorted(pd.Timestamp(window_start)))
+    elif spinup == "state":
+        if state is None:
+            raise ValueError("spinup 'state' needs the state a run ending the day before kept")
     elif spinup != "cold":
         raise ValueError(f"spinup {spinup!r}")
     pt = ph.pet == "priestley_taylor"
@@ -341,16 +357,30 @@ def simulate(field: Field, forcing, start, end, weights: np.ndarray, *, spinup: 
         raise ValueError(f"temp_delta {tfield.shape} is not on the forcing's rows and days "
                          f"{forcing.prcp.shape}")
     annual = np.zeros((len(field.cell), 2, int(yidx.max()) + 1 if P else 1))
+    warm = spinup == "state"
+    n_st = 4 + (7 if ph.learned else 6)
+    if warm:
+        _check_state(state, field, S)
+        st_in = np.ascontiguousarray(np.hstack([state["snow"], state["sac"]]), np.float64)
+    else:
+        st_in = np.zeros((len(field.cell), n_st))
+    st_out = np.zeros((len(field.cell), n_st))
+    hist = np.zeros((len(field.cell), S, N_HIST)) if keep_state else None
     for u0 in range(0, len(field.cell), step):
         u1 = min(u0 + step, len(field.cell))
         out = np.zeros((u1 - u0, S, N_HIST + T))
+        if warm:
+            out[:, :, :N_HIST] = state["hist"][u0:u1]
         sl = slice(u0, u1)
         _units(forcing.prcp, forcing.tavg, tmin, tmax, doy_i.astype(np.float64), doy_i,
                np.asarray(forcing.is_leap, np.int64), field.cell[sl], field.lat_rad[sl],
                field.elev[sl], field.kpet[sl], field.snow[sl], field.sma[sl], field.veg[sl],
                field.chi[sl], field.lai[sl], ph.et == "noah_lite", pt, ph.learned, ph.n_inc,
                ph.fracp_floor, ph.learned and ph.deep == "cascade",
-               field.deep[sl], a, t0, te, P, yidx, tfield, float(precip_scale), out, annual[sl])
+               field.deep[sl], a, t0, te, P, yidx, tfield, float(precip_scale), st_in[sl], warm,
+               st_out[sl], out, annual[sl])
+        if keep_state:
+            hist[sl] = out[:, :, -N_HIST:]
         rows = rows_of[bounds[u0]:bounds[u1]]
         loc = field.unit[rows] - u0
         if runoff is not None:
@@ -386,8 +416,35 @@ def simulate(field: Field, forcing, start, end, weights: np.ndarray, *, spinup: 
     res["bad"] = bad
     res["spinup"] = "cold start" if spinup == "cold" else (
         f"window spin-up from {dates[a].date()}" if spinup == "window" else
+        "the state a run ending the day before kept" if warm else
         spinup_line(dates, t0, te, P, _change(W, field.unit, annual)))
+    if keep_state:
+        res["state"] = dict(snow=st_out[:, :4], sac=st_out[:, 4:], hist=hist,
+                            cell=field.cell.copy(), params=_state_params(field))
     return res
+
+
+#: the arrays of a run's state (``simulate(keep_state=True)``), per unit: the Snow-17 state,
+#: the SAC-SMA stores (the deep store's content seventh in a learned field), the routing
+#: history (the last N_HIST days of each routed series), and the unit's forcing cell and
+#: parameters, which tell that a state belongs to the field it is given to
+STATE_KEYS = ("snow", "sac", "hist", "cell", "params")
+
+
+def _state_params(field: Field) -> np.ndarray:
+    return np.hstack([field.snow, field.sma, field.kpet[:, None], field.deep])
+
+
+def _check_state(state: dict, field: Field, S: int) -> None:
+    """Refuse a state of another field, physics or set of outputs."""
+    U = len(field.cell)
+    want = dict(snow=(U, 4), sac=(U, 7 if field.physics.learned else 6), hist=(U, S, N_HIST))
+    got = {k: np.shape(state.get(k)) for k in want}
+    if got != want:
+        raise ValueError(f"the state has the shapes {got}; this field and its outputs need {want}")
+    if not np.array_equal(state.get("cell"), field.cell) or not np.allclose(
+            state.get("params"), _state_params(field), rtol=1e-9, atol=0.0):
+        raise ValueError("the state is of another field: its units' cells or parameters differ")
 
 
 def spinup_line(dates, t0: int, t1: int, passes: int, change: float) -> str:

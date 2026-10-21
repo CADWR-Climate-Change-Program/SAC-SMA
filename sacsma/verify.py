@@ -28,8 +28,10 @@ The repository has no test suite; the model is verified by running it.  The chec
     mirrors, one tracked run per physics (:data:`LEARNED_RUNS`): 32 rows, two years from the
     cold start, the flow and its six routed components within 1e-9 mm/day (with the deep
     store's outflow and content where the run has it, and there the trainer's window spin-up,
-    the store brought to its steady state, against the engine's); then, on the first run
-    without the store, the store at a zero share bitwise equal to the field without it
+    the store brought to its steady state, against the engine's); on each run the same two
+    years split in two, the second year from the state the first left (``spinup="state"``),
+    bitwise equal to them unsplit; then, on the first run without the store, the store at a
+    zero share bitwise equal to the field without it
 ``product``
     the share model applied to the tier-2 pass kept beside each forcing's series
     (``artifacts/product/calsim3/<forcing>/tier2/``) reproduces the tracked
@@ -369,6 +371,23 @@ def _window_diff(net, x, dom, cfg, years: int = 3, T: int = 365) -> float:
     return float(np.abs(got["flow"] - sim.numpy()).max())
 
 
+def _handoff_same(net, x, dom, cfg, outputs, T: int = 730) -> bool:
+    """``T`` days from the cold start on :func:`_learned_rows`, split in two (the second half
+    from the state the first kept), bitwise equal to the run unsplit over ``outputs``."""
+    import numpy as np
+
+    from .dpl.evaluate import simulate_field
+
+    _pick, W = _learned_rows(dom)
+    h = T // 2
+    run = lambda t0, t1, **kw: simulate_field(  # noqa: E731
+        net, x, dom, cfg, dom.dates[t0], dom.dates[t1 - 1], W, outputs=outputs, **kw)
+    whole = run(0, T, spinup="cold")
+    first = run(0, h, spinup="cold", keep_state=True)
+    second = run(h, T, spinup="state", state=first["state"])
+    return all(np.array_equal(np.hstack([first[o], second[o]]), whole[o]) for o in outputs)
+
+
 def check_learned(data_dir: str = "data", artifacts_dir: str = "artifacts",
                   **_) -> tuple[bool | None, str]:
     if not _has_torch():
@@ -385,11 +404,16 @@ def check_learned(data_dir: str = "data", artifacts_dir: str = "artifacts",
         ck = paths.dpl_checkpoint(artifacts_dir, run, group)
         net, x, dom, cfg, _raw = load_net_from_checkpoint(ck, data_dir, device="cpu")
         deep = cfg.deep_store != "none"
-        d = _learned_diff(net, x, dom, cfg, (*OUTPUTS, *DEEP_OUTPUTS) if deep else OUTPUTS)
+        outs = (*OUTPUTS, *DEEP_OUTPUTS) if deep else OUTPUTS
+        d = _learned_diff(net, x, dom, cfg, outs)
         good = d < LEARNED_MAX_MM
         ok &= good
         rows.append(f"\n    {group}/{run[:40]:40s} max |d| {d:.1e} mm/day"
                     + (" (with the deep store)" if deep else "") + ("" if good else "   FAIL"))
+        same = _handoff_same(net, x, dom, cfg, outs)
+        ok &= same
+        rows.append(f"\n    {'  + split in two, from the state kept':46s} "
+                    + ("bitwise" if same else "DIFFERENT   FAIL"))
         if deep:
             w = _window_diff(net, x, dom, cfg)
             good = w < LEARNED_MAX_MM

@@ -40,6 +40,7 @@ Usage::
                                   [--components parts]
                                   [--extension-cells CSV] [--scenarios NAME=DT:PS,...]
                                   [--forcing NAME] [--start DATE] [--end DATE]
+                                  [--init-state NPZ] [--save-state NPZ]
 
 Writes ``tier2_metrics.csv`` (one row per arc x window) and ``tier2_arcs.csv`` (coverage,
 parent entity and trained-cell share per arc) to ``tier2/`` in the run's results folder, and
@@ -72,7 +73,10 @@ store file kept elsewhere), and ``--start`` /
 record, the cycle spinup then looping WY1916-1925).  Either skips the entity check, and is
 recorded in ``tier2_run_info.json``.  The scores are still against historical CalSim3, so
 they mean nothing for a synthetic weather sequence; such a pass is the input of the product
-(``sacsma dpl calsim product apply``).
+(``sacsma dpl calsim product apply``).  ``--save-state`` writes the model state on the last day
+of the envelope (:func:`save_state`), and ``--init-state`` starts the envelope from such a state
+instead of the spin-up, so that a forcing too long for one pass runs as consecutive passes,
+each from the state the one before left, with the flow of one unbroken run.
 
 Needs the ``dpl`` extra (torch) and a source checkout: the extrapolated arcs run the tracer
 of ``data/inputs/domains/multifamily/build_flowlens.py`` (``--trace-cells``) in a subprocess, which needs
@@ -306,7 +310,7 @@ PART_COLUMNS = ("quick", "interflow", "supplemental", "primary")
 
 def stream(net, x, dom, cfg, W_arc: np.ndarray, *, spinup: str = "cycle",
            components: bool = False, temp_delta: float = 0.0, precip_scale: float = 1.0,
-           envelope=None):
+           envelope=None, state: dict | None = None, state_out: dict | None = None):
     """The trained field over the envelope on the CPU engine (:func:`sacsma.dpl.evaluate.
     simulate_field`, the evaluator's spin-up): (arc depth (A, T), entity depth (B, T), t0, t1,
     bad_rows) in mm/day.  A row whose flow goes NaN (extrapolated parameters at their bounds) is
@@ -320,7 +324,9 @@ def stream(net, x, dom, cfg, W_arc: np.ndarray, *, spinup: str = "cycle",
     deduction (and dry-channel clamp), which act before routing.  ``temp_delta`` /
     ``precip_scale`` are a uniform climate perturbation (degC added to tavg/tmin/tmax, precip
     multiplied), spin-up included.  ``envelope = (start, end)`` dates, or None for the
-    evaluator's (WY1950 to 2018-12)."""
+    evaluator's (WY1950 to 2018-12).  ``state`` (the engine's, :data:`sacsma.engine.STATE_KEYS`)
+    starts the envelope from it instead of the spin-up; ``state_out`` gets the state on its
+    last day."""
     from ..evaluate import simulate_field
     from ..multi_timescale import ENVELOPE_END, ENVELOPE_START
 
@@ -328,12 +334,36 @@ def stream(net, x, dom, cfg, W_arc: np.ndarray, *, spinup: str = "cycle",
     outs = ("flow",) + (("fast", "slow", *PART_COLUMNS) if components else ())
     na = len(W_arc)
     r = simulate_field(net, x, dom, cfg, start, end, np.vstack([W_arc, dom.W.cpu().numpy()]),
-                       spinup=spinup, outputs=outs, temp_delta=temp_delta,
-                       precip_scale=precip_scale, zero_nan=True)
+                       spinup="state" if state is not None else spinup, outputs=outs,
+                       temp_delta=temp_delta, precip_scale=precip_scale, zero_nan=True,
+                       state=state, keep_state=state_out is not None)
     print(f"tier2: {r['spinup']}", flush=True)
+    if state_out is not None:
+        state_out.update(r["state"])
     t0 = int(dom.dates.searchsorted(pd.Timestamp(start)))
     return ((r["flow"][:na], r["flow"][na:], t0, t0 + r["flow"].shape[1], r["bad"])
             + tuple(r[o][:na] for o in outs[1:]))
+
+
+#: the fields of a pass whose state :func:`save_state` keeps: the trained entities' rows and
+#: the extension cells'
+STATE_FIELDS = ("entities", "extension")
+
+
+def save_state(path: str | Path, states: dict[str, dict]) -> None:
+    """The model state on the last day of a pass (``--save-state``), one ``.npz``: per field of
+    :data:`STATE_FIELDS` the arrays of :data:`sacsma.engine.STATE_KEYS`, as ``<field>_<key>``."""
+    with open(path, "wb") as fh:
+        np.savez(fh, **{f"{f}_{k}": v for f, st in states.items() for k, v in st.items()})
+
+
+def load_state(path: str | Path) -> dict[str, dict]:
+    """A :func:`save_state` file, per field it holds."""
+    from ...engine import STATE_KEYS
+
+    with np.load(path) as z:
+        return {f: {k: z[f"{f}_{k}"] for k in STATE_KEYS}
+                for f in STATE_FIELDS if f"{f}_snow" in z.files}
 
 
 def _drop_bad_cells(sim: np.ndarray, W: np.ndarray, bad: np.ndarray, hrus: pd.DataFrame,
@@ -483,7 +513,8 @@ def score_run(ckpt: str | Path, data_dir: str | Path = "data", *, run_dir=None,
               trace_python: str | None = None, spinup: str = "cycle",
               components: bool = False,
               extension_cells: str | Path | None = None, scenarios=None, outs=None,
-              forcing: str = DEFAULT_FORCING, envelope=None, score: bool = True):
+              forcing: str = DEFAULT_FORCING, envelope=None, score: bool = True,
+              init_state: str | Path | None = None, save_state_to: str | Path | None = None):
     """Returns (metrics, monthly, arcs, not_sim, entity_check).  ``extend`` simulates the
     arcs outside every trained footprint on their own region cells (``basis = extrapolated``);
     ``spinup`` is the evaluator's (:func:`stream`).  The checkpoint must hold
@@ -506,12 +537,18 @@ def score_run(ckpt: str | Path, data_dir: str | Path = "data", *, run_dir=None,
     :func:`_envelope`) run the field on another forcing store and period; either skips the
     archived entity check.  ``score=False`` scores no window (``metrics`` comes back empty; the
     flows, the components and the arc table are unchanged): a run with :func:`protected_wy`
-    without --score-holdout."""
+    without --score-holdout.  ``init_state`` (a :func:`save_state` file) starts the envelope
+    from the state a pass ending the day before kept, instead of the spin-up;
+    ``save_state_to`` writes the state on its last day.  Neither goes with ``scenarios``."""
     from ..evaluate import load_net_from_checkpoint
     mode = "parts" if components else None
     batch = scenarios is not None
     if batch and (outs is None or len(outs) != len(scenarios)):
         raise ValueError("scenarios needs one output folder each (outs)")
+    if batch and (init_state or save_state_to):
+        raise ValueError("init_state and save_state_to are for a single pass, not scenarios")
+    if init_state:
+        spinup = "state"
     todo = ([(float(t), float(s), None if o is None else Path(o))
              for (t, s), o in zip(scenarios, outs, strict=True)] if batch
             else [(0.0, 1.0, out)])
@@ -522,7 +559,7 @@ def score_run(ckpt: str | Path, data_dir: str | Path = "data", *, run_dir=None,
             _write_run_info(o_, ckpt=ckpt, data_dir=data_dir, spinup=spinup, extend=extend,
                             components=mode, temp_delta=t_, precip_scale=s_,
                             extension_cells=extension_cells, forcing=forcing, envelope=envelope,
-                            scored=score)
+                            scored=score, init_state=init_state, save_state=save_state_to)
     net, x, dom, cfg, ck = load_net_from_checkpoint(ckpt, data_dir, device="cpu",
                                                     product=forcing)
     ho = tuple(int(v) for v in (cfg.holdout_wy or ()))
@@ -555,6 +592,12 @@ def score_run(ckpt: str | Path, data_dir: str | Path = "data", *, run_dir=None,
             W2 = dom2.W.cpu().numpy()
         else:
             ext = None
+    start = load_state(init_state) if init_state else {}
+    if init_state and (ext is not None) != ("extension" in start):
+        raise ValueError(f"{init_state}: a state {'without' if ext is not None else 'with'} "
+                         "the extension cells, for a pass " + ("with" if ext is not None
+                                                                else "without") + " them")
+    kept = {f: {} for f in STATE_FIELDS}
     res1, res2 = [], []
     for t_, s_, _ in todo:
         kw = dict(spinup=spinup, envelope=envelope, components=bool(mode), temp_delta=t_,
@@ -562,8 +605,14 @@ def score_run(ckpt: str | Path, data_dir: str | Path = "data", *, run_dir=None,
         if bool(t_) or s_ != 1.0:
             print(f"tier2: climate perturbation tavg/tmin/tmax {t_:+g} degC, precip x{s_:g}, "
                   "spin-up included", flush=True)
-        res1.append(stream(net, x, dom, cfg, W_arc, **kw))
-        res2.append(None if ext is None else stream(net2, x2, dom2, cfg2, W2, **kw))
+        res1.append(stream(net, x, dom, cfg, W_arc, state=start.get("entities"),
+                           state_out=kept["entities"] if save_state_to else None, **kw))
+        res2.append(None if ext is None else stream(
+            net2, x2, dom2, cfg2, W2, state=start.get("extension"),
+            state_out=kept["extension"] if save_state_to else None, **kw))
+    if save_state_to:
+        save_state(save_state_to, {f: st for f, st in kept.items() if st})
+        print(f"tier2: wrote the state on the last day to {save_state_to}", flush=True)
     if ext is not None:
         print(f"tier2: extrapolated {len(dom2.basins)} uncovered arcs on {len(dom2.hrus)} region "
               "cells", flush=True)
@@ -700,10 +749,13 @@ def _write_run_info(out: Path, **info) -> Path:
     """``tier2_run_info.json``: the opt-in extras a tier-2 folder was made with.  A run under
     a uniform perturbation (dT / precip scale) is flagged ``perturbed``: its CSVs are still
     scored against HISTORICAL CalSim3, so its skill columns are not a baseline."""
+    import hashlib
     import json
     from datetime import datetime, timezone
     perturbed = bool(info["temp_delta"]) or info["precip_scale"] != 1.0
     envelope = info.get("envelope")
+    init = info.get("init_state")
+    save = info.get("save_state")
     rec = dict(
         tool="sacsma.dpl.calsim.tier2",
         written_utc=datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -723,7 +775,11 @@ def _write_run_info(out: Path, **info) -> Path:
         perturbed=perturbed, scored=bool(info.get("scored", True)),
         perturbation_note=("uniform climate perturbation (degC added to tavg/tmin/tmax, "
                            "precip multiplied, spin-up included); tier2_metrics/monthly still "
-                           "score against historical CalSim3" if perturbed else None))
+                           "score against historical CalSim3" if perturbed else None),
+        init_state=None if init is None else Path(init).as_posix(),
+        init_state_sha256=(None if init is None
+                           else hashlib.sha256(Path(init).read_bytes()).hexdigest()),
+        save_state=None if save is None else Path(save).as_posix())
     path = Path(out) / "tier2_run_info.json"
     path.write_text(json.dumps(rec, indent=1) + "\n")
     return path
@@ -1024,6 +1080,12 @@ def main(argv=None, prog=None) -> None:
                         "whole record); the cycle spinup loops its first ten water years")
     p.add_argument("--end", default=None, metavar="DATE",
                    help="last day of the envelope (default 2018-12-31)")
+    p.add_argument("--init-state", default=None, metavar="NPZ",
+                   help="start the envelope from the state a pass ending the day before wrote "
+                        "(--save-state) instead of the spin-up")
+    p.add_argument("--save-state", default=None, metavar="NPZ",
+                   help="write the model state on the last day of the envelope, from which "
+                        "--init-state continues the run")
     p.add_argument("--score-holdout", action="store_true",
                    help="score the run's held-out water years (protected_wy); without it the "
                         "run writes its flows (tier2_monthly.csv, the components, the arcs) "
@@ -1035,6 +1097,9 @@ def main(argv=None, prog=None) -> None:
     ckpt = roles.model / "checkpoints" / "best.pt" if run.is_dir() else run
     ho = require_holdout(ckpt, "tier2")
     if a.scenarios:
+        if a.init_state or a.save_state:
+            raise SystemExit("tier2: --init-state and --save-state are for a single pass, not "
+                             "--scenarios")
         _main_batch(a, ckpt, run_dir, ho)
         return
     # the tracked scores to the run's results folder, the rest to its local folder
@@ -1055,6 +1120,10 @@ def main(argv=None, prog=None) -> None:
         if a.extension_cells:
             extra["extension_cells"] = a.extension_cells
         extra.update(_forcing_args(a))
+        if a.init_state:
+            extra["init_state"] = a.init_state
+        if a.save_state:
+            extra["save_state_to"] = a.save_state
         res = score_run(ckpt, a.data_dir, run_dir=run_dir,
                         extend=not a.no_extend, tiles_dir=a.tiles_dir, out=bulk,
                         trace_python=a.trace_python,

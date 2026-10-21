@@ -46,6 +46,7 @@ Usage::
     sacsma dpl calsim product fit <run_dir> [--scenarios DIR ...] [--out DIR] [--data-dir data]
                                   [--mu MU] [--holdout-wy A-B] [--epochs N] [--threads N]
     sacsma dpl calsim product apply --forcing NAME [--tier2 DIR] [--start DATE] [--end DATE]
+                                    [--init-state NPZ] [--save-state NPZ]
                                     [--wy A-B] [--centre-wy A-B|all] [--share-model PT]
                                     [--out DIR] [--data-dir data]
 
@@ -68,8 +69,10 @@ series; ``sacsma verify product`` repeats every tracked series from its ``tier2/
 
 A forcing longer than one pass can hold (a datetime64 axis spans 584 years) runs in segments:
 ``--forcing`` may name a store file outside ``data/``, ``--start`` / ``--end`` set the span of
-its pass, and ``--tier2`` applies the share model to the segments' passes joined into one, with
-``--centre-wy all`` centring the inputs on the whole joined record instead of on WY1950-2015.
+its pass, ``--save-state`` keeps the model state on its last day and ``--init-state`` starts the
+next segment's pass from it, so the segments give the flow of one unbroken run.  ``--tier2``
+then applies the share model to the segments' passes joined into one, with ``--centre-wy all``
+centring the inputs on the whole joined record instead of on WY1950-2015.
 
 The fit is on the CPU and seeded; with the same thread count it reproduces to round-off.
 """
@@ -665,12 +668,14 @@ def fit_product(run_dir: str | Path, scenario_dirs=None, out: str | Path | None 
 
 def run_pass(model: dict, forcing: str, data_dir: str | Path = "data",
              score_holdout: bool = False, start: str | None = None,
-             end: str | None = None) -> Path:
+             end: str | None = None, init_state: str | Path | None = None,
+             save_state: str | Path | None = None) -> Path:
     """The tier-2 pass with runoff parts of the share model's run on ``forcing`` from ``start``
     (default :data:`PASS_START`) to ``end`` (default the envelope's end, 2018-12-31), in
     ``_local/product/calsim3/<forcing>/<run>/tier2`` (the extension cells' flow lengths of the
     run, :func:`sacsma.paths.extension_cells`, when it has them).  The run is the folder the
-    model was fitted on (``run_dir``)."""
+    model was fitted on (``run_dir``).  ``init_state`` and ``save_state`` are the tier-2
+    pass's ``--init-state`` and ``--save-state``."""
     from .tier2 import main as tier2_main
     run_dir = Path(model["run_dir"])
     d = paths.local(name=f"product/calsim3/{paths.forcing_name(forcing)}/{run_dir.name}") / "tier2"
@@ -678,6 +683,8 @@ def run_pass(model: dict, forcing: str, data_dir: str | Path = "data",
     tier2_main([str(run_dir), "--out", str(d), "--data-dir", str(data_dir), "--forcing", forcing,
                 "--start", start or PASS_START, "--components", "parts", "--no-maps"]
                + (["--end", end] if end else [])
+               + (["--init-state", str(init_state)] if init_state else [])
+               + (["--save-state", str(save_state)] if save_state else [])
                + (["--extension-cells", str(ext)] if ext.exists() else [])
                + (["--score-holdout"] if score_holdout else []))
     return d
@@ -701,19 +708,22 @@ def apply_product(tier2_dir: str | Path | None, forcing: str,
                   share_model: str | Path | None = None, out: str | Path | None = None,
                   data_dir: str | Path = "data", wy=None, score_holdout: bool = False,
                   start: str | None = None, end: str | None = None, centre_wy=PRODUCT_WY,
+                  init_state: str | Path | None = None, save_state: str | Path | None = None,
                   log=print) -> pd.DataFrame:
     """Write the product of one forcing (module docstring): the series over ``wy`` (default:
     every complete water year of the pass), the pass, and for a historical forcing its scores
     (those on the run's protected water years only with ``score_holdout``).  ``tier2_dir`` None
-    runs the pass first (:func:`run_pass`, from ``start`` to ``end``).  ``centre_wy`` goes to
-    :func:`share_features`.  ``out`` defaults to ``<forcing>/`` beside the share model."""
+    runs the pass first (:func:`run_pass`, from ``start`` to ``end``, from ``init_state`` and
+    keeping ``save_state``).  ``centre_wy`` goes to :func:`share_features`.  ``out`` defaults
+    to ``<forcing>/`` beside the share model."""
     share_model = Path(share_model) if share_model else paths.product() / "share_model.pt"
     model = torch.load(share_model, weights_only=False)
     if tier2_dir is None:
-        tier2_dir = run_pass(model, forcing, data_dir, score_holdout, start, end)
-    elif start or end:
-        raise ValueError("start and end set the span of a new pass; an existing pass (tier2_dir) "
-                         "has its own")
+        tier2_dir = run_pass(model, forcing, data_dir, score_holdout, start, end, init_state,
+                             save_state)
+    elif start or end or init_state or save_state:
+        raise ValueError("start, end, init_state and save_state are for a new pass; an existing "
+                         "pass (tier2_dir) has its own")
     _same_run(tier2_dir, model)
     out = Path(out) if out else share_model.parent / paths.forcing_name(forcing)
     out.mkdir(parents=True, exist_ok=True)
@@ -768,6 +778,11 @@ def main(argv=None, prog=None) -> None:
                    help=f"first day of the pass (default {PASS_START}); not with --tier2")
     g.add_argument("--end", default=None, metavar="DATE",
                    help="last day of the pass (default 2018-12-31); not with --tier2")
+    g.add_argument("--init-state", default=None, metavar="NPZ",
+                   help="start the pass from the state a pass ending the day before kept "
+                        "(--save-state) instead of the spin-up; not with --tier2")
+    g.add_argument("--save-state", default=None, metavar="NPZ",
+                   help="keep the model state on the last day of the pass; not with --tier2")
     g.add_argument("--wy", default=None, metavar="A-B",
                    help="water years of the product (default: every complete one of the pass)")
     g.add_argument("--centre-wy", default=None, metavar="A-B|all",
@@ -789,7 +804,11 @@ def main(argv=None, prog=None) -> None:
                     a.score_holdout)
         return
     wy = tuple(int(v) for v in a.wy.split("-")) if a.wy else None
+    if a.tier2 and (a.start or a.end or a.init_state or a.save_state):
+        p.error("--start, --end, --init-state and --save-state are for a new pass, not --tier2")
+    if a.centre_wy not in (None, "all") and len(a.centre_wy.split("-")) != 2:
+        p.error(f"--centre-wy {a.centre_wy}: A-B (two water years) or all")
     centre = (PRODUCT_WY if a.centre_wy is None else "all" if a.centre_wy == "all"
               else tuple(int(v) for v in a.centre_wy.split("-")))
     apply_product(a.tier2, a.forcing, a.share_model, a.out, a.data_dir, wy, a.score_holdout,
-                  a.start, a.end, centre)
+                  a.start, a.end, centre, a.init_state, a.save_state)

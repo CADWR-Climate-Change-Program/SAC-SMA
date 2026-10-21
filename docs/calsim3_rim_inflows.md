@@ -245,7 +245,10 @@ sacsma verify product                                               # apply repe
 
 A forcing longer than one pass, such as a 1,000-year WGEN sequence (a datetime64 axis spans 584
 years), runs in segments. `--forcing` takes the path of a segment's store file, kept outside
-`data/`, and `--start` and `--end` set the span of its pass. The segments' passes are then joined
+`data/`, and `--start` and `--end` set the span of its pass. `--save-state` keeps the model state
+on a pass's last day, and the next segment's pass starts from it with `--init-state` instead of
+the spin-up, so the segments give the flow of one unbroken run; `sacsma verify learned` checks
+that a run split this way matches it unsplit, bit for bit. The segments' passes are then joined
 into one and applied with `--tier2 <joined pass> --centre-wy all`, which centres the share
 model's inputs on the whole record rather than on WY1950-2015, since a synthetic sequence has no
 such years.
