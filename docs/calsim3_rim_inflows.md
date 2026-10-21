@@ -243,6 +243,13 @@ sacsma dpl calsim product apply --forcing <name> --score-holdout   # -> artifact
 sacsma verify product                                               # apply repeats every tracked series
 ```
 
+A forcing longer than one pass, such as a 1,000-year WGEN sequence (a datetime64 axis spans 584
+years), runs in segments. `--forcing` takes the path of a segment's store file, kept outside
+`data/`, and `--start` and `--end` set the span of its pass. The segments' passes are then joined
+into one and applied with `--tier2 <joined pass> --centre-wy all`, which centres the share
+model's inputs on the whole record rather than on WY1950-2015, since a synthetic sequence has no
+such years.
+
 `<run>` is any of the run's folders (`artifacts/models/dpl/multifamily/8_calsim`,
 `artifacts/results/dpl/multifamily/8_calsim` or its folder under `artifacts/_local/runs/`). The
 full sequence, from the data to the product, is in [Reproduce](reproduce.md). The files each

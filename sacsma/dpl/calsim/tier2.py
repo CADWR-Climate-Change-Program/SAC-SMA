@@ -66,7 +66,8 @@ model's training points), one pass each, and writes each scenario's CSVs into ``
 (default ``tier2_scenarios/NAME`` in the run's local folder), without maps or figures.
 
 ``--forcing`` runs the trained field on another forcing store (a ``--forcing`` name of
-``data/inputs/forcing``, e.g. ``wgen_product_a`` or ``wgen_product_a_s12``), and ``--start`` /
+``data/inputs/forcing``, e.g. ``wgen_product_a`` or ``wgen_product_a_s12``, or the path of a
+store file kept elsewhere), and ``--start`` /
 ``--end`` move the envelope (default WY1950 to 2018-12; ``--start 1915-10-01`` for the whole
 record, the cycle spinup then looping WY1916-1925).  Either skips the entity check, and is
 recorded in ``tier2_run_info.json``.  The scores are still against historical CalSim3, so
@@ -1015,8 +1016,9 @@ def main(argv=None, prog=None) -> None:
                         "'t1=1:1,p85=0:0.85'; each writes its CSVs into --out/NAME (no maps or "
                         "figures)")
     p.add_argument("--forcing", default=DEFAULT_FORCING,
-                   help="the forcing store to run on (a --forcing name of data/inputs/forcing; "
-                        f"default {DEFAULT_FORCING}, the training forcing)")
+                   help="the forcing store to run on (a --forcing name of data/inputs/forcing, "
+                        f"or the path of a store file; default {DEFAULT_FORCING}, the training "
+                        "forcing)")
     p.add_argument("--start", default=None, metavar="DATE",
                    help="first day of the envelope (default 1949-10-01; 1915-10-01 for the "
                         "whole record); the cycle spinup loops its first ten water years")
