@@ -71,10 +71,22 @@ def forcing_dir(data_dir="data") -> Path:
 
 def forcing(data_dir="data", domain: str = CDEC15, product: str = "historical_livneh_unsplit") -> Path:
     """Forcing store of a domain: the shared 1/16-degree store of the product, or, for the
-    fine 15cdec domain, the dense store of its off-grid HRU points."""
+    fine 15cdec domain, the dense store of its off-grid HRU points.  A ``product`` that names a
+    ``.nc`` file is that file, wherever it is kept (a store outside ``data/``, such as one
+    segment of a long WGEN sequence); it serves the grid domains only."""
+    if str(product).endswith(".nc"):
+        if _check(domain) not in GRID_DOMAINS:
+            raise ValueError(f"the store {product} serves the grid domains, not {domain!r}")
+        return Path(product)
     if _check(domain) in GRID_DOMAINS:
         return forcing_dir(data_dir) / f"{product}.nc"
     return forcing_dir(data_dir) / f"{product}_{domain}_hru.nc"
+
+
+def forcing_name(product: str) -> str:
+    """The name of a forcing for folders and records: the product name, or the file name
+    without ``.nc`` of a store given by its path."""
+    return Path(product).stem if str(product).endswith(".nc") else str(product)
 
 
 def wgen_scenario_key(data_dir="data") -> Path:
