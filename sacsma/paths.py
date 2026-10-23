@@ -245,6 +245,18 @@ def calsim3_targets(data_dir="data", name: str = "calsim3_inflow_monthly.csv") -
     return _root(data_dir) / T_CALSIM3 / name
 
 
+def target_screens(data_dir="data") -> dict[str, tuple[Path, ...]]:
+    """The hand-kept tables of the targets a run leaves out, by the setting that reads them
+    (dPL-CalSim's fine-tune, ``docs/reproduce.md``): ``target_mask`` the CDEC daily screen and the
+    location masks of the USGS gauges, the CalSim3 arcs and the DWR subbasins;
+    ``cdec_monthly_mask`` the CDEC monthly screen and the forcing eras."""
+    r = _root(data_dir)
+    return {"target_mask": (r / T_CDEC / "fnf_daily_screen.csv", r / T_USGS / "location_mask.csv",
+                            r / T_CALSIM3 / "location_mask.csv", r / T_DWR / "location_mask.csv"),
+            "cdec_monthly_mask": (r / T_CDEC / "fnf_monthly_screen.csv",
+                                  r / T_CDEC / "forcing_era_mask.csv")}
+
+
 # ------------------------------------------------------------------------------ reference
 def simflow(data_dir="data", domain: str = CDEC15) -> Path:
     """The archived MATLAB simulation of a calibration domain (the parity baseline)."""

@@ -72,13 +72,13 @@ class DomainTensors:
     device: torch.device
     dtype: torch.dtype
     #: per-cell (n_cells, T) Tmin/Tmax for the Noah ET path (CPU float32, like
-    #: forcing.prcp); None unless the domain has a per-cell tminmax sidecar
-    #: (only 15cdec_grid — its cells are ON the WGEN lattice).
+    #: forcing.prcp), from the region forcing store; None outside the region-grid domains
+    #: (``io.REGION_DOMAINS``: ``15cdec_grid``, the CalSim domains and ``multifamily``).
     tmin: np.ndarray | None = None
     tmax: np.ndarray | None = None
-    #: OBSERVED canopy structure for the Noah ET path (only 15cdec_grid): the
-    #: per-HRU green-vegetation fraction (static, on-device (N,)) and the per-CELL
-    #: daily LAI climatology look-up (CPU float32 (n_cells, 366), indexed by doy).
+    #: OBSERVED canopy structure for the Noah ET path (the grid domains, ``multifamily``
+    #: included): the per-HRU green-vegetation fraction (static, on-device (N,)) and the
+    #: per-CELL daily LAI climatology look-up (CPU float32 (n_cells, 366), indexed by doy).
     #: Pinned inputs — never learned.  None unless the domain ships the soilveg/
     #: LAI sidecars.
     veg_frac: torch.Tensor | None = None

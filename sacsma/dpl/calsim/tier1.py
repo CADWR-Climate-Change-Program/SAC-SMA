@@ -25,14 +25,15 @@ The run held water years out of training in every family (``DplConfig.holdout_wy
 its checkpoint) and is validated over them: windows ``WY1976-85`` (the holdout) and
 ``WY1976-84`` (the holdout minus its last water year, comparable with runs that trained the
 monthly family's WY1985), and WY1950-84 as ``WY1950-84_mixed`` (partly in-sample: the creeks,
-the back-extended monthly family and the arcs train WY1950-75).  The ten anchored locations
-coincide with the monthly training targets, so their held-out scores are a temporal holdout of
-the training target rather than an independent reference; the arc-sum locations compare against
-CalSim3's own inflow hydrology.  Each entity's own training window (the registry's
-``train_start`` .. ``train_end``: WY1985-2014 for the monthly family, record start to 2018-12
-for the daily families) is scored alongside as the in-sample comparison (``window = train``),
-without the held-out water years (``excluded_wy``).  The regime figure and the summary are over
-``WY1976-85``.
+the back-extended monthly family and the arcs train WY1950-75, and with the CDEC monthly
+companion, as in dPL-CalSim's fine-tune, the CDEC outlets' monthly flow too).  The ten
+anchored locations coincide with the monthly training targets, so their held-out scores are a
+temporal holdout of the training target rather than an independent reference; the arc-sum
+locations compare against CalSim3's own inflow hydrology.  Each entity's own training window
+(the registry's ``train_start`` .. ``train_end``: WY1985-2014 for the monthly family, record
+start to 2018-12 for the daily families) is scored alongside as the in-sample comparison
+(``window = train``), without the held-out water years (``excluded_wy``).  The regime figure
+and the summary are over ``WY1976-85``.
 
 Usage::
 

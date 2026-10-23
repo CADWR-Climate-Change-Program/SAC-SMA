@@ -13,7 +13,8 @@ CalSim3 series, and re-divides it among the arcs where it is not:
   model*: a small network gives each arc's share of its system's flow in a month, and each
   arc's water-year volume is then closed to its share of the system's water-year volume.  The
   arcs of a system therefore sum to the dPL system flow over every water year; inside the year
-  their sum moves by a few percent of the monthly flow.
+  their sum moves by a few percent of the monthly flow (median 2 %, 10 % in one month in ten in
+  the historical series).
 
 The share model.  Per arc and month, ``q = (dpl + floor) * exp(f)``, with
 ``f = log 2 * tanh(MLP)`` bounded to a factor of two and zero at initialization (= the dPL's own
@@ -109,7 +110,8 @@ TRAIN_POINTS = {"t1": (1.0, 1.0), "t3": (3.0, 1.0), "t4": (4.0, 1.0), "p85": (0.
 #: climate points no fit sees: the response gate is read at them
 VALIDATION_POINTS = {"t25": (2.5, 1.0), "p95": (0.0, 0.95), "p105": (0.0, 1.05),
                      "t25p95": (2.5, 0.95), "t25p105": (2.5, 1.05)}
-#: the water years the share model is fitted and scored on
+#: the water years the share model is fitted on (less the held-out years) and scored on
+#: (``product_scores`` also scores the years before them)
 PRODUCT_WY = (1950, 2015)
 #: the first day of a forcing's pass (the first complete water year of every forcing record)
 PASS_START = "1915-10-01"
@@ -221,10 +223,11 @@ def find_pass(name: str, run_dir: Path, scenario_dirs) -> Path | None:
 def share_features(D: pd.DataFrame, eps: pd.Series, centre_wy=PRODUCT_WY) -> pd.DataFrame:
     """The share model's inputs for one pass (``D`` sorted by arc and month, with ``system``
     and ``wy``).  Shares and the system flow are centred on the pass's own arc / system means
-    over ``centre_wy``: by default :data:`PRODUCT_WY`, the water years the model is fitted on,
-    whatever years the pass spans, so the fit and every pass the model is applied to centre
-    alike.  ``"all"`` centres on every water year of the pass, for a synthetic sequence that
-    has no such years (a stationary climate's long record stands in for the fit years)."""
+    over ``centre_wy``: by default :data:`PRODUCT_WY` (the fit years and the held-out years
+    among them; dPL flows only), whatever years the pass spans, so the fit and every pass the
+    model is applied to centre alike.  ``"all"`` centres on every water year of the pass, for a
+    synthetic sequence that has no such years (a stationary climate's long record stands in for
+    the fit years)."""
     wy = D.wy.to_numpy()
     if isinstance(centre_wy, str):
         if centre_wy != "all":

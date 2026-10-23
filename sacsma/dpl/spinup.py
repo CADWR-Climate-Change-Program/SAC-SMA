@@ -18,13 +18,13 @@ the fixed point 10-20x, and any rule evaluated on some set of rows makes a cell'
 state depend on which rows a caller watches.  A fixed count gives every cell the
 same state in every caller and domain holding it.
 
-Trained multifamily fields put the lower-zone tension capacity at its 5000 mm
-ceiling, and under Noah-lite that store is drawn by ET only above a 5 % wilting
-fraction, so it can take centuries to settle, filling in some cells and emptying in
-others.  No start is near the fixed point everywhere: from full storages a riva ~
-0.9 field ran twice its equilibrium block volume on the first pass and was still 10 %
-off after 20 passes (its stores empty), while a riva = 0 field reached 1e-3 in 16
-passes from full storages against ~65 from the cold start (its stores fill).  From
+Earlier trained multifamily fields put the lower-zone tension capacity at its 5000 mm
+ceiling (dPL-CalSim's runs from 56 to 805 mm), and under Noah-lite that store is drawn by
+ET only above a 5 % wilting fraction, so it can take centuries to settle, filling in some
+cells and emptying in others.  No start is near the fixed point everywhere: from full
+storages a riva ~ 0.9 field ran twice its equilibrium block volume on the first pass and
+was still 10 % off after 20 passes (its stores empty), while a riva = 0 field reached 1e-3
+in 16 passes from full storages against ~65 from the cold start (its stores fill).  From
 the cold start both were within 0.5 % in entity block volume after 20 passes, and
 the riva = 0 field's WY1950-84 tier-1 scores matched the full-start ones (0.857 vs
 0.858 mean KGE).  A few cells never settle from either start (lztwc 4900 mm apart

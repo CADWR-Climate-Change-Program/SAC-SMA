@@ -1,5 +1,5 @@
-"""The ``sacsma dpl`` commands: fidelity, train, evaluate, score, hybrid, and the two tool groups
-``calsim`` (the CalSim3 rim-arc validation and the rim-inflow product) and ``study`` (the
+"""The ``sacsma dpl`` commands: fidelity, train, evaluate, score, record, hybrid, and the two tool
+groups ``calsim`` (the CalSim3 rim-arc validation and the rim-inflow product) and ``study`` (the
 15-CDEC study figures).
 
 :func:`register` only defines arguments, so ``sacsma --help`` works without torch; every handler
@@ -250,6 +250,13 @@ def _dpl_score(args: argparse.Namespace) -> int:
             else [tok]))
     score_wy(args.checkpoint, _holdout_wy(args.wy), data_dir=args.data_dir,
              entities=entities, out_dir=args.out)
+    return 0
+
+
+def _dpl_record(args: argparse.Namespace) -> int:
+    from .record import write_record
+
+    write_record(args.run, data_dir=args.data_dir, out=args.out)
     return 0
 
 
@@ -542,7 +549,9 @@ def register(sub) -> None:
                          "tension-store memory exactly — measured KGE vs "
                          "the full prefix 1.000000; clamped to the record "
                          "start, so pass 1915-01-01 for the exact frozen "
-                         "full-prefix convention)")
+                         "full-prefix convention; on the multifamily domain a "
+                         "date inside the envelope is moved to 10 water years "
+                         "before it)")
     tr.add_argument("--lr", type=float, default=1e-3)
     tr.add_argument("--grad-clip", type=float, default=DplConfig.grad_clip,
                     help="max total gradient norm of a chunk's optimizer step (one step "
@@ -602,6 +611,18 @@ def register(sub) -> None:
                     help="the run to write (any of its folders; default: the run of the "
                          "checkpoint)")
     sc.set_defaults(func=_dpl_score)
+
+    rc = dpl_sub.add_parser(
+        "record",
+        help="what a multifamily run trained on, stage by stage (the run and its init_from "
+             "donors): every entity's targets and every exclusion with its reason -> the "
+             "run's results training_record/",
+    )
+    rc.add_argument("run", help="a run name, any of the run's folders, or a checkpoint")
+    rc.add_argument("--data-dir", default="data", help="organized data/ store")
+    rc.add_argument("--out", default=None,
+                    help="output dir (default: training_record/ of the run's results folder)")
+    rc.set_defaults(func=_dpl_record)
 
     hy = dpl_sub.add_parser(
         "hybrid",

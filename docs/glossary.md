@@ -9,8 +9,8 @@ one thing.
 |---|---|
 | Domain | What `--domain` selects: a group of watersheds with their modeling units. `15cdec`, `15cdec_grid`, `9unimp`, `11obs`, `12rim`, `multifamily`. |
 | Calibration set | One of the four GA calibrations: CDEC15 (`15cdec`), Rim12 (`12rim`), Observed11 (`11obs`), Unimpaired9 (`9unimp`). |
-| `15cdec_grid` | The 15 CDEC watersheds on 1/16° grid cells in place of the original HRUs. Its GA calibration is the starting field of every learned-parameter run; its forcing feeds the LSTM hybrids. |
-| `multifamily` | The grid cells and CalSim3 catchment outlines the learned-parameter runs train on: every entity of every family for dPL-CalSim, the 15 CDEC records for rungs 2 to 7 of the ladder. |
+| `15cdec_grid` | The 15 CDEC watersheds on 1/16° grid cells in place of the original HRUs. Its GA calibration is the starting field of every learned-parameter run trained from scratch; its forcing feeds the LSTM hybrids. |
+| `multifamily` | The grid cells and CalSim3 catchment outlines the learned-parameter runs train on: for dPL-CalSim every USGS, CDEC and unimpaired-flow entity and the 64 tier-A CalSim3 arcs (159 of the registry's 291), for rungs 2 to 7 of the ladder the 15 CDEC records. |
 | Entity | One flow record together with the grid cells that drain to it. |
 | Family | The entities of one data source: `usgs_daily`, `cdec_daily`, `uf_monthly`, `calsim_monthly`. |
 | HRU | Hydrologic response unit: a grid cell intersected with a soil class, the original modeling unit. |
@@ -39,10 +39,10 @@ one thing.
 
 | Word | Meaning |
 |---|---|
-| System | A group of arcs that closes to one anchor. 18 in all: 11 with several arcs, 7 with one. |
+| System | A group of arcs that shares one anchor series. The product divides the model's flow of the group among its arcs. 18 in all: 11 with several arcs, 7 with one. |
 | Share arc | An arc of a multi-arc system (139). The product divides the system's flow among them. |
 | Single-arc system | A system of one arc (7). |
-| Non-anchor arc | An arc with no system to close to (50). |
+| Non-anchor arc | An arc the product does not close to a system (50): 39 with no anchor, 11 whose anchor is left out. |
 | Share model | The small network that sets each share arc's fraction of its system's flow. |
 
 ## "Tier" has three unrelated meanings
@@ -77,6 +77,6 @@ one thing.
 | KGE | Kling–Gupta efficiency ([Model equations](equations.md#5-evaluation-metrics)). 1 is perfect. |
 | Seasonal mismatch | The share of annual volume placed in the wrong month. |
 | Footprint screening | Keeping only the modeling units inside the CalSim3 catchment for four watersheds whose calibrated outline over-reaches it ([Conventions](conventions.md)). |
-| Holdout | Years withheld from every fit. For dPL-CalSim: WY1976–85. Rungs 1 to 7 train on WY1989–2003 only. |
+| Holdout | Years whose observations are withheld from every fit (their forcing still runs). For dPL-CalSim: WY1976–85. Rungs 1 to 7 train on WY1989–2003 only. |
 | Cycle spinup | The starting state used in scoring: the first ten water years looped 20 times from a cold start. |
 | Local-only | On this machine and ignored by git: `tmp/` and `artifacts/_local/`. |

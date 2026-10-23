@@ -15,7 +15,7 @@ The reference model (`sacsma.model`) runs them with the HRU tables of
 | File | What |
 |---|---|
 | `15cdec/ga_optimum.csv` | The pooled optimum of the 15 CDEC watersheds (KGE objective, WY1989–2003), one row per cell, keyed by `key` |
-| `15cdec_grid/ga_optimum.csv` | The optimum on the coarse grid-aligned units of `15cdec_grid`, one row per `hruinfo` row, keyed by `basin` and `key`. Its area-weighted median over the rows, parameter by parameter, is also the starting field of every learned-parameter run (`sacsma.dpl.train`) |
+| `15cdec_grid/ga_optimum.csv` | The optimum on the coarse grid-aligned units of `15cdec_grid`, one row per `hruinfo` row, keyed by `basin` and `key`. Its area-weighted median over the rows, parameter by parameter, is also the starting field of every learned-parameter run trained from scratch (`sacsma.dpl.train`; a fine-tune starts from its donor's field) |
 | `callite/9unimp/`, `callite/11obs/`, `callite/12rim/` `ga_optimum.csv` | The per-watershed optima of the three CalLite sets, with a `basin` column: a cell shared by two watersheds holds different parameters in each, so filter by `basin` before indexing by `key` |
 
 `sacsma verify parity` checks that they still reproduce the archived MATLAB simulation.

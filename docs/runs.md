@@ -38,9 +38,10 @@ series.
 
 dPL-CalSim trains one network on 159 entities: 69 USGS gauges, 17 CDEC records, the 9
 unimpaired-flow subbasins (back to WY1950) and 64 CalSim3 arcs, on every year but WY1976–85,
-which is held out of every family. Mean KGE by family; the training years are scored on the
-cleaned targets, which keep 60 of the USGS gauges, 5 of the subbasins and 60 of the arcs, and
-WY1976–85 on the records as they are:
+whose targets are held out of every family. The warm start trains on all of them; the
+fine-tune's cleaned targets keep 60 of the USGS gauges, 5 of the subbasins and 60 of the arcs
+([Training record](training_record.md)). Mean KGE by family; the training years are scored on
+the cleaned targets and WY1976–85 on the records as they are:
 
 | | usgs | cdec | uf | arcs | Tier 1 mean | Tier 2 median |
 |---|---|---|---|---|---|---|
@@ -62,8 +63,10 @@ Every rung uses the defaults of `sacsma dpl train`: the variance-normalized squa
 log-flow term and the record-form variance term, each chunk weighted by its days, dropout 0, a
 gradient clip of 12, the state carried between water-year chunks with its relative saturation in
 the gradient, the gradient through two water years, 120 epochs, and the `15cdec_grid` GA median as
-the starting field. On top of them, every rung selects its network on the CPU every epoch
-(`--cpu-select`, patience 20), masks the confirmed bad CDEC days
+the starting field (for `8_calsim` its warm start; the fine-tune runs 45 epochs from the warm
+start's network). On top of them, every rung selects its network on the CPU every epoch
+(`--cpu-select`, patience 20; `8_calsim`'s fine-tune finished with patience 45), masks the
+confirmed bad CDEC days
 (`data/targets/cdec/fnf_daily_mask.csv`), maps `lzsk`, `lzpk`, `MFMAX` and `MFMIN` in log space
 with `lzsk` down to 0.001, and adds a small penalty on the network's saturated outputs. The
 commands are in [Reproduce](reproduce.md).
@@ -208,12 +211,15 @@ sacsma dpl calsim atlas <run> --score-holdout
   TLG and CLE, with more volume in the wrong month (0.064 against 0.045). These are training
   years: the check is the move to the weather-generator forcing. See [Benchmark](benchmark.md).
 - Snow-17 parameters fall outside the published ranges. With `MBASE` free down to −2 °C and
-  `NMF` up to 0.5, dPL-CalSim puts `MBASE` below 0 °C in every cell (median −1.79; 17 % at −2)
-  and `NMF` above 0.3, the largest Anderson gives, in every cell (median 0.47; 12 % at 0.5).
-  Daily ground melt `DAYGM` is 0.018 mm/day at the median, against 0.24 with the range pinned,
-  and below 0.01 in 32 % of the cells (inside its 0 to 0.3 range). The snowpack matches that of
-  the same recipe with these ranges pinned (regional mean peak 191 against 192 mm), as do the
-  WY1976–85 scores. The values fit this structure to flow; they are not measured melt properties.
+  `NMF` up to 0.5, dPL-CalSim's warm start puts `MBASE` below 0 °C in every cell (median −1.79;
+  11 % within 0.05 of −2) and `NMF` above 0.3, the largest Anderson gives, in every cell
+  (median 0.47; 13 % within 0.005 of 0.5). Daily ground melt `DAYGM` is 0.018 mm/day at the
+  median, against 0.24 with the range pinned, and below 0.01 in 32 % of the cells (inside its 0
+  to 0.3 range). The fine-tune keeps this (`MBASE` median −1.77, `NMF` 0.47 with 16 % within
+  0.005 of 0.5, `DAYGM` 0.016 and below 0.01 in 37 % of the cells). The warm start's snowpack
+  matches that of the same recipe with these ranges pinned (regional mean peak 191 against
+  192 mm), as do the WY1976–85 scores. The values fit this structure to flow; they are not
+  measured melt properties.
 - Flood peaks: the two-year gradient flattens the five largest annual peaks by about 4 points
   of their ratio to observed on WY1989–2003 (`2_grid` against a one-year control). Both
   under-predict them.
@@ -268,8 +274,8 @@ the time.
   (`7_calsim_fpb`): `PLWHC` and `UADJ` went below their published floors in every cell (medians
   0.004 and 0.005) and `MFMIN` in 55 %, `NMF` above 0.5 in 82 %, and the Noah-lite ET's
   slope at the wilting point drove one epoch's gradient to 5e8 (since capped,
-  [Model equations](equations.md#6-parameter-table)). Selection score 0.829 against dPL-CalSim's
-  0.831.
+  [Model equations](equations.md#6-parameter-table)). Selection score 0.829 against 0.831 for
+  dPL-CalSim's warm start, trained on the same targets.
 - Building the model by fine-tuning earlier runs (a one-year base, then two-year fine-tunes): on
   WY1976–85 the run trained from scratch on one recipe is level on the arcs and outlets, better
   on the USGS gauges (+0.011) and the product (+0.012), worse on the subbasins (−0.020).

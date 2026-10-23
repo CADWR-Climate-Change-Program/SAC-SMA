@@ -73,9 +73,11 @@ encodings and the sampling conventions are in
   its sidecars supply the observed canopy (cover fraction, LAI) of the Noah ET path.
 - caution: the `15cdec_grid` footprints over-reach the true catchments by 9 to 66 % in 11 of the 15
   watersheds. The learned-parameter runs from `2_grid` on train on the cells of the `multifamily`
-  registry instead (CalSim3 catchment outlines); the hybrids' precipitation input is a mean over the
-  `15cdec_grid` footprints. Against `15cdec`, the coarse grid loses the orographic downscaling of HRU
-  meteorology, an upstream CADWR product that is not in the repository.
+  registry instead (CalSim3 catchment outlines, the original SAC-SMA polygons for the four Tulare
+  watersheds and the USGS delineations for dPL-CalSim's gauges); the hybrids' precipitation input
+  is a mean over the `15cdec_grid` footprints. Against `15cdec`, the coarse grid loses the
+  orographic downscaling of HRU meteorology, an upstream CADWR product that is not in the
+  repository.
 - The `15cdec_grid` sidecars, like the region store, are means over the cell footprint. The sidecars of
   the HRU domains are point samples at the HRU point.
 - The sidecars are the soil, vegetation, terrain and LAI inputs of the `physical` feature variant of
@@ -94,8 +96,9 @@ encodings and the sampling conventions are in
 - `12rim/basin_area.csv`: `sacsma.product` (the CalLite file of the 12 rim inflows).
 - `basin_tminmax_livneh.csv`: `sacsma.dpl.hybrid.data` (the watershed Tmin and Tmax inputs of the hybrid
   and LSTM models).
-- `15cdec_grid`: `sacsma.dpl.train` (the starting field of every learned-parameter run is the
-  area-weighted median of its GA optimum over these rows), `sacsma.dpl.hybrid.data` (the hybrids'
+- `15cdec_grid`: `sacsma.dpl.train` (the starting field of every learned-parameter run trained from
+  scratch is the area-weighted median of its GA optimum over these rows; a fine-tune starts from its
+  donor), `sacsma.dpl.hybrid.data` (the hybrids'
   forcing) and `sacsma.dpl.studies.forcing_sensitivity` (the cells the temperature-detrending field is
   computed on).
 - Build scripts: `data/inputs/grid/build_region_grid.py` and `build_region_statics.py` (cells and

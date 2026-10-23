@@ -160,10 +160,11 @@ after a forcing store changes. The BCM fit is keyed by its inputs and code.
 
 - Caution: two of the three models were fitted to these records over this window, so their
   scores here are in-sample.
-  - dPL-CalSim was trained on these daily series, from 1986–1999 (by site) to 2018. Its
-    held-out decade (WY1976–85) is outside this window. It was trained on the daily records,
-    which run 3 to 6 % below CDEC's monthly series at YRS, CSN, MRC and MKM, so its volume
-    there sits 3 to 6 points lower against the monthly series than against the daily one.
+  - dPL-CalSim was trained on these daily series, from 1986–1999 (by site) to 2018, and its
+    fine-tune also on CDEC's monthly series at 15 of the 17 outlets (from WY1950; WY1986 at CLE,
+    ISB and SCC). Its held-out decade (WY1976–85) is outside this window. The daily records run
+    3 to 6 % below CDEC's monthly series at YRS, CSN, MRC and MKM, so its volume there sits 3 to
+    6 points lower against the monthly series than against the daily one.
   - BCM's routing was fitted here to the same observations over the same window; fitted on
     one half and scored on the other, its median KGE is 0.90 (above). The BCM water balance
     itself was not fitted.

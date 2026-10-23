@@ -1,0 +1,182 @@
+stage,entity,family,stream,source,reason,units
+2,cdec_CLE,cdec_daily,cdec_monthly,cdec/fnf_monthly_screen.csv,D2m,11
+2,cdec_CLE,cdec_daily,cdec_monthly,cdec/fnf_monthly_screen.csv,M1r,3
+2,cdec_CLE,cdec_daily,cdec_monthly,cdec/fnf_monthly_screen.csv,M1z,10
+2,cdec_CLE,cdec_daily,cdec_monthly,cdec/fnf_monthly_screen.csv + cdec/forcing_era_mask.csv,M1r + R3 WY1962-1975,2
+2,cdec_CLE,cdec_daily,cdec_monthly,cdec/fnf_monthly_screen.csv + cdec/forcing_era_mask.csv,M1z + R3 WY1962-1975,1
+2,cdec_CLE,cdec_daily,cdec_monthly,cdec/forcing_era_mask.csv,R3 WY1950-1961,144
+2,cdec_CLE,cdec_daily,cdec_monthly,cdec/forcing_era_mask.csv,R3 WY1962-1975,165
+2,cdec_CLE,cdec_daily,target,cdec/fnf_daily_screen.csv,D1,17
+2,cdec_CLE,cdec_daily,target,cdec/fnf_daily_screen.csv,D2,379
+2,cdec_CLE,cdec_daily,target,cdec/fnf_daily_screen.csv,S,4431
+2,cdec_CSN,cdec_daily,cdec_monthly,cdec/fnf_monthly_screen.csv,D2m,2
+2,cdec_CSN,cdec_daily,cdec_monthly,cdec/fnf_monthly_screen.csv,M1r,5
+2,cdec_CSN,cdec_daily,cdec_monthly,cdec/fnf_monthly_screen.csv,M1z,17
+2,cdec_CSN,cdec_daily,target,cdec/fnf_daily_screen.csv,D2,184
+2,cdec_CSN,cdec_daily,target,cdec/fnf_daily_screen.csv,S,3056
+2,cdec_FOL,cdec_daily,cdec_monthly,cdec/fnf_monthly_screen.csv,D2m,1
+2,cdec_FOL,cdec_daily,cdec_monthly,cdec/fnf_monthly_screen.csv,M1r,5
+2,cdec_FOL,cdec_daily,cdec_monthly,cdec/fnf_monthly_screen.csv,M1z,15
+2,cdec_FOL,cdec_daily,target,cdec/fnf_daily_screen.csv,D1,25
+2,cdec_FOL,cdec_daily,target,cdec/fnf_daily_screen.csv,D2,389
+2,cdec_FOL,cdec_daily,target,cdec/fnf_daily_screen.csv,S,3859
+2,cdec_ISB,cdec_daily,cdec_monthly,cdec/fnf_monthly_screen.csv,D2m,1
+2,cdec_ISB,cdec_daily,cdec_monthly,cdec/forcing_era_mask.csv,R3 WY1950-1961,144
+2,cdec_ISB,cdec_daily,cdec_monthly,cdec/forcing_era_mask.csv,R3 WY1962-1975,168
+2,cdec_MIL,cdec_daily,cdec_monthly,cdec/forcing_era_mask.csv,R3 WY1962-1975,168
+2,cdec_MIL,cdec_daily,target,cdec/fnf_daily_screen.csv,D1,124
+2,cdec_MIL,cdec_daily,target,cdec/fnf_daily_screen.csv,D2,353
+2,cdec_MIL,cdec_daily,target,cdec/fnf_daily_screen.csv,D3,366
+2,cdec_MIL,cdec_daily,target,cdec/fnf_daily_screen.csv,F,23
+2,cdec_MKM,cdec_daily,cdec_monthly,cdec/fnf_monthly_screen.csv,M1r,7
+2,cdec_MKM,cdec_daily,cdec_monthly,cdec/fnf_monthly_screen.csv,M1z,15
+2,cdec_MKM,cdec_daily,target,cdec/fnf_daily_screen.csv,D1,30
+2,cdec_MKM,cdec_daily,target,cdec/fnf_daily_screen.csv,D2,240
+2,cdec_MKM,cdec_daily,target,cdec/fnf_daily_screen.csv,F,36
+2,cdec_MKM,cdec_daily,target,cdec/fnf_daily_screen.csv,S,3920
+2,cdec_MRC,cdec_daily,cdec_monthly,cdec/fnf_monthly_screen.csv,D2m,3
+2,cdec_MRC,cdec_daily,cdec_monthly,cdec/fnf_monthly_screen.csv,M1r,2
+2,cdec_MRC,cdec_daily,cdec_monthly,cdec/fnf_monthly_screen.csv,M1z,13
+2,cdec_MRC,cdec_daily,target,cdec/fnf_daily_screen.csv,D2,449
+2,cdec_MRC,cdec_daily,target,cdec/fnf_daily_screen.csv,F,62
+2,cdec_MRC,cdec_daily,target,cdec/fnf_daily_screen.csv,S,3717
+2,cdec_NHG,cdec_daily,target,cdec/fnf_daily_screen.csv,D1,179
+2,cdec_NHG,cdec_daily,target,cdec/fnf_daily_screen.csv,S,3388
+2,cdec_NML,cdec_daily,target,cdec/fnf_daily_screen.csv,D1,29
+2,cdec_NML,cdec_daily,target,cdec/fnf_daily_screen.csv,S,4670
+2,cdec_ORO,cdec_daily,target,cdec/fnf_daily_screen.csv,D1,24
+2,cdec_ORO,cdec_daily,target,cdec/fnf_daily_screen.csv,D2,203
+2,cdec_ORO,cdec_daily,target,cdec/fnf_daily_screen.csv,F,1
+2,cdec_ORO,cdec_daily,target,cdec/fnf_daily_screen.csv,S,3665
+2,cdec_PNF,cdec_daily,cdec_monthly,cdec/fnf_monthly_screen.csv,D2m,1
+2,cdec_PNF,cdec_daily,target,cdec/fnf_daily_screen.csv,D1,40
+2,cdec_PNF,cdec_daily,target,cdec/fnf_daily_screen.csv,D2,88
+2,cdec_PNF,cdec_daily,target,cdec/fnf_daily_screen.csv,D3,71
+2,cdec_PNF,cdec_daily,target,cdec/fnf_daily_screen.csv,F,6
+2,cdec_SCC,cdec_daily,cdec_monthly,cdec/fnf_monthly_screen.csv,M1r,3
+2,cdec_SCC,cdec_daily,cdec_monthly,cdec/fnf_monthly_screen.csv,M1z,14
+2,cdec_SCC,cdec_daily,cdec_monthly,cdec/fnf_monthly_screen.csv + cdec/forcing_era_mask.csv,M1r + R3 WY1950-1961,8
+2,cdec_SCC,cdec_daily,cdec_monthly,cdec/fnf_monthly_screen.csv + cdec/forcing_era_mask.csv,M1r + R3 WY1962-1975,3
+2,cdec_SCC,cdec_daily,cdec_monthly,cdec/fnf_monthly_screen.csv + cdec/forcing_era_mask.csv,M1z + R3 WY1950-1961,13
+2,cdec_SCC,cdec_daily,cdec_monthly,cdec/fnf_monthly_screen.csv + cdec/forcing_era_mask.csv,M1z + R3 WY1962-1975,2
+2,cdec_SCC,cdec_daily,cdec_monthly,cdec/forcing_era_mask.csv,R3 WY1950-1961,123
+2,cdec_SCC,cdec_daily,cdec_monthly,cdec/forcing_era_mask.csv,R3 WY1962-1975,163
+2,cdec_SCC,cdec_daily,target,cdec/fnf_daily_screen.csv,D1,134
+2,cdec_SCC,cdec_daily,target,cdec/fnf_daily_screen.csv,D2,743
+2,cdec_SCC,cdec_daily,target,cdec/fnf_daily_screen.csv,D3,311
+2,cdec_SCC,cdec_daily,target,cdec/fnf_daily_screen.csv,F,264
+2,cdec_SHA,cdec_daily,target,cdec/fnf_daily_screen.csv,D1,12
+2,cdec_SHA,cdec_daily,target,cdec/fnf_daily_screen.csv,D2,28
+2,cdec_TLG,cdec_daily,cdec_monthly,cdec/fnf_monthly_screen.csv,D2m,4
+2,cdec_TLG,cdec_daily,cdec_monthly,cdec/fnf_monthly_screen.csv,M1r,4
+2,cdec_TLG,cdec_daily,cdec_monthly,cdec/fnf_monthly_screen.csv,M1z,1
+2,cdec_TLG,cdec_daily,target,cdec/fnf_daily_screen.csv,D1,88
+2,cdec_TLG,cdec_daily,target,cdec/fnf_daily_screen.csv,D2,280
+2,cdec_TLG,cdec_daily,target,cdec/fnf_daily_screen.csv,F,4
+2,cdec_TLG,cdec_daily,target,cdec/fnf_daily_screen.csv,S,4036
+2,cdec_TRM,cdec_daily,cdec_monthly,cdec/fnf_monthly_screen.csv,M1r,1
+2,cdec_TRM,cdec_daily,cdec_monthly,cdec/fnf_monthly_screen.csv,M1z,1
+2,cdec_TRM,cdec_daily,target,cdec/fnf_daily_screen.csv,D1,37
+2,cdec_TRM,cdec_daily,target,cdec/fnf_daily_screen.csv,D2,208
+2,cdec_TRM,cdec_daily,target,cdec/fnf_daily_screen.csv,D3,104
+2,cdec_TRM,cdec_daily,target,cdec/fnf_daily_screen.csv,F,28
+2,cdec_YRS,cdec_daily,cdec_monthly,cdec/fnf_monthly_screen.csv,M1z,1
+2,cdec_YRS,cdec_daily,target,cdec/fnf_daily_screen.csv,D1,45
+2,cdec_YRS,cdec_daily,target,cdec/fnf_daily_screen.csv,D2,285
+2,cdec_YRS,cdec_daily,target,cdec/fnf_daily_screen.csv,F,3
+2,cdec_YRS,cdec_daily,target,cdec/fnf_daily_screen.csv,S,4224
+2,cs_I_ANT011,calsim_monthly,target,calsim3/location_mask.csv,train once (usgs_11379000),309
+2,cs_I_BCK040,calsim_monthly,target,calsim3/location_mask.csv,Jul-Sep (location audit),18
+2,cs_I_BCN010,calsim_monthly,target,calsim3/location_mask.csv,Jul-Sep (location audit),3
+2,cs_I_BUCKS,calsim_monthly,target,calsim3/location_mask.csv,Jul-Sep (location audit),51
+2,cs_I_CAPLS,calsim_monthly,target,calsim3/location_mask.csv,Jul-Sep (location audit),99
+2,cs_I_CFS001,calsim_monthly,target,calsim3/location_mask.csv,train once (usgs_11292500),408
+2,cs_I_CMP001,calsim_monthly,target,calsim3/location_mask.csv,Jul-Sep (location audit),120
+2,cs_I_CMP014,calsim_monthly,target,calsim3/location_mask.csv,Jul-Sep (location audit),6
+2,cs_I_COL003,calsim_monthly,target,calsim3/location_mask.csv,train once (usgs_11315000),657
+2,cs_I_CSM035,calsim_monthly,target,calsim3/location_mask.csv,Jul-Sep (location audit),168
+2,cs_I_DAVIS,calsim_monthly,target,calsim3/location_mask.csv,Jul-Sep (location audit),24
+2,cs_I_DCC010,calsim_monthly,target,calsim3/location_mask.csv,train once (usgs_11427700),521
+2,cs_I_EBF001,calsim_monthly,target,calsim3/location_mask.csv,Jul-Sep (location audit),36
+2,cs_I_FRDYC,calsim_monthly,target,calsim3/location_mask.csv,Jul-Sep (location audit),117
+2,cs_I_FRMAN,calsim_monthly,target,calsim3/location_mask.csv,Jul-Sep (location audit),120
+2,cs_I_FRMDW,calsim_monthly,target,calsim3/location_mask.csv,Jul-Sep (location audit),117
+2,cs_I_GZL009,calsim_monthly,target,calsim3/location_mask.csv,Jul-Sep (location audit),66
+2,cs_I_HHOLE,calsim_monthly,target,calsim3/location_mask.csv,Jul-Sep (location audit),120
+2,cs_I_HON021,calsim_monthly,target,calsim3/location_mask.csv,Jul-Sep (location audit),78
+2,cs_I_ICEHS,calsim_monthly,target,calsim3/location_mask.csv,Jul-Sep (location audit),138
+2,cs_I_JKSMD,calsim_monthly,target,calsim3/location_mask.csv,Jul-Sep (location audit),126
+2,cs_I_JNKSN,calsim_monthly,target,calsim3/location_mask.csv,Jul-Sep (location audit),3
+2,cs_I_LCC038,calsim_monthly,target,calsim3/location_mask.csv,Jul-Sep (location audit),81
+2,cs_I_LNG012,calsim_monthly,target,calsim3/location_mask.csv,Jul-Sep (location audit),48
+2,cs_I_LOONL,calsim_monthly,target,calsim3/location_mask.csv,Jul-Sep (location audit),129
+2,cs_I_LRB004,calsim_monthly,target,calsim3/location_mask.csv,Jul-Sep (location audit),75
+2,cs_I_MFA036,calsim_monthly,target,calsim3/location_mask.csv,Jul-Sep (location audit),117
+2,cs_I_MFM008,calsim_monthly,target,calsim3/location_mask.csv,Jul-Sep (location audit),168
+2,cs_I_NFS033,calsim_monthly,target,calsim3/location_mask.csv,Jul-Sep (location audit),159
+2,cs_I_NMA003,calsim_monthly,target,calsim3/location_mask.csv,train once (usgs_11433260),120
+2,cs_I_OWN040,calsim_monthly,target,calsim3/location_mask.csv,Jul-Sep (location audit),15
+2,cs_I_PCRST,calsim_monthly,target,calsim3/location_mask.csv,Jul-Sep (location audit),168
+2,cs_I_RLIEF,calsim_monthly,target,calsim3/location_mask.csv,Jul-Sep (location audit),168
+2,cs_I_SFM005,calsim_monthly,target,calsim3/location_mask.csv,Jul-Sep (location audit) + train once (usgs_11318500),168
+2,cs_I_SFM005,calsim_monthly,target,calsim3/location_mask.csv,train once (usgs_11318500),501
+2,cs_I_SFY048,calsim_monthly,target,calsim3/location_mask.csv,Jul-Sep (location audit),27
+2,cs_I_SFY048,calsim_monthly,target,calsim3/location_mask.csv,Jul-Sep (location audit) + WY1995-2014 (location audit),60
+2,cs_I_SFY048,calsim_monthly,target,calsim3/location_mask.csv,Jul-Sep (location audit) + train once (usgs_11414000),78
+2,cs_I_SFY048,calsim_monthly,target,calsim3/location_mask.csv,WY1995-2014 (location audit),180
+2,cs_I_SFY048,calsim_monthly,target,calsim3/location_mask.csv,train once (usgs_11414000),231
+2,cs_I_SILVR,calsim_monthly,target,calsim3/location_mask.csv,Jul-Sep (location audit),168
+2,cs_I_SLTSP,calsim_monthly,target,calsim3/location_mask.csv,Jul-Sep (location audit),81
+2,cs_I_SLV006,calsim_monthly,target,calsim3/location_mask.csv,Jul-Sep (location audit),72
+2,cs_I_SLV015,calsim_monthly,target,calsim3/location_mask.csv,Jul-Sep (location audit),72
+2,cs_I_SLYCK,calsim_monthly,target,calsim3/location_mask.csv,Jul-Sep (location audit) + whole record,96
+2,cs_I_SLYCK,calsim_monthly,target,calsim3/location_mask.csv,whole record,288
+2,cs_I_SPICE,calsim_monthly,target,calsim3/location_mask.csv,Jul-Sep (location audit),9
+2,cs_I_SPICE,calsim_monthly,target,calsim3/location_mask.csv,Jul-Sep (location audit) + train once (usgs_11294000),69
+2,cs_I_SPICE,calsim_monthly,target,calsim3/location_mask.csv,train once (usgs_11294000),207
+2,cs_I_SPLDG,calsim_monthly,target,calsim3/location_mask.csv,Jul-Sep (location audit),117
+2,cs_I_UBEAR,calsim_monthly,target,calsim3/location_mask.csv,Jul-Sep (location audit),81
+2,cs_I_WBR001,calsim_monthly,target,calsim3/location_mask.csv,Jul-Sep (location audit) + whole record,30
+2,cs_I_WBR001,calsim_monthly,target,calsim3/location_mask.csv,whole record,90
+2,uf_02,uf_monthly,target,dwr_unimpaired/location_mask.csv,Jul-Sep (location audit),144
+2,uf_03,uf_monthly,target,dwr_unimpaired/location_mask.csv,whole record,660
+2,uf_04,uf_monthly,target,dwr_unimpaired/location_mask.csv,Jul-Sep (location audit),165
+2,uf_06,uf_monthly,target,dwr_unimpaired/location_mask.csv,whole record,660
+2,uf_07,uf_monthly,target,dwr_unimpaired/location_mask.csv,Jul-Sep (location audit),87
+2,uf_10,uf_monthly,target,dwr_unimpaired/location_mask.csv,Jul-Sep (location audit),165
+2,uf_13,uf_monthly,target,dwr_unimpaired/location_mask.csv,whole record,660
+2,uf_20,uf_monthly,target,dwr_unimpaired/location_mask.csv,Jul-Sep (location audit),87
+2,uf_20,uf_monthly,target,dwr_unimpaired/location_mask.csv,train once (usgs_11259000),273
+2,uf_21,uf_monthly,target,dwr_unimpaired/location_mask.csv,Jul-Sep (location audit) + whole record,87
+2,uf_21,uf_monthly,target,dwr_unimpaired/location_mask.csv,whole record,573
+2,usgs_11199500,usgs_daily,target,usgs/location_mask.csv,"WY1962-1975 forcing (R4, station index)",1703
+2,usgs_11208500,usgs_daily,target,usgs/location_mask.csv,Jul-Sep (location audit) + whole record,643
+2,usgs_11208500,usgs_daily,target,usgs/location_mask.csv,whole record,1670
+2,usgs_11218500,usgs_daily,target,usgs/location_mask.csv,Jul-Nov (11218501 regulated),3305
+2,usgs_11230500,usgs_daily,target,usgs/location_mask.csv,"WY1950-1975 forcing (R4, station index)",9404
+2,usgs_11237500,usgs_daily,target,usgs/location_mask.csv,"WY1962-1975 forcing (R4, station index)",5113
+2,usgs_11257500,usgs_daily,target,usgs/location_mask.csv,whole record,7670
+2,usgs_11258000,usgs_daily,target,usgs/location_mask.csv,whole record,7670
+2,usgs_11294000,usgs_daily,target,usgs/location_mask.csv,Jul-Sep (location audit),2116
+2,usgs_11294500,usgs_daily,target,usgs/location_mask.csv,Jul-Sep (location audit),2668
+2,usgs_11318500,usgs_daily,target,usgs/location_mask.csv,Jul-Sep (location audit),5122
+2,usgs_11341400,usgs_daily,target,usgs/location_mask.csv,Jul-Sep (location audit),735
+2,usgs_11341400,usgs_daily,target,usgs/location_mask.csv,Jul-Sep (location audit) + WY1969-1969 (location audit),92
+2,usgs_11341400,usgs_daily,target,usgs/location_mask.csv,October (Box Canyon),248
+2,usgs_11341400,usgs_daily,target,usgs/location_mask.csv,WY1969-1969 (location audit),273
+2,usgs_11374000,usgs_daily,target,usgs/location_mask.csv,Jul-Sep (location audit),2392
+2,usgs_11375700,usgs_daily,target,usgs/location_mask.csv,Jul-Sep (location audit),1748
+2,usgs_11394500,usgs_daily,target,usgs/location_mask.csv,Jul-Sep (location audit),2299
+2,usgs_11396400,usgs_daily,target,usgs/location_mask.csv,Jul-Sep (location audit) + whole record,1196
+2,usgs_11396400,usgs_daily,target,usgs/location_mask.csv,whole record,3278
+2,usgs_11408850,usgs_daily,target,usgs/location_mask.csv,whole record,2966
+2,usgs_11413320,usgs_daily,target,usgs/location_mask.csv,Jul-Sep (location audit) + whole record,1748
+2,usgs_11413320,usgs_daily,target,usgs/location_mask.csv,whole record,5210
+2,usgs_11413323,usgs_daily,target,usgs/location_mask.csv,Jul-Sep (location audit) + whole record,1656
+2,usgs_11413323,usgs_daily,target,usgs/location_mask.csv,whole record,4934
+2,usgs_11414000,usgs_daily,target,usgs/location_mask.csv,Jul-Sep (location audit),2392
+2,usgs_11418000,usgs_daily,target,usgs/location_mask.csv,whole record,7305
+2,usgs_11433300,usgs_daily,target,usgs/location_mask.csv,WY1963-2018 (location audit),1553
+2,usgs_11433500,usgs_daily,target,usgs/location_mask.csv,WY1962-2018 (location audit),1188
+2,usgs_11445500,usgs_daily,target,usgs/location_mask.csv,Jul-Sep (location audit),736
+2,usgs_11525500,usgs_daily,target,usgs/location_mask.csv,whole record,4018

@@ -29,6 +29,7 @@ remakes it in under a minute (`sacsma.dpl.evaluate.basin_daily`, cached under
 | `tier2/tier2_metrics.csv`, `tier2_arcs.csv` | Every rim arc against CalSim3, and each arc's coverage, parent entity and share of trained cells | `sacsma dpl calsim tier2 <run> --trace-python <python of sacsma-gis> --score-holdout` |
 | `tier2/tier2_anchor_rescaled.csv` | Each arc after its system is rescaled to the CalSim3 anchor (an evaluation-only score) | the same |
 | `atlas/calsim_validation_atlas.html` | One self-contained page: maps, a tab per location, the arcs outside every trained footprint, the training footprints | `sacsma dpl calsim atlas <run> --score-holdout` |
+| `training_record/` | What each training stage trained on, from its checkpoint through the trainer's own loader: `stages.csv` (stage 1 the warm start, stage 2 the fine-tune: checkpoint, donor, epochs, the settings that choose the targets), `families.csv` (per stage and family: entities with a target, units trained, the July–September units, the CDEC monthly record), `entities.csv` (per stage and entity: every count from the registry record to the units trained), `exclusions.csv` (per stage, entity and reason: the units left out and the table that gives the reason). Read with [Training record](../../../docs/training_record.md) | `sacsma dpl record <run>` (CPU, under a minute) |
 
 ## The fidelity check and the studies
 

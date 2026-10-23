@@ -3,10 +3,12 @@
 Daily full natural flow (FNF) as computed and published by the California Data Exchange
 Center (CDEC sensor 8, daily duration), and the monthly FNF of the benchmark sites (sensor 65,
 monthly duration). Role: target. `gage_15cdec.csv` is the daily calibration target of the
-15cdec domain (pooled calibration, WY1989 to 2003) and of the `cdec_daily` family of the
-learned-parameter (dPL) models. The other daily files are pulls of daily FNF for stations
+15cdec domain (pooled calibration, WY1989 to 2003) and of the 15 original watersheds in the
+`cdec_daily` family of the learned-parameter (dPL) models (CLE and CSN read `fnf_daily_mm.csv`).
+The other daily files are pulls of daily FNF for stations
 outside those 15 watersheds. `fnf_monthly.csv` is the monthly FNF, the reconciled month-end
-volume, at the 17 `cdec_daily` sites of the learned-parameter registry (`sacsma benchmark`
+volume, at 16 of the 17 `cdec_daily` sites of the learned-parameter registry (NHG has none;
+CLE's is TNL's, NML's is SNS's) (`sacsma benchmark`
 scores 12 of them, all but NML on this file). Every series is CDEC's own computation.
 
 ## Files
@@ -19,7 +21,7 @@ scores 12 of them, all but NML on this file). Every series is CDEC's own computa
 | `fnf_daily_mm.csv` | `station, date, depth_mm`: depth companion for the two stations with a defined depth area, CLE at 692.86 mi2 (the `I_TRNTY` arc area) and CSN at the UF 13 arc-sum area (539.1 mi2); negative-flow days dropped | `build_fnf_depth.py` |
 | `fnf_daily_mask.csv` | `entity_id, date, value_mm, kind, partner_date, partner_mm, evidence`: daily target values confirmed as computation artifacts (5 rows) | Hand-maintained, never generated |
 | `fnf_monthly.csv` | `date, station, flow_af, flag`: monthly FNF (sensor 65) of the 17 `cdec_daily` sites at 16 stations (below), acre-feet per month and CDEC's data flag exactly as CDEC serves them (`flag` empty when none), stamped at the month end, WY1922 (SCC from WY1931, KRI from WY1930) to 2025-09; a missing month would be an empty `flow_af` (none so far). 19,764 rows, 0.46 MB | `cdec_fnf.py monthly` |
-| `fnf_daily_screen.csv` | `entity_id, date, rule`: the days of the 17 `cdec_daily` records that dPL-CalSim does not train on, one rule per day ([below](#the-training-screens-of-dpl-calsim)). 44,858 rows, 1 MB | Kept by hand, never generated |
+| `fnf_daily_screen.csv` | `entity_id, date, rule`: the days of the 17 `cdec_daily` records that dPL-CalSim's fine-tune does not train on (the warm start trains them), one rule per day ([below](#the-training-screens-of-dpl-calsim)). 44,858 rows, 1 MB | Kept by hand, never generated |
 | `fnf_monthly_screen.csv` | `entity_id, month, rule`: the months of `fnf_monthly.csv` that dPL-CalSim does not train on. 169 rows | Kept by hand, never generated |
 | `forcing_era_mask.csv` | `entity_id, month, rule`: the WY1950–75 months of `fnf_monthly.csv` whose forcing era is suspect. 1,104 rows | Kept by hand, never generated |
 
@@ -43,8 +45,8 @@ The 17 `cdec_daily` sites and the station of their monthly FNF:
 
 ## The training screens of dPL-CalSim
 
-Three tables list the CDEC targets that dPL-CalSim does not train on. They come from an audit
-of the training records in October 2026: the forcing against PRISM by era, the daily records
+Three tables list the CDEC targets that dPL-CalSim's fine-tune does not train on. They come
+from an audit of the training records in October 2026: the forcing against PRISM by era, the daily records
 against the monthly ones, and an independent review of both. They are kept by hand: no script
 in the repository rebuilds them, and the audit's working files are not tracked. No statistic
 behind them reads WY1976–85.
@@ -53,7 +55,7 @@ behind them reads WY1976–85.
 
 | Rule | Days | Drops |
 |---|---|---|
-| `S` | 38,966 | The site's unreliable season, every year: July–November at CLE, FOL, MKM, YRS, TLG, NHG, NML and CSN, July–October at MRC and ORO. Their dry season trains on the monthly record instead |
+| `S` | 38,966 | The site's unreliable season, every year: July–November at CLE, FOL, MKM, YRS, TLG, NHG, NML and CSN, July–October at MRC and ORO. Their dry season trains on the monthly record instead, except at NHG and NML, which have no monthly record in training: there it does not train on CDEC at all |
 | `D1` | 784 | The compensating partner of a negative day (CDEC's daily computation nets a negative day against a neighbour), unless the day is a strong storm |
 | `D2` | 3,829 | A month whose daily sum is more than 25 % off a trusted monthly value |
 | `D3` | 852 | At the sites without `S`: a June–November month holding a negative day whose cleaned sum is more than 10 % off the monthly value, or that has none |

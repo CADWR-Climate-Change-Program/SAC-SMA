@@ -29,8 +29,10 @@ correlation/mean ratios — this is NOT chunked KGE.
 Every basin-chunk term is weighted by its valid days / 365, so a partial chunk
 counts by its length.
 
-Selection metric: pooled mean per-basin KGE over the full calibration record
-(the GA-comparable exact objective), computed no-grad by the trainer.
+Selection metric: pooled mean per-basin KGE over the full calibration record by
+default (the GA-comparable exact objective), computed no-grad by the trainer; with
+family shares, a share-weighted mean of the family means
+(``select_cpu.selection_stat``).
 """
 
 from __future__ import annotations
