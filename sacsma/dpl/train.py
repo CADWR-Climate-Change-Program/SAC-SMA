@@ -39,8 +39,9 @@ daily entity joins the chunk NNSE window-masked (NaN outside its own
 monthly NNSE term (simulated daily flow bucketed to complete calendar
 months), and selection scores per-entity KGE at each entity's native
 timescale — pooled mean by default; with numeric family shares
-("usgs=0.27,cdec=0.54,uf=0.19") the share-weighted family mean, so
-checkpoint choice follows the training objective.
+("usgs=0.27,cdec=0.54,uf=0.19") the share-weighted family mean, on the
+loss shares or on mt_select_weight's (dPL-CalSim: the footprint-area
+shares), never on the CDEC monthly companion.
 
 On CUDA the day-stepped pipeline runs as captured CUDA graphs
 (:mod:`sacsma.dpl.graphs`) — eager execution is dispatch-bound.  Graph

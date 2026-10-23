@@ -1,6 +1,6 @@
 # Guide
 
-The guide has eleven short pages. Read the first four in order for the whole picture; the rest
+The guide has twelve short pages. Read the first four in order for the whole picture; the rest
 are reference.
 
 | Page | What it answers |
@@ -9,6 +9,7 @@ are reference.
 | [Calibrated SAC-SMA](calibrated_sacsma.md) | The four genetic-algorithm calibration sets, their skill, and their comparison with CalSim3. |
 | [Learned parameters](learned_parameters.md) | How a neural network replaces the calibration, and what that showed on the 15 CDEC watersheds. |
 | [CalSim3 rim inflows](calsim3_rim_inflows.md) | The current model (dPL-CalSim), how it is checked, and the monthly inflow product on the 196 rim arcs. |
+| [Training record](training_record.md) | What dPL-CalSim trained on in each of its two stages, what it left out and why, how the held-out years and the family weights enter, and what the rim-inflow product reads. |
 | [Benchmark](benchmark.md) | Three models (dPL-CalSim, BCM with its monthly routing, the CalSim3 VIC) against observed CDEC full natural flow at 12 watersheds. |
 | [Runs](runs.md) | Every learned-parameter run: what is current, what each scores, what was tried and not adopted, what is open. |
 | [Reproduce](reproduce.md) | Environments, data, and the commands from a clone to the product. What a clone cannot rebuild. |

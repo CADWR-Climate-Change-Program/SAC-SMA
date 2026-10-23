@@ -1,0 +1,9 @@
+stage,family,unit,entities,with_target,trained,trained_jul_sep,screened,holdout,cdec_monthly_entities,cdec_monthly_trained,cdec_monthly_jul_sep,cdec_monthly_screened
+1,uf_monthly,month,9,9,5940,1485,0,108,0,0,0,0
+1,usgs_daily,day,69,69,666694,169569,0,154718,0,0,0,0
+1,cdec_daily,day,17,17,176898,42439,0,0,0,0,0,0
+1,calsim_monthly,month,64,64,25523,6382,0,0,0,0,0,0
+2,uf_monthly,month,9,5,2379,108,3561,108,0,0,0,0
+2,usgs_daily,day,69,60,573630,129722,93051,154718,0,0,0,0
+2,cdec_daily,day,17,17,132040,16521,44858,0,15,9421,2279,1244
+2,calsim_monthly,month,64,60,18345,2210,7178,0,0,0,0,0

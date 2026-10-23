@@ -61,7 +61,7 @@ repository ports its formulas exactly, and `sacsma verify bcm` checks the port a
 workbook's own numbers). Those parameters were fitted on PRISM-forced BCM, and on the WGEN-forced
 run they carry a volume error of up to +15 %. The benchmark fits the same equations itself, per
 site, on the WGEN-forced run against the observed flow of the whole scoring window,
-WY1991–2018 (the years dPL-CalSim was trained on). The objective is KGE, with the volume held
+WY1991–2018 (years dPL-CalSim also trained on). The objective is KGE, with the volume held
 within 1 %. The refit covers all 12 sites instead of the workbook's 10, scores above the
 workbook at 9 of its 10 (median KGE 0.91 against 0.84) and cuts the median volume bias from
 +9 % to +1 %.
@@ -75,8 +75,8 @@ KGE of 0.90. The workbook routing is kept beside it for comparison.
   elsewhere.
 - BCM's yield against the observations shifts from decade to decade. The fit holds the volume
   of the whole window, but a single decade can be off by up to 12 % (MKM, WY2001–2010).
-- dPL-CalSim was trained on the daily records, which run 3 to 6 % below the monthly series at
-  YRS, CSN, MRC and MKM.
+- dPL-CalSim's warm start was trained on the daily records, which run 3 to 6 % below the monthly
+  series at YRS, CSN, MRC and MKM; its fine-tune also trains on the monthly series.
 
 ## Command
 

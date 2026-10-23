@@ -32,6 +32,11 @@ The repository has no test suite; the model is verified by running it.  The chec
     years split in two, the second year from the state the first left (``spinup="state"``),
     bitwise equal to them unsplit; then, on the first run without the store, the store at a
     zero share bitwise equal to the field without it
+``record``
+    the training record of each run in :data:`RECORD_RUNS` (``sacsma dpl record``,
+    :mod:`sacsma.dpl.record`) is written again from the run's checkpoints and the hand-kept mask
+    tables, and every table equals the tracked one: a mask table edited since the run trained,
+    or a change to how the trainer loads its targets, shows here
 ``product``
     the share model applied to the tier-2 pass kept beside each forcing's series
     (``artifacts/product/calsim3/<forcing>/tier2/``) reproduces the tracked
@@ -66,6 +71,8 @@ PARITY_MAX_MM = 0.1
 LEARNED_RUNS = (("multifamily", "8_calsim"), ("15cdec", "4_noah"), ("15cdec", "3_pt"),
                 ("15cdec", "1_hru"))
 LEARNED_MAX_MM = 1e-9
+#: the multifamily runs whose training record is tracked (docs/training_record.md)
+RECORD_RUNS = ("8_calsim",)
 #: relative tolerance of the product check (the fit and ``apply`` agree to about 3e-7)
 PRODUCT_RTOL = 1e-5
 #: relative tolerance of the BCM routing port against the workbook's cached flow (it agrees to
@@ -73,7 +80,8 @@ PRODUCT_RTOL = 1e-5
 BCM_RTOL = 1e-9
 BCM_STAT_TOL = 1e-9
 
-CHECKS = ("imports", "cli", "links", "artifacts", "bcm", "parity", "learned", "product")
+CHECKS = ("imports", "cli", "links", "artifacts", "bcm", "parity", "learned", "record",
+          "product")
 QUICK = ("imports", "cli", "links", "artifacts", "bcm")
 #: the tracked parts of the output tree; ``_local/`` is ignored
 ARTIFACT_PARTS = ("product", "models", "results")
@@ -442,6 +450,32 @@ def check_learned(data_dir: str = "data", artifacts_dir: str = "artifacts",
                 + "".join(rows))
 
 
+# -------------------------------------------------------------------------------- record
+def check_record(data_dir: str = "data", artifacts_dir: str = "artifacts",
+                 **_) -> tuple[bool | None, str]:
+    if not _has_torch():
+        return None, "torch is not installed"
+    import tempfile
+
+    from .dpl.record import RECORD_DIR, TABLES, write_record
+
+    ok, rows = True, []
+    for run in RECORD_RUNS:
+        tracked = paths.dpl_run(artifacts_dir, run, paths.MULTIFAMILY, role="results") / RECORD_DIR
+        with tempfile.TemporaryDirectory() as tmp:
+            with contextlib.redirect_stdout(io.StringIO()):
+                write_record(run, data_dir=data_dir, out=tmp)
+            new = {name: (Path(tmp) / name).read_text() for name in TABLES}
+        differ = [name for name in TABLES
+                  if not (tracked / name).exists() or (tracked / name).read_text() != new[name]]
+        ok &= not differ
+        n = {name: new[name].count("\n") - 1 for name in TABLES}
+        rows.append(f"\n    {paths.MULTIFAMILY}/{run}: {n['stages.csv']} stages, "
+                    f"{n['entities.csv']} entity rows, {n['exclusions.csv']} exclusion rows, "
+                    + ("identical" if not differ else f"different in {', '.join(differ)}   FAIL"))
+    return ok, "each tracked training record written again from its checkpoints" + "".join(rows)
+
+
 # ------------------------------------------------------------------------------- product
 def _calsim3_rows(data_dir: str, artifacts_dir: str) -> list[tuple[bool | None, str]]:
     """The share model applied to each forcing's tier-2 pass against its tracked series."""
@@ -534,7 +568,7 @@ def check_product(data_dir: str = "data", artifacts_dir: str = "artifacts",
 
 _FUNCS = {"imports": check_imports, "cli": check_cli, "links": check_links,
           "artifacts": check_artifacts, "bcm": check_bcm, "parity": check_parity,
-          "learned": check_learned, "product": check_product}
+          "learned": check_learned, "record": check_record, "product": check_product}
 
 
 def run_checks(checks=None, *, data_dir: str = "data", quick: bool = False) -> int:

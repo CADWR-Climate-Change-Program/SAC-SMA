@@ -13,7 +13,9 @@ these limits and releasing them improved frozen cal/val KGE): ``rexp`` ceiling
 10 -> 15 and ``lzsk`` floor 0.01 -> 0.003.  Both only EXPAND the box (never
 exclude an archived GA value).  The
 probe found NMF/Diff/UADJ pinned but inert (no daily-flow leverage), so those
-stay at the archived limits.
+stay at the archived limits in ``BOUNDS``.  A run can still replace and widen any
+box with ``param_bounds``: dPL-CalSim takes lzsk [0.001, 0.5], MBASE [-2, 5],
+NMF [0.05, 0.5], Velo [0.5, 10] and zperc [1, 1000].
 
 This module imports no torch at module scope — it is safe to import from the
 core package paths.
@@ -215,11 +217,12 @@ class DplConfig:
     #: (ln(V_sim + eps) - ln(V_obs + eps))^2 with V the Jul-Sep volume — of the valid days
     #: of a daily target (at least 80 % of the 92), of the three months of a monthly one.
     #: A cdec_daily outlet takes its companion's year where that is scored, its daily
-    #: record's otherwise.  eps = dry_season_eps x the entity's median observed Jul-Sep
-    #: volume; an entity with a zero Jul-Sep in more than 10 % of its scored years is left
-    #: out.  Each entity weighs its family's nominal share / the family's entity count in the
-    #: run, scored or not, so a masked or left-out entity drops its weight rather than handing
-    #: it to its siblings (the CDEC outlets carry the cdec and cdecm shares together).
+    #: record's otherwise.  eps = dry_season_eps x the median observed Jul-Sep volume of
+    #: the entity's record (daily, monthly or companion); a record with a zero Jul-Sep in
+    #: more than 10 % of its scored years is left out.  Each entity weighs its family's
+    #: nominal share / the family's entity count in the run, scored or not, so a masked or
+    #: left-out entity drops its weight rather than handing it to its siblings (the CDEC
+    #: outlets carry the cdec and cdecm shares together).
     #: Multi-timescale domain only.
     #: 0 = off (default).
     dry_season_lambda: float = 0.0
@@ -240,9 +243,10 @@ class DplConfig:
     #: how a chunk's loss normalizes the family-weighted entities (only with
     #: mt_family_weight shares): "present" (default) divides by the
     #: weight of the entities scored in THAT chunk, so a chunk holding one
-    #: family gives it the whole daily term — on the 95-entity set the USGS
-    #: creeks train WY1950-84 and CDEC/uf from WY1985, and nominal shares
-    #: 0.216/0.558/0.226 come out ~0.57/0.34/0.10 over the chunks; "all"
+    #: family gives it the whole daily term — on the 95-entity set only the USGS
+    #: creeks have targets before WY1985 (CDEC and uf start about then; many
+    #: creeks run on to 2015), and nominal shares 0.216/0.558/0.226 come out
+    #: ~0.57/0.34/0.10 over the chunks; "all"
     #: divides by the weight of EVERY entity of the run (the monthly term by
     #: the number of monthly entities), so each entity always carries
     #: share_f / n_f and a family's term scales with how many of its entities
@@ -250,7 +254,8 @@ class DplConfig:
     #: COEFFICIENTS, approximately (each family's total scales with its mean
     #: scored chunks per entity: 95-entity set 0.234/0.546/0.220).  They are
     #: not the families' shares of the loss or gradient: the monthly NNSE runs
-    #: ~10x smaller per entity than the daily NNSE + log + var terms.
+    #: several times smaller per entity than the daily NNSE + log + var terms
+    #: (1 to 6 times in dPL-CalSim's reference states).
     mt_share_norm: str = "present"
     #: checkpoint-selection shares, when they must differ from the loss shares
     #: (numeric mt_family_weight only): "area" = the footprint-area shares of

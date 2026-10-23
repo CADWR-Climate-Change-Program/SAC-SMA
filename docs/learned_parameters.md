@@ -18,7 +18,8 @@ parameters for any place with the same attributes.
 
 **The network.** A per-unit multilayer perceptron (hidden width 64, embedding 32). It emits 28
 of the 31 parameters inside the ranges the GA searched ([parameter table](equations.md#6-parameter-table));
-two ranges are widened (`rexp` up to 15, `lzsk` down to 0.001). `lzsk`, `lzpk`, `MFMAX` and
+two ranges are widened in every run (`rexp` up to 15, `lzsk` down to 0.001), and dPL-CalSim
+widens four more (`MBASE`, `NMF`, `Velo`, `zperc`). `lzsk`, `lzpk`, `MFMAX` and
 `MFMIN` are mapped in log space, so the network can reach the low end of their ranges. With the
 learned rain/snow threshold a separate output gives `PXTEMP`, and with the deep store a separate
 head gives its share and residence time (below). The untrained network returns the
@@ -96,29 +97,33 @@ The reasons for a separate store rather than a slower SAC-SMA lower zone:
 The store has two limits. It has no loss: all of its water returns to the channel, while the
 models that worked in [Zhang et al. (2026)](references.md#zhang2026) lose some. And $g$ and
 $\tau$ are identified from streamflow alone, which gave a bedrock store implausible parameters in
-[La Follette et al. (2022)](references.md#lafollette2022). In dPL-CalSim's field $g$ is 0.28 at
-the median (20 % of the cells at 0.45 or more) and $\tau$ 8.4 years; in `6_deep`, trained on
-the 15 watersheds alone, $g$ is 0.42 (43 % at 0.45 or more) and $\tau$ spreads over the whole
-range (2.1 to 9.6 years from the 10th to the 90th percentile).
+[La Follette et al. (2022)](references.md#lafollette2022). Over the distinct cells of
+dPL-CalSim's field $g$ is 0.26 at the median (18 % of the cells at 0.45 or more) and $\tau$ 8.3
+years; in `6_deep`, trained on the 15 watersheds alone, $g$ is 0.39 (38 % at 0.45 or more) and
+$\tau$ spreads over the whole range (2.1 to 9.5 years from the 10th to the 90th percentile).
 
 **Training.** Every run uses one recipe ([the ladder](runs.md#the-ladder)). The loss is a
 squared error normalized by each watershed's observed variance, plus a log-flow term and a term that
-matches the variance over the record, each chunk weighted by its days. Optimization is AdamW
+matches each water year's spread of flow to the observed one, scaled by the record's, each chunk
+weighted by its days (the log and spread terms on the daily records only). Optimization is AdamW
 over water-year chunks, with the model state carried from chunk to chunk and the gradient carried
 through two water years: with one, the gradient on the slow lower-zone drainage and on `Kpet` at
-Shasta has the wrong sign. The network kept is the one with the best training-period KGE, scored
-on the CPU after every epoch.
+Shasta has the wrong sign. The network kept is the one with the best training-period score, scored
+on the CPU after every epoch: each entity's KGE on its training targets, averaged by family and
+weighted by the families' footprint areas (for dPL-CalSim without the CDEC monthly record).
 
 **Scoring.** A run is scored as it was trained: its field runs on the engine with the numerics
 and the basin weights of its training (`sacsma dpl evaluate <checkpoint>`). Test years are
 never read in training or selection. Each use starts the stores its own way:
 
-- the trainer and its selection: cold, ten water years before the training window
-  (`--spinup-start`), with the deep store then raised to its steady state;
+- the trainer and its selection: cold, the ten water years before the training window, one
+  pass (WY1940–49 for dPL-CalSim, whose `--spinup-start` falls inside the window and is moved
+  there), with the deep store then raised to its steady state;
 - the evaluator of the 15-CDEC runs: cold, at the start of the record (October 1915);
 - the evaluator of the multi-family runs (`metrics.csv` and the held-out reads): WY1950–59
   looped twenty times from cold;
-- the tier-2 passes and the product: WY1916–25 looped twenty times;
+- the tier-2 passes, the share model's fit among them: WY1950–59 looped twenty times;
+- the product's passes: WY1916–25 looped twenty times;
 - the response studies: cold in October 1915, read from WY1951.
 
 The deep store keeps its start for years, so with it these differ a little more than
@@ -204,7 +209,8 @@ change in annual runoff, `hybrid` about 77 % and `lstm` about 36 %.
 ## From 15 watersheds to the CalSim3 arcs
 
 The rungs above train on 15 daily records. dPL-CalSim (`8_calsim`) trains one network on several
-kinds of record at once (daily gauges, monthly unimpaired flows, CalSim3 arc inflows) and its
+kinds of record at once (daily gauges, monthly unimpaired flows, CalSim3 arc inflows, and in its
+fine-tune CDEC's monthly full natural flow) and its
 flow becomes monthly inflows on the CalSim3 rim arcs: [CalSim3 rim inflows](calsim3_rim_inflows.md).
 
 ## Where things are

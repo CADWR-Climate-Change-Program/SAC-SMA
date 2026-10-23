@@ -1,6 +1,7 @@
 # CalSim3 rim inflows
 
-CalSim3 takes monthly inflows on 196 rim arcs. The current model, **dPL-CalSim** (`8_calsim`),
+CalSim3 takes monthly inflows on its rim arcs; 196 of them have both a series and a catchment
+outline, and the product covers those. The current model, **dPL-CalSim** (`8_calsim`),
 is a [learned-parameter](learned_parameters.md) SAC-SMA trained on four kinds of flow record at
 once, and the **CalSim3 rim-inflow product** is its monthly flow on those arcs, in TAF, from
 WY1916 to 2018, under the historical weather and two WGEN weather sequences. This page says what
@@ -15,22 +16,25 @@ grid cells that drain to it. Entities come in four *families*:
 | Family | Entities | Record | Loss |
 |---|---|---|---|
 | `usgs_daily` | 69 USGS gauges inside the CalSim3 domain | daily, from WY1950 | daily |
-| `cdec_daily` | 17 CDEC full-natural-flow stations | daily, from 1986 to 1988 (two from 1999); with it CDEC's monthly full natural flow at 15 of them, from WY1950 | daily; monthly for the monthly record |
-| `uf_monthly` | 9 DWR unimpaired-flow subbasins | monthly | monthly |
-| `calsim_monthly` | 64 CalSim3 arcs with a record of their own (of 196 in the table) | monthly | monthly volume |
+| `cdec_daily` | 17 CDEC full-natural-flow stations | daily, from 1986 to 1988 (two from 1999); in the fine-tune, with it CDEC's monthly full natural flow at 15 of them, from WY1950 (from WY1986 at CLE, ISB and SCC) | daily; monthly for the monthly record |
+| `uf_monthly` | 9 DWR unimpaired-flow subbasins (5 with a target in the fine-tune) | monthly | monthly |
+| `calsim_monthly` | 64 CalSim3 arcs whose own gauge record passes the naturalness screen (tier A, of 196 in the table; 60 with a target in the fine-tune) | monthly | monthly volume |
 
 The training domain is `--domain multifamily`. Each entity is scored over its own record inside
 WY1950–2018; the unimpaired-flow subbasins over WY1985–2014, which dPL-CalSim extends back to
-WY1950. Family weights follow the area the families cover, and a fixed scale per family
-keeps one family's loss units from dominating the others.
+WY1950. In the warm start the family weights follow the area the families cover; the fine-tune
+splits CDEC's weight between its daily and monthly records, and the monthly record then carries
+the largest part. A fixed scale per family keeps one family's loss units from dominating the
+others.
 
 dPL-CalSim is the run `8_calsim` (`artifacts/models/dpl/multifamily/8_calsim/`,
 `artifacts/results/dpl/multifamily/8_calsim/`), the last rung of [the ladder](runs.md#the-ladder).
 It keeps the physics and inputs of the rung below it, `7_aef`: Priestley–Taylor PET, the
 soil-moisture-limited ET with the SAC-SMA exchange terms kept, a learned rain/snow threshold, the
-deep store ([Learned parameters](learned_parameters.md#how-it-is-built)) and the AlphaEarth
-inputs (`aef_u`). It trains on all 159 entities of the four families, on every water year but
-WY1976–85, which is held out of every family, with wider ranges for four parameters the GA box
+deep store in the fine-tune ([Learned parameters](learned_parameters.md#how-it-is-built)) and the
+AlphaEarth inputs (`aef_u`). It trains on the 159 entities of the four families (in the
+fine-tune 17 of them have no target left after the cleaning), on every water year but WY1976–85,
+whose targets are held out of every family, with wider ranges for four parameters the GA box
 pins (`MBASE`, `NMF`, `Velo`, `zperc`; [Model equations](equations.md#6-parameter-table)).
 
 It is trained in two stages:
@@ -42,20 +46,32 @@ It is trained in two stages:
    - The deep store, with its head new at the start.
    - Cleaned targets. The days and months that an audit of the training records found
      unreliable are left out: an unreliable dry season, the partners of CDEC's negative days,
-     impaired summers, records that a USGS gauge at the same place already trains, and forcing
-     eras the Livneh precipitation gets wrong. The tables are
+     daily months that disagree with the monthly record, impaired summers and spans of years,
+     whole records that are impaired, misidentified or a copy of another target, records that a
+     USGS gauge at the same place already trains, and forcing eras the Livneh precipitation gets
+     wrong. The tables are
      [the CDEC screens](../data/targets/cdec/README.md#the-training-screens-of-dpl-calsim) and
      [the location masks](../data/targets/usgs/README.md#the-location-mask). The Kings River
      gauge trains on its record with the powerhouse flow added, and two arcs on a corrected depth.
-   - CDEC's monthly full natural flow at the CDEC sites, from WY1950, beside the daily
+   - CDEC's monthly full natural flow at 15 of the 17 CDEC sites, from WY1950 (from WY1986 at
+     CLE, ISB and SCC, whose earlier months fall in the masked forcing eras), beside the daily
      records. It covers the decades before the daily records and the late summers where the daily
-     record is screened out. The CDEC family's weight is split evenly between the two.
+     record is screened out. NHG and NML have none, so their screened late summers do not train
+     on CDEC. The CDEC family's nominal share is split evenly between the two; with the fixed
+     loss scales and the monthly record's longer span, the monthly record carries about half of
+     the fine-tune's loss weight and the daily records about a fifth.
    - A dry-season term: for each entity and scored water year,
      $\lambda\,\big(\ln(V_{sim} + \epsilon) - \ln(V_{obs} + \epsilon)\big)^2$, with $V$ the
-     July–September volume, $\epsilon$ a tenth of the entity's median observed July–September
-     volume, and $\lambda = 0.113$, about a tenth of the objective at the warm start's field.
+     July–September volume (from the CDEC monthly record where it is kept, else the entity's
+     monthly target, else its daily target with 80 % of the days), $\epsilon$ a tenth of the
+     median of that observed volume, each entity weighted by its family's share over the
+     family's number of entities, and $\lambda = 0.113$, about a tenth of the objective at the
+     warm start's field. A record with no July–September flow in more than a tenth of its years
+     is left out.
 
-The recipe and the scores of every rung are in [Runs](runs.md#the-ladder).
+The recipe and the scores of every rung are in [Runs](runs.md#the-ladder). What each stage
+trains on, entity by entity, and every record it leaves out with the reason are in
+[Training record](training_record.md).
 
 ## How a run is checked against CalSim3
 
@@ -101,15 +117,21 @@ Arcs are of three kinds.
 |---|---|---|
 | Single-arc system | 7 | dPL-CalSim's flow |
 | Share arc: an arc of one of the 11 multi-arc systems | 139 | the system's dPL-CalSim flow, divided among its arcs by the share model |
-| Non-anchor arc: no system to close to | 50 | dPL-CalSim's flow |
+| Non-anchor arc: an arc the product does not close to a system (39 with no anchor; 11 whose anchor is left out) | 50 | dPL-CalSim's flow |
 
-A *system* is a group of arcs that closes to one CalSim3 anchor (18 systems: the 11 multi-arc
-ones and the 7 single arcs).
+A *system* is a group of arcs with one anchor series: CalSim3's `FLOW-UNIMPAIRED` for 9 of them
+and a DWR unimpaired-flow series for the other 9 (18 systems: the 11 multi-arc ones and the 7
+single arcs). The product does not read the anchors: it divides the model's own system flow.
 
 **The share model** is a small network that gives each share arc's fraction of its system's
 flow in a month. It reads the model's own shares and their lags, the fractions of the runoff
-components, the system flow, the month and the arc area. Each system's arcs sum to the
-dPL-CalSim system flow over every water year, so a system's volume, and its response to a
+components, the system flow, the month and the arc area, and a learned code for each arc and
+each system. It is fitted to the CalSim3 series of the share arcs, every month of WY1950–2015
+outside the held-out decade: none of the training's masks applies
+([Training record](training_record.md#what-the-product-reads)). A system's water-year volume is
+divided among its arcs in proportion to each arc's dPL-CalSim volume times its ratio of CalSim3
+to dPL-CalSim volume over those years. Each system's arcs sum to the dPL-CalSim system flow
+over every water year, so a system's volume, and its response to a
 changed climate, stay the model's own. The arcs' response is held close to the model's by a
 penalty in the fit and is checked at climate points the fit never saw.
 

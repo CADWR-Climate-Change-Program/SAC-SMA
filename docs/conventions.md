@@ -26,7 +26,7 @@ and results are kept.
 There is no test suite. A change is checked by running the model.
 
 ```bash
-sacsma verify            # imports, commands, links, artifacts, parity, learned, product
+sacsma verify            # imports, commands, links, artifacts, bcm, parity, learned, record, product
 sacsma verify --quick    # the checks that need no model run
 ```
 
@@ -39,11 +39,13 @@ sacsma verify --quick    # the checks that need no model run
 | `bcm` | the port of the BCM routing workbook reproduces the cached flow of its 11 calibration sheets within 1e-9 relative, and their r2, NSE and percent bias |
 | `parity` | every watershed of the four calibrated domains matches the MATLAB simulation on the forcing it ran on: KGE above 0.9999 and a largest daily difference below 0.1 mm/day |
 | `learned` | the learned step of the CPU engine (`sacsma/sma_learned.py`) matches the torch step it copies, for one tracked run of each physics, within 1e-9 mm/day |
+| `record` | `sacsma dpl record` writes dPL-CalSim's [training record](training_record.md) again from its two checkpoints and the hand-kept mask tables, and every table equals the tracked one |
 | `product` | `sacsma dpl calsim product apply` reproduces every tracked series of the rim-inflow product from the tier-2 pass kept beside it, to 1 part in 100,000 |
 
 Run `parity` after any change that touches the model or the path the data takes into it, and
 `learned` after any change to the torch physics or to `sacsma/sma_learned.py`: the two are
-changed together. Regenerated tables can differ from the tracked ones by about 1e-13 through
+changed together. Run `record` after any change to a mask table or to how the trainer loads its
+targets. Regenerated tables can differ from the tracked ones by about 1e-13 through
 floating-point order; compare before committing and do not commit noise.
 
 `sacsma dpl fidelity` runs the archived GA optimum through the learned numerics (the fixed

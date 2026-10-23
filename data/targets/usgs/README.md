@@ -2,10 +2,11 @@
 
 Daily discharge at the 69 USGS gauges whose watersheds lie inside the CalSim3 domain. Role:
 target. The `usgs_daily` family of the learned-parameter models (dPL-CalSim) is
-fitted to them. For the calibrated SAC-SMA they are an observational set independent of the
-full-natural-flow and CDEC series it was fitted to. The flows come from the training store
-of the sibling neuralhyd-ca repository, whose QA/QC pipeline retrieves NWIS parameter `00060`
-and screens it; nothing is re-cleaned here.
+fitted to them: all 69 in its warm start, 60 in its fine-tune (nine whole records masked;
+`usgs_11218500` trains on `usgs_11218501_mm.csv`). For the calibrated SAC-SMA they are an
+observational set independent of the full-natural-flow and CDEC series it was fitted to. The
+flows come from the training store of the sibling neuralhyd-ca repository, whose QA/QC pipeline
+retrieves NWIS parameter `00060` and screens it; nothing is re-cleaned here.
 
 ## Files
 
@@ -14,8 +15,8 @@ and screens it; nothing is re-cleaned here.
 | `flow_daily.nc` | `flow_cfs` and `flow_mm`, dims `(gauge, time)` = 69 x 25202, float32 zlib, daily 1950-01-01 to 2018-12-31. 3.2 MB (LFS) | `usgs_flows.py` from the neuralhyd-ca store |
 | `gauges.csv` | One row per gauge: `gid`, `tier`, `tier_label`, `area_km2_delineated`, `frac_in_calsim`, `n_obs`, `coverage_frac`, `first_obs`, `last_obs`, `synthetic`, and from NWIS `station_name`, `lat`, `lon`, `area_km2_usgs`, with `area_ratio_delin_over_usgs`. 12 KB | `usgs_flows.py`; NWIS site service |
 | `usgs_watersheds.gpkg` | The 69 delineations, layer `usgs_watersheds`, EPSG:4326 to match `data/inputs/calsim3/calsim3.gpkg`. 3.2 MB | `usgs_flows.py` from the neuralhyd-ca delineations |
-| `usgs_11218501_mm.csv` | `date, value_mm`: USGS 11218501 (the Kings River below North Fork plus the Kings River powerhouse near Trimmer), the record dPL-CalSim trains `usgs_11218500` on, in depth over that gauge's area. 1962-01-01 to 1993-09-30, 11,596 days. 0.24 MB | `usgs_11218501.py` from NWIS |
-| `location_mask.csv` | `entity_id, start, end, reason`: the days of the USGS records that dPL-CalSim does not train on ([below](#the-location-mask)). 949 ranges | Kept by hand, never generated |
+| `usgs_11218501_mm.csv` | `date, value_mm`: USGS 11218501 (the Kings River below North Fork plus the Kings River powerhouse near Trimmer), the record dPL-CalSim's fine-tune trains `usgs_11218500` on (the warm start trained the river-only record), in depth over that gauge's area. 1962-01-01 to 1993-09-30, 11,596 days. 0.24 MB | `usgs_11218501.py` from NWIS |
+| `location_mask.csv` | `entity_id, start, end, reason`: the days of the USGS records that dPL-CalSim's fine-tune does not train on (the warm start trains them) ([below](#the-location-mask)). 949 ranges | Kept by hand, never generated |
 
 ## How it is built
 
@@ -56,7 +57,8 @@ on 2 of 11,537 common days. A pull on 2026-10-19 matched the file exactly.
 An audit of the non-CDEC training records in October 2026 read each USGS gauge, CalSim3 arc and
 unimpaired-flow subbasin against upstream storage, diversions and its own record, annually and
 for July–September. `location_mask.csv` in this folder, in `../calsim3/` and in
-`../dwr_unimpaired/` holds what dPL-CalSim does not train on as a result, one file per family.
+`../dwr_unimpaired/` holds what dPL-CalSim's fine-tune does not train on as a result, one file per
+family.
 The files are kept by hand: the audit's working files are not tracked. The reasons:
 
 | Reason | USGS | Arcs | UF | Drops |

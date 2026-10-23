@@ -85,7 +85,7 @@ dPL-CalSim.
 | Folder | Runs |
 |---|---|
 | `15cdec/` | The rungs trained on the 15 watersheds (`1_hru`, `2_grid`, `3_pt`, `4_noah`, `5_px`, `6_deep`, `7_aef`) and the LSTM models (`hybrid`, `hybrid_dt`, and `lstm` without physics; three seeds each) |
-| `multifamily/` | dPL-CalSim (`8_calsim`), trained on 159 sites of four kinds: USGS gauges, CDEC records, unimpaired-flow subbasins and CalSim3 arcs |
+| `multifamily/` | dPL-CalSim (`8_calsim`), trained on 159 sites of four kinds (142 with a target after the fine-tune's cleaning): USGS gauges, CDEC records, unimpaired-flow subbasins and CalSim3 arcs |
 
 `evaluate` takes a run's checkpoint and the CalSim3 commands take the run's folder. Scores and
 figures go to `artifacts/results/dpl/<group>/<run>/`.
@@ -114,7 +114,7 @@ To train a run, see `sacsma dpl train --help` and [Learned parameters](docs/lear
 
 ```bash
 sacsma verify --quick             # imports, commands, links, layout, BCM routing; no model run
-sacsma verify                     # adds parity with the MATLAB runs, the learned step, the products
+sacsma verify                     # adds parity with the MATLAB runs, the learned step, the training record, the products
 ```
 
 ## Layout

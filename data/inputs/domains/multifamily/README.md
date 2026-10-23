@@ -85,8 +85,10 @@ The registry holds no series. `obs_store` points at each entity's target:
 No series has a training window built in: `record_start`, `train_start` and `train_end` set the window
 at load time.
 
-De-duplication, applied at build time. A watershed does not train at both daily and monthly timescales
-unless its daily record is short (starts about 2000 or later). Eleven monthly twins of long-record CDEC
+De-duplication, applied at build time. A watershed of the registry does not train at both daily and
+monthly timescales unless its daily record is short (starts about 2000 or later); dPL-CalSim's fine-tune
+adds CDEC's monthly full natural flow at 15 of the 17 `cdec_daily` outlets, so there they train at both.
+Eleven monthly twins of long-record CDEC
 dailies are built and then dropped: UF 8, 9, 11, 14, 15, 16, 18, 19, 22 and both `obs11_monthly` rows (SHA
 = the SIS daily; TNL = the CLE daily at 96 % shared area). The short-daily pairs stay: `uf_13`/`cdec_CSN`
 (CSN from 1999-04) and `uf_06`/`cdec_BND` (SBB from 1999-05). The twin and record start of each drop are

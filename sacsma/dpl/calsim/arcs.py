@@ -41,8 +41,9 @@ import pandas as pd
 from ... import paths
 from .tier1 import AF_PER_MM_MI2
 
-#: the dPL training water years (WY1976-85 is the holdout of every family; nothing
-#: before WY1950) — inclusive (first, last) pairs
+#: the dPL training water years of the CalSim3 arcs (WY1976-85 is the holdout of every
+#: family; nothing before WY1950; the daily families train on to 2018-12) — inclusive
+#: (first, last) pairs
 TRAIN_WY: tuple[tuple[int, int], ...] = ((1950, 1975), (1986, 2015))
 HOLDOUT_WY = (1976, 1985)
 #: "present" in a listed gauge period = the end of the CalSim3 historical record used here

@@ -45,7 +45,7 @@ section 7; it is not needed to reproduce results.
 
 ```bash
 sacsma verify --quick    # imports, commands, links, layout, the BCM routing port: no model run
-sacsma verify            # adds parity, the learned step and the products
+sacsma verify            # adds parity, the learned step, the training record and the products
 ```
 
 `parity` runs one watershed per calibration set and compares with the archived MATLAB
@@ -161,9 +161,11 @@ the other two. The tracked folders hold the selected checkpoint and the scores, 
 
 **Train.** dPL-CalSim is rung 8 of the ladder, trained in two stages
 ([CalSim3 rim inflows](calsim3_rim_inflows.md#what-the-model-trains-on)). Both use the recipe of
-section 5 on 159 entities of every family (69 USGS gauges, 17 CDEC records, 9 unimpaired-flow
-subbasins, 64 CalSim3 arcs) and every year but WY1976–85, with the unimpaired-flow targets back
-to WY1950, the families weighted by footprint area and a fixed loss scale per family. Their
+section 5 on the same 159 entities (69 USGS gauges, 17 CDEC records, 9 unimpaired-flow
+subbasins, 64 CalSim3 arcs; the fine-tune's cleaned targets leave 17 of them with no target)
+and every year but WY1976–85, with the unimpaired-flow targets back to WY1950, family weights
+set from footprint area (in the fine-tune with CDEC's weight split between its daily and monthly
+records, which no longer follows area) and a fixed loss scale per family. Their
 `--param-bounds` replaces the one in `R`: it keeps `lzsk` down to 0.001 and widens the ranges of
 `MBASE`, `NMF`, `Velo` and `zperc` that the GA box pins ([Runs](runs.md#the-ladder)).
 
@@ -228,6 +230,13 @@ footprint get straight-line flow lengths instead of traced ones, and the output 
 
 The scores go to the run's results folder, the monthly series, maps and figures behind them
 to its local folder.
+
+**The training record** (CPU, under a minute; reads no held-out target): what each stage trained
+on and left out, entity by entity ([Training record](training_record.md)):
+
+```bash
+sacsma dpl record <run>                                   # -> training_record/
+```
 
 **The share model** is fitted on the base pass and on tier-2 passes at changed climates, one
 pass each (into `tier2_scenarios/` of the local folder, `<local>`):
