@@ -344,5 +344,7 @@ the time.
 - No warmed VIC run exists for a like-for-like comparison of the response.
 - A rain/snow partition that does not switch whole storm days (the candidate fix for ORO) has not
   been built.
-- The Stanislaus' late summer is low: dPL-CalSim's August–November flow at NML is 0.66 of
-  observed over its training years (SHA 0.92, ORO 0.97).
+- The Stanislaus' late summer is low: dPL-CalSim's August–November flow at NML is 0.62 of
+  observed over its training years, WY1988–2018 (SHA 0.97, ORO 1.09). The fine-tune does not
+  train NML's July–November: the CDEC screen leaves it out every year (rule `S`), and NML has no
+  CDEC monthly record ([Training record](training_record.md)).
