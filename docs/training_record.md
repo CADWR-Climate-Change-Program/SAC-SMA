@@ -17,10 +17,10 @@ no longer holds what a stage masked, so the reasons are those the stage was trai
 
 ## The two stages
 
-| | Stage 1: warm start | Stage 2: fine-tune |
+| | Stage 1: basis | Stage 2: fine-tune |
 |---|---|---|
-| Checkpoint | `provenance/warm_start.pt` | `checkpoints/best.pt` |
-| Starts from | scratch | the warm start's network |
+| Checkpoint | `checkpoints/basis.pt` | `checkpoints/best.pt` |
+| Starts from | scratch | the basis's network |
 | Epochs, learning rate | 120, 1e-3 | 45, 3e-4 (the deep store's head at 10 times) |
 | Physics | `7_aef`'s, without the deep store | the same, with the deep store |
 | Targets | the records as stored | the cleaned records: the CDEC screens and the location masks |
@@ -28,11 +28,10 @@ no longer holds what a stage masked, so the reasons are those the stage was trai
 | Dry-season term | no | yes, λ = 0.1132 |
 | Epoch kept, selection score | 120, 0.8310 | 45, 0.8427 |
 
-The warm start is the network of the run `7_calsim`, the dPL-CalSim of before October 19 2026:
-the two checkpoints hold the same weights and the same configuration. Both stages train the same
-159 entities and hold out the same years (WY1976–85). The product reads only stage 2.
+Both stages train the same 159 entities and hold out the same years (WY1976–85). The product
+reads only stage 2.
 
-A checkpoint's configuration is not a verbatim launch record. The warm start predates the
+A checkpoint's configuration is not a verbatim launch record. The basis predates the
 fine-tune's settings, which it reads as off. The fine-tune's was edited after training: the
 retired `riparian` key was removed, `init_from` and the `target_series` path were rewritten, and
 it records patience 45 for a run that began with 20 and was resumed (`docs/reproduce.md`,

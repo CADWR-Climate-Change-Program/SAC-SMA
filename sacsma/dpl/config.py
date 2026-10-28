@@ -77,7 +77,7 @@ FIXED_PARAMS: dict[str, float] = {"side": 0.0, "SCF": 1.0, "PXTEMP": 0.0}
 
 #: The deep store (``DplConfig.deep_store``, not in the GA model): the share ``gdeep`` of the
 #: supplemental drainage it takes, its residence ``1 / kdeep`` in years (log-mapped), and the
-#: share a new head starts at (near 0, so a warm start begins close to its donor's field).
+#: share a new head starts at (near 0, so a fine-tune begins close to its donor's field).
 DEEP_G_BOUNDS: tuple[float, float] = (0.0, 0.5)
 DEEP_TAU_YEARS: tuple[float, float] = (2.0, 10.0)
 DEEP_G_INIT: float = 0.01
@@ -364,8 +364,8 @@ class DplConfig:
     graph_recompute_days: int = 73
     eval_every: int = 2            # full-cal no-grad KGE selection cadence
     patience: int = 10              # early stop after this many stale selections
-    #: a warm start: the network of this checkpoint (same variant, domain, entities,
-    #: parameter mapping and input scaling) with a fresh optimizer and schedule — a fine-tune.
+    #: a fine-tune: the network of this checkpoint (same variant, domain, entities,
+    #: parameter mapping and input scaling) with a fresh optimizer and schedule.
     #: "" = the priors (default).
     init_from: str = ""
     #: the selection scored EVERY epoch on the CPU engine by a separate process

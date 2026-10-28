@@ -38,7 +38,7 @@ series.
 
 dPL-CalSim trains one network on 159 entities: 69 USGS gauges, 17 CDEC records, the 9
 unimpaired-flow subbasins (back to WY1950) and 64 CalSim3 arcs, on every year but WY1976–85,
-whose targets are held out of every family. The warm start trains on all of them; the
+whose targets are held out of every family. The basis trains on all of them; the
 fine-tune's cleaned targets keep 60 of the USGS gauges, 5 of the subbasins and 60 of the arcs
 ([Training record](training_record.md)). Mean KGE by family; the training years are scored on
 the cleaned targets and WY1976–85 on the records as they are:
@@ -56,15 +56,15 @@ monthly full natural flow.
 ## The ladder
 
 The learned-parameter runs are one recipe, one change per rung, each trained from scratch but
-the last, which fine-tunes a run trained from scratch. The rungs are named for their place on
+the last, a basis trained from scratch and a fine-tune of it. The rungs are named for their place on
 the ladder, not for what they train on ([Conventions](conventions.md)).
 
 Every rung uses the defaults of `sacsma dpl train`: the variance-normalized squared error with a
 log-flow term and the record-form variance term, each chunk weighted by its days, dropout 0, a
 gradient clip of 12, the state carried between water-year chunks with its relative saturation in
 the gradient, the gradient through two water years, 120 epochs, and the `15cdec_grid` GA median as
-the starting field (for `8_calsim` its warm start; the fine-tune runs 45 epochs from the warm
-start's network). On top of them, every rung selects its network on the CPU every epoch
+the starting field (for `8_calsim` its basis; the fine-tune runs 45 epochs from the basis's
+network). On top of them, every rung selects its network on the CPU every epoch
 (`--cpu-select`, patience 20; `8_calsim`'s fine-tune finished with patience 45), masks the
 confirmed bad CDEC days
 (`data/targets/cdec/fnf_daily_mask.csv`), maps `lzsk`, `lzpk`, `MFMAX` and `MFMIN` in log space
@@ -84,7 +84,7 @@ and CalSim3 catchment outlines of the `multifamily` domain, restricted to the 15
 | `5_px` | a learned rain/snow threshold |
 | `6_deep` | the deep store: a slow store behind the supplemental lower zone, with a learned share and a residence time of 2 to 10 years ([Learned parameters](learned_parameters.md#how-it-is-built)) |
 | `7_aef` | AlphaEarth embeddings (`aef_u`) in place of every static input: soil, vegetation, terrain, elevation, position and flow length |
-| `8_calsim` | dPL-CalSim: every family, every year but WY1976–85, family weights by footprint area with a fixed loss scale per family, and wider ranges for `MBASE`, `NMF`, `Velo` and `zperc`, trained from scratch without the deep store; then a 45-epoch fine-tune with the deep store, the cleaned targets, CDEC's monthly records from WY1950 and a dry-season term ([CalSim3 rim inflows](calsim3_rim_inflows.md#what-the-model-trains-on)) |
+| `8_calsim` | dPL-CalSim: every family, every year but WY1976–85, family weights by footprint area with a fixed loss scale per family, and wider ranges for `MBASE`, `NMF`, `Velo` and `zperc`, a basis trained from scratch without the deep store; then a 45-epoch fine-tune with the deep store, the cleaned targets, CDEC's monthly records from WY1950 and a dry-season term ([CalSim3 rim inflows](calsim3_rim_inflows.md#what-the-model-trains-on)) |
 | `hybrid` | an LSTM on the forcing, `5_px`'s daily flow and 27 static attributes, 3 seeds |
 | `hybrid_dt` | `hybrid` fine-tuned to keep `5_px`'s response to climate, 3 seeds |
 | `lstm` | the LSTM without `5_px`'s flow (a control), 3 seeds |
@@ -211,12 +211,12 @@ sacsma dpl calsim atlas <run> --score-holdout
   TLG and CLE, with more volume in the wrong month (0.064 against 0.045). These are training
   years: the check is the move to the weather-generator forcing. See [Benchmark](benchmark.md).
 - Snow-17 parameters fall outside the published ranges. With `MBASE` free down to −2 °C and
-  `NMF` up to 0.5, dPL-CalSim's warm start puts `MBASE` below 0 °C in every cell (median −1.79;
+  `NMF` up to 0.5, dPL-CalSim's basis puts `MBASE` below 0 °C in every cell (median −1.79;
   11 % within 0.05 of −2) and `NMF` above 0.3, the largest Anderson gives, in every cell
   (median 0.47; 13 % within 0.005 of 0.5). Daily ground melt `DAYGM` is 0.018 mm/day at the
   median, against 0.24 with the range pinned, and below 0.01 in 32 % of the cells (inside its 0
   to 0.3 range). The fine-tune keeps this (`MBASE` median −1.77, `NMF` 0.47 with 16 % within
-  0.005 of 0.5, `DAYGM` 0.016 and below 0.01 in 37 % of the cells). The warm start's snowpack
+  0.005 of 0.5, `DAYGM` 0.016 and below 0.01 in 37 % of the cells). The basis's snowpack
   matches that of the same recipe with these ranges pinned (regional mean peak 191 against
   192 mm), as do the WY1976–85 scores. The values fit this structure to flow; they are not
   measured melt properties.
@@ -275,7 +275,7 @@ the time.
   0.004 and 0.005) and `MFMIN` in 55 %, `NMF` above 0.5 in 82 %, and the Noah-lite ET's
   slope at the wilting point drove one epoch's gradient to 5e8 (since capped,
   [Model equations](equations.md#6-parameter-table)). Selection score 0.829 against 0.831 for
-  dPL-CalSim's warm start, trained on the same targets.
+  dPL-CalSim's basis, trained on the same targets.
 - Building the model by fine-tuning earlier runs (a one-year base, then two-year fine-tunes): on
   WY1976–85 the run trained from scratch on one recipe is level on the arcs and outlets, better
   on the USGS gauges (+0.011) and the product (+0.012), worse on the subbasins (−0.020).
@@ -288,7 +288,7 @@ the time.
   the lower zone grew, the percolation deficit stayed high and the interflow went to zero. The
   five largest annual peaks of four Sierra watersheds fell to 66.6 % of observed against 76.8 %,
   and the CDEC daily KGE at ORO by 0.05.
-- The same recipe as a 15-epoch fine-tune of dPL-CalSim (`7_calsim_ft15_ds`): the wet years
+- The same recipe as a 15-epoch fine-tune of the basis (`7_calsim_ft15_ds`): the wet years
   moved (wettest third −1.5 %, against +9.3 % for a control fine-tune on the cleaned targets
   alone), the dry ones did not (−30 % against −31 %).
 - The from-scratch run fine-tuned 15 epochs with twice the daily CDEC weight
@@ -301,7 +301,7 @@ the time.
   0.30 at ORO and 0.47 at FOL, and the July–September flow of the extrapolated arcs to +235 % of
   CalSim3's (−53 % without it).
 - The deep store fed from the primary drainage instead of the supplemental (a test on
-  dPL-CalSim's field): Sierra peaks 72–75 % against 76.5 %.
+  the basis's field): Sierra peaks 72–75 % against 76.5 %.
 
 **LSTM hybrids on the 15 CDEC watersheds**
 

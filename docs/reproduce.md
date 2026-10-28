@@ -169,9 +169,9 @@ records, which no longer follows area) and a fixed loss scale per family. Their
 `--param-bounds` replaces the one in `R`: it keeps `lzsk` down to 0.001 and widens the ranges of
 `MBASE`, `NMF`, `Velo` and `zperc` that the GA box pins ([Runs](runs.md#the-ladder)).
 
-The warm start trains from scratch (about 20 hours on an 8 GB laptop GPU: 120 epochs of about
-10 minutes). The tracked run's warm start is
-`artifacts/models/dpl/multifamily/8_calsim/provenance/warm_start.pt`:
+The basis trains from scratch (about 20 hours on an 8 GB laptop GPU: 120 epochs of about
+10 minutes). The tracked run's basis is
+`artifacts/models/dpl/multifamily/8_calsim/checkpoints/basis.pt`:
 
 ```bash
 B=lzsk=0.001:0.5,MBASE=-2:5,NMF=0.05:0.5,Velo=0.5:10,zperc=1:1000
@@ -181,12 +181,12 @@ ALL="--domain multifamily --holdout-wy 1976-1985 $NOAH $PX --param-bounds $B \
 sacsma dpl train aef_u $R $ALL \
     --mt-family-weight usgs=0.2366,cdec=0.5508,uf=0.1226,calsim=0.0900 \
     --mt-loss-ref usgs=0.6374,cdec=0.3511,uf=0.1140,calsim=0.3548 \
-    --out $L/8_calsim_warm_start
+    --out $L/8_calsim_basis
 ```
 
 The fine-tune starts from it (about 6 hours: 45 epochs of about 8 minutes) and adds the deep
 store, the cleaned targets of `data/targets/`, CDEC's monthly records and the dry-season term.
-Its loss scales and dry-season weight were measured at the warm start's field
+Its loss scales and dry-season weight were measured at the basis's field
 (`provenance/levels_finetune.json`); `--shape-min-days 180` lets the variance term score the
 outlets whose screened records leave fewer than 300 days in a water year:
 
@@ -200,7 +200,7 @@ sacsma dpl train aef_u $R $ALL \
     --target-series usgs_11218500=$T/usgs/usgs_11218501_mm.csv \
     --cdec-monthly 1949-10-01 --cdec-monthly-mask $T/cdec/fnf_monthly_screen.csv,$T/cdec/forcing_era_mask.csv \
     --dry-season-lambda 0.1132 --deep-store cascade --deep-lr-mult 10 --shape-min-days 180 \
-    --init-from $L/8_calsim_warm_start/checkpoints/best.pt \
+    --init-from $L/8_calsim_basis/checkpoints/best.pt \
     --lr 3e-4 --warmup-epochs 1 --epochs 45 --patience 45 --graph-recompute-days 73 \
     --out $L/8_calsim
 ```

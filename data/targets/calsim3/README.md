@@ -20,7 +20,7 @@ by any model in this repository is a target, so they are kept here.
 | `arc_hierarchy.csv` | The rim-arc target set, 203 rows (every `CalSim3_Merged` polygon plus every derivation arc): area, anchors, closure group, record and tier of each arc (columns below). 0.03 MB | `build_calsim_arcs.py` |
 | `arc_obs_mask.csv` | `arc, date` (month-end): every arc-month that is the arc's own observed record inside the training water years WY1950 to 1975 and WY1986 to 2015. 42,010 rows on 95 arcs, 25,523 of them on the 64 tier-A arcs. 0.9 MB (LFS) | `build_calsim_arcs.py` |
 | `calsim3_inflow_monthly_mm.csv` | `arc, date, depth_mm`: the 196 rim `INFLOW` series as mm/month over each arc's `SQ_MI`, full record WY1922 to 2021. 8.8 MB (LFS) | `build_calsim_arcs.py` |
-| `location_mask.csv` | `entity_id, start, end, reason` (months, `YYYY-MM`): the arc-months that dPL-CalSim's fine-tune does not train on (the warm start trains them) ([below](#the-location-mask)). 6,506 ranges, 0.36 MB | Kept by hand, never generated |
+| `location_mask.csv` | `entity_id, start, end, reason` (months, `YYYY-MM`): the arc-months that dPL-CalSim's fine-tune does not train on (the basis trains them) ([below](#the-location-mask)). 6,506 ranges, 0.36 MB | Kept by hand, never generated |
 
 Columns of `arc_hierarchy.csv`: `sq_mi` (the `CalSim3_Merged` `SQ_MI`); `status` (196
 `rim_arc`, the series-less `I_SRBB_VAL`, 3 without a polygon, 3 excluded below the rim);

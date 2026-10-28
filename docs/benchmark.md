@@ -75,7 +75,7 @@ KGE of 0.90. The workbook routing is kept beside it for comparison.
   elsewhere.
 - BCM's yield against the observations shifts from decade to decade. The fit holds the volume
   of the whole window, but a single decade can be off by up to 12 % (MKM, WY2001–2010).
-- dPL-CalSim's warm start was trained on the daily records, which run 3 to 6 % below the monthly
+- dPL-CalSim's basis was trained on the daily records, which run 3 to 6 % below the monthly
   series at YRS, CSN, MRC and MKM; its fine-tune also trains on the monthly series.
 
 ## Command

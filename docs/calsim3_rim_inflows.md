@@ -22,7 +22,7 @@ grid cells that drain to it. Entities come in four *families*:
 
 The training domain is `--domain multifamily`. Each entity is scored over its own record inside
 WY1950–2018; the unimpaired-flow subbasins over WY1985–2014, which dPL-CalSim extends back to
-WY1950. In the warm start the family weights follow the area the families cover; the fine-tune
+WY1950. In the basis the family weights follow the area the families cover; the fine-tune
 splits CDEC's weight between its daily and monthly records, and the monthly record then carries
 the largest part. A fixed scale per family keeps one family's loss units from dominating the
 others.
@@ -39,9 +39,9 @@ pins (`MBASE`, `NMF`, `Velo`, `zperc`; [Model equations](equations.md#6-paramete
 
 It is trained in two stages:
 
-1. The warm start trains that recipe without the deep store, from scratch, for 120 epochs. Its
-   network is kept in the run's provenance (`provenance/warm_start.pt`).
-2. The fine-tune runs 45 epochs from the warm start at a lower learning rate, with four
+1. The basis trains that recipe without the deep store, from scratch, for 120 epochs
+   (`checkpoints/basis.pt`).
+2. The fine-tune runs 45 epochs from the basis at a lower learning rate, with four
    additions:
    - The deep store, with its head new at the start.
    - Cleaned targets. The days and months that an audit of the training records found
@@ -66,7 +66,7 @@ It is trained in two stages:
      monthly target, else its daily target with 80 % of the days), $\epsilon$ a tenth of the
      median of that observed volume, each entity weighted by its family's share over the
      family's number of entities, and $\lambda = 0.113$, about a tenth of the objective at the
-     warm start's field. A record with no July–September flow in more than a tenth of its years
+     basis's field. A record with no July–September flow in more than a tenth of its years
      is left out.
 
 The recipe and the scores of every rung are in [Runs](runs.md#the-ladder). What each stage
