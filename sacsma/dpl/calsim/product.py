@@ -10,17 +10,18 @@ CalSim3 series, and re-divides it among the arcs where it is not:
 * **Non-anchor arcs** — rim arcs with no closure group, and the groups of
   :data:`NON_ANCHOR_GROUPS` — also take the dPL arc flow.
 * **Share arcs** — the arcs of a closure group with two or more arcs — take the *share
-  model*: a small network gives each arc's share of its system's flow in a month, and each
-  arc's water-year volume is then closed to its share of the system's water-year volume.  The
+  model*: a timing factor per arc and month gives each arc's share of its system's flow in a
+  month, and each arc's water-year volume is then closed to its share of the system's
+  water-year volume.  The
   arcs of a system therefore sum to the dPL system flow over every water year; inside the year
   their sum moves by a few percent of the monthly flow (median 2 %, 10 % in one month in ten in
   the historical series).
 
 The share model.  Per arc and month, ``q = (dpl + floor) * exp(f)``, with
-``f = log 2 * tanh(MLP)`` bounded to a factor of two and zero at initialization (= the dPL's own
-shares).  Inputs: the arc's log share of the system's dPL flow and its lags 1, 2, 3, 6 and 12
-months, the four routed runoff-part fractions, the log system flow, the month as sin / cos, the
-log arc area, and learned arc (4) and system (2) embeddings.  Monthly flow is
+``f = log 2 * tanh(a + w . x)`` bounded to a factor of two: per arc an intercept ``a`` and one
+weight per input, all zero at initialization (= the dPL's own shares).  Inputs ``x``: the
+arc's log share of the system's dPL flow and its lags 1, 2, 3, 6 and 12 months, the log system
+flow and the month as sin / cos.  Monthly flow is
 ``q / sum_system(q) * system flow``; then each (arc, water year) is rescaled to
 ``V_system * k_a D_a / sum_b k_b D_b``, where ``D`` is the dPL arc water-year volume of the same
 pass and ``k_a`` the arc's training-year ratio of CalSim3 to dPL volume.  The loss is the mean
@@ -30,10 +31,10 @@ the squared miss of the product's volume change (%) and April-July share change 
 the dPL arc's own.  No temperature or precipitation enters the model; the response comes
 through the dPL flows of each pass.
 
-``fit`` needs the run's base tier-2 pass with runoff parts (``tier2/`` of the run's local
-folder, written by ``sacsma dpl calsim tier2 --components parts``) and the same at the eleven
-training climate points of :data:`TRAIN_POINTS` (``sacsma dpl calsim tier2 --components parts
---scenarios ...`` writes them to ``tier2_scenarios/<name>`` of the same folder;
+``fit`` needs the run's base tier-2 pass (``tier2/`` of the run's local folder, written by
+``sacsma dpl calsim tier2``) and the same at the eleven training climate points of
+:data:`TRAIN_POINTS` (``sacsma dpl calsim tier2 --scenarios ...`` writes them to
+``tier2_scenarios/<name>`` of the same folder;
 :func:`scenario_spec` gives the argument).  It fits on water
 years 1950-2015 without the run's held-out water years (``DplConfig.holdout_wy``, or
 ``--holdout-wy``), selects ``mu`` out of fold over seven blocks of training water years
@@ -52,16 +53,16 @@ Usage::
                                     [--out DIR] [--data-dir data]
 
 ``fit`` writes the share model and its records to ``artifacts/product/calsim3/``
-(:func:`sacsma.paths.product`): ``share_model.pt`` (the network and everything :func:`apply`
+(:func:`sacsma.paths.product`): ``share_model.pt`` (the timing factor and everything :func:`apply`
 needs), ``share_selection.csv`` (the out-of-fold candidates), ``response_gate.csv`` and
 ``product_info.json`` (with the scores
 of the dPL arcs and of the product on the held-out water years of the base pass).  ``apply``
 runs the tier-2 pass of the fitted run on ``--forcing`` over the whole record (a minute on the
-CPU engine; ``--tier2`` uses an existing pass with runoff parts instead), runs the fitted model
+CPU engine; ``--tier2`` uses an existing pass instead), runs the fitted model
 on it and writes the product of one forcing
 to ``artifacts/product/calsim3/<forcing>/`` unless ``--out`` names another folder:
 ``rim_inflow_monthly.csv`` (``arc, month, taf, dpl_taf, kind``) over the complete water years of
-the pass (``--wy`` narrows them), ``tier2/`` (the two tables of the pass and its
+the pass (``--wy`` narrows them), ``tier2/`` (the pass's table and its
 ``tier2_run_info.json``) and, for a historical forcing, ``product_metrics.csv`` (per arc: monthly
 KGE against CalSim3 of the dPL arc and of the product on the held-out water years, on the other
 fit years and on the years before them).  A WGEN weather sequence does not follow the days of
@@ -95,8 +96,8 @@ from ...io import DEFAULT_FORCING
 from ...metrics import kge
 from .tier1 import protected_wy, run_holdout_wy
 
-#: the two tables of a tier-2 pass the product is made from (kept beside each product)
-PASS_FILES = ("tier2_monthly.csv", "tier2_components_monthly.csv")
+#: the table of a tier-2 pass the product is made from (kept beside each product)
+PASS_FILES = ("tier2_monthly.csv",)
 #: the record of a pass (forcing, envelope, checkpoint), kept with it when present
 PASS_RECORD = "tier2_run_info.json"
 #: closure groups whose arcs are NOT closed to a system: Whiskeytown (``I_WKYTN``) lies inside
@@ -117,13 +118,12 @@ PRODUCT_WY = (1950, 2015)
 PASS_START = "1915-10-01"
 MUS = (0.03, 0.1, 0.3)
 EPOCHS = 300
+LR = 1e-2
 N_BLOCKS = 7
 PENALTY_POINTS = 3
 CLIP = float(np.log(2.0))
 LAGS = (1, 2, 3, 6, 12)
-PARTS = ("quick", "inter", "supp", "prim")
-FEATURES = (["msin", "mcos", "lshare"] + [f"lshare_l{k}" for k in LAGS]
-            + [f"frac_{c}" for c in PARTS] + ["lsys", "larea"])
+FEATURES = ["msin", "mcos", "lshare"] + [f"lshare_l{k}" for k in LAGS] + ["lsys"]
 _APR_JUL = (4, 5, 6, 7)
 
 
@@ -165,21 +165,11 @@ def pass_wy(tier2_dir: str | Path) -> tuple[int, int]:
 
 
 def load_pass(tier2_dir: str | Path, arcs, wy: tuple[int, int] = PRODUCT_WY) -> pd.DataFrame:
-    """One tier-2 pass as ``[arc, month, sim, ref, quick, inter, supp, prim, wy, moy]`` for
-    ``arcs`` over the water years ``wy`` (first, last), sorted by arc and month (flows in
-    TAF/month)."""
-    d = Path(tier2_dir)
-    comp = d / "tier2_components_monthly.csv"
-    if not comp.exists():
-        raise FileNotFoundError(f"{comp}: the pass needs sacsma dpl calsim tier2 --components parts")
-    m = pd.read_csv(d / "tier2_monthly.csv")
-    c = pd.read_csv(comp)
-    m = m[m.arc.isin(arcs)].merge(
-        c[["arc", "month", "quick_taf", "interflow_taf", "supplemental_taf", "primary_taf"]],
-        on=["arc", "month"])
-    m = m.rename(columns={"sim_taf": "sim", "ref_taf": "ref", "quick_taf": "quick",
-                          "interflow_taf": "inter", "supplemental_taf": "supp",
-                          "primary_taf": "prim"})
+    """One tier-2 pass as ``[arc, month, sim, ref, wy, moy]`` for ``arcs`` over the water years
+    ``wy`` (first, last), sorted by arc and month (flows in TAF/month)."""
+    m = pd.read_csv(Path(tier2_dir) / "tier2_monthly.csv", usecols=["arc", "month", "sim_taf",
+                                                                    "ref_taf"])
+    m = m[m.arc.isin(arcs)].rename(columns={"sim_taf": "sim", "ref_taf": "ref"})
     m["month"] = pd.PeriodIndex(m.month, freq="M")
     m["wy"] = [p.year + (p.month >= 10) for p in m.month]
     m["moy"] = [p.month for p in m.month]
@@ -245,29 +235,23 @@ def share_features(D: pd.DataFrame, eps: pd.Series, centre_wy=PRODUCT_WY) -> pd.
     g = f.lshare.groupby(D.arc)
     for k in LAGS:
         f[f"lshare_l{k}"] = g.shift(k)
-    ptot = D[list(PARTS)].sum(axis=1) + 1e-9
-    for c in PARTS:
-        f[f"frac_{c}"] = D[c] / ptot
     lsys = np.log(tot + 1e-9)
     f["lsys"] = lsys - lsys.where(fit).groupby(D.system).transform("mean")
     f["msin"], f["mcos"] = np.sin(2 * np.pi * D.moy / 12), np.cos(2 * np.pi * D.moy / 12)
     return f
 
 
-class ShareNet(nn.Module):
-    """``f = log 2 * tanh(MLP(inputs, arc embedding, system embedding))``, zero at init."""
+class ShareTiming(nn.Module):
+    """The timing factor ``f = log 2 * tanh(a + w . x)``: per arc an intercept and one weight per
+    input, zero at init."""
 
-    def __init__(self, n_features: int, n_arcs: int, n_systems: int):
+    def __init__(self, n_features: int, n_arcs: int):
         super().__init__()
-        self.ea, self.es = nn.Embedding(n_arcs, 4), nn.Embedding(n_systems, 2)
-        self.mlp = nn.Sequential(nn.Linear(n_features + 6, 64), nn.SiLU(), nn.Linear(64, 64),
-                                 nn.SiLU(), nn.Linear(64, 1))
-        nn.init.zeros_(self.mlp[-1].weight)
-        nn.init.zeros_(self.mlp[-1].bias)
+        self.a = nn.Parameter(torch.zeros(n_arcs))
+        self.w = nn.Parameter(torch.zeros(n_arcs, n_features))
 
-    def forward(self, x, arc_i, sys_i):
-        h = torch.cat([x, self.ea(arc_i), self.es(sys_i)], 1)
-        return CLIP * torch.tanh(self.mlp(h).squeeze(1))
+    def forward(self, x, arc_i):
+        return CLIP * torch.tanh(self.a[arc_i] + (self.w[arc_i] * x).sum(1))
 
 
 def _seg(x, g, size=None):
@@ -276,15 +260,13 @@ def _seg(x, g, size=None):
 
 
 class _Rows:
-    """The row structure of one pass's share-arc frame: arc / system indices and the
-    (system, month), (arc, water year) and (system, water year) groups."""
+    """The row structure of one pass's share-arc frame: arc indices and the (system, month),
+    (arc, water year) and (system, water year) groups."""
 
-    def __init__(self, B: pd.DataFrame, arcs: list[str], systems: list[str], n_per_system):
+    def __init__(self, B: pd.DataFrame, arcs: list[str], n_per_system):
         self.n_arcs = len(arcs)
         arc_id = {a: i for i, a in enumerate(arcs)}
-        sys_id = {s: i for i, s in enumerate(systems)}
         self.arc_i = torch.tensor(B.arc.map(arc_id).to_numpy(), dtype=torch.long)
-        self.sys_i = torch.tensor(B.system.map(sys_id).to_numpy(), dtype=torch.long)
         fac = lambda *c: torch.tensor(pd.MultiIndex.from_arrays(c).factorize()[0],  # noqa: E731
                                          dtype=torch.long)
         self.g_sm, self.g_aw = fac(B.system, B.month), fac(B.arc, B.wy)
@@ -293,7 +275,7 @@ class _Rows:
         self.aj = torch.tensor(B.moy.isin(_APR_JUL).to_numpy())
 
     def close(self, f, sim, anchor, kv, floor):
-        """Arc flow from the network output ``f``: shares of the system-month flow ``anchor``,
+        """Arc flow from the timing factor ``f``: shares of the system-month flow ``anchor``,
         then each (arc, water year) closed to its ``k x dPL`` share of the system's volume."""
         q = (sim + floor) * torch.exp(f.double())
         Qm = q / _seg(q, self.g_sm)[self.g_sm] * anchor
@@ -373,13 +355,9 @@ class _Fit:
         mean_tr = B[self.TR].groupby("arc").sim.mean()
         self.eps, self.floor_arc = mean_tr * 0.01, mean_tr * 1e-6
         self.floor = torch.tensor(B.arc.map(self.floor_arc).to_numpy(), dtype=torch.float64)
-        self.larea = np.log(B.arc.map(hm.sq_mi)).to_numpy()
-        self.Fx = {}
-        for p in self.points:
-            f = share_features(runs[p], self.eps)
-            f["larea"] = self.larea
-            self.Fx[p] = f[FEATURES].to_numpy(float)
-        self.rows = _Rows(B, self.arcs, self.systems, self.n)
+        self.Fx = {p: share_features(runs[p], self.eps)[FEATURES].to_numpy(float)
+                   for p in self.points}
+        self.rows = _Rows(B, self.arcs, self.n)
         self.ref = torch.tensor(B.ref.to_numpy(), dtype=torch.float64)
         self.sim_np = {p: runs[p].sim.to_numpy() for p in self.points}
         self.SIM = {p: torch.tensor(v, dtype=torch.float64) for p, v in self.sim_np.items()}
@@ -404,15 +382,15 @@ class _Fit:
         return {p: torch.tensor(np.nan_to_num((self.Fx[p] - mu_x) / sd_x), dtype=torch.float32)
                 for p in self.points}
 
-    def predict(self, net, Xs, p, kv):
+    def predict(self, timing, Xs, p, kv):
         r = self.rows
-        f = torch.zeros(len(self.B)) if net is None else net(Xs[p], r.arc_i, r.sys_i)
+        f = torch.zeros(len(self.B)) if timing is None else timing(Xs[p], r.arc_i)
         return r.close(f, self.SIM[p], self.ANC[p], kv, self.floor)
 
-    def fit(self, Xs, tr, kv, mu: float, epochs: int = EPOCHS) -> ShareNet:
+    def fit(self, Xs, tr, kv, mu: float, epochs: int = EPOCHS) -> ShareTiming:
         r, n_arcs = self.rows, len(self.arcs)
-        net = ShareNet(Xs["base"].shape[1], n_arcs, len(self.systems))
-        opt = torch.optim.Adam(net.parameters(), lr=3e-3, weight_decay=1e-5)
+        timing = ShareTiming(Xs["base"].shape[1], n_arcs)
+        opt = torch.optim.Adam(timing.parameters(), lr=LR, weight_decay=1e-5)
         trm = torch.tensor(tr)
         m = trm.double()
         mref = _seg(self.ref * m, r.arc_i, n_arcs) / _seg(m, r.arc_i, n_arcs).clamp_min(1)
@@ -420,7 +398,7 @@ class _Fit:
         pts = self.train_points
         for _ in range(epochs):
             opt.zero_grad()
-            Qb = self.predict(net, Xs, "base", kv)
+            Qb = self.predict(timing, Xs, "base", kv)
             loss = (self.arc_w * _seg((Qb - self.ref) ** 2 * m, r.arc_i, n_arcs) / sst).sum() \
                 / len(self.systems)
             if mu > 0:
@@ -428,7 +406,7 @@ class _Fit:
                 pen = 0.0
                 sub = [pts[i] for i in torch.randperm(len(pts))[:PENALTY_POINTS].tolist()]
                 for p in sub:
-                    cp, cpa, tp, tpa = r.sums(self.predict(net, Xs, p, kv), self.SIM[p], trm)
+                    cp, cpa, tp, tpa = r.sums(self.predict(timing, Xs, p, kv), self.SIM[p], trm)
                     mV = 100 * (cp / cb.clamp_min(1e-9) - tp / tb.clamp_min(1e-9))
                     mA = 100 * ((cpa / cp.clamp_min(1e-9) - cba / cb.clamp_min(1e-9))
                                 - (tpa / tp.clamp_min(1e-9) - tba / tb.clamp_min(1e-9)))
@@ -436,7 +414,7 @@ class _Fit:
                 loss = loss + mu * pen / len(sub)
             loss.backward()
             opt.step()
-        return net
+        return timing
 
     def misses(self, Q: dict, pts, mask) -> pd.DataFrame:
         unit, aj = self.B.arc.to_numpy(), self.B.moy.isin(_APR_JUL).to_numpy()
@@ -462,13 +440,13 @@ def select(F: _Fit, mus=MUS, epochs: int = EPOCHS, n_blocks: int = N_BLOCKS, log
             te = B.wy.isin(b).to_numpy()
             tr = TR & ~te
             kv = F.kv(F.kvec(tr))
-            Xs = net = None
+            Xs = timing = None
             if mu is not None:
                 Xs = F.xs(F.scaler(tr))
-                net = F.fit(Xs, tr, kv, mu, epochs)
+                timing = F.fit(Xs, tr, kv, mu, epochs)
             with torch.no_grad():
                 for p in pts:
-                    Q[p][te] = F.predict(net, Xs, p, kv).numpy()[te]
+                    Q[p][te] = F.predict(timing, Xs, p, kv).numpy()[te]
         ks = _unit_kge(Q["base"], B.ref.to_numpy(), B.arc.to_numpy(), TR)
         g = gate_table(F.misses(Q, F.train_points, TR))
         w = g[["medV", "p90V", "medAJ", "p90AJ"]].max()
@@ -511,7 +489,7 @@ def _assemble(units: pd.DataFrame, tier2_dir, share: pd.DataFrame,
 
 def apply(model: dict, tier2_dir: str | Path, data_dir: str | Path = "data",
           wy: tuple[int, int] | None = None, centre_wy=PRODUCT_WY) -> pd.DataFrame:
-    """The product for one tier-2 pass (with runoff parts) under a fitted share model
+    """The product for one tier-2 pass under a fitted share model
     (``share_model.pt`` as loaded by ``torch.load``): ``[arc, month, taf, dpl_taf, kind]`` over
     the water years ``wy`` (default: every complete water year of the pass).  The share model's
     inputs are built on the whole pass whatever ``wy`` is (centred on its means over
@@ -520,24 +498,23 @@ def apply(model: dict, tier2_dir: str | Path, data_dir: str | Path = "data",
     wy = tuple(wy) if wy else pass_wy(tier2_dir)
     units = load_units(data_dir)
     hm = units[units.kind == "share"]
-    arcs, systems = model["arcs"], model["systems"]
+    arcs = model["arcs"]
     if sorted(arcs) != sorted(hm.index):
         raise ValueError("the share arcs of data/targets/calsim3/arc_hierarchy.csv differ from the model's")
     D = load_pass(tier2_dir, arcs, pass_wy(tier2_dir))
     D["system"] = D.arc.map(hm.system)
     as_s = lambda v: pd.Series(v, index=arcs)   # noqa: E731
     f = share_features(D, as_s(model["eps"]), centre_wy)
-    f["larea"] = np.log(D.arc.map(hm.sq_mi)).to_numpy()
     x = np.nan_to_num((f[FEATURES].to_numpy(float) - model["x_mean"]) / model["x_std"])
-    rows = _Rows(D, arcs, systems, hm.system.value_counts())
+    rows = _Rows(D, arcs, hm.system.value_counts())
     t64 = lambda v: torch.tensor(np.asarray(v), dtype=torch.float64)   # noqa: E731
     with torch.no_grad():
         if model["state"] is None:
             out = torch.zeros(len(D))
         else:
-            net = ShareNet(len(FEATURES), len(arcs), len(systems))
-            net.load_state_dict(model["state"])
-            out = net(torch.tensor(x, dtype=torch.float32), rows.arc_i, rows.sys_i)
+            timing = ShareTiming(len(FEATURES), len(arcs))
+            timing.load_state_dict(model["state"])
+            out = timing(torch.tensor(x, dtype=torch.float32), rows.arc_i)
         Q = rows.close(out, t64(D.sim.to_numpy()), t64(_system_flow(D)),
                        t64(D.arc.map(as_s(model["k"])).to_numpy()),
                        t64(D.arc.map(as_s(model["floor"])).to_numpy())).numpy()
@@ -613,7 +590,7 @@ def fit_product(run_dir: str | Path, scenario_dirs=None, out: str | Path | None 
     if absent:
         raise FileNotFoundError(
             f"no tier-2 pass for the training points {absent}; run sacsma dpl calsim tier2 "
-            f"--components parts --scenarios {scenario_spec(TRAIN_POINTS)}")
+            f"--scenarios {scenario_spec(TRAIN_POINTS)}")
     passes = {p: d for p, d in passes.items() if d is not None}
     val_points = [p for p in VALIDATION_POINTS if p in passes]
     out.mkdir(parents=True, exist_ok=True)
@@ -630,14 +607,14 @@ def fit_product(run_dir: str | Path, scenario_dirs=None, out: str | Path | None 
         log(f"out-of-fold selection of mu ({N_BLOCKS} blocks of training water years):")
         mu, cand = select(F, epochs=epochs, log=log)
         cand.to_csv(out / "share_selection.csv", index=False)
-        log(f"  selected: {'the dPL shares (no network)' if mu is None else f'mu {mu:g}'}")
+        log(f"  selected: {'the dPL shares (no timing factor)' if mu is None else f'mu {mu:g}'}")
     k = F.kvec(F.TR)
     kv, scaler = F.kv(k), F.scaler(F.TR)
     Xs = F.xs(scaler)
-    net = None if mu is None else F.fit(Xs, F.TR, kv, mu, epochs)
+    timing = None if mu is None else F.fit(Xs, F.TR, kv, mu, epochs)
     with torch.no_grad():
-        Q = {p: F.predict(net, Xs, p, kv).numpy() for p in F.points}
-    model = dict(state=None if net is None else net.state_dict(), arcs=F.arcs, systems=F.systems,
+        Q = {p: F.predict(timing, Xs, p, kv).numpy() for p in F.points}
+    model = dict(state=None if timing is None else timing.state_dict(), arcs=F.arcs,
                  x_mean=scaler[0], x_std=scaler[1], k=k.reindex(F.arcs).to_numpy(),
                  eps=F.eps.reindex(F.arcs).to_numpy(), floor=F.floor_arc.reindex(F.arcs).to_numpy(),
                  mu=mu, epochs=epochs, features=FEATURES, holdout_wy=holdout_wy,
@@ -673,7 +650,7 @@ def run_pass(model: dict, forcing: str, data_dir: str | Path = "data",
              score_holdout: bool = False, start: str | None = None,
              end: str | None = None, init_state: str | Path | None = None,
              save_state: str | Path | None = None) -> Path:
-    """The tier-2 pass with runoff parts of the share model's run on ``forcing`` from ``start``
+    """The tier-2 pass of the share model's run on ``forcing`` from ``start``
     (default :data:`PASS_START`) to ``end`` (default the envelope's end, 2018-12-31), in
     ``_local/product/calsim3/<forcing>/<run>/tier2`` (the extension cells' flow lengths of the
     run, :func:`sacsma.paths.extension_cells`, when it has them).  The run is the folder the
@@ -684,7 +661,7 @@ def run_pass(model: dict, forcing: str, data_dir: str | Path = "data",
     d = paths.local(name=f"product/calsim3/{paths.forcing_name(forcing)}/{run_dir.name}") / "tier2"
     ext = paths.extension_cells(run_dir)
     tier2_main([str(run_dir), "--out", str(d), "--data-dir", str(data_dir), "--forcing", forcing,
-                "--start", start or PASS_START, "--components", "parts", "--no-maps"]
+                "--start", start or PASS_START, "--no-maps"]
                + (["--end", end] if end else [])
                + (["--init-state", str(init_state)] if init_state else [])
                + (["--save-state", str(save_state)] if save_state else [])
@@ -773,7 +750,7 @@ def main(argv=None, prog=None) -> None:
     g = sub.add_parser("apply", help="the product of one forcing: its tier-2 pass, then the "
                                       "share model")
     g.add_argument("--tier2", default=None,
-                   help="an existing tier-2 pass (with --components parts) instead of running it")
+                   help="an existing tier-2 pass instead of running it")
     g.add_argument("--forcing", required=True,
                    help="the forcing of the pass (its --forcing name, a scenario's name, or the "
                         "path of a store file outside data/)")

@@ -23,20 +23,20 @@ The forcings are described in [`data/inputs/forcing/`](../../../data/inputs/forc
 |---|---|
 | `<forcing>/rim_inflow_monthly.csv` | `arc, month, taf, dpl_taf, kind`. `kind` is `share` (an arc of one of the eleven multi-arc systems, divided by the share model), `single-arc system` or `non-anchor` (the model's own flow); `taf = dpl_taf` except on the share arcs. |
 | `<forcing>/product_metrics.csv` | Historical forcing only: per arc, monthly KGE against CalSim3 of the model's arc flow and of the product, on the held-out water years (`holdout`, WY1976–85), on the other water years of WY1950–2015 (`train`) and on WY1922–1949 (`early`). |
-| `<forcing>/tier2/` | The tier-2 pass the share model was applied to (`tier2_monthly.csv`, `tier2_components_monthly.csv`) and its record (`tier2_run_info.json`: forcing, envelope, checkpoint), so that `sacsma verify product` can repeat the series. `ref_taf` in `tier2_monthly.csv` is the historical CalSim3 series whatever the forcing. |
-| `share_model.pt` | The share model and everything applying it needs (arc and system order, input scaling, per-arc volume ratios). |
+| `<forcing>/tier2/` | The tier-2 pass the share model was applied to (`tier2_monthly.csv`) and its record (`tier2_run_info.json`: forcing, envelope, checkpoint), so that `sacsma verify product` can repeat the series. `ref_taf` in `tier2_monthly.csv` is the historical CalSim3 series whatever the forcing. |
+| `share_model.pt` | The share model and everything applying it needs (the timing factor's weights per arc, arc order, input scaling, per-arc volume ratios). |
 | `share_selection.csv` | The out-of-fold candidates of the fit: the model's own shares and each penalty weight μ, with the median and p10 arc KGE on training water years and the response misses at the training climate points. |
 | `response_gate.csv` | Per validation climate point, the product's miss against the model's own arcs in volume change (`V`, %) and April–July share change (`AJ`, pp), with the full gate (median ≤ 1, p90 ≤ 3) and the half gate. |
 | `product_info.json` | The fit: the run, the settings, its water years, the climate points and the passes it used (relative to the run's local folder), and the scores on the held-out water years by kind of arc. |
 
 ```bash
-# the fit, on the run's passes on the training forcing (WY1950-2018 envelope): the base tier 2
-# with runoff parts, and the same at the 11 training and 5 validation climate points
+# the fit, on the run's passes on the training forcing (WY1950-2018 envelope): the base tier 2,
+# and the same at the 11 training and 5 validation climate points
 # (sacsma.dpl.calsim.product.scenario_spec() lists them; one pass each, about a minute);
 # <run> is any folder of 8_calsim, e.g. artifacts/models/dpl/multifamily/8_calsim
-sacsma dpl calsim tier2 <run> --components parts --score-holdout --trace-python <python of sacsma-gis>
-sacsma dpl calsim tier2 <run> --components parts --scenarios t1=1:1,t3=3:1,...
-sacsma dpl calsim product fit <run> --score-holdout   # CPU, about 30 min; --mu 0.03 skips the selection
+sacsma dpl calsim tier2 <run> --score-holdout --trace-python <python of sacsma-gis>
+sacsma dpl calsim tier2 <run> --scenarios t1=1:1,t3=3:1,...
+sacsma dpl calsim product fit <run> --score-holdout   # CPU, about 15 min; --mu <value> skips the selection
 
 # the series of one forcing: the tier-2 pass over the whole record (into
 # artifacts/_local/product/calsim3/<forcing>/tier2, a minute or two), then the share model;

@@ -219,7 +219,7 @@ a few minutes). The commands read the held-out years only with `--score-holdout`
 ```bash
 sacsma dpl evaluate <run>/checkpoints/best.pt --score-holdout   # metrics.csv, metrics_holdout.csv, sim_daily.npz
 sacsma dpl calsim tier1 <run> --score-holdout             # the 20 locations -> tier1/
-sacsma dpl calsim tier2 <run> --components parts --score-holdout \
+sacsma dpl calsim tier2 <run> --score-holdout \
     --trace-python <python of the sacsma-gis environment> # all 196 arcs -> tier2/
 ```
 
@@ -242,7 +242,7 @@ sacsma dpl record <run>                                   # -> training_record/
 pass each (into `tier2_scenarios/` of the local folder, `<local>`):
 
 ```bash
-sacsma dpl calsim tier2 <run> --components parts \
+sacsma dpl calsim tier2 <run> \
     --extension-cells <local>/tier2/tier2_extension_cells.csv \
     --scenarios p85=0:0.85,p95=0:0.95,p105=0:1.05,p115=0:1.15,t1=1:1,t25=2.5:1,t3=3:1,t4=4:1,t1p85=1:0.85,t1p115=1:1.15,t25p95=2.5:0.95,t25p105=2.5:1.05,t3p85=3:0.85,t3p115=3:1.15,t4p85=4:0.85,t4p115=4:1.15
 sacsma dpl calsim product fit <run> --score-holdout       # -> artifacts/product/calsim3/
