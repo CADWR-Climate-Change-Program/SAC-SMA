@@ -1,7 +1,7 @@
 item,n,mean,median,up,label
-usgs 8_calsim vs warm_start,49,-0.0009068908068948,0.0030378211150294,27,no change
-uf 8_calsim vs warm_start,9,0.0031615798377532,0.0003800680083899,5,no change
-arcs 8_calsim vs warm_start,64,0.0001842329616714,0.0031349307861456,34,no change
-outlets 8_calsim vs warm_start,13,0.0115792172786226,0.0094602451715132,10,better
-product kge_product_holdout 8_calsim vs warm_start,196,-0.0025356635862514,0.0016127088277828,104,no change
-product kge_product_early 8_calsim vs warm_start,196,-0.0019533568048896,0.0031080756512994,105,no change
+usgs 8_calsim vs basis,49,-0.0009068908068948,0.0030378211150294,27,no change
+uf 8_calsim vs basis,9,0.0031615798377532,0.0003800680083899,5,no change
+arcs 8_calsim vs basis,64,0.0001842329616714,0.0031349307861456,34,no change
+outlets 8_calsim vs basis,13,0.0115792172786226,0.0094602451715132,10,better
+product kge_product_holdout 8_calsim vs basis,196,-0.0025356635862514,0.0016127088277828,104,no change
+product kge_product_early 8_calsim vs basis,196,-0.0019533568048896,0.0031080756512994,105,no change

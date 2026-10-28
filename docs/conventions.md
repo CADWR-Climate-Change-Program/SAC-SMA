@@ -128,8 +128,9 @@ tables only.
 - The tree keeps no record of old names: no alias tables and no notes on what something used
   to be called. Earlier text is in git.
 - The one exception is a run's `provenance/` folder. Its files are evidence of what was fixed
-  before a run's held-out numbers were read, so they are never edited and keep the names of
-  their day. dPL-CalSim's (`models/dpl/multifamily/8_calsim/provenance/`) holds the pass and
+  before a run's held-out numbers were read, so their levels, numbers and decisions are never
+  edited and they keep the names of their day. Only a rename applied to the whole tree reaches
+  them. dPL-CalSim's (`models/dpl/multifamily/8_calsim/provenance/`) holds the pass and
   fail levels of its WY1976–85 read, written before the read, and the check tables it was
   adopted on.
 
@@ -180,7 +181,8 @@ The output tree is described in [`artifacts/README.md`](../artifacts/README.md).
   run's `provenance/` folder.
 - One job runs on the GPU at a time.
 - Run folders keep the names they were made with; the files in a run's `provenance/` are the
-  record of the run as it was made, including names and module paths of that time.
+  record of the run as it was made, with the names and module paths of that time
+  ([Names](#names) gives the one exception).
 - Runs are named for what they train on. The ladder is the exception: its rungs are named for
   the one change each makes (`1_hru`, `2_grid`, `3_pt`, `4_noah`, `5_px`, `6_deep`, `7_aef`,
   `8_calsim`), and every rung trains on one shared recipe ([Runs](runs.md#the-ladder)).

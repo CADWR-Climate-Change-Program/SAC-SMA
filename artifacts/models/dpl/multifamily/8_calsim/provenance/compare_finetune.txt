@@ -1,4 +1,4 @@
-D = D, S = 7_calsim_ft45_deep, X = 7_calsim_ds_deep_e045, F = 7_calsim_ft45_deep_ref
+D = basis, S = 7_calsim_ft45_deep, X = 7_calsim_ds_deep_e045, F = 7_calsim_ft45_deep_ref
   selected epoch / selection KGE: D 120 / 0.8310  S 45 / 0.8429  X 45 / 0.8036  F 45 / 0.8427
 
 Primary bars (on F; D, S and X reported)

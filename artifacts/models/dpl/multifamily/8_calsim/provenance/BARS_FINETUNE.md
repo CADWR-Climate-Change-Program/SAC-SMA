@@ -1,6 +1,6 @@
 # Bars for the paired fine-tune (written 2026-10-16, before any run)
 
-**The pair.** Both arms start from dPL-CalSim's `best.pt`: `--init-from`, lr 3e-4, 1 warmup
+**The pair.** Both arms start from the basis: `--init-from`, lr 3e-4, 1 warmup
 epoch, 15 epochs, CPU selection with patience 20. Both train on the same cleaned targets:
 - the CDEC daily screen and the location masks, applied after the normalizers;
 - the depth fixes for I_MFM008 and I_SFM005;
@@ -9,12 +9,12 @@ epoch, 15 epochs, CPU selection with patience 20. Both train on the same cleaned
 
 | | Control (C) | Treatment (T) |
 |---|---|---|
-| Recipe | dPL-CalSim's | C plus three changes (next row) |
-| Changes | — | CDEC monthly companion from WY1950 (cdec and cdecm 0.2754 each; companion screened, plus R3 at CLE, ISB, SCC E1+E2 and MIL E2); dry-season term with λ 0.1132 (10 % of the loss at dPL-CalSim's field; fixed denominators); flow-scaled riparian ET |
+| Recipe | the basis's | C plus three changes (next row) |
+| Changes | — | CDEC monthly companion from WY1950 (cdec and cdecm 0.2754 each; companion screened, plus R3 at CLE, ISB, SCC E1+E2 and MIL E2); dry-season term with λ 0.1132 (10 % of the loss at the basis's field; fixed denominators); flow-scaled riparian ET |
 | `--mt-loss-ref` | usgs 0.6006, cdec 0.2827, uf 0.1088, calsim 0.3221 | same, plus cdecm 0.1173 |
 | Scales | usgs 0.7325, cdec 1.0678, uf 1.7215, calsim 1.0004 | usgs 0.6653, cdec 0.9698, uf 1.5635, calsim 0.9086, cdecm 1.5053 |
 
-dPL-CalSim (D) is reported beside both arms for context.
+The basis (D) is reported beside both arms for context.
 
 ## Data and window
 
@@ -172,11 +172,11 @@ whatever the fine-tune's bars said (user, 2026-10-17 00:29). It is read with
 
 **P** = `7_calsim_ds_ft15_pk` starts from R's `best.pt`: 15 epochs, lr 3e-4, 1 warmup epoch,
 every option R's (`launch_peak.py`, checked by `check_peak_cfg.py`). It makes one change: the
-daily CDEC record's share goes back to dPL-CalSim's 0.5508, beside the monthly companion's
+daily CDEC record's share goes back to the basis's 0.5508, beside the monthly companion's
 0.2754, with the other shares unchanged
 (`usgs=0.2366,cdec=0.5508,cdecm=0.2754,uf=0.1226,calsim=0.0900`). Renormalized, that is usgs
 0.186, cdec 0.432, cdecm 0.216, uf 0.096 and calsim 0.071. The daily CDEC record then weighs
-against every other family as in dPL-CalSim. The other families each lose 22 % of their share,
+against every other family as in the basis. The other families each lose 22 % of their share,
 and the dry-season term's CDEC weight (cdec + cdecm) rises from 0.551 to 0.648.
 
 R lost its peaks (Sierra-4 top-5 76.8 -> 66.6) and its daily CDEC skill (FOL, ORO, NML, YRS,
@@ -210,7 +210,7 @@ share change with 15 more epochs at lr 3e-4. P is the candidate either way.
 
 ## Deep-store run (user 2026-10-17: "launch it"; written before launch)
 
-**S** = `7_calsim_ft45_deep` starts from dPL-CalSim's `best.pt` with the full retrain's recipe:
+**S** = `7_calsim_ft45_deep` starts from the basis with the full retrain's recipe:
 the target cleaning, the CDEC monthly companion, the dry-season term (λ 0.1132), flow-scaled
 riparian ET, and the shares and loss references of `7_calsim_ds`. Four changes
 (`deep/DESIGN.md`, `deep/review/REVIEW.md`; `launch_deep.py`, checked by `check_deep_cfg.py`):
@@ -218,7 +218,7 @@ riparian ET, and the shares and loss references of `7_calsim_ds`. Four changes
   learned residence (2–10 years), outside the lower-zone deficit;
 - `--deep-lr-mult 10`: the store head's learning rate at 10× (it starts at a share of 0.01);
 - `--shape-min-days 180`: the variance term back at the masked outlets;
-- the warm start: lr 3e-4, 1 warmup epoch, 45 epochs, patience 20.
+- from the basis: lr 3e-4, 1 warmup epoch, 45 epochs, patience 20.
 
 A 1-epoch GPU smoke pair (12 entities, WY1987–90, graphs against eager) runs first. If the
 epoch's loss differs by more than 1e-3 (relative), the launcher stops.
@@ -274,10 +274,10 @@ deep-store options added and the flow-scaled riparian ET taken out (`launch_scra
   - `--deep-lr-mult 10`: the head's learning rate at 1e-2;
   - `--shape-min-days 180`.
 - **No `--riparian flow`** (user 2026-10-18, on the recipe review for simplicity: "drop it, then
-  launch the training"). The riparian ET is the reference form, as in dPL-CalSim, so the store is
+  launch the training"). The riparian ET is the reference form, as in the basis, so the store is
   the run's only change to the model. Why:
   - the CPU pre-test (`deep/DESIGN.md`) passed the four Sacramento bars with the store on
-    dPL-CalSim's field, under the reference form;
+    the basis's field, under the reference form;
   - the peak diagnosis ranks the flow form as an enabler of R's no-interflow path (a
     hypothesis);
   - review 2 traced the extension arcs' summer excess to the flow form.
@@ -305,7 +305,7 @@ compare_scratch.txt DRSX` (columns D, R, S, X; guards on X − D). The launcher 
 - **Epoch 40:** at ORO and at FOL, the interflow share of the top-5 peak days is at least
   15 %, and the median `uzk` at least 0.6.
 - **Epoch 60:** the same, and the Sierra-4 top-5 median at least 70.
-- **Why these values.** dPL-CalSim's own path from scratch cleared both:
+- **Why these values.** The basis's own path from scratch cleared both:
   - epoch 40: 28 % and 20 %, `uzk` 0.83, Sierra-4 72.2;
   - epoch 60: 37 % and 31 %, `uzk` 0.91, Sierra-4 74.9.
   - R failed both: 0 %, `uzk` 0.29, Sierra-4 about 62.
@@ -317,7 +317,7 @@ compare_scratch.txt DRSX` (columns D, R, S, X; guards on X − D). The launcher 
 - the store report;
 - X − S and X − R on every item;
 - the tier-2 arcs on their own (`deep/arcs_score.py`, X added);
-- the gate's values at epochs 10 and 20 (information only: dPL-CalSim's path or R's).
+- the gate's values at epochs 10 and 20 (information only: the basis's path or R's).
 
 **Then:**
 - **X succeeds:** I recommend X over S as the candidate carried forward. The user decides.
@@ -334,10 +334,10 @@ compare_scratch.txt DRSX` (columns D, R, S, X; guards on X − D). The launcher 
   - its extension arcs are better (Jul-Sep bias median +53 % against S's +235 %).
 - **Stopped** on the user's go: "yes stop x and prepare the new fine tune".
 
-## Deep store, warm start, reference riparian ET (user 2026-10-18: "yes stop x and prepare the new fine tune"; written before launch)
+## Deep store, from the basis, reference riparian ET (user 2026-10-18: "yes stop x and prepare the new fine tune"; written before launch)
 
 F = `7_calsim_ft45_deep_ref`. It is S's command less `--riparian flow` (`launch_ref.py`):
-- dPL-CalSim's best.pt, 45 epochs at lr 3e-4 with a 1-epoch warm-up;
+- the basis, 45 epochs at lr 3e-4 with a 1-epoch warm-up;
 - the full retrain's recipe and cleaning;
 - `--deep-store cascade`, `--deep-lr-mult 10`, `--shape-min-days 180`.
 
@@ -347,8 +347,8 @@ F = `7_calsim_ft45_deep_ref`. It is S's command less `--riparian flow` (`launch_
     +29.4;
   - S then grew `riva` 7-8x (ORO 0.04 -> 0.30, FOL 0.06 -> 0.47) to take the wet summers back;
   - its extension arcs carry a +235 % median Jul-Sep bias.
-- **From scratch this recipe misses the interflow regime** (R and X): the warm start is what keeps
-  the peaks.
+- **From scratch this recipe misses the interflow regime** (R and X): starting from the basis is what
+  keeps the peaks.
 - **The CPU pre-test (`deep/DESIGN.md`)** put a uniform store on D's field under the reference
   form, untrained. Training has to lift Sac-4 mKGE by 0.01 and should trim the wet third:
 
@@ -437,5 +437,5 @@ How the run got there:
   - `--patience 45`;
   - `--init-from` dropped, which the trainer requires on resume;
   - the empty `checkpoints/select/done` marker removed.
-- **Provenance:** the checkpoints after the resume carry `init_from` empty. The warm start is
-  dPL-CalSim's best.pt.
+- **Provenance:** the checkpoints after the resume carry `init_from` empty. The run started from
+  the basis.
