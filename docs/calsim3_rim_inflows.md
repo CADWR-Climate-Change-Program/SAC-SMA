@@ -123,11 +123,12 @@ A *system* is a group of arcs with one anchor series: CalSim3's `FLOW-UNIMPAIRED
 and a DWR unimpaired-flow series for the other 9 (18 systems: the 11 multi-arc ones and the 7
 single arcs). The product does not read the anchors: it divides the model's own system flow.
 
-**The share model** is a small network that gives each share arc's fraction of its system's
-flow in a month. It reads the model's own shares and their lags, the fractions of the runoff
-components, the system flow, the month and the arc area, and a learned code for each arc and
-each system. It is fitted to the CalSim3 series of the share arcs, every month of WY1950–2015
-outside the held-out decade: none of the training's masks applies
+**The share model** gives each share arc's fraction of its system's flow in a month. A timing
+factor, between ½ and 2, multiplies the arc's own flow before the system's flow is divided. It
+is linear per arc, with an intercept and one weight on each input: the model's own share and
+its lags of 1, 2, 3, 6 and 12 months, the system flow, and the month. It is fitted to the
+CalSim3 series of the share arcs, every month of WY1950–2015 outside the held-out decade: none
+of the training's masks applies
 ([Training record](training_record.md#what-the-product-reads)). A system's water-year volume is
 divided among its arcs in proportion to each arc's dPL-CalSim volume times its ratio of CalSim3
 to dPL-CalSim volume over those years. Each system's arcs sum to the dPL-CalSim system flow
@@ -147,7 +148,7 @@ Skill on the held-out decade, median monthly KGE against CalSim3
 
 Over all 196 arcs the product's mean is 0.73 and its 10th percentile 0.48; 6 arcs are below
 zero (14 for the model alone). At the five validation climate points the share arcs' response
-differs from the model's by at most 0.32 % in volume and 0.73 points in the April–July share at
+differs from the model's by at most 0.32 % in volume and 1.09 points in the April–July share at
 the 90th percentile (`artifacts/product/calsim3/response_gate.csv`), inside the limits set
 beforehand (median 1, 90th percentile 3).
 
@@ -168,13 +169,13 @@ historical series scores (median monthly KGE):
 
 **Under the WGEN weather.** Over WY1916–2018 the product carries 28,140 TAF a year under the
 historical weather, 28,400 under scenario 1 and 28,420 under scenario 12, and the April–July
-share of the year's flow falls from 40.9 % to 37.3 % and 28.8 %. The warmer early record of
+share of the year's flow falls from 41.0 % to 37.4 % and 28.9 %. The warmer early record of
 scenario 1 (its temperature is detrended to 1991–2020) moves the melt earlier and leaves the
 volume within 1 %: the response the comparison of the calibrated sets finds in VIC, not in the
 Hamon-PET calibrations, which lose about 3 % ([Calibrated SAC-SMA](calibrated_sacsma.md)). On
 the share arcs the product keeps the model's own response. From scenario 1 to scenario 12 the
 model's arc volume changes by −0.3 % and its April–July share by −7.8 points at the median;
-the product differs from that by 0.05 % and 0.20 points at the median and by 0.13 % and 0.59
+the product differs from that by 0.05 % and 0.20 points at the median and by 0.13 % and 0.61
 points at the 90th percentile, within half the limits set for the fit's validation points.
 
 ## What was tried and not adopted
@@ -230,7 +231,7 @@ straight-line flow lengths × 1.5, which the output records. dPL-CalSim's traced
 tracked (`models/dpl/multifamily/8_calsim/tier2_extension_cells.csv`), and `product apply`
 reuses them, so applying the product needs no tracing. `--components parts` adds the
 routed runoff components each arc's flow is made of (quick and interflow, supplemental and
-primary baseflow), which the share model reads.
+primary baseflow).
 
 **The atlas** is one self-contained HTML page per run: what the run trained on and its family
 weights, domain maps, a tab per location (scores, series, the arc table with each arc's
@@ -258,7 +259,7 @@ evaluation-only score.
 
 ```bash
 sacsma dpl calsim tier1 <run> --score-holdout
-sacsma dpl calsim tier2 <run> --components parts --score-holdout --trace-python <python of the sacsma-gis environment>
+sacsma dpl calsim tier2 <run> --score-holdout --trace-python <python of the sacsma-gis environment>
 sacsma dpl calsim atlas <run> --score-holdout
 sacsma dpl calsim product fit <run> --score-holdout                 # -> artifacts/product/calsim3/
 sacsma dpl calsim product apply --forcing <name> --score-holdout   # -> artifacts/product/calsim3/<name>/

@@ -17,19 +17,19 @@ Median monthly KGE against CalSim3 on the held-out water years 1976–85:
 
 | Arcs | dPL-CalSim | Product |
 |---|---|---|
-| 139 share arcs | 0.708 | 0.842 |
+| 139 share arcs | 0.708 | 0.837 |
 | 50 non-anchor arcs | 0.582 | 0.582 |
 | 7 single-arc systems | 0.909 | 0.909 |
-| All 196 | 0.685 | 0.809 |
+| All 196 | 0.685 | 0.807 |
 
 On WY1922–1949, before any training year:
 
 | Arcs | dPL-CalSim | Product |
 |---|---|---|
-| 139 share arcs | 0.646 | 0.776 |
+| 139 share arcs | 0.646 | 0.782 |
 | 50 non-anchor arcs | 0.415 | 0.415 |
 | 7 single-arc systems | 0.785 | 0.785 |
-| All 196 | 0.633 | 0.762 |
+| All 196 | 0.633 | 0.761 |
 
 Source: `artifacts/product/calsim3/historical_livneh_unsplit/product_metrics.csv`; the fit's own
 scores, on its WY1950–2015 pass, are in `artifacts/product/calsim3/product_info.json`.
@@ -336,6 +336,10 @@ the time.
 - A daily LSTM on the non-anchor arcs: 0.719 against the model's 0.604; the model's flow was kept
   by choice, after the held-out numbers were read.
 - An LSTM that gives the flow outright, not a correction: behind the correction form.
+- A network for the share model's timing factor (two hidden layers of 64, arc and system
+  embeddings, the arc's routed runoff parts among its inputs): share arcs 0.842 against 0.837
+  for the per-arc linear factor, all arcs 0.809 against 0.807; out of fold on the training years
+  0.876 for both. Narrower, or without the runoff parts, it scored the same out of fold.
 
 ## Open
 

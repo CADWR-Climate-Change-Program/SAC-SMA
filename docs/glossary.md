@@ -43,7 +43,7 @@ one thing.
 | Share arc | An arc of a multi-arc system (139). The product divides the system's flow among them. |
 | Single-arc system | A system of one arc (7). |
 | Non-anchor arc | An arc the product does not close to a system (50): 39 with no anchor, 11 whose anchor is left out. |
-| Share model | The small network that sets each share arc's fraction of its system's flow. |
+| Share model | Sets each share arc's fraction of its system's flow: a fixed volume ratio `k` per arc and a timing factor, linear per arc. |
 
 ## "Tier" has three unrelated meanings
 
