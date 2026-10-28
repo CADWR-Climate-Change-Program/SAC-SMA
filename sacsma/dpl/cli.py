@@ -482,7 +482,7 @@ def register(sub) -> None:
     tr.add_argument("--deep-lr-mult", type=float, default=1.0,
                     help="the deep store head's learning rate as a multiple of --lr")
     tr.add_argument("--init-from", default="", metavar="CKPT",
-                    help="warm start (a fine-tune) from this checkpoint's net: same variant, "
+                    help="fine-tune from this checkpoint's net: same variant, "
                          "domain, entities, parameter mapping and input scaling; fresh "
                          "optimizer and schedule")
     tr.add_argument("--holdout-wy", default="", metavar="FIRST-LAST",

@@ -90,7 +90,7 @@ The reasons for a separate store rather than a slower SAC-SMA lower zone:
   ([Carroll et al., 2020](references.md#carroll2020)), with water held in weathered rock 10 to
   20 m deep in the southern Sierra ([Klos et al., 2018](references.md#klos2018)).
 - The store is fed from the supplemental drainage, in series: it lengthens the slowest
-  recession rather than splitting percolation in parallel. In a test on dPL-CalSim's field, a
+  recession rather than splitting percolation in parallel. In a test on the basis's field, a
   store fed from the primary drainage instead brought the five largest annual peaks of four
   Sierra watersheds to 72–75 % of observed, against 76.5 % fed from the supplemental drainage.
 

@@ -722,7 +722,7 @@ def train(
               + ", ".join(f"{p} in [{lo:g}, {hi:g}]" for p, (lo, hi) in cfg.param_bounds.items()),
               flush=True)
     if cfg.init_from:
-        # the warm start: the donor's net as it is (weights and mapping buffers), refused
+        # the fine-tune: the donor's net as it is (weights and mapping buffers), refused
         # unless it was trained on the same variant, domain, entities, mapping and input
         # scaling, so epoch 0 starts at the donor's parameter field exactly
         if resume:
@@ -756,7 +756,7 @@ def train(
         if new_head:
             print("train: the donor has no deep store; its head starts at gdeep "
                   f"{DEEP_G_INIT:g} and the log-midpoint residence", flush=True)
-        print(f"train: warm start from {cfg.init_from} (epoch {ick['epoch']}, sel cal KGE "
+        print(f"train: fine-tune from {cfg.init_from} (epoch {ick['epoch']}, sel cal KGE "
               f"{ick.get('cal_kge', float('nan')):.4f}): its net exactly, a fresh optimizer and "
               "schedule", flush=True)
     # the deep store head in its own group at deep_lr_mult x lr (one group without it)
@@ -806,7 +806,7 @@ def train(
             raise ValueError("resume: the physics differ from the checkpoint's (repeat its "
                              "flags)")
         if ck_cfg.init_from and not cfg.init_from:
-            # a resumed warm start keeps its record (the donor is not loaded again)
+            # a resumed fine-tune keeps its record (the donor is not loaded again)
             cfg = replace(cfg, init_from=ck_cfg.init_from)
         net.load_state_dict(ck["net"])
         opt.load_state_dict(ck["opt"])

@@ -1,7 +1,7 @@
 """What a multifamily run trained on, stage by stage (``sacsma dpl record``).
 
 A run's stages are its kept checkpoint and the chain of ``init_from`` donors behind it, first
-stage first (dPL-CalSim: the warm start in ``provenance/warm_start.pt``, then the fine-tune).  Each
+stage first (dPL-CalSim: the basis in ``checkpoints/basis.pt``, then the fine-tune).  Each
 stage's targets are read with the trainer's own loader (:func:`load_entity_obs` with
 :func:`entity_obs_kwargs` of the stage's configuration), so every count is what that stage's loss
 saw.  A checkpoint keeps its mask entries but not why each was made: the reasons come from the

@@ -68,8 +68,8 @@ These are sources of truth. No script overwrites them.
 | `targets/calsim3/calsim3_arc_derivation.csv` | How CalSim3 built each rim inflow series, transcribed from the DWR hydrology report. |
 | `targets/dwr_unimpaired/uf_gauges.csv` | Pour point and report area of each unimpaired-flow subbasin. |
 | `targets/cdec/fnf_daily_mask.csv` | Daily target values confirmed to be wrong, masked in training. |
-| `targets/cdec/fnf_daily_screen.csv`, `fnf_monthly_screen.csv`, `forcing_era_mask.csv` | The CDEC days and months dPL-CalSim's fine-tune does not train on (its warm start trains the days), from the October 2026 audit of its training records. |
-| `targets/usgs/location_mask.csv`, `targets/calsim3/location_mask.csv`, `targets/dwr_unimpaired/location_mask.csv` | The USGS days, arc-months and subbasin-months dPL-CalSim's fine-tune does not train on (its warm start trains them), from the same audit. |
+| `targets/cdec/fnf_daily_screen.csv`, `fnf_monthly_screen.csv`, `forcing_era_mask.csv` | The CDEC days and months dPL-CalSim's fine-tune does not train on (its basis trains the days), from the October 2026 audit of its training records. |
+| `targets/usgs/location_mask.csv`, `targets/calsim3/location_mask.csv`, `targets/dwr_unimpaired/location_mask.csv` | The USGS days, arc-months and subbasin-months dPL-CalSim's fine-tune does not train on (its basis trains them), from the same audit. |
 
 Three more files need care.
 
